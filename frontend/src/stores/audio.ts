@@ -1,0 +1,159 @@
+import { defineStore } from 'pinia'
+import { ref, computed, reactive } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { usePersistenceStore } from './persistence'
+
+export interface AppInfo { id: number; name: string; binary: string; channel: string; icon: string; volume?: number }
+export interface Channel { name: string; volume: number; muted: boolean; node_id: number }
+export interface AudioDevice { name: string; description: string; device_type: 'sink' | 'source'; is_default: boolean }
+
+const CHANNEL_NAMES = ['Game', 'Chat', 'Media', 'Aux']
+
+export const useAudioStore = defineStore('audio', () => {
+  const allApps = ref<AppInfo[]>([])
+  const devices = ref<AudioDevice[]>([])
+  const vuLevels = ref<Record<string, number>>({})
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+  const channelDevices = reactive<Record<string, string>>({})
+  const draggedApp = ref<AppInfo | null>(null)
+  const routingInProgress = ref(false)
+  let vuUnlisten: UnlistenFn | null = null
+
+  // ★ E4-P7: Channel volumes as STATEFUL reactive map (not computed)
+  // This ensures two-way binding works — sliders read AND write to this.
+  const channelVolumes = reactive<Record<string, number>>({ Master: 100 })
+  const channelMutes = reactive<Record<string, boolean>>({ Master: false })
+  for (const n of CHANNEL_NAMES) { channelVolumes[n] = 100; channelMutes[n] = false }
+
+  // Build channelMap with apps derived from allApps
+  const channelMap = computed(() => {
+    const m: Record<string, { name: string; volume: number; muted: boolean; apps: AppInfo[] }> = {}
+    for (const name of CHANNEL_NAMES) {
+      m[name] = { name, volume: channelVolumes[name] ?? 100, muted: channelMutes[name] ?? false, apps: [] }
+    }
+    for (const app of allApps.value) {
+      if (app.channel && m[app.channel]) m[app.channel].apps.push(app)
+    }
+    return m
+  })
+
+  const outputDevices = computed(() => devices.value.filter(d => d.device_type === 'sink'))
+  const inputDevices = computed(() => devices.value.filter(d => d.device_type === 'source'))
+  const unassignedApps = computed(() =>
+    allApps.value.filter(a => !a.channel && !a.name.toLowerCase().includes('opengg') && a.name.toLowerCase() !== 'wireplumber' && a.name.toLowerCase() !== 'pipewire')
+  )
+  const masterChannel = computed(() => ({
+    name: 'Master', volume: channelVolumes.Master ?? 100, muted: channelMutes.Master ?? false, apps: unassignedApps.value,
+  }))
+
+  // ★ E4-P8: Fetch channels reads REAL volumes from pactl
+  async function fetchChannels() {
+    try {
+      loading.value = true
+      // Try D-Bus first
+      const j = await invoke<string>('get_channels')
+      const chs = JSON.parse(j) as Channel[]
+      for (const ch of chs) {
+        channelVolumes[ch.name] = ch.volume
+        channelMutes[ch.name] = ch.muted
+      }
+      error.value = null
+    } catch {
+      // D-Bus failed — channels keep their current/default values
+    } finally { loading.value = false }
+  }
+
+  // ★ E4-P8: Fetch apps — this already reads correct routing from pactl
+  // scan_sink_inputs in Rust cross-references sink index → OpenGG channel name
+  async function fetchApps() {
+    try { const j = await invoke<string>('get_apps'); allApps.value = JSON.parse(j) }
+    catch (e) { console.error('fetchApps:', e) }
+  }
+
+  async function fetchDevices() {
+    try { devices.value = await invoke<AudioDevice[]>('get_audio_devices') } catch {}
+  }
+
+  // ★ E4-P7: Two-way volume binding — update local state AND pactl
+  async function setVolume(ch: string, vol: number) {
+    channelVolumes[ch] = vol
+    usePersistenceStore().setChannelVolume(ch, vol)
+    try { await invoke('set_volume', { channel: ch, volume: vol }) } catch {}
+  }
+  async function setMute(ch: string, muted: boolean) {
+    channelMutes[ch] = muted
+    usePersistenceStore().setChannelMute(ch, muted)
+    try { await invoke('set_mute', { channel: ch, muted }) } catch {}
+  }
+  async function setAppVolume(appIndex: number, vol: number) {
+    const app = allApps.value.find(a => a.id === appIndex); if (app) app.volume = vol
+    try { await invoke('set_app_volume', { appIndex, volume: vol }) } catch {}
+  }
+
+  async function routeApp(appId: number, channel: string) {
+    await invoke('route_app', { appId, channel })
+    const app = allApps.value.find(a => a.id === appId)
+    if (app?.binary) usePersistenceStore().setAppRule(app.binary, channel)
+  }
+  async function unrouteApp(id: number) { await routeApp(id, 'default') }
+
+  async function setChannelDevice(ch: string, dev: string) {
+    channelDevices[ch] = dev; usePersistenceStore().setChannelDevice(ch, dev)
+    try { await invoke('set_channel_device', { channel: ch, deviceName: dev }) } catch {}
+  }
+  function restoreFromPersistence() {
+    Object.assign(channelDevices, usePersistenceStore().state.mixer.devices)
+    // Restore saved volumes
+    const saved = usePersistenceStore().state.mixer.volumes || {}
+    for (const [k, v] of Object.entries(saved)) { if (typeof v === 'number') channelVolumes[k] = v }
+  }
+
+  function startDrag(app: AppInfo) { draggedApp.value = app }
+  function endDrag() { draggedApp.value = null; routingInProgress.value = false }
+
+  async function dropOnChannel(channel: string) {
+    if (!draggedApp.value || routingInProgress.value) return
+    const app = { ...draggedApp.value }
+    const prev = app.channel || ''
+    draggedApp.value = null
+    routingInProgress.value = true
+
+    const appRef = allApps.value.find(a => a.id === app.id)
+    if (appRef) appRef.channel = (channel === 'Master') ? '' : channel
+
+    try {
+      if (channel === 'Master') await unrouteApp(app.id)
+      else await routeApp(app.id, channel)
+      await fetchApps()
+    } catch {
+      const revert = allApps.value.find(a => a.id === app.id)
+      if (revert) revert.channel = prev
+      await fetchApps()
+    } finally { routingInProgress.value = false }
+  }
+
+  async function startVuStream() { try { await invoke('start_vu_stream'); vuUnlisten = await listen<{ channels: Record<string, number> }>('vu-levels', e => { vuLevels.value = e.payload.channels }) } catch {} }
+  async function stopVuStream() { try { await invoke('stop_vu_stream'); vuUnlisten?.(); vuUnlisten = null } catch {} }
+
+  let interval: ReturnType<typeof setInterval> | null = null
+  function startPolling(ms = 2000) {
+    stopPolling(); restoreFromPersistence()
+    // ★ E4-P8: On startup, fetchApps reads existing PipeWire routing
+    fetchChannels(); fetchApps(); fetchDevices(); startVuStream()
+    interval = setInterval(() => { fetchChannels(); fetchApps() }, ms)
+  }
+  function stopPolling() { if (interval) { clearInterval(interval); interval = null }; stopVuStream() }
+
+  return {
+    allApps, devices, vuLevels, channelDevices, channelVolumes, channelMutes,
+    unassignedApps, channelMap, masterChannel, outputDevices, inputDevices,
+    loading, error, draggedApp, routingInProgress,
+    fetchChannels, fetchApps, fetchDevices,
+    setVolume, setMute, setAppVolume, routeApp, unrouteApp,
+    setChannelDevice, restoreFromPersistence,
+    startDrag, endDrag, dropOnChannel,
+    startPolling, stopPolling,
+  }
+})

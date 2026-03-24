@@ -1,0 +1,23 @@
+[package]
+name = "openggd"
+version = "1.0.0"
+edition = "2021"
+description = "OpenGG Gaming Daemon — Audio, Device, and Replay management for Linux"
+license = "MIT"
+
+[[bin]]
+name = "openggd"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+zbus = { version = "4", features = ["tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+procfs = "0.16"
+anyhow = "1"
+dirs = "5"
+libc = "0.2"
