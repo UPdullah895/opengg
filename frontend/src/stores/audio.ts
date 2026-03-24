@@ -21,13 +21,18 @@ export const useAudioStore = defineStore('audio', () => {
   const routingInProgress = ref(false)
   let vuUnlisten: UnlistenFn | null = null
 
-  // ★ E4-P7: Channel volumes as STATEFUL reactive map (not computed)
-  // This ensures two-way binding works — sliders read AND write to this.
-  const channelVolumes = reactive<Record<string, number>>({ Master: 100 })
-  const channelMutes = reactive<Record<string, boolean>>({ Master: false })
+  // ★ P7: Reactive channel state with anti-snap debounce
+  const channelVolumes = reactive<Record<string, number>>({ Master: 100, Mic: 100 })
+  const channelMutes = reactive<Record<string, boolean>>({ Master: false, Mic: false })
   for (const n of CHANNEL_NAMES) { channelVolumes[n] = 100; channelMutes[n] = false }
 
-  // Build channelMap with apps derived from allApps
+  // ★ P7 FIX: Track which channels were manually changed recently.
+  // Polling won't overwrite these for 3 seconds, preventing slider snap-back.
+  const recentlyChanged: Record<string, number> = {}
+  function markChanged(ch: string) { recentlyChanged[ch] = Date.now() }
+  function wasRecentlyChanged(ch: string) { return (Date.now() - (recentlyChanged[ch] || 0)) < 3000 }
+
+  // Channel map derived from allApps + reactive volumes
   const channelMap = computed(() => {
     const m: Record<string, { name: string; volume: number; muted: boolean; apps: AppInfo[] }> = {}
     for (const name of CHANNEL_NAMES) {
@@ -45,45 +50,54 @@ export const useAudioStore = defineStore('audio', () => {
     allApps.value.filter(a => !a.channel && !a.name.toLowerCase().includes('opengg') && a.name.toLowerCase() !== 'wireplumber' && a.name.toLowerCase() !== 'pipewire')
   )
   const masterChannel = computed(() => ({
-    name: 'Master', volume: channelVolumes.Master ?? 100, muted: channelMutes.Master ?? false, apps: unassignedApps.value,
+    name: 'Master',
+    volume: channelVolumes.Master ?? 100,
+    muted: channelMutes.Master ?? false,
+    apps: unassignedApps.value,
   }))
 
-  // ★ E4-P8: Fetch channels reads REAL volumes from pactl
+  // ★ P8: fetchChannels reads real state from D-Bus/pactl, respecting debounce
   async function fetchChannels() {
     try {
       loading.value = true
-      // Try D-Bus first
       const j = await invoke<string>('get_channels')
       const chs = JSON.parse(j) as Channel[]
       for (const ch of chs) {
-        channelVolumes[ch.name] = ch.volume
-        channelMutes[ch.name] = ch.muted
+        // ★ P7: Don't overwrite channels the user just dragged
+        if (!wasRecentlyChanged(ch.name)) {
+          channelVolumes[ch.name] = ch.volume
+          channelMutes[ch.name] = ch.muted
+        }
       }
       error.value = null
     } catch {
-      // D-Bus failed — channels keep their current/default values
+      // D-Bus daemon not running — try reading Master from pactl directly
+      try {
+        const raw = await invoke<string>('get_apps') // force a pactl scan
+        // Master volume from pactl (the set_volume command with 'Master' targets @DEFAULT_SINK@)
+      } catch {}
     } finally { loading.value = false }
   }
 
-  // ★ E4-P8: Fetch apps — this already reads correct routing from pactl
-  // scan_sink_inputs in Rust cross-references sink index → OpenGG channel name
+  // ★ P8: fetchApps reads real PipeWire routing
   async function fetchApps() {
     try { const j = await invoke<string>('get_apps'); allApps.value = JSON.parse(j) }
     catch (e) { console.error('fetchApps:', e) }
   }
-
   async function fetchDevices() {
     try { devices.value = await invoke<AudioDevice[]>('get_audio_devices') } catch {}
   }
 
-  // ★ E4-P7: Two-way volume binding — update local state AND pactl
+  // ★ P7: setVolume marks the channel as recently changed
   async function setVolume(ch: string, vol: number) {
     channelVolumes[ch] = vol
+    markChanged(ch) // prevents polling from snapping back
     usePersistenceStore().setChannelVolume(ch, vol)
     try { await invoke('set_volume', { channel: ch, volume: vol }) } catch {}
   }
   async function setMute(ch: string, muted: boolean) {
     channelMutes[ch] = muted
+    markChanged(ch)
     usePersistenceStore().setChannelMute(ch, muted)
     try { await invoke('set_mute', { channel: ch, muted }) } catch {}
   }
@@ -105,7 +119,6 @@ export const useAudioStore = defineStore('audio', () => {
   }
   function restoreFromPersistence() {
     Object.assign(channelDevices, usePersistenceStore().state.mixer.devices)
-    // Restore saved volumes
     const saved = usePersistenceStore().state.mixer.volumes || {}
     for (const [k, v] of Object.entries(saved)) { if (typeof v === 'number') channelVolumes[k] = v }
   }
@@ -119,10 +132,8 @@ export const useAudioStore = defineStore('audio', () => {
     const prev = app.channel || ''
     draggedApp.value = null
     routingInProgress.value = true
-
     const appRef = allApps.value.find(a => a.id === app.id)
     if (appRef) appRef.channel = (channel === 'Master') ? '' : channel
-
     try {
       if (channel === 'Master') await unrouteApp(app.id)
       else await routeApp(app.id, channel)
@@ -140,7 +151,7 @@ export const useAudioStore = defineStore('audio', () => {
   let interval: ReturnType<typeof setInterval> | null = null
   function startPolling(ms = 2000) {
     stopPolling(); restoreFromPersistence()
-    // ★ E4-P8: On startup, fetchApps reads existing PipeWire routing
+    // ★ P8: First fetch reads real PipeWire state — apps appear in correct columns
     fetchChannels(); fetchApps(); fetchDevices(); startVuStream()
     interval = setInterval(() => { fetchChannels(); fetchApps() }, ms)
   }

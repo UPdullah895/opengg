@@ -354,9 +354,10 @@ pub async fn rename_clip(old_path: String, new_name: String) -> Result<String, S
     let ext = old.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
     let dir = old.parent().unwrap_or(Path::new("."));
     // Sanitize filename
+    // ★ Epic 2: Allow Unicode (Arabic/CJK) — only strip OS-illegal path chars
     let safe_name: String = new_name.chars()
-        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_' || *c == '.')
-        .collect();
+        .filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0'))
+        .collect::<String>().trim().to_string();
     let new_path = dir.join(format!("{safe_name}.{ext}"));
 
     if new_path.exists() { return Err("A file with that name already exists".into()); }
@@ -405,7 +406,7 @@ pub async fn export_timeline(
 
     let dir = if output_dir.is_empty() { default_clips_dir() } else { PathBuf::from(shexp(&output_dir)) };
     let _ = std::fs::create_dir_all(&dir);
-    let safe: String = output_name.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_').collect();
+    let safe: String = output_name.chars().filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0')).collect::<String>().trim().to_string();
     let outfile = dir.join(format!("{}.mp4", if safe.is_empty() { "export" } else { &safe }));
 
     // For single-source trim (most common case), use stream copy
@@ -507,105 +508,145 @@ pub async fn export_clip_with_filters(
     let dur = end_sec - start_sec;
     if dur <= 0.0 { return Err("Invalid trim range".into()); }
 
-    let out = if output_path.is_empty() {
+    let mut out = if output_path.is_empty() {
         auto_name(&input_path, "_export")
     } else { output_path };
+
+    // ★ Epic 1: CRITICAL — if output == input, FFmpeg crashes instantly
+    if out == input_path || std::path::Path::new(&out) == std::path::Path::new(&input_path) {
+        out = auto_name(&input_path, "_export");
+        eprintln!("export: output path collided with input, renamed to {out}");
+    }
+
+    // ★ Epic 1B: Get actual audio stream global indices from ffprobe
+    let audio_global_indices = get_audio_stream_global_indices(&input_path);
+    eprintln!("export: audio streams at global indices {:?}", audio_global_indices);
+
+    // Map global stream index → audio-relative index for [0:a:N]
+    // ffprobe global: video=0, audio=1, audio=2  →  [0:a:0], [0:a:1]
+    let to_audio_relative = |global_idx: u32| -> Option<u32> {
+        audio_global_indices.iter().position(|&g| g == global_idx).map(|i| i as u32)
+    };
 
     // ── Build the filter_complex graph ──
     let mut inputs: Vec<String> = vec!["-i".into(), input_path.clone()];
     let mut filter_parts: Vec<String> = Vec::new();
-    let mut input_count = 1; // input 0 = main video
-
-    // 1) Video: trim
+    let mut input_count = 1u32;
     let mut video_label = "[0:v]".to_string();
 
-    // 2) Audio downmix — combine active (non-muted) tracks
-    let active_audio: Vec<&ExportAudioTrack> = audio_tracks.iter()
+    // ★ Epic 1B: Filter to valid, unmuted tracks with correct relative indices
+    let valid_audio: Vec<(&ExportAudioTrack, u32)> = audio_tracks.iter()
         .filter(|t| !t.muted && t.volume > 0.0)
+        .filter_map(|t| to_audio_relative(t.stream_index).map(|rel| (t, rel)))
         .collect();
 
-    let audio_label = if active_audio.is_empty() {
-        // All muted — generate silence
-        filter_parts.push("anullsrc=r=48000:cl=stereo[aout]".into());
+    let audio_label = if valid_audio.is_empty() {
+        filter_parts.push("anullsrc=r=48000:cl=stereo:d=1[aout]".into());
         "[aout]".to_string()
-    } else if active_audio.len() == 1 {
-        // Single track — just apply volume
-        let t = active_audio[0];
-        let label = format!("[amix]");
-        filter_parts.push(format!("[0:a:{}]volume={:.2}{}", t.stream_index, t.volume, label));
-        label
+    } else if valid_audio.len() == 1 {
+        let (t, rel) = valid_audio[0];
+        filter_parts.push(format!("[0:a:{rel}]volume={:.2}[amix]", t.volume));
+        "[amix]".to_string()
     } else {
-        // Multiple tracks — volume each, then amix
         let mut mix_inputs = Vec::new();
-        for (i, t) in active_audio.iter().enumerate() {
+        for (i, (t, rel)) in valid_audio.iter().enumerate() {
             let lbl = format!("[a{i}]");
-            filter_parts.push(format!("[0:a:{}]volume={:.2}{lbl}", t.stream_index, t.volume));
+            filter_parts.push(format!("[0:a:{rel}]volume={:.2}{lbl}", t.volume));
             mix_inputs.push(lbl);
         }
         let mix_in = mix_inputs.join("");
-        filter_parts.push(format!("{mix_in}amix=inputs={}:duration=longest[amix]", active_audio.len()));
+        filter_parts.push(format!("{mix_in}amix=inputs={}:duration=longest[amix]", valid_audio.len()));
         "[amix]".to_string()
     };
 
-    // 3) Overlay burn — text and image overlays
+    // ★ Epic 5: Probe source video resolution for normalized sizing
+    let (src_w, src_h) = probe_resolution(&input_path);
+    eprintln!("export: source resolution {src_w}x{src_h}");
+
+    // Overlay burn
     for ov in &overlays {
+        let ov_start = (ov.start_sec - start_sec).max(0.0);
+        let ov_end = (ov.start_sec + ov.dur_sec - start_sec).min(dur);
+        if ov_end <= ov_start { continue; }
+
+        let enable = format!("between(t\\,{ov_start:.2}\\,{ov_end:.2})");
+
         match ov.overlay_type.as_str() {
             "text" => {
-                let escaped = ov.content.replace("'", "\\'").replace(":", "\\:");
-                let x_expr = format!("(W*{}/100)", ov.x / 100.0);
-                let y_expr = format!("(H*{}/100)", ov.y / 100.0);
-                let fs = (24.0 * ov.scale / 100.0).max(8.0) as u32;
-                let enable = format!("between(t\\,{:.2}\\,{:.2})", ov.start_sec, ov.start_sec + ov.dur_sec);
-                let next_label = format!("[vov{}]", filter_parts.len());
+                let tmp = std::env::temp_dir().join(format!("opengg_text_{}.txt", filter_parts.len()));
+                if std::fs::write(&tmp, &ov.content).is_err() { continue; }
+                let tmp_path = tmp.to_string_lossy().to_string();
+
+                // ★ Epic 5: Scale font size proportional to video height
+                // Base: 24px at 1080p → scale = video_height / 1080 * 24 * user_scale/100
+                let fs = ((src_h as f64 / 1080.0) * 24.0 * ov.scale / 100.0).max(8.0) as u32;
+                let font = find_system_font();
+                let x_expr = format!("(W*{}/100-tw/2)", ov.x as u32);
+                let y_expr = format!("(H*{}/100-th/2)", ov.y as u32);
+                let next = format!("[vov{}]", filter_parts.len());
                 filter_parts.push(format!(
-                    "{video_label}drawtext=text='{escaped}':fontsize={fs}:fontcolor=white:borderw=2:bordercolor=black:x={x_expr}:y={y_expr}:enable='{enable}'{next_label}"
+                    "{video_label}drawtext=fontfile='{font}':textfile='{tmp_path}':fontsize={fs}:fontcolor=white:borderw=2:bordercolor=black:x={x_expr}:y={y_expr}:enable='{enable}'{next}"
                 ));
-                video_label = next_label;
+                video_label = next;
             }
             "image" | "gif" => {
                 if !ov.content.is_empty() && std::path::Path::new(&ov.content).exists() {
+                    // ★ Epic 6: For GIFs, add -ignore_loop 0 to keep animation
+                    let is_gif = ov.overlay_type == "gif"
+                        || ov.content.to_lowercase().ends_with(".gif");
+                    if is_gif {
+                        inputs.push("-ignore_loop".into());
+                        inputs.push("0".into());
+                    }
                     inputs.push("-i".into());
                     inputs.push(ov.content.clone());
-                    let inp_idx = input_count;
+                    let idx = input_count;
                     input_count += 1;
-                    let x_expr = format!("(W*{}/100)", ov.x / 100.0);
-                    let y_expr = format!("(H*{}/100)", ov.y / 100.0);
-                    let enable = format!("between(t\\,{:.2}\\,{:.2})", ov.start_sec, ov.start_sec + ov.dur_sec);
-                    let next_label = format!("[vov{}]", filter_parts.len());
+
+                    // ★ Epic 5: Scale image/gif to normalized size (scale% of video width)
+                    let scale_w = (src_w as f64 * ov.scale / 100.0 * 0.3) as u32; // 30% of video width at scale=100
+                    let scale_label = format!("[sovl{}]", filter_parts.len());
+
+                    if is_gif {
+                        // ★ Epic 6: Scale GIF and loop for duration
+                        filter_parts.push(format!(
+                            "[{idx}:v]scale={scale_w}:-1:flags=lanczos,loop=-1:size=0{scale_label}"
+                        ));
+                    } else {
+                        filter_parts.push(format!(
+                            "[{idx}:v]scale={scale_w}:-1:flags=lanczos{scale_label}"
+                        ));
+                    }
+
+                    let x_expr = format!("(W*{}/100-overlay_w/2)", ov.x as u32);
+                    let y_expr = format!("(H*{}/100-overlay_h/2)", ov.y as u32);
+                    let next = format!("[vov{}]", filter_parts.len());
                     filter_parts.push(format!(
-                        "{video_label}[{inp_idx}:v]overlay=x={x_expr}:y={y_expr}:enable='{enable}'{next_label}"
+                        "{video_label}{scale_label}overlay=x={x_expr}:y={y_expr}:enable='{enable}':shortest=1{next}"
                     ));
-                    video_label = next_label;
+                    video_label = next;
                 }
             }
             _ => {}
         }
     }
 
-    // Build final filter_complex string
     let has_filters = !filter_parts.is_empty();
-    let filter_complex = if has_filters {
-        // Rename final video/audio labels for output mapping
-        let fc = filter_parts.join(";");
-        format!("{fc}")
-    } else {
-        String::new()
-    };
+    let filter_complex = filter_parts.join(";");
 
-    // ── Build ffmpeg command ──
+    // Build ffmpeg command — note: -ss AFTER -i so filtergraph t starts at 0
     let mut args: Vec<String> = vec!["-y".into()];
+    args.extend(inputs);
     args.push("-ss".into()); args.push(format!("{start_sec:.3}"));
     args.push("-to".into()); args.push(format!("{end_sec:.3}"));
-    args.extend(inputs);
 
     if has_filters {
         args.push("-filter_complex".into());
         args.push(filter_complex);
-        args.push("-map".into()); args.push(video_label.trim_matches(|c| c == '[' || c == ']').to_string());
-        args.push("-map".into()); args.push(audio_label.trim_matches(|c| c == '[' || c == ']').to_string());
+        args.push("-map".into()); args.push(video_label.clone());
+        args.push("-map".into()); args.push(audio_label.clone());
     }
 
-    // Video encoding settings
     if target_mb > 0.0 {
         let audio_kbps = 128.0;
         let video_kbps = ((target_mb * 8192.0 / dur) - audio_kbps).max(100.0);
@@ -634,11 +675,83 @@ pub async fn export_clip_with_filters(
         });
     }
 
-    let status = child.wait().map_err(|e| format!("ffmpeg: {e}"))?;
+    // ★ Epic 3: Store child in managed state so cancel_export can kill it
+    {
+        let export_state = app.state::<crate::ExportProcess>();
+        let mut lock = export_state.child.lock().unwrap();
+        *lock = Some((child, out.clone()));
+    }
+
+    // Wait for the process (either completes or gets killed by cancel_export)
+    let status = {
+        let export_state = app.state::<crate::ExportProcess>();
+        let mut lock = export_state.child.lock().unwrap();
+        if let Some((ref mut c, _)) = *lock {
+            let s = c.wait().map_err(|e| format!("ffmpeg: {e}"))?;
+            Some(s)
+        } else {
+            None // was cancelled
+        }
+    };
+
+    // Clear the managed state
+    {
+        let export_state = app.state::<crate::ExportProcess>();
+        *export_state.child.lock().unwrap() = None;
+    }
+
+    // Clean up temp text files
+    for i in 0..20 {
+        let tmp = std::env::temp_dir().join(format!("opengg_text_{i}.txt"));
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     let _ = app.emit("export-progress", serde_json::json!({"percent": 100, "stage": "done", "speed": ""}));
 
-    if status.success() { Ok(out) }
-    else { Err("FFmpeg export failed".into()) }
+    match status {
+        Some(s) if s.success() => Ok(out),
+        Some(_) => Err("FFmpeg export failed".into()),
+        None => Err("Export was cancelled".into()),
+    }
+}
+
+/// ★ Epic 3: Cancel the running FFmpeg export
+#[command]
+pub async fn cancel_export(app: AppHandle) -> Result<(), String> {
+    let export_state = app.state::<crate::ExportProcess>();
+    let mut lock = export_state.child.lock().unwrap();
+    if let Some((mut child, output_path)) = lock.take() {
+        eprintln!("cancel_export: killing FFmpeg process");
+        let _ = child.kill();
+        let _ = child.wait(); // reap zombie
+        // Delete the partial/corrupt output file
+        if std::path::Path::new(&output_path).exists() {
+            let _ = std::fs::remove_file(&output_path);
+            eprintln!("cancel_export: deleted partial file {output_path}");
+        }
+        let _ = app.emit("export-progress", serde_json::json!({"percent": -1, "stage": "cancelled", "speed": ""}));
+        Ok(())
+    } else {
+        Ok(()) // nothing running
+    }
+}
+
+// ═══ App Lifecycle ═══
+
+/// ★ Epic 4: Graceful quit — shows window if hidden, then exits
+#[command]
+pub async fn quit_app(app: AppHandle) -> Result<(), String> {
+    eprintln!("OpenGG: quit requested");
+    // Kill any running export
+    {
+        let ep = app.state::<crate::ExportProcess>();
+        if let Some((mut child, path)) = ep.child.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            if std::path::Path::new(&path).exists() { let _ = std::fs::remove_file(&path); }
+        }
+    }
+    std::process::exit(0);
 }
 
 // ═══ Replay ═══
@@ -707,24 +820,34 @@ const VIDEO_EXTS: &[&str] = &["mp4","mkv","webm","avi","mov","ts","flv"];
     if r.status.success() && out.exists() { Ok(out.to_string_lossy().to_string()) }
     else { Err(format!("ffmpeg: {}", String::from_utf8_lossy(&r.stderr))) }
 }
-#[derive(Deserialize)] pub struct ClipMetaUpdate { pub filepath:String, pub custom_name:Option<String>, pub favorite:Option<bool>, pub game_tag:Option<String> }
+#[derive(Deserialize)] pub struct ClipMetaUpdate { pub filepath:String, pub custom_name:Option<String>, pub favorite:Option<bool>, pub game_tag:Option<String>, pub notes:Option<String> }
 #[command] pub async fn set_clip_meta(update: ClipMetaUpdate) -> Result<(), String> {
     let db = open_db()?;
-    // Ensure game_tag column exists (migration)
     let _ = db.execute("ALTER TABLE clip_meta ADD COLUMN game_tag TEXT DEFAULT ''", []);
-    db.execute("INSERT INTO clip_meta(filepath,custom_name,favorite,game_tag) VALUES(?1,?2,?3,?4) ON CONFLICT(filepath) DO UPDATE SET custom_name=COALESCE(?2,custom_name),favorite=COALESCE(?3,favorite),game_tag=COALESCE(?4,game_tag)",
-        rusqlite::params![update.filepath, update.custom_name.unwrap_or_default(), update.favorite.unwrap_or(false) as i32, update.game_tag.unwrap_or_default()]
+    // Build dynamic UPDATE to only set provided fields
+    let cn = update.custom_name.unwrap_or_default();
+    let fav = update.favorite.unwrap_or(false) as i32;
+    let gt = update.game_tag.unwrap_or_default();
+    let notes = update.notes.unwrap_or_default();
+    db.execute(
+        "INSERT INTO clip_meta(filepath,custom_name,favorite,game_tag,notes) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(filepath) DO UPDATE SET custom_name=CASE WHEN ?2='' THEN custom_name ELSE ?2 END,favorite=?3,game_tag=CASE WHEN ?4='' THEN game_tag ELSE ?4 END,notes=CASE WHEN ?5='' THEN notes ELSE ?5 END",
+        rusqlite::params![update.filepath, cn, fav, gt, notes]
     ).map_err(|e| format!("{e}"))?;
     Ok(())
 }
 
-/// Get game_tag for a clip
+/// Get full clip metadata including notes (for overlay persistence)
 #[command]
 pub async fn get_clip_meta(filepath: String) -> Result<String, String> {
     let db = open_db()?;
     let _ = db.execute("ALTER TABLE clip_meta ADD COLUMN game_tag TEXT DEFAULT ''", []);
-    match db.query_row("SELECT custom_name,favorite,game_tag FROM clip_meta WHERE filepath=?1", [&filepath], |r| {
-        Ok(serde_json::json!({"custom_name": r.get::<_,String>(0)?, "favorite": r.get::<_,bool>(1)?, "game_tag": r.get::<_,String>(2).unwrap_or_default() }))
+    match db.query_row("SELECT custom_name,favorite,COALESCE(game_tag,''),COALESCE(notes,'') FROM clip_meta WHERE filepath=?1", [&filepath], |r| {
+        Ok(serde_json::json!({
+            "custom_name": r.get::<_,String>(0)?,
+            "favorite": r.get::<_,bool>(1)?,
+            "game_tag": r.get::<_,String>(2).unwrap_or_default(),
+            "notes": r.get::<_,String>(3).unwrap_or_default(),
+        }))
     }) {
         Ok(v) => Ok(v.to_string()),
         Err(_) => Ok("null".into()),
@@ -758,7 +881,7 @@ pub async fn take_screenshot(filepath: String, time_sec: f64) -> Result<String, 
 #[command] pub async fn save_trim_state(filepath: String, trim_start: f64, trim_end: f64) -> Result<(), String> { open_db()?.execute("INSERT INTO trim_state(filepath,trim_start,trim_end) VALUES(?1,?2,?3) ON CONFLICT(filepath) DO UPDATE SET trim_start=?2,trim_end=?3", rusqlite::params![filepath,trim_start,trim_end]).map_err(|e| format!("{e}"))?; Ok(()) }
 #[derive(Serialize)] pub struct TrimState { pub trim_start: f64, pub trim_end: f64 }
 #[command] pub async fn get_trim_state(filepath: String) -> Result<Option<TrimState>, String> { let c=open_db()?; let mut s=c.prepare("SELECT trim_start,trim_end FROM trim_state WHERE filepath=?1").map_err(|e| format!("{e}"))?; match s.query_row([&filepath],|r| Ok(TrimState{trim_start:r.get(0)?,trim_end:r.get(1)?})){Ok(t)=>Ok(Some(t)),Err(rusqlite::Error::QueryReturnedNoRows)=>Ok(None),Err(e)=>Err(format!("{e}"))} }
-#[command] pub async fn trim_clip(input_path: String, start_sec: f64, end_sec: f64, output_path: String) -> Result<String, String> { let out=if output_path.is_empty(){auto_name(&input_path,"_trim")}else{output_path}; let r=Command::new("ffmpeg").args(["-i",&input_path,"-ss",&format!("{start_sec:.3}"),"-to",&format!("{end_sec:.3}"),"-c","copy","-avoid_negative_ts","make_zero","-y",&out]).output().map_err(|e| format!("{e}"))?; if r.status.success(){Ok(out)}else{Err(format!("{}",String::from_utf8_lossy(&r.stderr)))} }
+#[command] pub async fn trim_clip(input_path: String, start_sec: f64, end_sec: f64, output_path: String) -> Result<String, String> { let mut out=if output_path.is_empty(){auto_name(&input_path,"_trim")}else{output_path}; if out==input_path{out=auto_name(&input_path,"_trim")} let r=Command::new("ffmpeg").args(["-i",&input_path,"-ss",&format!("{start_sec:.3}"),"-to",&format!("{end_sec:.3}"),"-c","copy","-avoid_negative_ts","make_zero","-y",&out]).output().map_err(|e| format!("{e}"))?; if r.status.success(){Ok(out)}else{Err(format!("{}",String::from_utf8_lossy(&r.stderr)))} }
 /// Export with target size + real-time progress via Tauri events.
 /// Parses ffmpeg stderr for "time=HH:MM:SS.xx" to calculate %.
 #[command]
@@ -766,7 +889,8 @@ pub async fn export_clip_sized(app: AppHandle, input_path: String, start_sec: f6
     let dur = end_sec - start_sec;
     if dur <= 0.0 { return Err("Invalid trim range".into()); }
 
-    let out = if output_path.is_empty() { auto_name(&input_path, &format!("_{}mb", target_mb as u32)) } else { output_path };
+    let mut out = if output_path.is_empty() { auto_name(&input_path, &format!("_{}mb", target_mb as u32)) } else { output_path };
+    if out == input_path { out = auto_name(&input_path, &format!("_{}mb", target_mb as u32)); }
 
     if target_mb <= 0.0 {
         // Original quality — stream copy (fast, no progress needed)
@@ -1046,6 +1170,89 @@ fn settings_path() -> PathBuf { dirs::config_dir().unwrap_or_else(||PathBuf::fro
 
 // ═══ Helpers ═══
 fn thumb_dir() -> PathBuf { dirs::data_dir().unwrap_or_else(||PathBuf::from("~/.local/share")).join("opengg/thumbnails") }
+
+/// Count actual audio streams in a file via ffprobe
+fn count_audio_streams(path: &str) -> u32 {
+    get_audio_stream_global_indices(path).len() as u32
+}
+
+/// Get the global stream indices of all audio streams.
+fn get_audio_stream_global_indices(path: &str) -> Vec<u32> {
+    if let Ok(o) = Command::new("ffprobe")
+        .args(["-v", "quiet", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", path])
+        .output() {
+        if o.status.success() {
+            return String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|l| l.trim().parse::<u32>().ok())
+                .collect();
+        }
+    }
+    vec![0]
+}
+
+/// ★ Epic 5: Probe video resolution for normalized overlay sizing
+fn probe_resolution(path: &str) -> (u32, u32) {
+    if let Ok(o) = Command::new("ffprobe")
+        .args(["-v", "quiet", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", path])
+        .output() {
+        if o.status.success() {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let parts: Vec<&str> = s.split('x').collect();
+            if parts.len() == 2 {
+                let w = parts[0].parse().unwrap_or(1920);
+                let h = parts[1].parse().unwrap_or(1080);
+                return (w, h);
+            }
+        }
+    }
+    (1920, 1080) // fallback
+}
+
+/// Find a system font that supports Arabic/CJK/Latin characters.
+/// Tries common paths on Arch/Ubuntu/Fedora, falls back to fc-match.
+fn find_system_font() -> String {
+    let candidates = [
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/TTF/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ];
+    for path in &candidates {
+        if std::path::Path::new(path).exists() { return path.to_string(); }
+    }
+    // Fallback: use fc-match to find any available sans-serif font
+    if let Ok(output) = Command::new("fc-match").args(["--format=%{file}", "sans"]).output() {
+        if output.status.success() {
+            let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !p.is_empty() && std::path::Path::new(&p).exists() { return p; }
+        }
+    }
+    // Last resort
+    "sans".to_string()
+}
+
+/// Clear the thumbnail cache directory
+#[command]
+pub async fn clear_thumbnail_cache() -> Result<u32, String> {
+    let td = thumb_dir();
+    let mut count = 0u32;
+    if td.exists() {
+        // Count files before deleting
+        if let Ok(entries) = std::fs::read_dir(&td) {
+            count = entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).count() as u32;
+        }
+        std::fs::remove_dir_all(&td).map_err(|e| format!("remove: {e}"))?;
+    }
+    std::fs::create_dir_all(&td).map_err(|e| format!("create: {e}"))?;
+    Ok(count)
+}
 fn resolve_clips_dir(f:&str) -> PathBuf { if !f.is_empty(){return PathBuf::from(shexp(f));} let sp=settings_path(); if sp.exists(){if let Ok(j)=std::fs::read_to_string(&sp){if let Ok(v)=serde_json::from_str::<serde_json::Value>(&j){if let Some(f)=v["settings"]["clipsFolder"].as_str(){return PathBuf::from(shexp(f));}}}} default_clips_dir() }
 fn default_clips_dir() -> PathBuf { dirs::video_dir().unwrap_or_else(||dirs::home_dir().unwrap().join("Videos")).join("OpenGG") }
 fn shexp(p:&str) -> String { if p.starts_with("~/"){if let Some(h)=dirs::home_dir(){return p.replacen("~",&h.to_string_lossy(),1);}} p.into() }

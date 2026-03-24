@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { usePersistenceStore } from '../stores/persistence'
@@ -10,6 +11,18 @@ onMounted(async () => { if (!persist.loaded) await persist.load() })
 
 const modules = computed(() => persist.state.modules)
 const settings = computed(() => persist.state.settings)
+
+// ★ Epic 4: Clear thumbnail cache
+const cacheClearing = ref(false)
+const cacheMsg = ref('')
+async function clearCache() {
+  cacheClearing.value = true; cacheMsg.value = ''
+  try {
+    const count = await invoke<number>('clear_thumbnail_cache')
+    cacheMsg.value = `Cleared ${count} thumbnails. Reload clips to regenerate.`
+  } catch (e) { cacheMsg.value = `Error: ${e}` }
+  finally { cacheClearing.value = false }
+}
 
 // Theme editing
 const themeAccent = ref('#E94560')
@@ -100,6 +113,18 @@ async function openExternal(url: string) {
       </div>
     </div>
 
+    <!-- ★ Epic 4: Cache & Data -->
+    <div class="section">
+      <h3>Cache &amp; Data</h3>
+      <p class="hint">Thumbnails are cached at ~/.local/share/opengg/thumbnails/</p>
+      <div class="cache-row">
+        <button class="btn btn-warn" @click="clearCache" :disabled="cacheClearing">
+          {{ cacheClearing ? 'Clearing...' : '🗑 Clear Thumbnail Cache' }}
+        </button>
+        <span v-if="cacheMsg" class="cache-msg">{{ cacheMsg }}</span>
+      </div>
+    </div>
+
     <!-- Shortcuts -->
     <div class="section">
       <h3>Keyboard Shortcuts</h3>
@@ -135,6 +160,9 @@ async function openExternal(url: string) {
 .color-picker { width:40px; height:36px; border:1px solid var(--border); border-radius:var(--radius); background:none; cursor:pointer; padding:2px; }
 .color-hex { width:90px; padding:7px 10px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-size:13px; font-family:monospace; outline:none; color-scheme:dark; }
 .btn { padding:7px 14px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg-card); color:var(--text-sec); font-size:12px; cursor:pointer; white-space:nowrap; } .btn:hover { background:var(--bg-hover); color:var(--text); } .btn:disabled { opacity:.5; }
+.btn-warn { border-color:var(--danger); color:var(--danger); } .btn-warn:hover { background:color-mix(in srgb, var(--danger) 10%, transparent); }
+.cache-row { display:flex; align-items:center; gap:12px; margin-top:8px; }
+.cache-msg { font-size:11px; color:var(--text-muted); }
 
 .toggle-grid { display:flex; flex-direction:column; gap:10px; }
 .toggle-row { display:flex; align-items:center; gap:12px; padding:10px 14px; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius); cursor:pointer; font-size:13px; }

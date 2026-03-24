@@ -4,8 +4,8 @@ mod commands;
 mod media_server;
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-use tauri::Manager;
+use std::sync::{Arc, Mutex};
+use tauri::{Manager, WindowEvent};
 
 fn main() {
     std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
@@ -27,38 +27,53 @@ fn main() {
             // Clips
             commands::get_clips, commands::generate_thumbnail,
             commands::set_clip_meta, commands::get_clip_meta,
-            commands::take_screenshot, commands::delete_clip,
+            commands::take_screenshot,
+            commands::clear_thumbnail_cache, commands::delete_clip,
             commands::trim_clip, commands::export_clip_sized,
             commands::save_trim_state, commands::get_trim_state,
             commands::open_file_location,
             // Editor
             commands::analyze_media, commands::rename_clip, commands::export_timeline,
             commands::calc_export_settings, commands::export_clip_with_filters,
-            commands::generate_waveform,
-            commands::export_with_progress, commands::generate_waveform,
+            commands::generate_waveform, commands::export_with_progress,
+            commands::cancel_export,
             // Recording
             commands::start_screen_recording, commands::stop_screen_recording,
-            // Theme
+            // Theme + Settings
             commands::load_theme, commands::save_theme,
-            // Media server
             commands::get_media_server_port,
-            // Persistence
             commands::save_ui_settings, commands::load_ui_settings,
+            // ★ Epic 4: Quit command (for menu/tray "Exit")
+            commands::quit_app,
         ])
         .setup(|app| {
             app.manage(VuState(Arc::new(AtomicBool::new(false))));
+            app.manage(ExportProcess::default());
             if let Err(e) = commands::init_clips_db() { eprintln!("DB: {e}"); }
-
-            // ★ Spawn local HTTP media server on a random port
             let port = media_server::spawn_media_server();
             app.manage(MediaServerPort(port));
-            eprintln!("Media server started on http://localhost:{port}");
-
+            eprintln!("OpenGG media server on http://localhost:{port}");
             Ok(())
         })
+        // ★ Epic 4: Close-to-background — hiding instead of quitting
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                // Prevent the window from actually closing
+                api.prevent_close();
+                // Hide the window instead
+                let _ = window.hide();
+                eprintln!("OpenGG: window hidden (still running in background)");
+            }
+        })
         .run(tauri::generate_context!())
-        .expect("error while running opengg");
+        .expect("opengg failed");
 }
 
 pub struct VuState(pub Arc<AtomicBool>);
 pub struct MediaServerPort(pub u16);
+
+/// Managed state for cancellable FFmpeg export
+#[derive(Default)]
+pub struct ExportProcess {
+    pub child: Mutex<Option<(std::process::Child, String)>>,
+}

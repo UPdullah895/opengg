@@ -71,6 +71,25 @@ function addOverlay(type: 'text' | 'image' | 'gif') {
 }
 function removeOverlay(id: string) { overlays.value = overlays.value.filter(o => o.id !== id); if (selectedOverlay.value === id) selectedOverlay.value = null }
 
+// ★ Epic 3: Clean display name — extract filename from full URL/path
+function ovDisplayName(ov: Overlay): string {
+  if (ov.type === 'text') return ov.content ? `"${ov.content.slice(0, 20)}"` : 'Empty text'
+  if (!ov.content) return ov.type === 'image' ? 'No image' : 'No GIF'
+  // Extract filename from URL or path: http://localhost:18500/media/home/.../photo.jpg → photo.jpg
+  return ov.content.split('/').pop()?.split('?')[0] || ov.type
+}
+
+// ★ Epic 3: Overlay reordering — controls z-index AND ffmpeg filter chain order
+function moveOverlay(id: string, dir: 'up' | 'down') {
+  const idx = overlays.value.findIndex(o => o.id === id)
+  if (idx < 0) return
+  const newIdx = dir === 'up' ? idx - 1 : idx + 1
+  if (newIdx < 0 || newIdx >= overlays.value.length) return
+  const arr = [...overlays.value]
+  ;[arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]]
+  overlays.value = arr
+}
+
 // ★ Epic 3: File picker for image/gif overlays
 async function pickOverlayFile(ov: Overlay) {
   try {
@@ -252,11 +271,25 @@ onMounted(async () => { try { info.value = await invoke<MInfo>('analyze_media', 
 async function saveMeta() {
   try { await invoke('save_trim_state', { filepath: props.clip.filepath, trimStart: trimS.value, trimEnd: trimE.value }) } catch {}
   try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: editName.value, favorite: props.clip.favorite, game_tag: gameTag.value } }) } catch {}
+  // ★ Epic 5: Persist overlays as JSON in the notes column
+  if (overlays.value.length) {
+    try {
+      const ovJson = JSON.stringify(overlays.value.map(o => ({ ...o, open: false })))
+      await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, notes: ovJson } })
+    } catch {}
+  }
 }
 async function loadMeta() {
   try { const s = await invoke<{ trim_start: number; trim_end: number } | null>('get_trim_state', { filepath: props.clip.filepath }); if (s && s.trim_end > 0) { trimS.value = s.trim_start; trimE.value = s.trim_end } } catch {}
-  // Load game tag
-  try { const m = await invoke<string>('get_clip_meta', { filepath: props.clip.filepath }); if (m && m !== 'null') { const d = JSON.parse(m); if (d.game_tag) gameTag.value = d.game_tag } } catch {}
+  try {
+    const m = await invoke<string>('get_clip_meta', { filepath: props.clip.filepath })
+    if (m && m !== 'null') {
+      const d = JSON.parse(m)
+      if (d.game_tag) gameTag.value = d.game_tag
+      // ★ Epic 5: Restore overlays from notes
+      if (d.notes) { try { const restored = JSON.parse(d.notes); if (Array.isArray(restored)) overlays.value = restored } catch {} }
+    }
+  } catch {}
 }
 
 // ★ E3-P5: Screenshot
@@ -269,6 +302,13 @@ async function takeScreenshot() {
 
 // ★ E1-P2: Active overlays for rendering on video
 const visibleOverlays = computed(() => overlays.value.filter(o => ct.value >= o.startSec && ct.value < o.startSec + o.durSec))
+
+// ★ Epic 1: Auto-save overlays whenever they change (debounced)
+let overlaySaveTimer: ReturnType<typeof setTimeout> | null = null
+watch(overlays, () => {
+  if (overlaySaveTimer) clearTimeout(overlaySaveTimer)
+  overlaySaveTimer = setTimeout(() => saveMeta(), 800)
+}, { deep: true })
 
 // Click-outside
 function onDocClick(e: MouseEvent) {
@@ -285,14 +325,16 @@ function selectGame(g: string) { gameTag.value = g; gameOpen.value = false; save
 async function openExport() { exportModal.value = true; exportName.value = editName.value || 'export'; exportDir.value = props.clip.filepath.replace(/\/[^/]+$/, ''); exportTarget.value = 0; exportProgress.value = 0; exportSpeed.value = ''; await updateProj() }
 async function updateProj() { if (exportTarget.value <= 0) { exportSettings.value = `Stream copy • ${info.value?.width || 1920}x${info.value?.height || 1080}`; return } try { const j = await invoke<string>('calc_export_settings', { durationSec: trimDur.value, targetMb: exportTarget.value, width: info.value?.width || 1920, height: info.value?.height || 1080 }); const s = JSON.parse(j); exportSettings.value = `${s.resolution} • ${s.video_bitrate_kbps}kbps video • ${s.audio_bitrate_kbps}kbps audio • H.264` } catch { exportSettings.value = '...' } }
 watch(exportTarget, updateProj)
+const exportResult = ref('')
+
 async function doExport() {
-  exporting.value = true; exportProgress.value = 0
+  exporting.value = true; exportProgress.value = 0; exportResult.value = ''
   progressUnsub = await listen<{ percent: number; speed: string }>('export-progress', e => {
     if (e.payload.percent >= 0) exportProgress.value = e.payload.percent
     if (e.payload.speed) exportSpeed.value = e.payload.speed
   })
   try {
-    const p = `${exportDir.value}/${exportName.value.replace(/[^a-zA-Z0-9 _-]/g, '')}.mp4`
+    const p = `${exportDir.value}/${exportName.value.replace(/[<>:"/\\|?*\x00]/g, '').trim()}.mp4`
     const audioTracks = tracks.value.filter(t => t.type === 'audio').map(t => ({
       stream_index: t.streamIndex, volume: t.volume / 100, muted: t.muted,
     }))
@@ -313,14 +355,31 @@ async function doExport() {
         targetMb: exportTarget.value, outputPath: p,
       })
     }
-    emit('saved', out); showToast(`Export complete: ${out.split('/').pop()}`, out)
-  } catch (e) { showToast(`Export failed: ${e}`) }
-  finally { exporting.value = false; exportModal.value = false; progressUnsub?.(); progressUnsub = null }
+    // ★ Epic 3: Stay open on success — show drag zone
+    exportResult.value = out
+    emit('saved', out)
+  } catch (e) {
+    showToast(`Export failed: ${e}`)
+    exportModal.value = false
+  } finally {
+    exporting.value = false
+    progressUnsub?.(); progressUnsub = null
+  }
+}
+function closeExportModal() { exportModal.value = false; exportResult.value = '' }
+
+// ★ Epic 3: Cancel running export
+async function cancelExport() {
+  try { await invoke('cancel_export') } catch {}
+  exporting.value = false
+  exportProgress.value = 0
+  exportSpeed.value = ''
+  showToast('Export cancelled')
 }
 function onToastDrag(e: DragEvent) { if (e.dataTransfer && toastFile.value) { e.dataTransfer.setData('text/uri-list', `file://${toastFile.value}`); e.dataTransfer.effectAllowed = 'copy' } }
 
 // Hotkeys
-function onKey(e: KeyboardEvent) { if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return; if (e.code === 'Space') { e.preventDefault(); togglePlay() } else if (e.code === 'ArrowRight') { e.preventDefault(); skip(SKIP) } else if (e.code === 'ArrowLeft') { e.preventDefault(); skip(-SKIP) } else if (e.code === 'KeyZ' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); undo() } else if (e.code === 'Escape') { if (exportModal.value) exportModal.value = false; else emit('close') } }
+function onKey(e: KeyboardEvent) { if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return; if (e.code === 'Space') { e.preventDefault(); togglePlay() } else if (e.code === 'ArrowRight') { e.preventDefault(); skip(SKIP) } else if (e.code === 'ArrowLeft') { e.preventDefault(); skip(-SKIP) } else if (e.code === 'KeyZ' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); undo() } else if (e.code === 'Escape') { if (exportModal.value) closeExportModal(); else emit('close') } }
 onMounted(() => document.addEventListener('keydown', onKey)); onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
 
 function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}.${Math.floor((s % 1) * 10)}` }
@@ -409,7 +468,10 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
           <div v-for="ov in overlays" :key="ov.id" class="ov-card" :class="{ sel: selectedOverlay === ov.id }">
             <div class="ov-header" @click="selectedOverlay = ov.id; ov.open = !ov.open">
               <span class="ov-icon">{{ ov.type === 'text' ? '🔤' : ov.type === 'image' ? '🖼' : '🎞' }}</span>
-              <span class="ov-name">{{ ov.type }} {{ ov.content ? `"${ov.content.slice(0, 12)}"` : '' }}</span>
+              <span class="ov-name">{{ ovDisplayName(ov) }}</span>
+              <!-- ★ Epic 3: Reorder buttons -->
+              <button class="ov-move" @click.stop="moveOverlay(ov.id, 'up')" title="Move up (behind)">▲</button>
+              <button class="ov-move" @click.stop="moveOverlay(ov.id, 'down')" title="Move down (in front)">▼</button>
               <span class="ov-chevron">{{ ov.open ? '▾' : '▸' }}</span>
               <button class="ov-del" @click.stop="removeOverlay(ov.id)">×</button>
             </div>
@@ -522,7 +584,7 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
                 :style="{ left: pct(ov.startSec), width: pct(ov.durSec) }"
                 @mousedown="dragOverlayClip(ov, $event)" @click.stop="selectedOverlay = ov.id; sideTab = 'overlay'">
                 <span>{{ ov.type === 'text' ? '🔤' : ov.type === 'image' ? '🖼' : '🎞' }}</span>
-                <span class="ov-clip-label">{{ ov.content || ov.type }}</span>
+                <span class="ov-clip-label">{{ ovDisplayName(ov) }}</span>
               </div>
             </template>
             <!-- Audio track → waveform -->
@@ -545,8 +607,21 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
 
   <!-- ═══ Export Modal ═══ -->
   <Teleport to="body">
-    <div v-if="exportModal" class="modal-overlay" @click.self="exportModal = false">
+    <div v-if="exportModal" class="modal-overlay" @click.self="closeExportModal">
       <div class="modal-box">
+        <!-- ★ Epic 3: Success state with drag zone -->
+        <template v-if="exportResult">
+          <h2>✓ Export Complete</h2>
+          <div class="export-success-file">{{ exportResult.split('/').pop() }}</div>
+          <div class="export-drag-zone" draggable="true" @dragstart="e => { if (e.dataTransfer) { e.dataTransfer.setData('text/uri-list', `file://${exportResult}`); e.dataTransfer.effectAllowed = 'copy' } }">
+            📎 Drag this file to Discord, Telegram, or a folder
+          </div>
+          <div class="modal-actions">
+            <button class="btn" @click="closeExportModal">Close</button>
+          </div>
+        </template>
+        <!-- Normal export form -->
+        <template v-else>
         <h2>Export Clip</h2>
         <div class="modal-field"><label>Filename</label><input v-model="exportName" class="modal-input" /></div>
         <div class="modal-field"><label>Directory</label><input v-model="exportDir" class="modal-input" readonly /></div>
@@ -563,9 +638,11 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
           <span class="progress-text">{{ exportProgress.toFixed(0) }}% {{ exportSpeed ? `(${exportSpeed})` : '' }}</span>
         </div>
         <div class="modal-actions">
-          <button class="btn" @click="exportModal = false" :disabled="exporting">Cancel</button>
+          <button v-if="exporting" class="btn btn-cancel" @click="cancelExport">✕ Cancel Export</button>
+          <button v-else class="btn" @click="closeExportModal">Cancel</button>
           <button class="btn accent" @click="doExport" :disabled="exporting">{{ exporting ? 'Exporting...' : 'Export' }}</button>
         </div>
+        </template>
       </div>
     </div>
   </Teleport>
@@ -651,6 +728,8 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 .ov-chevron { font-size: 9px; color: var(--text-muted); }
 .ov-del { border: none; background: none; color: var(--text-muted); font-size: 14px; cursor: pointer; padding: 0 2px; line-height: 1; }
 .ov-del:hover { color: var(--danger); }
+.ov-move { border: none; background: none; color: var(--text-muted); font-size: 8px; cursor: pointer; padding: 1px 2px; line-height: 1; opacity: .5; }
+.ov-move:hover { opacity: 1; color: var(--accent); }
 .ov-body { padding: 6px 8px; display: flex; flex-direction: column; gap: 5px; }
 /* ★ Epic 3: Overlay file picker styles */
 .ov-upload { display: flex; flex-direction: column; gap: 4px; }
@@ -692,8 +771,8 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 .tl-wrap { min-height: 60px; overflow: hidden; flex-shrink: 0; }
 .tl-container { display: flex; height: 100%; }
 
-/* Track Headers — fixed width, gap from canvas */
-.tl-headers { width: 110px; flex-shrink: 0; display: flex; flex-direction: column; margin-right: 1px; background: var(--bg-deep); z-index: 4; }
+/* Track Headers — flush against canvas (no gap) */
+.tl-headers { width: 110px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--bg-deep); z-index: 4; }
 .tl-header {
   height: 36px; /* ★ E1: FIXED height per track */
   display: flex; align-items: center; gap: 4px; padding: 0 8px;
@@ -776,6 +855,12 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 .progress-fill { height: 100%; background: var(--accent); transition: width .3s; border-radius: 4px; }
 .progress-text { font-size: 10px; color: var(--text-sec); margin-top: 4px; display: block; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.btn-cancel { border-color: var(--danger); color: var(--danger); }
+.btn-cancel:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.export-success-file { padding: 10px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 12px; word-break: break-all; }
+.export-drag-zone { padding: 20px; border: 2px dashed var(--accent); border-radius: 8px; text-align: center; cursor: grab; font-size: 13px; color: var(--accent); font-weight: 600; margin-bottom: 16px; transition: background .15s; }
+.export-drag-zone:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.export-drag-zone:active { cursor: grabbing; opacity: .7; }
 
 /* Toast */
 .toast-box { position: fixed; bottom: 14px; right: 14px; z-index: 9999; background: var(--bg-card); border: 1px solid var(--accent); padding: 10px 14px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.4); font-size: 11px; font-weight: 600; display: flex; flex-direction: column; gap: 5px; color: var(--text); }
