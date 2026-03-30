@@ -8,29 +8,39 @@
  *   E5: Audio playback fix — don't mute on init
  *   E6: Dynamic track colors via CSS variables
  */
-import { ref, computed, onMounted, onBeforeUnmount, watch, inject, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, inject } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { mediaUrl } from '../utils/assets'
 import type { Clip } from '../stores/replay'
 import type { Ref } from 'vue'
+import { usePersistenceStore } from '../stores/persistence'
+import { resumeAudioContext } from '../utils/audio'
+import CustomVideoPlayer from './CustomVideoPlayer.vue'
 
 // ── Types ──
 interface MInfo { duration: number; width: number; height: number; fps: number; video_codec: string; streams: { index: number; codec_type: string; title: string }[]; audio_streams: number }
 interface Track { id: string; label: string; type: 'video' | 'audio' | 'overlay'; color: string; volume: number; muted: boolean; streamIndex: number; peaks: number[]; volOpen: boolean }
-interface Overlay { id: string; type: 'text' | 'image' | 'gif'; content: string; x: number; y: number; scale: number; startSec: number; durSec: number; open: boolean }
+interface Overlay { id: string; type: 'text' | 'image' | 'gif'; content: string; x: number; y: number; scale: number; startSec: number; durSec: number; open: boolean; fontName?: string }
 
 const props = defineProps<{ clip: Clip }>()
 const emit = defineEmits<{ 'close': []; 'toast': [string]; 'saved': [string] }>()
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 const videoSrc = computed(() => mediaUrl(props.clip.filepath, mediaPort.value))
+const persist = usePersistenceStore()
 
 const SKIP = 5
 const GAMES = ['Counter-Strike 2', 'League of Legends', 'Valorant', 'Overwatch 2', 'Apex Legends', 'Fortnite', 'Minecraft', 'Dota 2', 'Rocket League', 'Elden Ring', "Baldur's Gate 3", 'Cyberpunk 2077', 'Honkai: Star Rail', 'Genshin Impact', 'Helldivers 2', 'Path of Exile 2']
 
 // ── Core State ──
-const videoRef = ref<HTMLVideoElement | null>(null)
+const playerComp = ref<InstanceType<typeof CustomVideoPlayer> | null>(null)
+const videoRef   = ref<HTMLVideoElement | null>(null)  // synced from playerComp in onMounted
 const dur = ref(props.clip.duration || 30)
+
+// ★ Epic 2: Local monitor volume (preview only — NOT exported) and hover-mute tracking
+const localVol        = ref(1)
+const hoveredTrackId  = ref<string | null>(null)
+const isFullscreen    = ref(false)
 const ct = ref(0)
 const playing = ref(false)
 const info = ref<MInfo | null>(null)
@@ -43,11 +53,33 @@ const gameOpen = ref(false)
 const gameRef = ref<HTMLElement | null>(null)
 const gameFiltered = computed(() => { const q = gameTag.value.toLowerCase(); return q ? GAMES.filter(g => g.toLowerCase().includes(q)) : GAMES })
 
-// ── Tracks (E6: colors via CSS vars) ──
+// ── Tracks (E6: colors via CSS vars, sourced from persisted Settings) ──
 const tracks = ref<Track[]>([])
-const trackColors = ref<Record<string, string>>({
-  V1: '#3B82F6', A1: '#10B981', A2: '#F59E0B', A3: '#A855F7', A4: '#EC4899', O1: '#F97316',
-})
+
+const TRACK_FALLBACKS: Record<string, string> = {
+  V1: '#E94560', A1: '#10B981', A2: '#3b82f6', A3: '#f59e0b', A4: '#8b5cf6', A5: '#ec4899', O1: '#F97316',
+}
+
+function getTrackDef(id: string) {
+  return persist.state.settings.trackDefs?.find(d => d.id === id)
+}
+function getTrackColor(id: string): string {
+  return getTrackDef(id)?.color ?? TRACK_FALLBACKS[id] ?? '#64748b'
+}
+function getTrackName(id: string): string {
+  return getTrackDef(id)?.name ?? (id.startsWith('A') ? `Audio ${id.slice(1)}` : id)
+}
+function showIcons(): boolean {
+  return persist.state.settings.showTrackIcons ?? true
+}
+
+// AudioContext resume is handled by the shared singleton in utils/audio.ts.
+// installAudioUnlocker() in App.vue covers the global one-shot unlock.
+// resumeAudioContext() is called immediately before every play() as a safeguard.
+
+// ── Extensions feature flags ──
+const extOverlays = computed(() => persist.state.extensions?.overlays ?? true)
+const extTiktok   = computed(() => persist.state.extensions?.tiktokExport ?? false)
 
 // ── Layout ──
 const sideOpen = ref(true)
@@ -55,21 +87,24 @@ const sideWidth = ref(200) // E4: resizable
 const previewFlex = ref(3)
 const tlFlex = ref(1.2)
 const undoStack = ref<{ s: number; e: number }[]>([])
+const redoStack = ref<{ s: number; e: number }[]>([])
 const sideTab = ref<'info' | 'overlay'>('info')
 
 // ── Overlays (E2+E3) ──
 const overlays = ref<Overlay[]>([])
 const selectedOverlay = ref<string | null>(null)
-const activeOverlay = computed(() => overlays.value.find(o => o.id === selectedOverlay.value))
+
+const OVERLAY_FONTS = ['Noto Sans', 'Impact', 'Arial', 'Tahoma', 'DejaVu Sans', 'Liberation Sans', 'Ubuntu', 'Roboto']
 
 function addOverlay(type: 'text' | 'image' | 'gif') {
-  const o: Overlay = { id: `ov_${Date.now()}`, type, content: type === 'text' ? 'Your Text' : '', x: 50, y: 50, scale: 100, startSec: ct.value, durSec: Math.min(5, dur.value - ct.value), open: true }
+  const o: Overlay = { id: `ov_${Date.now()}`, type, content: type === 'text' ? 'Your Text' : '', x: 50, y: 50, scale: 100, startSec: ct.value, durSec: Math.min(5, dur.value - ct.value), open: true, fontName: 'Noto Sans' }
   overlays.value.push(o)
   selectedOverlay.value = o.id
   sideTab.value = 'overlay'
   if (!sideOpen.value) sideOpen.value = true
 }
 function removeOverlay(id: string) { overlays.value = overlays.value.filter(o => o.id !== id); if (selectedOverlay.value === id) selectedOverlay.value = null }
+function clearOverlays() { overlays.value = []; selectedOverlay.value = null }
 
 // ★ Epic 3: Clean display name — extract filename from full URL/path
 function ovDisplayName(ov: Overlay): string {
@@ -121,10 +156,21 @@ function showToast(m: string, f = '') { toast.value = m; toastFile.value = f; se
 
 // ── Video ──
 function onMeta() { if (videoRef.value) { dur.value = videoRef.value.duration; if (trimE.value <= 0 || trimE.value > dur.value) trimE.value = dur.value } }
-function togglePlay() {
+// Intercept 'play' event to resume AudioContext (handles native controls too)
+async function onVideoPlay() { await resumeAudioContext(); playing.value = true }
+async function togglePlay() {
   if (!videoRef.value) return
+  await resumeAudioContext()
   if (playing.value) { videoRef.value.pause() }
-  else { if (videoRef.value.currentTime < trimS.value || videoRef.value.currentTime >= trimE.value) videoRef.value.currentTime = trimS.value; videoRef.value.play() }
+  else {
+    if (videoRef.value.currentTime < trimS.value || videoRef.value.currentTime >= trimE.value) {
+      const seekTo = trimS.value > 0 ? trimS.value : 0.01
+      videoRef.value.currentTime = seekTo
+      // Re-seek audio elements immediately so they're aligned when play() fires
+      for (const el of Object.values(audioEls.value)) el.currentTime = seekTo
+    }
+    videoRef.value.play().catch(e => console.warn('play blocked:', e))
+  }
   playing.value = !playing.value
 }
 function seekTo(s: number) { if (videoRef.value) { videoRef.value.currentTime = Math.max(0, Math.min(dur.value, s)); ct.value = videoRef.value.currentTime } }
@@ -134,7 +180,9 @@ watch(ct, t => { if (playing.value && t >= trimE.value && videoRef.value) { vide
 // RAF playhead
 let raf = 0
 function startRAF() { const tick = () => { if (videoRef.value) ct.value = videoRef.value.currentTime; raf = requestAnimationFrame(tick) }; raf = requestAnimationFrame(tick) }
-onMounted(startRAF); onBeforeUnmount(() => cancelAnimationFrame(raf))
+onMounted(startRAF)
+// The AudioContext singleton lives for the app session; don't close it on unmount.
+onBeforeUnmount(() => { cancelAnimationFrame(raf) })
 
 // ═══ Epic 1: Multi-Track Audio via hidden <audio> elements ═══
 // HTML5 <video> only plays the first audio stream.
@@ -151,14 +199,18 @@ function buildAudioUrl(streamIndex: number) {
 
 function initAudioElements() {
   // Destroy old audio elements
-  for (const el of Object.values(audioEls.value)) { el.pause(); el.src = '' }
+  for (const el of Object.values(audioEls.value)) { el.pause(); el.src = ''; el.load() }
   audioEls.value = {}
 
   const audioTracks = tracks.value.filter(t => t.type === 'audio')
-  if (audioTracks.length <= 1) return // single track → use native <video> audio
+  if (audioTracks.length <= 1) {
+    // Single-track: unmute the <video> so native audio plays
+    if (videoRef.value) { videoRef.value.muted = false; videoRef.value.volume = audioTracks[0] ? (audioTracks[0].muted ? 0 : audioTracks[0].volume / 100) : 1 }
+    return
+  }
 
-  // Mute the video element (we'll play audio via separate <audio> tags)
-  if (videoRef.value) videoRef.value.volume = 0
+  // Multi-track: keep <video> muted and use separate <audio> elements
+  if (videoRef.value) videoRef.value.muted = true
 
   for (const t of audioTracks) {
     const el = new Audio()
@@ -176,7 +228,7 @@ function syncAudioToVideo() {
     if (videoRef.value) {
       const vt = videoRef.value.currentTime
       const vPlaying = !videoRef.value.paused
-      for (const [id, el] of Object.entries(audioEls.value)) {
+      for (const [_id, el] of Object.entries(audioEls.value)) {
         if (Math.abs(el.currentTime - vt) > 0.15) el.currentTime = vt
         if (vPlaying && el.paused) el.play().catch(() => {})
         if (!vPlaying && !el.paused) el.pause()
@@ -193,30 +245,31 @@ onBeforeUnmount(() => {
 })
 
 // Per-track volume/mute → update the corresponding <audio> element
-watch(tracks, ts => {
-  const audioTracks = ts.filter(t => t.type === 'audio')
+// localVol is applied as a master monitor gain (preview only — not in export)
+function applyAudioVolumes() {
+  const audioTracks = tracks.value.filter(t => t.type === 'audio')
   const hasMulti = Object.keys(audioEls.value).length > 0
-
   if (hasMulti) {
-    // Multi-track mode: control individual <audio> elements
     for (const t of audioTracks) {
       const el = audioEls.value[t.id]
-      if (el) el.volume = (t.muted || t.volume <= 0) ? 0 : Math.min(1, t.volume / 100)
+      if (el) el.volume = (t.muted || t.volume <= 0) ? 0 : Math.min(1, (t.volume / 100) * localVol.value)
     }
   } else if (videoRef.value) {
-    // Single-track mode: control <video> volume directly
     const t = audioTracks[0]
-    if (t) videoRef.value.volume = (t.muted || t.volume <= 0) ? 0 : Math.min(1, t.volume / 100)
+    if (t) videoRef.value.volume = (t.muted || t.volume <= 0) ? 0 : Math.min(1, (t.volume / 100) * localVol.value)
   }
-}, { deep: true })
+}
+watch(tracks, applyAudioVolumes, { deep: true })
+watch(localVol, applyAudioVolumes)
 
 // ── Timeline ──
 const tlRef = ref<HTMLElement | null>(null)
 const scrubbing = ref(false)
 function pxToSec(e: MouseEvent) { if (!tlRef.value) return 0; const r = tlRef.value.getBoundingClientRect(); return Math.max(0, Math.min(dur.value, ((e.clientX - r.left) / r.width) * dur.value)) }
 function tlClick(e: MouseEvent) { if ((e.target as HTMLElement).closest('.no-seek')) return; seekTo(pxToSec(e)) }
-function pushUndo() { undoStack.value.push({ s: trimS.value, e: trimE.value }) }
-function undo() { const p = undoStack.value.pop(); if (p) { trimS.value = p.s; trimE.value = p.e; saveMeta() } }
+function pushUndo() { undoStack.value.push({ s: trimS.value, e: trimE.value }); redoStack.value = [] }
+function undo() { const p = undoStack.value.pop(); if (p) { redoStack.value.push({ s: trimS.value, e: trimE.value }); trimS.value = p.s; trimE.value = p.e; saveMeta() } }
+function redo() { const r = redoStack.value.pop(); if (r) { undoStack.value.push({ s: trimS.value, e: trimE.value }); trimS.value = r.s; trimE.value = r.e; saveMeta() } }
 function dragTrim(w: 'start' | 'end', e: MouseEvent) { e.preventDefault(); e.stopPropagation(); pushUndo(); const mv = (ev: MouseEvent) => { const s = pxToSec(ev); if (w === 'start') trimS.value = Math.min(s, trimE.value - 0.3); else trimE.value = Math.max(s, trimS.value + 0.3) }; const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); saveMeta() }; document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up) }
 function phDown(e: MouseEvent) { e.preventDefault(); scrubbing.value = true; seekTo(pxToSec(e)); document.addEventListener('mousemove', scrubMv); document.addEventListener('mouseup', phUp) }
 function scrubMv(e: MouseEvent) { if (scrubbing.value) seekTo(pxToSec(e)) }
@@ -250,19 +303,28 @@ function sideResizeDown(e: MouseEvent) {
 
 // ── Init ──
 function initTracks() {
-  const t: Track[] = [
-    { id: 'O1', label: 'Overlays', type: 'overlay', color: trackColors.value.O1, volume: 100, muted: false, streamIndex: -1, peaks: [], volOpen: false },
-    { id: 'V1', label: 'Video', type: 'video', color: trackColors.value.V1, volume: 100, muted: false, streamIndex: 0, peaks: [], volOpen: false },
-  ]
+  const t: Track[] = []
+  // Only add the overlay track if the extension is enabled
+  if (extOverlays.value) {
+    t.push({ id: 'O1', label: getTrackName('O1'), type: 'overlay', color: getTrackColor('O1'), volume: 100, muted: false, streamIndex: -1, peaks: [], volOpen: false })
+  }
+  t.push({ id: 'V1', label: getTrackName('V1'), type: 'video', color: getTrackColor('V1'), volume: 100, muted: false, streamIndex: 0, peaks: [], volOpen: false })
   const audioStreams = info.value?.streams.filter(s => s.codec_type === 'audio') || []
-  const defaultAudioColors = ['#10B981', '#F59E0B', '#A855F7', '#EC4899']
   audioStreams.forEach((s, i) => {
     const id = `A${i + 1}`
-    t.push({ id, label: s.title || `Audio ${i + 1}`, type: 'audio', color: trackColors.value[id] || defaultAudioColors[i % 4], volume: 100, muted: false, streamIndex: s.index, peaks: [], volOpen: false })
+    t.push({ id, label: getTrackName(id), type: 'audio', color: getTrackColor(id), volume: 100, muted: false, streamIndex: s.index, peaks: [], volOpen: false })
   })
-  if (!audioStreams.length) t.push({ id: 'A1', label: 'Audio', type: 'audio', color: trackColors.value.A1, volume: 100, muted: false, streamIndex: 1, peaks: [], volOpen: false })
+  if (!audioStreams.length) t.push({ id: 'A1', label: getTrackName('A1'), type: 'audio', color: getTrackColor('A1'), volume: 100, muted: false, streamIndex: 1, peaks: [], volOpen: false })
   tracks.value = t
 }
+
+// Live-update colors + names when Settings → Track Defs changes
+watch(() => persist.state.settings.trackDefs, () => {
+  tracks.value.forEach(t => { t.color = getTrackColor(t.id); t.label = getTrackName(t.id) })
+}, { deep: true })
+
+// Re-init tracks when the overlays extension is toggled (adds/removes O1 row)
+watch(extOverlays, () => { initTracks() })
 async function loadWaveforms() { for (const t of tracks.value) { if (t.type !== 'audio') continue; try { t.peaks = await invoke<number[]>('generate_waveform', { filepath: props.clip.filepath, streamIndex: t.streamIndex, numPeaks: 200 }) } catch { t.peaks = Array(200).fill(0.3) } } }
 onMounted(async () => { try { info.value = await invoke<MInfo>('analyze_media', { filepath: props.clip.filepath }); if (info.value.duration > 0) dur.value = info.value.duration } catch {} initTracks(); await loadMeta(); await loadWaveforms(); initAudioElements() })
 
@@ -292,12 +354,30 @@ async function loadMeta() {
   } catch {}
 }
 
-// ★ E3-P5: Screenshot
+// ★ E3-P5: Screenshot — respects the user-configured save directory
 async function takeScreenshot() {
   try {
-    const path = await invoke<string>('take_screenshot', { filepath: props.clip.filepath, timeSec: ct.value })
+    const outputDir = persist.state.settings.screenshotDir || ''
+    const path = await invoke<string>('take_screenshot', {
+      filepath: props.clip.filepath,
+      timeSec: ct.value,
+      outputDir,
+    })
     showToast(`Screenshot saved: ${path.split('/').pop()}`, path)
   } catch (e) { showToast(`Screenshot failed: ${e}`) }
+}
+
+/** Returns true when a KeyboardEvent matches a shortcut string like "Alt+F12" or "Ctrl+Shift+S". */
+function shortcutMatches(e: KeyboardEvent, combo: string): boolean {
+  const parts = combo.split('+').map(p => p.trim().toLowerCase())
+  const key = parts[parts.length - 1]
+  const needCtrl  = parts.includes('ctrl')
+  const needShift = parts.includes('shift')
+  const needAlt   = parts.includes('alt')
+  const evKey = e.key.toLowerCase()
+  const evCode = e.code.toLowerCase().replace('key', '').replace('digit', '')
+  return (e.ctrlKey === needCtrl) && (e.shiftKey === needShift) && (e.altKey === needAlt)
+      && (evKey === key || evCode === key)
 }
 
 // ★ E1-P2: Active overlays for rendering on video
@@ -338,11 +418,15 @@ async function doExport() {
     const audioTracks = tracks.value.filter(t => t.type === 'audio').map(t => ({
       stream_index: t.streamIndex, volume: t.volume / 100, muted: t.muted,
     }))
-    const exportOverlays = overlays.value.map(o => ({
-      overlay_type: o.type, content: o.type === 'text' ? o.content : (o.content?.replace(/^http:\/\/localhost:\d+\/media/, '') || ''),
-      x: o.x, y: o.y, scale: o.scale, start_sec: o.startSec, dur_sec: o.durSec,
-    }))
-    const hasFilters = overlays.value.length > 0 || audioTracks.some(t => t.muted || t.volume < 1)
+    // Only include overlays in the export if the extension is enabled
+    const exportOverlays = extOverlays.value
+      ? overlays.value.map(o => ({
+          overlay_type: o.type, content: o.type === 'text' ? o.content : (o.content?.replace(/^http:\/\/localhost:\d+\/media/, '') || ''),
+          x: o.x, y: o.y, scale: o.scale, start_sec: o.startSec, dur_sec: o.durSec,
+          font_name: o.fontName || null,
+        }))
+      : []
+    const hasFilters = exportOverlays.length > 0 || audioTracks.some(t => t.muted || t.volume < 1)
     let out: string
     if (hasFilters) {
       out = await invoke<string>('export_clip_with_filters', {
@@ -378,15 +462,53 @@ async function cancelExport() {
 }
 function onToastDrag(e: DragEvent) { if (e.dataTransfer && toastFile.value) { e.dataTransfer.setData('text/uri-list', `file://${toastFile.value}`); e.dataTransfer.effectAllowed = 'copy' } }
 
-// Hotkeys
-function onKey(e: KeyboardEvent) { if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return; if (e.code === 'Space') { e.preventDefault(); togglePlay() } else if (e.code === 'ArrowRight') { e.preventDefault(); skip(SKIP) } else if (e.code === 'ArrowLeft') { e.preventDefault(); skip(-SKIP) } else if (e.code === 'KeyZ' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); undo() } else if (e.code === 'Escape') { if (exportModal.value) closeExportModal(); else emit('close') } }
-onMounted(() => document.addEventListener('keydown', onKey)); onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
+// Hotkeys — all configurable shortcuts read from settings store dynamically
+function onKey(e: KeyboardEvent) {
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+  const sc = persist.state.settings.shortcuts
+  if (e.code === 'Space') { e.preventDefault(); togglePlay() }
+  else if (e.code === 'ArrowRight') { e.preventDefault(); skip(SKIP) }
+  else if (e.code === 'ArrowLeft')  { e.preventDefault(); skip(-SKIP) }
+  else if (e.code === 'ArrowUp')    { e.preventDefault(); setPreviewVol(Math.min(1, localVol.value + 0.1)) }
+  else if (e.code === 'ArrowDown')  { e.preventDefault(); setPreviewVol(Math.max(0, localVol.value - 0.1)) }
+  else if (e.code === 'Escape') { if (exportModal.value) closeExportModal(); else emit('close') }
+  else if (shortcutMatches(e, sc.undo))       { e.preventDefault(); undo() }
+  else if (shortcutMatches(e, sc.redo))       { e.preventDefault(); redo() }
+  else if (shortcutMatches(e, sc.screenshot)) { e.preventDefault(); takeScreenshot() }
+  else if (shortcutMatches(e, sc.exportClip)) { e.preventDefault(); openExport() }
+  else if (shortcutMatches(e, sc.splitClip))  { e.preventDefault(); pushUndo(); trimE.value = Math.max(ct.value, trimS.value + 0.1); saveMeta() }
+  else if (shortcutMatches(e, sc.toggleMic))  {
+    e.preventDefault()
+    if (hoveredTrackId.value) {
+      const t = tracks.value.find(t => t.id === hoveredTrackId.value)
+      if (t) { t.muted = !t.muted; applyAudioVolumes() }
+    } else if (videoRef.value) {
+      videoRef.value.muted = !videoRef.value.muted
+    }
+  }
+}
+const onFsChange = () => { isFullscreen.value = !!document.fullscreenElement }
+function togglePreviewFullscreen() { playerComp.value?.toggleFullscreen() }
+onMounted(() => {
+  videoRef.value = playerComp.value?.videoRef ?? null
+  document.addEventListener('keydown', onKey)
+  document.addEventListener('fullscreenchange', onFsChange)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKey)
+  document.removeEventListener('fullscreenchange', onFsChange)
+})
 
 function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}.${Math.floor((s % 1) * 10)}` }
+function onPreviewProgressClick(e: MouseEvent) {
+  const el = e.currentTarget as HTMLElement
+  const r = el.getBoundingClientRect()
+  const t = ((e.clientX - r.left) / r.width) * dur.value
+  if (videoRef.value) { videoRef.value.currentTime = t; ct.value = t }
+}
+function setPreviewVol(v: number) { localVol.value = v; if (videoRef.value) videoRef.value.volume = v }
 function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !t.peaks.length) return; const ctx = canvas.getContext('2d'); if (!ctx) return; const w = canvas.clientWidth; const h = canvas.clientHeight; canvas.width = w; canvas.height = h; ctx.clearRect(0, 0, w, h); const bw = w / t.peaks.length; const color = t.muted ? '#555' : t.color; const grad = ctx.createLinearGradient(0, 0, 0, h); grad.addColorStop(0, color + '80'); grad.addColorStop(0.5, color + 'DD'); grad.addColorStop(1, color + '80'); ctx.fillStyle = grad; for (let i = 0; i < t.peaks.length; i++) { const bh = Math.max(2, t.peaks[i] * h * 1.6); ctx.fillRect(i * bw, (h - bh) / 2, Math.max(1, bw - 0.5), bh) } }
 
-// E6: Apply track color
-function setTrackColor(id: string, color: string) { trackColors.value[id] = color; const t = tracks.value.find(t => t.id === id); if (t) t.color = color }
 </script>
 
 <template>
@@ -407,26 +529,71 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
     <span v-if="info" class="tag">{{ info.width }}×{{ info.height }}</span>
     <span v-if="info" class="tag">{{ info.fps.toFixed(0) }}fps</span>
     <span v-if="undoStack.length" class="tag">↩{{ undoStack.length }}</span>
+    <button v-if="extTiktok" class="btn tiktok-btn" :disabled="exporting" title="TikTok Vertical Export (9:16) — coming soon" @click.prevent>
+      <svg viewBox="0 0 24 24" fill="currentColor" class="ic" style="width:13px;height:13px"><path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1V9.01a6.27 6.27 0 00-.79-.05 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.33-6.34V8.69a8.14 8.14 0 004.77 1.52V6.74a4.85 4.85 0 01-1-.05z"/></svg>
+      9:16
+    </button>
     <button class="btn accent" :disabled="exporting" @click="openExport">Export</button>
   </div>
 
   <!-- ═══ Main: Preview + Sidebar ═══ -->
   <div class="main" :style="{ flex: previewFlex }">
-    <div class="preview" @click="togglePlay">
-      <video ref="videoRef" :src="videoSrc" preload="metadata" @loadedmetadata="onMeta" @ended="playing = false" @pause="playing = false" @play="playing = true" class="vid" />
-      <!-- ★ E1-P2: Overlay rendering ON the video -->
-      <div class="overlay-layer">
-        <div v-for="ov in visibleOverlays" :key="ov.id" class="overlay-item"
-          :style="{ left: ov.x + '%', top: ov.y + '%', transform: `translate(-50%,-50%) scale(${ov.scale / 100})` }"
-          @click.stop="selectedOverlay = ov.id; sideTab = 'overlay'">
-          <span v-if="ov.type === 'text'" class="overlay-text">{{ ov.content }}</span>
-          <img v-else-if="ov.type === 'image' && ov.content" :src="ov.content" class="overlay-img" />
-          <img v-else-if="ov.type === 'gif' && ov.content" :src="ov.content" class="overlay-img" />
-          <span v-else class="overlay-placeholder">{{ ov.type === 'image' ? '🖼' : '🎞' }}</span>
+    <div class="preview">
+      <CustomVideoPlayer
+        ref="playerComp"
+        :src="videoSrc"
+        :show-controls="false"
+        :capture-keyboard="false"
+        @loadedmetadata="onMeta"
+        @play="onVideoPlay"
+        @pause="playing = false"
+        @ended="playing = false"
+      >
+        <!-- ★ E1-P2: Overlay rendering ON the video (only when extension is enabled) -->
+        <div v-if="extOverlays" class="overlay-layer">
+          <div v-for="ov in visibleOverlays" :key="ov.id" class="overlay-item"
+            :style="{ left: ov.x + '%', top: ov.y + '%', transform: `translate(-50%,-50%) scale(${ov.scale / 100})` }"
+            @click.stop="selectedOverlay = ov.id; sideTab = 'overlay'">
+            <span v-if="ov.type === 'text'" class="overlay-text">{{ ov.content }}</span>
+            <img v-else-if="ov.type === 'image' && ov.content" :src="ov.content" class="overlay-img" />
+            <img v-else-if="ov.type === 'gif' && ov.content" :src="ov.content" class="overlay-img" />
+            <span v-else class="overlay-placeholder">{{ ov.type === 'image' ? '🖼' : '🎞' }}</span>
+          </div>
         </div>
-      </div>
-      <div v-if="!playing" class="play-ov"><svg viewBox="0 0 24 24" fill="currentColor" style="width:40px;height:40px;color:#fff;opacity:.7"><polygon points="5 3 19 12 5 21"/></svg></div>
-      <div class="time-badge">{{ fmt(ct) }} / {{ fmt(dur) }}</div>
+        <div v-if="!playing && !isFullscreen" class="play-ov" @click.stop="togglePlay"><svg viewBox="0 0 24 24" fill="currentColor" style="width:40px;height:40px;color:#fff;opacity:.7"><polygon points="5 3 19 12 5 21"/></svg></div>
+        <!-- Custom ctrl-bar — only visible in fullscreen mode; transport bar handles normal editing -->
+        <div class="prev-ctrl-bar" :class="{ 'prev-ctrl-vis': isFullscreen }">
+          <div class="prev-prog" @click.stop="onPreviewProgressClick">
+            <div class="prev-prog-fill" :style="{ width: dur ? (ct/dur*100)+'%' : '0%' }">
+              <div class="prev-prog-thumb"></div>
+            </div>
+          </div>
+          <div class="prev-ctrl-row">
+            <button class="prev-cb" @click.stop="skip(-5)" title="-5s">
+              <svg viewBox="0 0 24 24" fill="currentColor" style="width:12px;height:12px"><polygon points="11 19 2 12 11 5"/><polygon points="22 19 13 12 22 5"/></svg>
+            </button>
+            <button class="prev-cb" @click.stop="togglePlay">
+              <svg v-if="playing" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+              <svg v-else viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
+            </button>
+            <button class="prev-cb" @click.stop="skip(5)" title="+5s">
+              <svg viewBox="0 0 24 24" fill="currentColor" style="width:12px;height:12px"><polygon points="13 19 22 12 13 5"/><polygon points="2 19 11 12 2 5"/></svg>
+            </button>
+            <span class="prev-time">{{ fmt(ct) }} / {{ fmt(dur) }}</span>
+            <div class="prev-vol">
+              <svg viewBox="0 0 24 24" fill="currentColor" class="prev-vol-ic" style="cursor:pointer" @click.stop="setPreviewVol(localVol > 0 ? 0 : 1)">
+                <path d="M11 5L6 9H2v6h4l5 4V5z"/>
+                <path v-if="localVol > 0" d="M15.54 8.46a5 5 0 010 7.07" stroke="currentColor" fill="none" stroke-width="2"/>
+                <line v-else x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2"/><line v-if="localVol === 0" x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2"/>
+              </svg>
+              <input type="range" min="0" max="1" step="0.05" :value="localVol" @input="setPreviewVol(+($event.target as HTMLInputElement).value)" class="prev-vol-sl" />
+            </div>
+            <button class="prev-cb" @click.stop="togglePreviewFullscreen()" title="Fullscreen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+            </button>
+          </div>
+        </div>
+      </CustomVideoPlayer>
     </div>
 
     <!-- ═══ E4: Resizable Sidebar ═══ -->
@@ -436,7 +603,7 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
       <div v-if="sideOpen" class="side-inner">
         <div class="side-tabs">
           <button :class="{ active: sideTab === 'info' }" @click="sideTab = 'info'">Info</button>
-          <button :class="{ active: sideTab === 'overlay' }" @click="sideTab = 'overlay'">Overlays<span v-if="overlays.length" class="tab-badge">{{ overlays.length }}</span></button>
+          <button v-if="extOverlays" :class="{ active: sideTab === 'overlay' }" @click="sideTab = 'overlay'">Overlays<span v-if="overlays.length" class="tab-badge">{{ overlays.length }}</span></button>
         </div>
 
         <!-- Info tab -->
@@ -456,12 +623,13 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
           </div>
         </div>
 
-        <!-- E2+E3: Overlays tab -->
-        <div v-if="sideTab === 'overlay'" class="tab-content">
+        <!-- E2+E3: Overlays tab (only rendered when extension is on) -->
+        <div v-if="sideTab === 'overlay' && extOverlays" class="tab-content">
           <div class="ov-add-row">
             <button class="ov-add-btn" @click="addOverlay('text')">🔤 Text</button>
             <button class="ov-add-btn" @click="addOverlay('image')">🖼 Image</button>
             <button class="ov-add-btn" @click="addOverlay('gif')">🎞 GIF</button>
+            <button v-if="overlays.length" class="ov-clear-btn" @click="clearOverlays" title="Remove all overlays">🗑</button>
           </div>
           <div v-if="!overlays.length" class="empty-hint">No overlays. Add one above.</div>
           <!-- E3: Accordion per overlay -->
@@ -479,6 +647,12 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
               <div v-if="ov.type === 'text'" class="ov-field">
                 <label>Text</label>
                 <input v-model="ov.content" class="ov-input" placeholder="Your text..." />
+              </div>
+              <div v-if="ov.type === 'text'" class="ov-field">
+                <label>Font</label>
+                <select v-model="ov.fontName" class="ov-select">
+                  <option v-for="f in OVERLAY_FONTS" :key="f" :value="f">{{ f }}</option>
+                </select>
               </div>
               <!-- ★ Epic 3: File picker for image/gif overlays -->
               <div v-if="ov.type === 'image' || ov.type === 'gif'" class="ov-upload">
@@ -538,9 +712,23 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
     <span class="tr-sep">│</span>
     <span class="tr-time dim">{{ fmt(trimE) }}</span>
     <div style="flex:1"></div>
+    <!-- ★ Epic 2: Local monitor volume (preview only — not exported) -->
+    <div class="vol-monitor" title="Monitor volume (preview only)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ic" style="opacity:.5">
+        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/>
+        <path v-if="localVol > 0" d="M15.54 8.46a5 5 0 010 7.07"/>
+        <line v-else x1="23" y1="9" x2="17" y2="15"/><line v-if="localVol === 0" x1="17" y1="9" x2="23" y2="15"/>
+      </svg>
+      <input type="range" min="0" max="1" step="0.05" v-model.number="localVol" class="vol-monitor-range" />
+      <span class="vol-monitor-val">{{ Math.round(localVol * 100) }}</span>
+    </div>
     <!-- ★ E3-P5: Screenshot button -->
     <button class="tr-btn" @click="takeScreenshot" title="Screenshot (save to Pictures)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ic"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    </button>
+    <!-- ★ Epic 4: Fullscreen button -->
+    <button class="tr-btn" @click="togglePreviewFullscreen()" title="Fullscreen (click again to exit)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ic"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
     </button>
     <span class="tr-dur">{{ fmt(trimDur) }}</span>
   </div>
@@ -550,8 +738,17 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
     <div class="tl-container">
       <!--  Left: Track Headers (fixed width, gap from canvas) -->
       <div class="tl-headers">
-        <div v-for="t in tracks" :key="'h' + t.id" class="tl-header" :style="{ '--tc': t.color }">
+        <div v-for="t in tracks" :key="'h' + t.id" class="tl-header" :style="{ '--tc': t.color }"
+          @mouseenter="hoveredTrackId = t.id" @mouseleave="hoveredTrackId = null">
           <span class="hdr-id">{{ t.id }}</span>
+          <svg v-if="showIcons() && getTrackDef(t.id)?.icon" class="hdr-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path v-if="getTrackDef(t.id)?.icon === 'video'"   d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M3 6h10a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2z"/>
+            <path v-else-if="getTrackDef(t.id)?.icon === 'game'"    d="M6 11h4m-2-2v4m7-1h.01M18 11h.01M2 6a2 2 0 012-2h16a2 2 0 012 2v10a4 4 0 01-4 4H6a4 4 0 01-4-4V6z"/>
+            <path v-else-if="getTrackDef(t.id)?.icon === 'mic'"     d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3zM19 10v2a7 7 0 01-14 0v-2M12 19v3M8 23h8"/>
+            <path v-else-if="getTrackDef(t.id)?.icon === 'chat'"    d="M3 18v-6a9 9 0 0118 0v6M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/>
+            <path v-else-if="getTrackDef(t.id)?.icon === 'media'"   d="M9 18V5l12-2v13M9 19c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2zm12-3c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2z"/>
+            <path v-else-if="getTrackDef(t.id)?.icon === 'overlay'" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
           <span class="hdr-name">{{ t.label }}</span>
           <!-- Speaker icon on RIGHT edge of header for audio tracks -->
           <template v-if="t.type === 'audio'">
@@ -577,7 +774,8 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
 
         <!-- E1: Each track is a distinct fixed-height row -->
         <div class="tl-rows">
-          <div v-for="t in tracks" :key="'r' + t.id" class="tl-row" :style="{ '--tc': t.color }">
+          <div v-for="t in tracks" :key="'r' + t.id" class="tl-row" :style="{ '--tc': t.color }"
+            @mouseenter="hoveredTrackId = t.id" @mouseleave="hoveredTrackId = null">
             <!-- E2: Overlay track shows overlay clips -->
             <template v-if="t.type === 'overlay'">
               <div v-for="ov in overlays" :key="ov.id" class="ov-clip no-seek" :class="{ sel: selectedOverlay === ov.id }"
@@ -669,6 +867,9 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
 .btn:hover { background: var(--bg-hover); }
 .btn:disabled { opacity: .4; }
 .accent { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tiktok-btn { border-color: #69C9D0; color: #69C9D0; gap: 4px; }
+.tiktok-btn:hover { background: rgba(105,201,208,.1); }
+.tiktok-btn:disabled { opacity: .5; cursor: not-allowed; }
 .name-in { flex: 0 1 200px; padding: 3px 8px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 5px; color: var(--text); font-size: 12px; font-weight: 700; outline: none; }
 .name-in:focus { border-color: var(--accent); }
 .game-wrap { position: relative; }
@@ -685,7 +886,64 @@ function setTrackColor(id: string, color: string) { trackColors.value[id] = colo
 .preview { flex: 1; background: #000; position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .vid { max-width: 100%; max-height: 100%; object-fit: contain; }
 .play-ov { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.15); }
-.time-badge { position: absolute; bottom: 6px; right: 6px; background: rgba(0,0,0,.8); color: #fff; font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: 3px; pointer-events: none; }
+/* ── Custom preview ctrl-bar ── */
+.prev-ctrl-bar {
+  position:absolute; bottom:0; left:0; right:0;
+  background:linear-gradient(transparent, rgba(0,0,0,.75));
+  padding:12px 8px 6px; opacity:0; transition:opacity .2s; pointer-events:none;
+}
+.prev-ctrl-bar.prev-ctrl-vis { opacity:1; pointer-events:auto; }
+.prev-prog {
+  height:3px; background:rgba(255,255,255,.25); border-radius:2px; cursor:pointer; margin-bottom:6px;
+  transition:height .15s;
+}
+.prev-prog:hover { height:5px; }
+.prev-prog-fill { height:100%; background:var(--accent); border-radius:2px; pointer-events:none; position:relative; }
+.prev-prog-thumb { position:absolute; right:-6px; top:50%; transform:translateY(-50%); width:13px; height:13px; border-radius:50%; background:#fff; box-shadow:0 0 5px rgba(0,0,0,.5); pointer-events:none; opacity:0; transition:opacity .15s; }
+.prev-prog:hover .prev-prog-thumb { opacity:1; }
+.prev-ctrl-row { display:flex; align-items:center; gap:6px; }
+.prev-cb { width:26px; height:26px; border:none; background:transparent; color:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; border-radius:4px; flex-shrink:0; }
+.prev-cb svg { width:14px; height:14px; }
+.prev-cb:hover { background:rgba(255,255,255,.15); }
+.prev-time { font-size:10px; color:rgba(255,255,255,.85); flex:1; white-space:nowrap; }
+.prev-vol { display:flex; align-items:center; gap:4px; }
+.prev-vol-ic { width:14px; height:14px; color:#fff; flex-shrink:0; }
+.prev-vol-sl { width:55px; height:3px; accent-color:var(--accent); cursor:pointer; }
+/* Fullscreen compat */
+.preview:fullscreen .prev-ctrl-bar,
+.preview:-webkit-full-screen .prev-ctrl-bar { position:absolute; }
+
+/* ★ Epic 4: Fullscreen fix — container fills top layer, video letterboxes cleanly */
+.preview:fullscreen,
+.preview:-webkit-full-screen {
+  width: 100vw !important;
+  height: 100vh !important;
+  aspect-ratio: auto !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  position: relative;
+}
+.preview:fullscreen .vid,
+.preview:-webkit-full-screen .vid {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+.preview:fullscreen .overlay-layer,
+.preview:-webkit-full-screen .overlay-layer {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+}
+.preview:fullscreen .play-ov,
+.preview:-webkit-full-screen .play-ov {
+  position: absolute;
+  inset: 0;
+}
 
 /* ★ E1-P2: Overlay rendering on video */
 .overlay-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
@@ -718,6 +976,9 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 .ov-add-row { display: flex; gap: 4px; margin-bottom: 8px; }
 .ov-add-btn { flex: 1; padding: 5px 4px; border: 1px dashed var(--border); border-radius: 5px; background: transparent; color: var(--text-sec); font-size: 9px; cursor: pointer; text-align: center; }
 .ov-add-btn:hover { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.ov-clear-btn { padding: 5px 7px; border: 1px dashed #ef4444; border-radius: 5px; background: transparent; color: #ef4444; font-size: 11px; cursor: pointer; }
+.ov-clear-btn:hover { background: color-mix(in srgb, #ef4444 10%, transparent); }
+.ov-select { width: 100%; background: var(--bg-input, #1a1a2e); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 3px 4px; font-size: 10px; }
 .empty-hint { color: var(--text-muted); font-style: italic; font-size: 9px; padding: 8px 0; }
 .ov-card { border: 1px solid var(--border); border-radius: 5px; margin-bottom: 6px; overflow: hidden; }
 .ov-card.sel { border-color: var(--accent); }
@@ -767,6 +1028,11 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 .tr-sep { color: var(--text-muted); font-size: 9px; }
 .tr-dur { font-size: 11px; color: var(--accent); font-weight: 600; }
 
+/* ★ Epic 2: Local monitor volume slider */
+.vol-monitor { display: flex; align-items: center; gap: 4px; padding: 0 4px; }
+.vol-monitor-range { width: 52px; height: 4px; accent-color: var(--accent); cursor: pointer; }
+.vol-monitor-val { font-size: 9px; color: var(--text-muted); min-width: 22px; text-align: right; }
+
 /* ═══ E1: Timeline — FIXED HEIGHT ROWS ═══ */
 .tl-wrap { min-height: 60px; overflow: hidden; flex-shrink: 0; }
 .tl-container { display: flex; height: 100%; }
@@ -782,6 +1048,7 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
   position: relative;
 }
 .hdr-id { font-size: 10px; font-weight: 900; color: var(--tc); }
+.hdr-icon-svg { width: 11px; height: 11px; color: var(--tc); opacity: .75; flex-shrink: 0; }
 .hdr-name { font-size: 9px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Speaker icon on right edge */

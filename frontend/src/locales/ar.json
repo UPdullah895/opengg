@@ -1,0 +1,139 @@
+{
+  "_meta": { "name": "العربية", "dir": "rtl" },
+  "nav": {
+    "home": "الرئيسية",
+    "mixer": "الخلاط",
+    "clips": "المقاطع",
+    "devices": "الأجهزة",
+    "settings": "الإعدادات"
+  },
+  "settings": {
+    "title": "الإعدادات",
+    "saved": "تم حفظ الإعدادات تلقائياً",
+    "sections": {
+      "general": "عام",
+      "language": "اللغة",
+      "shortcuts": "الاختصارات",
+      "mixerRouting": "توجيه الخلاط",
+      "eqAutoFlatten": "تسوية المعادل التلقائية",
+      "captureSound": "التقاط والصوت",
+      "clipSettings": "إعدادات المقاطع",
+      "storage": "التخزين",
+      "extensions": "الإضافات"
+    },
+    "groups": {
+      "general": "عام",
+      "audioEngine": "محرك الصوت",
+      "moments": "اللحظات",
+      "extensions": "الإضافات"
+    },
+    "general": {
+      "title": "عام",
+      "accentColor": "لون التمييز",
+      "apply": "تطبيق",
+      "reloadTheme": "↺ إعادة تحميل theme.json",
+      "themeFile": "ملف السمة",
+      "themeHint": "تخصيص مظهر الواجهة. يُخزَّن في ~/.config/opengg/theme.json",
+      "modules": "الوحدات",
+      "audioHub": "مركز الصوت",
+      "audioHubDesc": "خلاط PipeWire والمعادل وإلغاء الضوضاء",
+      "deviceManager": "مدير الأجهزة",
+      "deviceManagerDesc": "إعداد الفأرة/لوحة المفاتيح، RGB",
+      "replayClips": "الإعادة والمقاطع",
+      "replayClipsDesc": "التسجيل وذاكرة الإعادة والمقاطع",
+      "about": "حول",
+      "version": "الإصدار 1.0.0",
+      "openSource": "مركز ألعاب Linux مفتوح المصدر",
+      "github": "GitHub ↗"
+    },
+    "language": {
+      "title": "اللغة",
+      "selectLanguage": "اختر اللغة",
+      "hint": "تسري التغييرات فوراً. اللغات من اليمين إلى اليسار مدعومة بالكامل.",
+      "addLanguage": "إضافة لغة جديدة",
+      "openFolderHint": "ضع ملف xx.json جديداً في مجلد اللغات لإضافة لغة مخصصة."
+    },
+    "shortcuts": {
+      "title": "الاختصارات",
+      "hint": "انقر على الاختصار لتسجيل اختصار جديد. اضغط Escape للإلغاء.",
+      "recording": "جارٍ التسجيل… اضغط الاختصار",
+      "actions": {
+        "saveReplay": "حفظ الإعادة",
+        "toggleRecording": "بدء / إيقاف التسجيل",
+        "screenshot": "لقطة الشاشة",
+        "splitClip": "تقسيم المقطع",
+        "exportClip": "تصدير المقطع",
+        "toggleMic": "تشغيل/إيقاف الميكروفون"
+      },
+      "hints": {
+        "saveReplay": "يحفظ ذاكرة الإعادة الحالية كملف مقطع جديد",
+        "toggleRecording": "يبدأ أو يوقف جلسة التسجيل اليدوي",
+        "screenshot": "يلتقط لقطة شاشة للشاشة النشطة في مجلد الصور",
+        "splitClip": "يقسّم المقطع عند موضع رأس التشغيل في المحرر",
+        "exportClip": "يفتح نافذة التصدير لحفظ المقطع المقتصّ كملف فيديو",
+        "toggleMic": "يكتم أو يرفع كتم الميكروفون عبر جميع مسارات التسجيل"
+      }
+    },
+    "mixerRouting": {
+      "title": "توجيه الخلاط",
+      "hint": "تكوين كيفية توجيه تدفقات الصوت عبر أحواض PipeWire الافتراضية."
+    },
+    "eqAutoFlatten": {
+      "title": "تسوية المعادل التلقائية",
+      "hint": "تسوية منحنيات المعادل تلقائياً عند تبديل ملفات الصوت."
+    },
+    "captureSound": {
+      "title": "التقاط والصوت",
+      "quality": "جودة الفيديو",
+      "resolution": "الدقة",
+      "fps": "معدل الإطارات",
+      "replayBuffer": "ذاكرة الإعادة",
+      "captureDevices": "أجهزة التقاط الصوت",
+      "captureHint": "اربط أحواض PipeWire الافتراضية بكل مسار تسجيل (أسلوب OBS).",
+      "trackLabel": "مسار",
+      "addTrack": "+ إضافة مسار",
+      "sources": {
+        "Game": "ألعاب",
+        "Chat": "دردشة",
+        "Media": "وسائط",
+        "Aux": "مساعد",
+        "Mic": "ميكروفون"
+      }
+    },
+    "clipSettings": {
+      "title": "إعدادات المقاطع",
+      "defaultClick": "إجراء النقر الافتراضي",
+      "defaultClickPreview": "معاينة سريعة",
+      "defaultClickEditor": "محرر متقدم",
+      "clipsPerRow": "أعمدة في الصف",
+      "trackColors": "ألوان المسارات",
+      "trackColorsHint": "تُطبَّق الألوان كمتغيرات CSS على محرر الجدول الزمني.",
+      "addTrack": "+ إضافة مسار",
+      "thumbnailCache": "ذاكرة الصور المصغرة",
+      "thumbnailHint": "مخزنة في ~/.local/share/opengg/thumbnails/",
+      "clearCache": "مسح ذاكرة الصور المصغرة",
+      "clearing": "جارٍ المسح...",
+      "cleared": "تم مسح {count} صور مصغرة."
+    },
+    "storage": {
+      "title": "التخزين",
+      "clipsFolder": "مجلد المقاطع",
+      "change": "تغيير الموقع",
+      "clips": "مقاطع",
+      "used": "مستخدم",
+      "free": "حر",
+      "total": "الإجمالي",
+      "diskUsage": "استخدام القرص",
+      "loading": "جارٍ التحميل..."
+    },
+    "extensions": {
+      "title": "الإضافات",
+      "hint": "فعّل أو عطّل ميزات المحرر الاختيارية. تختفي الإضافات المعطّلة في كل مكان، مما يبقي الواجهة نظيفة.",
+      "overlays": "نظام التراكبات",
+      "overlaysDesc": "أضف نصوصاً وصوراً وملفات GIF إلى مقاطعك عند التصدير.",
+      "tiktokExport": "تصدير TikTok العمودي",
+      "tiktokExportDesc": "اقتصاص وتصدير المقاطع بنسبة 9:16 لـ TikTok/Reels.",
+      "restartHint": "تُطبَّق التغييرات فوراً — لا حاجة لإعادة التشغيل."
+    }
+  }
+}

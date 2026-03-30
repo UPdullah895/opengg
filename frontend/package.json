@@ -1,7 +1,7 @@
 {
   "name": "opengg",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "npx vite",
@@ -10,18 +10,19 @@
     "tauri": "npx tauri"
   },
   "dependencies": {
-    "vue": "^3.4",
-    "pinia": "^2.1",
     "@tauri-apps/api": "^2.0",
     "@tauri-apps/plugin-dialog": "^2.0",
     "@tauri-apps/plugin-opener": "^2.0",
-    "@tauri-apps/plugin-shell": "^2.0"
+    "@tauri-apps/plugin-shell": "^2.0",
+    "pinia": "^2.1",
+    "vue": "^3.4",
+    "vue-i18n": "^9.14.5"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.0",
     "@vitejs/plugin-vue": "^5.0",
     "typescript": "^5.4",
     "vite": "^5.4",
-    "vue-tsc": "^2.0",
-    "@tauri-apps/cli": "^2.0"
+    "vue-tsc": "^2.0"
   }
 }

@@ -5,12 +5,13 @@ import { mediaUrl } from '../utils/assets'
 import type { Clip } from '../stores/replay'
 import { useReplayStore } from '../stores/replay'
 import type { Ref } from 'vue'
+import CustomVideoPlayer from './CustomVideoPlayer.vue'
 
 const props = defineProps<{ clip: Clip; mode: 'preview' | 'trim' }>()
 const emit = defineEmits<{ 'close': []; 'saved': [string]; 'toast': [string] }>()
 
 const replay = useReplayStore()
-const videoRef = ref<HTMLVideoElement | null>(null)
+const playerComp = ref<InstanceType<typeof CustomVideoPlayer> | null>(null)
 
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 const videoSrc = computed(() => mediaUrl(props.clip.filepath, mediaPort.value))
@@ -26,11 +27,9 @@ const trimDuration = computed(() => Math.max(0, trimEnd.value - trimStart.value)
 const exporting = ref(false)
 const exportMenuOpen = ref(false)
 
-function onMeta() { if (videoRef.value) { duration.value = videoRef.value.duration; if (trimEnd.value <= 0) trimEnd.value = videoRef.value.duration } }
-function onTimeUpdate() { if (videoRef.value) currentTime.value = videoRef.value.currentTime }
-function onEnded() { playing.value = false }
-function togglePlay() { if (!videoRef.value) return; playing.value ? videoRef.value.pause() : videoRef.value.play(); playing.value = !playing.value }
-function seekTo(s: number) { if (videoRef.value) { videoRef.value.currentTime = s; currentTime.value = s } }
+function onMeta(dur: number) { duration.value = dur; if (trimEnd.value <= 0) trimEnd.value = dur }
+function onTimeUpdate(ct: number) { currentTime.value = ct }
+function seekTo(s: number) { playerComp.value?.seekTo(s); currentTime.value = s }
 
 const timelineRef = ref<HTMLElement | null>(null)
 function pxToSec(px: number) { if (!timelineRef.value || !duration.value) return 0; const r = timelineRef.value.getBoundingClientRect(); return Math.max(0, Math.min(duration.value, ((px - r.left) / r.width) * duration.value)) }
@@ -41,6 +40,7 @@ function dragHandle(h: 'start' | 'end', e: MouseEvent) {
   const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); saveTrimState() }
   document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up)
 }
+function togglePlay() { playerComp.value?.togglePlay() }
 
 const GAMES = ['Counter-Strike 2','League of Legends','Valorant','Overwatch 2','Apex Legends','Fortnite','Minecraft','Dota 2','Rocket League','Elden Ring',"Baldur's Gate 3",'Cyberpunk 2077','Honkai: Star Rail','Genshin Impact','Helldivers 2','Path of Exile 2']
 const gameTag = ref('')
@@ -50,7 +50,6 @@ const gameFiltered = computed(() => { const q = gameTag.value.toLowerCase(); ret
 async function saveTrimState() { try { await invoke('save_trim_state', { filepath: props.clip.filepath, trimStart: trimStart.value, trimEnd: trimEnd.value }) } catch {} }
 onMounted(async () => {
   try { const s = await invoke<{ trim_start: number; trim_end: number } | null>('get_trim_state', { filepath: props.clip.filepath }); if (s && s.trim_end > 0) { trimStart.value = s.trim_start; trimEnd.value = s.trim_end } } catch {}
-  // Load game tag
   try { const m = await invoke<string>('get_clip_meta', { filepath: props.clip.filepath }); if (m && m !== 'null') { const d = JSON.parse(m); if (d.game_tag) gameTag.value = d.game_tag } } catch {}
 })
 
@@ -61,6 +60,7 @@ async function saveTitle() {
   titleDirty.value = false
 }
 function selectGame(g: string) { gameTag.value = g; gameOpen.value = false; saveTitle() }
+function closeGameDropDelayed() { setTimeout(() => { gameOpen.value = false }, 150) }
 
 async function doExport(targetMb: number) {
   exportMenuOpen.value = false; exporting.value = true
@@ -83,7 +83,7 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
         <input v-model="editTitle" class="title-input" @input="titleDirty = true" @blur="saveTitle" @keydown.enter="($event.target as HTMLInputElement).blur()" spellcheck="false" />
         <!-- ★ E2-P6: Game tag in Quick Preview -->
         <div class="game-wrap">
-          <input v-model="gameTag" class="game-in" placeholder="Game..." @focus="gameOpen = true" @blur="setTimeout(() => gameOpen = false, 150)" />
+          <input v-model="gameTag" class="game-in" placeholder="Game..." @focus="gameOpen = true" @blur="closeGameDropDelayed()" />
           <div v-if="gameOpen && gameFiltered.length" class="game-drop">
             <button v-for="g in gameFiltered.slice(0, 8)" :key="g" @mousedown.prevent="selectGame(g)">{{ g }}</button>
           </div>
@@ -91,17 +91,17 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
         <button class="close-btn" @click="emit('close')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
 
-      <!-- ★ FIX 2: Video with native controls and preload=metadata -->
-      <div class="player-wrap">
-        <video ref="videoRef" :src="videoSrc" preload="metadata"
-          :controls="mode === 'preview'"
-          @loadedmetadata="onMeta" @timeupdate="onTimeUpdate" @ended="onEnded"
-          @pause="playing = false" @play="playing = true"
-          class="video" />
-        <div class="play-ov" v-if="!playing && mode === 'trim'" @click="togglePlay">
-          <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        </div>
-      </div>
+      <!-- Custom video player -->
+      <CustomVideoPlayer
+        ref="playerComp"
+        :src="videoSrc"
+        :capture-keyboard="true"
+        @loadedmetadata="onMeta"
+        @timeupdate="onTimeUpdate"
+        @play="playing = true"
+        @pause="playing = false"
+        @ended="playing = false"
+      />
 
       <!-- Trim controls -->
       <div v-if="mode === 'trim'" class="trim-panel">
@@ -157,17 +157,11 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
 .title-static { font-size:15px; font-weight:700; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .close-btn { width:32px; height:32px; border:none; background:transparent; color:var(--text-sec); cursor:pointer; border-radius:6px; display:flex; align-items:center; justify-content:center; } .close-btn svg { width:18px; height:18px; } .close-btn:hover { background:var(--bg-hover); }
 
-/* ★ FIX 2: Player maintains 16:9 and fills available modal space */
-.player-wrap {
-  position: relative;
-  background: #000;
-  aspect-ratio: 16 / 9;
-  width: 100%;
+/* Player sizing — CustomVideoPlayer handles the video/controls */
+:deep(.cvp-wrap) {
   flex-shrink: 1;
   min-height: 0;
 }
-.video { width:100%; height:100%; object-fit:contain; display:block; }
-.play-ov { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.3); cursor:pointer; } .play-ov svg { width:56px; height:56px; color:#fff; opacity:.8; }
 
 .trim-panel { padding:16px 20px; flex-shrink:0; }
 .time-row { display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); margin-bottom:6px; } .cur { color:var(--accent); font-weight:600; }

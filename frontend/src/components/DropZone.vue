@@ -59,11 +59,11 @@ function startDragApp(e: DragEvent, app: { id: number; name: string; binary: str
 </template>
 
 <style scoped>
-.dropzone { width: 100%; min-height: 40px; border: 1px dashed var(--border); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; transition: all .15s; }
+.dropzone { width: 100%; min-height: 40px; max-height: 140px; overflow-y: auto; border: 1px dashed var(--border); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; transition: all .15s; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 .show-target { border-color: color-mix(in srgb, var(--dz) 40%, var(--border)); background: color-mix(in srgb, var(--dz) 3%, transparent); }
 .hovering { border-color: var(--dz) !important; background: color-mix(in srgb, var(--dz) 10%, transparent) !important; border-style: solid !important; box-shadow: 0 0 12px color-mix(in srgb, var(--dz) 20%, transparent); }
 .dz-apps { display: flex; flex-direction: column; gap: 2px; }
-.dz-chip { display: flex; align-items: center; gap: 4px; padding: 3px 6px; background: var(--bg-deep); border-radius: 4px; font-size: 9.5px; color: var(--text-sec); cursor: grab; overflow: hidden; transition: background .1s; }
+.dz-chip { display: flex; align-items: center; gap: 5px; padding: 6px 8px; background: var(--bg-deep); border-radius: 4px; font-size: 11px; color: var(--text-sec); cursor: grab; overflow: hidden; transition: background .1s; }
 .dz-chip:hover { background: var(--bg-hover); }
 .dz-chip:active { cursor: grabbing; opacity: .6; }
 .dz-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }

@@ -6,6 +6,7 @@ export interface Clip {
   id: string; filename: string; filepath: string; filesize: number
   created: string; duration: number; width: number; height: number
   game: string; custom_name: string; favorite: boolean; thumbnail: string
+  isSkeleton?: boolean // ★ Epic 3: live-watcher placeholder — never persisted
 }
 
 export type SortMode = 'newest' | 'oldest' | 'longest' | 'shortest'
@@ -21,12 +22,17 @@ export const useReplayStore = defineStore('replay', () => {
   // Search/Sort/Filter
   const search = ref('')
   const sortMode = ref<SortMode>('newest')
-  const filterGame = ref('all')
+  const filterGame = ref('all')       // legacy single-select (kept for compat)
+  const selectedGames = ref<string[]>([]) // ★ Epic 3: multi-select game filter
   const filterFav = ref(false)
 
   // Multi-select
   const selectedIds = ref<Set<string>>(new Set())
   const selectMode = ref(false)
+
+  // ── Context menu singleton ──
+  const activeMenuClipId = ref('')
+  const activeMenuPos = ref({ x: 0, y: 0 })
 
   // ── Computed ──
   const games = computed(() => {
@@ -36,17 +42,34 @@ export const useReplayStore = defineStore('replay', () => {
   })
 
   const filteredClips = computed(() => {
-    let r = clips.value
+    // Skeletons always float to the top regardless of any filter/sort
+    const skeletons = clips.value.filter(c => c.isSkeleton)
+    let r = clips.value.filter(c => !c.isSkeleton)
     if (search.value) { const q = search.value.toLowerCase(); r = r.filter(c => (c.custom_name || c.filename).toLowerCase().includes(q) || c.game.toLowerCase().includes(q)) }
     if (filterFav.value) r = r.filter(c => c.favorite)
-    if (filterGame.value !== 'all') r = r.filter(c => c.game === filterGame.value)
+    // ★ Epic 3: multi-select game filter takes priority over legacy single filterGame
+    if (selectedGames.value.length > 0) r = r.filter(c => selectedGames.value.includes(c.game))
+    else if (filterGame.value !== 'all') r = r.filter(c => c.game === filterGame.value)
     switch (sortMode.value) {
       case 'oldest': r = [...r].sort((a,b) => a.created.localeCompare(b.created)); break
       case 'longest': r = [...r].sort((a,b) => b.duration - a.duration); break
       case 'shortest': r = [...r].sort((a,b) => a.duration - b.duration); break
       default: r = [...r].sort((a,b) => b.created.localeCompare(a.created))
     }
-    return r
+    return [...skeletons, ...r]
+  })
+
+  // ★ CSS-filter arch: sort ONLY — no filter applied. ClipsPage uses v-show="isMatch()" instead.
+  const sortedClips = computed(() => {
+    const skeletons = clips.value.filter(c => c.isSkeleton)
+    let r = clips.value.filter(c => !c.isSkeleton)
+    switch (sortMode.value) {
+      case 'oldest':   r = [...r].sort((a,b) => a.created.localeCompare(b.created)); break
+      case 'longest':  r = [...r].sort((a,b) => b.duration - a.duration); break
+      case 'shortest': r = [...r].sort((a,b) => a.duration - b.duration); break
+      default:         r = [...r].sort((a,b) => b.created.localeCompare(a.created))
+    }
+    return [...skeletons, ...r]
   })
 
   const selectedCount = computed(() => selectedIds.value.size)
@@ -89,8 +112,27 @@ export const useReplayStore = defineStore('replay', () => {
       clips.value = [...clips.value]
     }
   }
-  function removeClip(fp: string) { clips.value = clips.value.filter(c => c.filepath !== fp); selectedIds.value.delete(fp) }
+  function removeClip(fp: string) { clips.value = clips.value.filter(c => c.filepath !== fp && c.id !== fp); selectedIds.value.delete(fp) }
   function setThumbnail(id: string, p: string) { const c = clips.value.find(c => c.id===id); if (c) c.thumbnail = p }
+  /** Prepend a new clip (from file-watcher) without a full rescan. */
+  function addClip(clip: Clip) { if (!clips.value.find(c => c.filepath === clip.filepath)) clips.value.unshift(clip) }
+
+  // ★ Epic 3: Inject a loading skeleton at the top of the list, then swap it for real data.
+  // This avoids wiping the entire clips array while a new file is being parsed.
+  function injectSkeleton(tempId: string, filepath: string) {
+    if (clips.value.find(c => c.id === tempId)) return
+    clips.value = [{
+      id: tempId, filename: '', filepath, filesize: 0,
+      created: '', duration: 0, width: 0, height: 0,
+      game: '', custom_name: '', favorite: false, thumbnail: '',
+      isSkeleton: true,
+    }, ...clips.value]
+  }
+  function replaceSkeleton(tempId: string, clip: Clip) {
+    const idx = clips.value.findIndex(c => c.id === tempId)
+    if (idx >= 0) { const arr = [...clips.value]; arr.splice(idx, 1, clip); clips.value = arr }
+    else clips.value = [clip, ...clips.value]
+  }
 
   // Multi-select
   function toggleSelect(id: string) { if (selectedIds.value.has(id)) selectedIds.value.delete(id); else selectedIds.value.add(id); selectMode.value = selectedIds.value.size > 0 }
@@ -99,11 +141,12 @@ export const useReplayStore = defineStore('replay', () => {
 
   return {
     status, replayDuration, clips, loading, loaded,
-    search, sortMode, filterGame, filterFav,
-    games, filteredClips, favCount,
+    search, sortMode, filterGame, selectedGames, filterFav,
+    games, filteredClips, sortedClips, favCount,
     selectedIds, selectMode, selectedCount,
     fetchStatus, startReplay, stopRecorder, saveReplay,
-    fetchClips, updateClipMeta, removeClip, setThumbnail,
+    fetchClips, updateClipMeta, removeClip, setThumbnail, addClip, injectSkeleton, replaceSkeleton,
     toggleSelect, clearSelection, isSelected,
+    activeMenuClipId, activeMenuPos,
   }
 })

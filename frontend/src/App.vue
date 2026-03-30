@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, provide, onMounted } from 'vue'
+import { ref, computed, provide, onMounted, watch } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import Titlebar from './components/Titlebar.vue'
 import HomePage from './pages/HomePage.vue'
@@ -7,9 +7,15 @@ import MixerPage from './pages/MixerPage.vue'
 import ClipsPage from './pages/ClipsPage.vue'
 import DevicesPage from './pages/DevicesPage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
+import SelectField from './components/SelectField.vue'
 import { usePersistenceStore } from './stores/persistence'
 import { loadTheme } from './utils/theme'
 import { getMediaPort } from './utils/assets'
+import { installAudioUnlocker } from './utils/audio'
+import { registerLocale } from './i18n'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import type { AudioDevice } from './stores/audio'
 
 const currentPage = ref('home')
 const persist = usePersistenceStore()
@@ -20,24 +26,219 @@ provide('mediaPort', mediaPort)
 
 function navigate(page: string) { currentPage.value = page }
 
+// ═══ Epic 2: Virtual Audio Onboarding ═══
+const showOnboarding = ref(false)
+const onboardStep = ref<1 | 2>(1)
+const onboardLoading = ref(false)
+const onboardMsg = ref('')
+const audioDevices = ref<AudioDevice[]>([])
+const selectedHeadphones = ref('')
+const selectedMic = ref('')
+
+const outputDevices = () => audioDevices.value.filter(d => d.device_type === 'sink' && !d.name.includes('OpenGG'))
+const inputDevices  = () => audioDevices.value.filter(d => d.device_type === 'source')
+
+// SelectField-compatible option arrays derived from filtered device lists
+const headphoneOptions = computed(() => outputDevices().map(d => ({ value: d.name, label: d.description })))
+const micOptions       = computed(() => inputDevices().map(d => ({ value: d.name, label: d.description })))
+
+async function fetchOnboardDevices() {
+  try { audioDevices.value = await invoke<AudioDevice[]>('get_audio_devices') } catch {}
+  const defOut = outputDevices().find(d => d.is_default)
+  const defIn  = inputDevices().find(d => d.is_default)
+  if (defOut) selectedHeadphones.value = defOut.name
+  if (defIn)  selectedMic.value = defIn.name
+}
+
+async function doCreateVirtualAudio() {
+  onboardLoading.value = true; onboardMsg.value = ''
+  try {
+    await invoke('create_virtual_audio')
+    await fetchOnboardDevices()
+    onboardStep.value = 2
+  } catch (e) { onboardMsg.value = `Setup failed: ${e}` }
+  finally { onboardLoading.value = false }
+}
+
+async function completeOnboarding() {
+  onboardLoading.value = true; onboardMsg.value = ''
+  try {
+    if (selectedHeadphones.value) {
+      const { useAudioStore } = await import('./stores/audio')
+      const audio = useAudioStore()
+      await audio.setChannelDevice('Master', selectedHeadphones.value)
+    }
+    await invoke('hydrate_audio_routing')
+    showOnboarding.value = false
+    onboardStep.value = 1
+  } catch (e) { onboardMsg.value = `Could not complete setup: ${e}` }
+  finally { onboardLoading.value = false }
+}
+
+async function registerGlobalShortcuts() {
+  try {
+    const sc = persist.state.settings.shortcuts
+    await invoke('register_global_shortcuts', {
+      saveReplay: sc.saveReplay,
+      toggleRecording: sc.toggleRecording,
+      screenshot: sc.screenshot,
+    })
+  } catch (e) { console.warn('global shortcuts:', e) }
+}
+
 onMounted(async () => {
   await persist.load()
   await loadTheme()
   mediaPort.value = await getMediaPort()
+  installAudioUnlocker()
+  loadUserLocales()
+  await registerGlobalShortcuts()
+  // Listen for global shortcut events fired from Rust
+  listen('global-shortcut-save_replay', async () => {
+    try { await invoke('save_replay') } catch (e) { console.warn('save_replay:', e) }
+  })
+  listen('global-shortcut-toggle_recording', async () => {
+    try {
+      const { useReplayStore } = await import('./stores/replay')
+      const replay = useReplayStore()
+      if (replay.status === 'idle') await replay.startReplay()
+      else await replay.stopRecorder()
+    } catch (e) { console.warn('toggle_recording:', e) }
+  })
+  listen('global-shortcut-screenshot', async () => {
+    try { await invoke('take_screenshot', { outputDir: persist.state.settings.screenshotDir || '' }) } catch (e) { console.warn('screenshot:', e) }
+  })
+
+  // ★ Epic 2: Check virtual audio status — show onboarding if sinks missing
+  try {
+    const ok = await invoke<boolean>('check_virtual_audio_status')
+    if (!ok) showOnboarding.value = true
+  } catch { /* daemon or pactl not available — skip silently */ }
+
+  // ★ Epic 4: Listen for audio reset flow from SettingsPage danger zone
+  window.addEventListener('openOnboarding', (e: Event) => {
+    const detail = (e as CustomEvent<{ step?: number }>).detail
+    onboardStep.value = (detail?.step === 2 ? 2 : 1) as 1 | 2
+    if (detail?.step === 2) fetchOnboardDevices()
+    onboardMsg.value = ''
+    showOnboarding.value = true
+  })
 })
+
+// Re-register global OS shortcuts whenever the user changes them in Settings
+watch(
+  () => [
+    persist.state.settings.shortcuts.saveReplay,
+    persist.state.settings.shortcuts.toggleRecording,
+    persist.state.settings.shortcuts.screenshot,
+  ],
+  () => { if (persist.loaded) registerGlobalShortcuts() },
+)
+
+async function loadUserLocales() {
+  try {
+    const list = await invoke<Array<{ code: string; json_content: string }>>('list_user_locales')
+    for (const ul of list) {
+      try {
+        const data = JSON.parse(ul.json_content)
+        const meta = (data._meta ?? {}) as { name?: string; dir?: 'ltr' | 'rtl' }
+        registerLocale(ul.code, data, meta.name ?? (ul.code.charAt(0).toUpperCase() + ul.code.slice(1)), meta.dir ?? 'ltr')
+      } catch { /* skip malformed JSON */ }
+    }
+  } catch { /* locales dir not created yet — fine */ }
+}
 </script>
 
 <template>
   <div class="app-layout">
     <Titlebar />
     <div class="app-body">
-      <Sidebar :current="currentPage" @navigate="navigate" />
+      <Sidebar :active="currentPage" @navigate="navigate" />
       <main class="content">
         <KeepAlive include="ClipsPage">
           <component :is="{ home: HomePage, mixer: MixerPage, clips: ClipsPage, devices: DevicesPage, settings: SettingsPage }[currentPage]" />
         </KeepAlive>
       </main>
     </div>
+
+    <!-- ═══ Epic 2: Virtual Audio Onboarding Modal ═══ -->
+    <Teleport to="body">
+      <div v-if="showOnboarding" class="onboard-overlay">
+        <div class="onboard-box">
+
+          <!-- Step indicator -->
+          <div class="onboard-steps">
+            <div class="onboard-step" :class="{ active: onboardStep === 1, done: onboardStep > 1 }">
+              <div class="step-dot">{{ onboardStep > 1 ? '✓' : '1' }}</div>
+              <span>Create Virtual Audio</span>
+            </div>
+            <div class="step-connector"></div>
+            <div class="onboard-step" :class="{ active: onboardStep === 2 }">
+              <div class="step-dot">2</div>
+              <span>Link Devices</span>
+            </div>
+          </div>
+
+          <!-- Step 1: Create virtual sinks -->
+          <template v-if="onboardStep === 1">
+            <div class="onboard-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/>
+              </svg>
+            </div>
+            <h2 class="onboard-title">Virtual Audio Engine Required</h2>
+            <p class="onboard-desc">OpenGG uses virtual audio sinks to route Game, Chat, Media, and Aux channels independently. This one-time setup takes about 2 seconds.</p>
+            <div class="onboard-channels">
+              <div class="ch-pill" v-for="(color, ch) in { Game: '#E94560', Chat: '#3B82F6', Media: '#10B981', Aux: '#A855F7' }" :key="ch">
+                <div class="ch-dot" :style="{ background: color }"></div>
+                {{ ch }}
+              </div>
+            </div>
+            <p v-if="onboardMsg" class="onboard-err">{{ onboardMsg }}</p>
+            <div class="onboard-actions">
+              <button class="onboard-skip" @click="showOnboarding = false">Skip for now</button>
+              <button class="onboard-primary" :disabled="onboardLoading" @click="doCreateVirtualAudio">
+                <svg v-if="!onboardLoading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+                {{ onboardLoading ? 'Creating…' : 'Create Virtual Audio Engine' }}
+              </button>
+            </div>
+          </template>
+
+          <!-- Step 2: Link physical devices -->
+          <template v-if="onboardStep === 2">
+            <div class="onboard-icon onboard-icon--ok">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <h2 class="onboard-title">Link Your Devices</h2>
+            <p class="onboard-desc">Select which physical devices the mixer should use by default. You can change these anytime in the Mixer.</p>
+            <div class="onboard-device-rows">
+              <div class="device-field">
+                <label>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0118 0v6"/><path d="M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/></svg>
+                  Headphones / Output
+                </label>
+                <SelectField v-model="selectedHeadphones" :options="headphoneOptions" placeholder="Select output device…" />
+              </div>
+              <div class="device-field">
+                <label>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                  Microphone / Input
+                </label>
+                <SelectField v-model="selectedMic" :options="micOptions" placeholder="Select input device…" />
+              </div>
+            </div>
+            <p v-if="onboardMsg" class="onboard-err">{{ onboardMsg }}</p>
+            <div class="onboard-actions">
+              <button class="onboard-skip" @click="showOnboarding = false">Skip</button>
+              <button class="onboard-primary" :disabled="onboardLoading" @click="completeOnboarding">
+                {{ onboardLoading ? 'Saving…' : 'Finish Setup' }}
+              </button>
+            </div>
+          </template>
+
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -55,6 +256,7 @@ onMounted(async () => {
   --accent: #E94560;
   --danger: #dc2626;
   --success: #10b981;
+  --purple: #a855f7;
   --radius: 6px;
   --radius-lg: 10px;
   --titlebar-h: 40px;
@@ -76,65 +278,92 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-/*
- * ★ FULLSCREEN VIDEO FIX for WebKitGTK / Tauri
- *
- * Root causes of black screen:
- *   1. overflow:hidden on body, .app-body, .modal clips the fullscreen element
- *   2. backdrop-filter:blur() on .overlay creates a stacking context trap
- *   3. z-index of titlebar overlays the fullscreen pseudo-class
- *
- * Fix: force fullscreen to highest z-index and override container clipping.
- */
-
-/* The video itself in fullscreen */
-video:fullscreen,
-video:-webkit-full-screen {
-  z-index: 2147483647 !important;
-  position: fixed !important;
-  inset: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  object-fit: contain !important;
-  background: #000 !important;
-}
-
-/* The ::backdrop pseudo-element */
-video::backdrop,
-video::-webkit-backdrop {
-  background: #000 !important;
-}
-
-/* When fullscreen: remove ALL container restrictions that clip the video */
-body:has(video:fullscreen),
-body:has(video:-webkit-full-screen) {
-  overflow: visible !important;
-}
-
+/* Fullscreen video fix */
+video:fullscreen, video:-webkit-full-screen { z-index: 2147483647 !important; position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100vh !important; object-fit: contain !important; background: #000 !important; }
+video::backdrop, video::-webkit-backdrop { background: #000 !important; }
+body:has(video:fullscreen), body:has(video:-webkit-full-screen) { overflow: visible !important; }
 body:has(video:fullscreen) .app-layout,
 body:has(video:fullscreen) .app-body,
 body:has(video:fullscreen) .content,
 body:has(video:-webkit-full-screen) .app-layout,
 body:has(video:-webkit-full-screen) .app-body,
-body:has(video:-webkit-full-screen) .content {
-  overflow: visible !important;
-}
-
-/* Remove backdrop-filter that creates stacking context trap */
+body:has(video:-webkit-full-screen) .content { overflow: visible !important; }
 body:has(video:fullscreen) .overlay,
-body:has(video:-webkit-full-screen) .overlay {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-/* Hide titlebar in fullscreen */
+body:has(video:-webkit-full-screen) .overlay { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
 body:has(video:fullscreen) [data-tauri-drag-region],
-body:has(video:-webkit-full-screen) [data-tauri-drag-region] {
-  display: none !important;
+body:has(video:-webkit-full-screen) [data-tauri-drag-region] { display: none !important; }
+:fullscreen, :-webkit-full-screen { z-index: 2147483647 !important; }
+
+/* ═══ Virtual Audio Onboarding Modal ═══ */
+.onboard-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,.78);
+  backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.onboard-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px;
+  width: 100%; max-width: 480px;
+  box-shadow: 0 32px 80px rgba(0,0,0,.65);
+  display: flex; flex-direction: column; gap: 20px;
 }
 
-/* General fullscreen z-index */
-:fullscreen, :-webkit-full-screen {
-  z-index: 2147483647 !important;
+/* Step indicator */
+.onboard-steps { display: flex; align-items: center; }
+.onboard-step { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); font-weight: 500; }
+.onboard-step.active { color: var(--text); }
+.onboard-step.done { color: var(--success); }
+.step-dot {
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  background: var(--bg-deep); border: 2px solid var(--border); color: var(--text-muted);
 }
+.onboard-step.active .step-dot { border-color: var(--accent); color: var(--accent); }
+.onboard-step.done .step-dot { border-color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
+.step-connector { flex: 1; height: 2px; background: var(--border); margin: 0 10px; }
+
+/* Icon */
+.onboard-icon {
+  width: 58px; height: 58px; border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  display: flex; align-items: center; justify-content: center; color: var(--accent);
+}
+.onboard-icon svg { width: 30px; height: 30px; }
+.onboard-icon--ok { background: color-mix(in srgb, var(--success) 12%, transparent); border-color: color-mix(in srgb, var(--success) 30%, transparent); color: var(--success); }
+
+.onboard-title { font-size: 20px; font-weight: 800; letter-spacing: -.3px; }
+.onboard-desc { font-size: 13px; color: var(--text-sec); line-height: 1.6; }
+
+.onboard-channels { display: flex; gap: 8px; flex-wrap: wrap; }
+.ch-pill { display: flex; align-items: center; gap: 6px; padding: 5px 11px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 20px; font-size: 12px; font-weight: 600; color: var(--text-sec); }
+.ch-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+.onboard-err { font-size: 12px; color: var(--danger); padding: 8px 12px; background: color-mix(in srgb, var(--danger) 8%, transparent); border-radius: 6px; border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent); }
+
+.onboard-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding-top: 4px; }
+.onboard-skip { background: transparent; border: none; color: var(--text-muted); font-size: 13px; cursor: pointer; padding: 8px 4px; }
+.onboard-skip:hover { color: var(--text-sec); }
+.onboard-primary {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 20px; border-radius: 8px;
+  border: none; background: var(--accent);
+  color: #fff; font-size: 13px; font-weight: 700;
+  cursor: pointer; transition: opacity .15s;
+}
+.onboard-primary svg { width: 15px; height: 15px; }
+.onboard-primary:hover { opacity: .88; }
+.onboard-primary:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Device selectors */
+.onboard-device-rows { display: flex; flex-direction: column; gap: 12px; }
+.device-field { display: flex; flex-direction: column; gap: 6px; }
+.device-field label { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--text-sec); }
+.device-field label svg { width: 13px; height: 13px; }
+/* device-select replaced by SelectField component */
 </style>

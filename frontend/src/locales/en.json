@@ -1,0 +1,143 @@
+{
+  "_meta": { "name": "English", "dir": "ltr" },
+  "nav": {
+    "home": "Home",
+    "mixer": "Mixer",
+    "clips": "Clips",
+    "devices": "Devices",
+    "settings": "Settings"
+  },
+  "settings": {
+    "title": "Settings",
+    "saved": "Settings auto-saved",
+    "sections": {
+      "general": "General",
+      "language": "Language",
+      "shortcuts": "Shortcuts",
+      "mixerRouting": "Mixer Routing",
+      "eqAutoFlatten": "EQ Auto-Flatten",
+      "captureSound": "Capture & Sound",
+      "clipSettings": "Clip Settings",
+      "storage": "Storage",
+      "extensions": "Extensions"
+    },
+    "groups": {
+      "general": "GENERAL",
+      "audioEngine": "AUDIO ENGINE",
+      "moments": "MOMENTS",
+      "extensions": "EXTENSIONS"
+    },
+    "general": {
+      "title": "General",
+      "accentColor": "Accent Color",
+      "apply": "Apply",
+      "reloadTheme": "↻ Reload theme.json",
+      "themeFile": "Theme File",
+      "themeHint": "Customize UI appearance. Stored at ~/.config/opengg/theme.json",
+      "modules": "Modules",
+      "audioHub": "Audio Hub",
+      "audioHubDesc": "PipeWire mixer, EQ, noise cancellation",
+      "deviceManager": "Device Manager",
+      "deviceManagerDesc": "Mouse/keyboard config, RGB",
+      "replayClips": "Replay & Clips",
+      "replayClipsDesc": "Recording, replay buffer, clips",
+      "about": "About",
+      "version": "v1.0.0",
+      "openSource": "Open-source Linux gaming hub",
+      "github": "GitHub ↗"
+    },
+    "language": {
+      "title": "Language",
+      "selectLanguage": "Select Language",
+      "hint": "Changes take effect immediately. RTL languages are fully supported.",
+      "addLanguage": "Add New Language",
+      "openFolderHint": "Drop a new xx.json file into the locales folder to add a custom language."
+    },
+    "shortcuts": {
+      "title": "Shortcuts",
+      "hint": "Click a binding to record a new shortcut. Press Escape to cancel.",
+      "recording": "Recording… press your shortcut",
+      "actions": {
+        "saveReplay": "Save Replay",
+        "toggleRecording": "Start / Stop Recording",
+        "screenshot": "Screenshot",
+        "splitClip": "Split Clip",
+        "exportClip": "Export Clip",
+        "toggleMic": "Toggle Mic",
+        "undo": "Undo",
+        "redo": "Redo"
+      },
+      "hints": {
+        "saveReplay": "Saves the current replay buffer as a new clip file",
+        "toggleRecording": "Starts or stops a manual full-length recording session",
+        "screenshot": "Captures a screenshot of the active screen to your Pictures folder",
+        "splitClip": "Splits the clip at the current playhead position in the editor",
+        "exportClip": "Opens the export dialog to save the trimmed clip as a video file",
+        "toggleMic": "Mutes or unmutes your microphone across all recording tracks",
+        "undo": "Undo the last trim change in the editor",
+        "redo": "Redo the last undone trim change"
+      }
+    },
+    "mixerRouting": {
+      "title": "Mixer Routing",
+      "hint": "Configure how audio streams are routed through virtual PipeWire sinks."
+    },
+    "eqAutoFlatten": {
+      "title": "EQ Auto-Flatten",
+      "hint": "Automatically flatten EQ curves when switching audio profiles."
+    },
+    "captureSound": {
+      "title": "Capture & Sound",
+      "quality": "Video Quality",
+      "resolution": "Resolution",
+      "fps": "Frame Rate",
+      "replayBuffer": "Replay Buffer",
+      "captureDevices": "Audio Capture Devices",
+      "captureHint": "Assign PipeWire virtual sinks to each recording track (OBS-style).",
+      "trackLabel": "Track",
+      "addTrack": "+ Add Track",
+      "sources": {
+        "Game": "Game",
+        "Chat": "Chat",
+        "Media": "Media",
+        "Aux": "Aux",
+        "Mic": "Mic"
+      }
+    },
+    "clipSettings": {
+      "title": "Clip Settings",
+      "defaultClick": "Default Click Action",
+      "defaultClickPreview": "Quick Preview",
+      "defaultClickEditor": "Advanced Editor",
+      "clipsPerRow": "Columns Per Row",
+      "trackColors": "Track Colors",
+      "trackColorsHint": "Colors are applied as CSS variables to the timeline editor.",
+      "addTrack": "+ Add Track",
+      "thumbnailCache": "Thumbnail Cache",
+      "thumbnailHint": "Cached at ~/.local/share/opengg/thumbnails/",
+      "clearCache": "Clear Thumbnail Cache",
+      "clearing": "Clearing…",
+      "cleared": "Cleared {count} thumbnails. Reload clips to regenerate."
+    },
+    "storage": {
+      "title": "Storage",
+      "clipsFolder": "Clips Folder",
+      "change": "Change Location",
+      "clips": "clips",
+      "used": "Used",
+      "free": "Free",
+      "total": "Total",
+      "diskUsage": "Disk Usage",
+      "loading": "Loading…"
+    },
+    "extensions": {
+      "title": "Extensions",
+      "hint": "Toggle optional editor features. Disabled extensions are hidden everywhere — keeping the interface clean for what you actually use.",
+      "overlays": "Overlays System",
+      "overlaysDesc": "Burn text, images, and GIFs into your clips at export time.",
+      "tiktokExport": "TikTok Vertical Export",
+      "tiktokExportDesc": "Crop and export clips in 9:16 portrait mode for TikTok / Reels.",
+      "restartHint": "Changes apply immediately — no restart required."
+    }
+  }
+}

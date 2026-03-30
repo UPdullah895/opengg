@@ -34,9 +34,9 @@ export const useAudioStore = defineStore('audio', () => {
 
   // Channel map derived from allApps + reactive volumes
   const channelMap = computed(() => {
-    const m: Record<string, { name: string; volume: number; muted: boolean; apps: AppInfo[] }> = {}
+    const m: Record<string, { name: string; volume: number; muted: boolean; node_id: number; apps: AppInfo[] }> = {}
     for (const name of CHANNEL_NAMES) {
-      m[name] = { name, volume: channelVolumes[name] ?? 100, muted: channelMutes[name] ?? false, apps: [] }
+      m[name] = { name, volume: channelVolumes[name] ?? 100, muted: channelMutes[name] ?? false, node_id: 0, apps: [] }
     }
     for (const app of allApps.value) {
       if (app.channel && m[app.channel]) m[app.channel].apps.push(app)
@@ -53,7 +53,17 @@ export const useAudioStore = defineStore('audio', () => {
     name: 'Master',
     volume: channelVolumes.Master ?? 100,
     muted: channelMutes.Master ?? false,
+    node_id: 0,
     apps: unassignedApps.value,
+  }))
+
+  // Mic is an input channel — apps are source-outputs captured from the mic (scanned via pactl).
+  const micChannel = computed(() => ({
+    name: 'Mic',
+    volume: channelVolumes.Mic ?? 100,
+    muted: channelMutes.Mic ?? false,
+    node_id: 0,
+    apps: allApps.value.filter(a => a.channel === 'Mic'),
   }))
 
   // ★ P8: fetchChannels reads real state from D-Bus/pactl, respecting debounce
@@ -73,8 +83,7 @@ export const useAudioStore = defineStore('audio', () => {
     } catch {
       // D-Bus daemon not running — try reading Master from pactl directly
       try {
-        const raw = await invoke<string>('get_apps') // force a pactl scan
-        // Master volume from pactl (the set_volume command with 'Master' targets @DEFAULT_SINK@)
+        await invoke<string>('get_apps') // force a pactl scan to populate sink state
       } catch {}
     } finally { loading.value = false }
   }
@@ -159,7 +168,7 @@ export const useAudioStore = defineStore('audio', () => {
 
   return {
     allApps, devices, vuLevels, channelDevices, channelVolumes, channelMutes,
-    unassignedApps, channelMap, masterChannel, outputDevices, inputDevices,
+    unassignedApps, channelMap, masterChannel, micChannel, outputDevices, inputDevices,
     loading, error, draggedApp, routingInProgress,
     fetchChannels, fetchApps, fetchDevices,
     setVolume, setMute, setAppVolume, routeApp, unrouteApp,

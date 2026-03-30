@@ -1,92 +1,72 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-// import { invoke } from '@tauri-apps/api/core' // TODO: use for get_devices
-
-const devices = ref<any[]>([])
-const loading = ref(true)
-
-onMounted(async () => {
-  loading.value = false
-  // TODO: invoke get_devices from daemon
-})
+// ★ Epic 5: Devices page — coming in a future release
 </script>
 
 <template>
-  <div>
-    <h1 class="page-title">Devices & RGB</h1>
-
-    <div class="section">
-      <h3>Gaming Peripherals</h3>
-      <p class="hint">Detected via ratbagd (libratbag). Make sure <code>ratbagd.service</code> is running.</p>
-      <div v-if="devices.length === 0" class="empty">
-        No devices detected. Connect a supported gaming mouse or keyboard.
+  <div class="coming-soon">
+    <div class="cs-inner">
+      <div class="cs-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+          <path d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+        </svg>
       </div>
-    </div>
-
-    <div class="section">
-      <h3>RGB Control</h3>
-      <p class="hint">Unified RGB via OpenRGB SDK. Start OpenRGB with <code>--server</code> flag.</p>
-      <div class="rgb-grid">
-        <div class="rgb-card">
-          <div class="rgb-preview" style="background: linear-gradient(135deg, #E94560, #533483)"></div>
-          <div class="rgb-info">
-            <span>All Devices</span>
-            <span class="rgb-mode">Static</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <h3>Auto-Profile Switching</h3>
-      <p class="hint">Automatically switch DPI, audio routing, and RGB when a game launches.</p>
-      <div class="profile-list">
-        <div class="profile-row">
-          <span class="profile-name">CS2 Competitive</span>
-          <span class="profile-exes">cs2, csgo_linux64</span>
-          <span class="profile-dpi">800 DPI</span>
-        </div>
-      </div>
-      <button class="btn" style="margin-top: 12px">+ Add Profile</button>
+      <h2 class="cs-title">Coming Soon</h2>
+      <p class="cs-subtitle">قادم قريباً</p>
+      <p class="cs-desc">
+        Devices &amp; RGB control — gaming peripherals, OpenRGB integration,
+        and auto-profile switching are on the roadmap.
+      </p>
+      <span class="cs-badge">Beta</span>
     </div>
   </div>
 </template>
 
 <style scoped>
-.page-title { font-size: 22px; font-weight: 700; margin-bottom: 24px; }
-.section {
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: 24px; margin-bottom: 20px;
+.coming-soon {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-main);
 }
-.section h3 {
-  font-size: 15px; font-weight: 700; margin-bottom: 8px;
-  padding-bottom: 10px; border-bottom: 1px solid var(--border);
+.cs-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 400px;
+  text-align: center;
+  padding: 48px 32px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
 }
-.hint { font-size: 13px; color: var(--text-sec); margin-bottom: 16px; }
-.hint code { background: var(--bg-deep); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
-.empty { color: var(--text-muted); font-size: 13px; }
-.rgb-grid { display: flex; gap: 12px; }
-.rgb-card {
-  width: 160px; border: 1px solid var(--border);
-  border-radius: var(--radius); overflow: hidden;
+.cs-icon {
+  width: 64px; height: 64px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent);
+  margin-bottom: 8px;
 }
-.rgb-preview { height: 60px; }
-.rgb-info { padding: 10px; display: flex; justify-content: space-between; font-size: 12px; }
-.rgb-mode { color: var(--text-muted); }
-.profile-list { display: flex; flex-direction: column; gap: 8px; }
-.profile-row {
-  display: flex; align-items: center; gap: 16px;
-  padding: 10px 14px; background: var(--bg-input);
-  border: 1px solid var(--border); border-radius: var(--radius);
-  font-size: 13px;
+.cs-icon svg { width: 30px; height: 30px; }
+.cs-title {
+  font-size: 22px; font-weight: 800; color: var(--text); margin: 0;
 }
-.profile-name { font-weight: 600; min-width: 160px; }
-.profile-exes { color: var(--text-sec); flex: 1; }
-.profile-dpi { color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.btn {
-  padding: 8px 16px; border-radius: var(--radius);
-  border: 1px solid var(--border); background: var(--bg-card);
-  color: var(--text); font-size: 13px; cursor: pointer; transition: all .15s;
+.cs-subtitle {
+  font-size: 16px; font-weight: 500; color: var(--text-sec);
+  margin: 0; direction: rtl;
 }
-.btn:hover { background: var(--bg-hover); }
+.cs-desc {
+  font-size: 13px; color: var(--text-muted); line-height: 1.6; margin: 8px 0 4px;
+}
+.cs-badge {
+  display: inline-block;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  font-size: 10px; font-weight: 700; letter-spacing: 1px;
+  padding: 3px 10px; border-radius: 20px; text-transform: uppercase;
+}
 </style>

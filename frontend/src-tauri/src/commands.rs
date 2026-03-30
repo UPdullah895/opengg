@@ -9,13 +9,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tauri::{command, AppHandle, Emitter, Manager};
 
 const AU_PATH: &str = "/org/opengg/Daemon/Audio";
 const AU_IFACE: &str = "org.opengg.Daemon.Audio";
 const RP_PATH: &str = "/org/opengg/Daemon/Replay";
 const RP_IFACE: &str = "org.opengg.Daemon.Replay";
+
+// ── Mic Volume Lock (defeats OS AGC) ──────────────────────────────────────
+/// When `MIC_LOCK_ENABLED` is true the enforcement thread continuously
+/// restores the OS mic source volume to this value (0–100).
+pub static LOCKED_MIC_VOLUME: AtomicU32  = AtomicU32::new(100);
+pub static MIC_LOCK_ENABLED:  AtomicBool = AtomicBool::new(false);
 
 // ═══ Audio ═══
 #[command] pub async fn get_channels() -> Result<String, String> { call_dbus("GetChannels", AU_PATH, AU_IFACE, ()).await }
@@ -31,6 +38,8 @@ pub async fn set_volume(channel: String, volume: u32) -> Result<(), String> {
     if channel == "Master" {
         run_cmd("pactl", &["set-sink-volume", "@DEFAULT_SINK@", &pct])?;
     } else if channel == "Mic" {
+        // Store as the locked value so the enforcement thread knows the user's intent
+        LOCKED_MIC_VOLUME.store(volume, Ordering::Relaxed);
         run_cmd("pactl", &["set-source-volume", "@DEFAULT_SOURCE@", &pct])?;
     } else {
         let sink = format!("OpenGG_{channel}");
@@ -52,6 +61,15 @@ pub async fn set_mute(channel: String, muted: bool) -> Result<(), String> {
     } else {
         run_cmd("pactl", &["set-sink-mute", &format!("OpenGG_{channel}"), val])?;
     }
+    Ok(())
+}
+
+/// Enable or disable the mic volume lock (defeats OS AGC).
+/// When enabled, a background thread re-applies the last user-set mic volume
+/// any time the OS diverges from it by more than 1%.
+#[command]
+pub async fn set_mic_volume_lock(enabled: bool) -> Result<(), String> {
+    MIC_LOCK_ENABLED.store(enabled, Ordering::Relaxed);
     Ok(())
 }
 
@@ -217,6 +235,32 @@ fn scan_sink_inputs() -> Result<String, String> {
             "channel": channel, "icon": "", "volume": vol
         }));
     }
+
+    // ★ Epic 3: Also scan source-outputs — apps recording from the mic
+    // IDs are offset by 90000 to avoid conflicts with sink-input IDs.
+    if let Ok(sj) = run_cmd("pactl", &["-f", "json", "list", "source-outputs"]) {
+        if let Ok(sos) = serde_json::from_str::<Vec<serde_json::Value>>(&sj) {
+            for (idx, so) in sos.iter().enumerate() {
+                let p = &so["properties"];
+                let name = p["application.name"].as_str()
+                    .or(p["media.name"].as_str())
+                    .or(p["application.process.binary"].as_str())
+                    .unwrap_or("Unknown");
+                let binary = p["application.process.binary"].as_str().unwrap_or("");
+                let name_lower = name.to_lowercase();
+                if name_lower.contains("opengg") || name_lower == "wireplumber"
+                    || name_lower == "pipewire" || name_lower.contains("peak detect") {
+                    continue;
+                }
+                let fake_id = 90000u32 + idx as u32;
+                apps.push(serde_json::json!({
+                    "id": fake_id, "name": name, "binary": binary,
+                    "channel": "Mic", "icon": "", "volume": 100
+                }));
+            }
+        }
+    }
+
     Ok(serde_json::to_string(&apps).unwrap_or("[]".into()))
 }
 
@@ -477,13 +521,14 @@ pub async fn generate_waveform(filepath: String, stream_index: u32, num_peaks: u
 
 #[derive(Deserialize)]
 pub struct ExportOverlay {
-    pub overlay_type: String,  // "text" | "image" | "gif"
-    pub content: String,       // text string or file path
-    pub x: f64,               // percentage 0-100
+    pub overlay_type: String,       // "text" | "image" | "gif"
+    pub content: String,            // text string or file path
+    pub x: f64,                    // percentage 0-100
     pub y: f64,
     pub scale: f64,
     pub start_sec: f64,
     pub dur_sec: f64,
+    pub font_name: Option<String>, // e.g. "Impact", "Arial" — resolved to system font path
 }
 
 #[derive(Deserialize)]
@@ -493,7 +538,16 @@ pub struct ExportAudioTrack {
     pub muted: bool,
 }
 
-/// Export a clip with filter_complex: audio downmix + text/image overlays
+/// Export a clip with strict branching:
+///
+///  Condition A — No visual overlays → fast stream copy (`-c copy`).
+///    Input-side seeking, zero quality loss, no re-encoding.
+///
+///  Condition B — Has visual overlays → filter_complex + libx264 re-encode.
+///    Builds drawtext/overlay filter graph, burns in at CRF 18.
+///
+/// Stderr is captured to `stderr_log` so error details can be surfaced to the
+/// user instead of silently disappearing into the terminal.
 #[command]
 pub async fn export_clip_with_filters(
     app: AppHandle,
@@ -508,38 +562,155 @@ pub async fn export_clip_with_filters(
     let dur = end_sec - start_sec;
     if dur <= 0.0 { return Err("Invalid trim range".into()); }
 
-    let mut out = if output_path.is_empty() {
-        auto_name(&input_path, "_export")
-    } else { output_path };
-
-    // ★ Epic 1: CRITICAL — if output == input, FFmpeg crashes instantly
-    if out == input_path || std::path::Path::new(&out) == std::path::Path::new(&input_path) {
+    let mut out = if output_path.is_empty() { auto_name(&input_path, "_export") } else { smart_prefix(&output_path) };
+    if out == input_path || Path::new(&out) == Path::new(&input_path) {
         out = auto_name(&input_path, "_export");
-        eprintln!("export: output path collided with input, renamed to {out}");
+        eprintln!("export: output collided with input, renamed to {out}");
     }
 
-    // ★ Epic 1B: Get actual audio stream global indices from ffprobe
-    let audio_global_indices = get_audio_stream_global_indices(&input_path);
-    eprintln!("export: audio streams at global indices {:?}", audio_global_indices);
+    // Shared stderr accumulator — lets error path report the actual FFmpeg message.
+    let stderr_log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-    // Map global stream index → audio-relative index for [0:a:N]
-    // ffprobe global: video=0, audio=1, audio=2  →  [0:a:0], [0:a:1]
+    // ─────────────────────────────────────────────────────────────
+    // Condition A: NO valid visual overlays → stream copy (fast, lossless)
+    // ─────────────────────────────────────────────────────────────
+    let has_valid_overlays = overlays.iter().any(|o| match o.overlay_type.as_str() {
+        "text"        => !o.content.is_empty(),
+        "image" | "gif" => !o.content.is_empty() && Path::new(&o.content).exists(),
+        _             => false,
+    });
+
+    if !has_valid_overlays {
+        // Even with no visual overlays we still need correct audio handling:
+        //   • Multiple audio tracks  → downmix to one AAC stream (amix).
+        //   • Per-track volume/mute  → apply volume filter even in copy mode.
+        //   • Single default track   → copy video + encode audio to AAC.
+        // Without explicit -map ffmpeg only picks the "best" audio stream,
+        // silently discarding any additional tracks.
+        let audio_indices_a = get_audio_stream_global_indices(&input_path);
+        let to_rel_a = |global_idx: u32| -> Option<u32> {
+            audio_indices_a.iter().position(|&g| g == global_idx).map(|i| i as u32)
+        };
+
+        let valid_audio_a: Vec<(&ExportAudioTrack, u32)> = audio_tracks.iter()
+            .filter(|t| !t.muted && t.volume > 0.0)
+            .filter_map(|t| to_rel_a(t.stream_index).map(|rel| (t, rel)))
+            .collect();
+
+        let mut cond_a_fc: Vec<String> = Vec::new();
+        let a_map: String = if audio_tracks.is_empty() {
+            // No audio track info from frontend: map all source audio as-is.
+            "0:a".to_string()
+        } else if valid_audio_a.is_empty() {
+            // All tracks muted — output silence.
+            cond_a_fc.push("anullsrc=r=48000:cl=stereo:d=1[aout]".into());
+            "[aout]".to_string()
+        } else if valid_audio_a.len() == 1 && (valid_audio_a[0].0.volume - 1.0).abs() < 0.01 {
+            // Single track at unity gain → no filter needed, direct map.
+            format!("0:a:{}", valid_audio_a[0].1)
+        } else {
+            // Multiple tracks OR custom volume → build amix with per-track gain.
+            let mut mix_ins = Vec::new();
+            for (i, (t, rel)) in valid_audio_a.iter().enumerate() {
+                let lbl = format!("[ca{i}]");
+                cond_a_fc.push(format!("[0:a:{rel}]volume={:.4}{lbl}", t.volume));
+                mix_ins.push(lbl);
+            }
+            let joined = mix_ins.join("");
+            cond_a_fc.push(format!(
+                "{joined}amix=inputs={}:normalize=0:duration=longest[amix]",
+                mix_ins.len()
+            ));
+            "[amix]".to_string()
+        };
+
+        let mut args: Vec<String> = vec![
+            "-y".into(),
+            "-ss".into(), format!("{start_sec:.3}"),
+            "-to".into(), format!("{end_sec:.3}"),
+            "-i".into(), input_path.clone(),
+        ];
+        if !cond_a_fc.is_empty() {
+            args.extend(["-filter_complex".into(), cond_a_fc.join(";")]);
+        }
+        args.extend([
+            "-map".into(), "0:v".into(),
+            "-map".into(), a_map,
+            "-c:v".into(), "copy".into(),
+            "-c:a".into(), "aac".into(),
+            "-b:a".into(), "192k".into(),
+            "-avoid_negative_ts".into(), "make_zero".into(),
+            out.clone(),
+        ]);
+        eprintln!("export (copy+audio): ffmpeg {}", args.join(" "));
+        let _ = app.emit("export-progress", serde_json::json!({"percent": 0, "stage": "copying", "speed": ""}));
+
+        let mut child = Command::new("ffmpeg")
+            .args(&args)
+            .stderr(std::process::Stdio::piped())
+            .spawn().map_err(|e| format!("ffmpeg: {e}"))?;
+
+        let log_c = Arc::clone(&stderr_log);
+        if let Some(stderr) = child.stderr.take() {
+            tokio::task::spawn_blocking(move || {
+                use std::io::{BufRead, BufReader};
+                for line in BufReader::new(stderr).lines().flatten() {
+                    eprintln!("ffmpeg: {line}");
+                    log_c.lock().unwrap().push(line);
+                }
+            });
+        }
+
+        { *app.state::<crate::ExportProcess>().child.lock().unwrap() = Some((child, out.clone())); }
+
+        let status = {
+            let es = app.state::<crate::ExportProcess>();
+            let mut lock = es.child.lock().unwrap();
+            if let Some((ref mut c, _)) = *lock { Some(c.wait().map_err(|e| format!("ffmpeg: {e}"))?) } else { None }
+        };
+        { *app.state::<crate::ExportProcess>().child.lock().unwrap() = None; }
+        for i in 0..20 { let _ = std::fs::remove_file(std::env::temp_dir().join(format!("opengg_text_{i}.txt"))); }
+
+        return match status {
+            Some(s) if s.success() => {
+                let _ = app.emit("export-progress", serde_json::json!({"percent": 100, "stage": "done", "speed": ""}));
+                Ok(out)
+            }
+            Some(_) => {
+                std::thread::sleep(std::time::Duration::from_millis(80)); // let stderr thread flush
+                let tail = stderr_log.lock().unwrap().iter().rev().take(8).rev().cloned().collect::<Vec<_>>().join("\n");
+                let _ = app.emit("export-progress", serde_json::json!({"percent": -1, "stage": "error", "speed": "failed"}));
+                Err(format!("FFmpeg stream copy failed.\n\nDetails:\n{tail}"))
+            }
+            None => Err("Export was cancelled".into()),
+        };
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Condition B: Has overlays → filter_complex + libx264 re-encode
+    // ─────────────────────────────────────────────────────────────
+    let audio_global_indices = get_audio_stream_global_indices(&input_path);
+    eprintln!("export (encode): audio streams {:?}", audio_global_indices);
+
     let to_audio_relative = |global_idx: u32| -> Option<u32> {
         audio_global_indices.iter().position(|&g| g == global_idx).map(|i| i as u32)
     };
 
-    // ── Build the filter_complex graph ──
-    let mut inputs: Vec<String> = vec!["-i".into(), input_path.clone()];
+    // Input-side seeking (before the main -i so PTS starts at 0)
+    let mut inputs: Vec<String> = vec![
+        "-ss".into(), format!("{start_sec:.3}"),
+        "-to".into(), format!("{end_sec:.3}"),
+        "-i".into(), input_path.clone(),
+    ];
     let mut filter_parts: Vec<String> = Vec::new();
     let mut input_count = 1u32;
     let mut video_label = "[0:v]".to_string();
 
-    // ★ Epic 1B: Filter to valid, unmuted tracks with correct relative indices
+    // Audio filter graph
     let valid_audio: Vec<(&ExportAudioTrack, u32)> = audio_tracks.iter()
         .filter(|t| !t.muted && t.volume > 0.0)
         .filter_map(|t| to_audio_relative(t.stream_index).map(|rel| (t, rel)))
         .collect();
-
     let audio_label = if valid_audio.is_empty() {
         filter_parts.push("anullsrc=r=48000:cl=stereo:d=1[aout]".into());
         "[aout]".to_string()
@@ -548,81 +719,69 @@ pub async fn export_clip_with_filters(
         filter_parts.push(format!("[0:a:{rel}]volume={:.2}[amix]", t.volume));
         "[amix]".to_string()
     } else {
-        let mut mix_inputs = Vec::new();
+        let mut mix_ins = Vec::new();
         for (i, (t, rel)) in valid_audio.iter().enumerate() {
             let lbl = format!("[a{i}]");
             filter_parts.push(format!("[0:a:{rel}]volume={:.2}{lbl}", t.volume));
-            mix_inputs.push(lbl);
+            mix_ins.push(lbl);
         }
-        let mix_in = mix_inputs.join("");
+        let mix_in = mix_ins.join("");
         filter_parts.push(format!("{mix_in}amix=inputs={}:duration=longest[amix]", valid_audio.len()));
         "[amix]".to_string()
     };
 
-    // ★ Epic 5: Probe source video resolution for normalized sizing
+    // Probe resolution for proportional sizing
     let (src_w, src_h) = probe_resolution(&input_path);
-    eprintln!("export: source resolution {src_w}x{src_h}");
+    eprintln!("export (encode): source {src_w}x{src_h}");
 
-    // Overlay burn
+    // Burn overlays into the video filter chain
     for ov in &overlays {
         let ov_start = (ov.start_sec - start_sec).max(0.0);
-        let ov_end = (ov.start_sec + ov.dur_sec - start_sec).min(dur);
+        let ov_end   = (ov.start_sec + ov.dur_sec - start_sec).min(dur);
         if ov_end <= ov_start { continue; }
-
         let enable = format!("between(t\\,{ov_start:.2}\\,{ov_end:.2})");
-
         match ov.overlay_type.as_str() {
             "text" => {
                 let tmp = std::env::temp_dir().join(format!("opengg_text_{}.txt", filter_parts.len()));
                 if std::fs::write(&tmp, &ov.content).is_err() { continue; }
-                let tmp_path = tmp.to_string_lossy().to_string();
-
-                // ★ Epic 5: Scale font size proportional to video height
-                // Base: 24px at 1080p → scale = video_height / 1080 * 24 * user_scale/100
                 let fs = ((src_h as f64 / 1080.0) * 24.0 * ov.scale / 100.0).max(8.0) as u32;
-                let font = find_system_font();
+                // Resolve font: honour user choice, fall back to best system font.
+                let font = find_system_font_by_name(ov.font_name.as_deref());
                 let x_expr = format!("(W*{}/100-tw/2)", ov.x as u32);
                 let y_expr = format!("(H*{}/100-th/2)", ov.y as u32);
                 let next = format!("[vov{}]", filter_parts.len());
+                // Shadow (shadowx/y + alpha) replaces the old hard-coded black border.
+                // Gives a natural depth effect without visual artefacts on bright bg.
                 filter_parts.push(format!(
-                    "{video_label}drawtext=fontfile='{font}':textfile='{tmp_path}':fontsize={fs}:fontcolor=white:borderw=2:bordercolor=black:x={x_expr}:y={y_expr}:enable='{enable}'{next}"
+                    "{video_label}drawtext=fontfile='{font}':textfile='{}':fontsize={fs}:fontcolor=white:shadowx=2:shadowy=2:shadowcolor=black@0.65:x={x_expr}:y={y_expr}:enable='{enable}'{next}",
+                    tmp.to_string_lossy()
                 ));
                 video_label = next;
             }
             "image" | "gif" => {
-                if !ov.content.is_empty() && std::path::Path::new(&ov.content).exists() {
-                    // ★ Epic 6: For GIFs, add -ignore_loop 0 to keep animation
-                    let is_gif = ov.overlay_type == "gif"
-                        || ov.content.to_lowercase().ends_with(".gif");
-                    if is_gif {
-                        inputs.push("-ignore_loop".into());
-                        inputs.push("0".into());
-                    }
-                    inputs.push("-i".into());
-                    inputs.push(ov.content.clone());
-                    let idx = input_count;
-                    input_count += 1;
-
-                    // ★ Epic 5: Scale image/gif to normalized size (scale% of video width)
-                    let scale_w = (src_w as f64 * ov.scale / 100.0 * 0.3) as u32; // 30% of video width at scale=100
-                    let scale_label = format!("[sovl{}]", filter_parts.len());
-
-                    if is_gif {
-                        // ★ Epic 6: Scale GIF and loop for duration
-                        filter_parts.push(format!(
-                            "[{idx}:v]scale={scale_w}:-1:flags=lanczos,loop=-1:size=0{scale_label}"
-                        ));
-                    } else {
-                        filter_parts.push(format!(
-                            "[{idx}:v]scale={scale_w}:-1:flags=lanczos{scale_label}"
-                        ));
-                    }
-
+                if !ov.content.is_empty() && Path::new(&ov.content).exists() {
+                    let is_gif = ov.overlay_type == "gif" || ov.content.to_lowercase().ends_with(".gif");
+                    if is_gif { inputs.push("-ignore_loop".into()); inputs.push("0".into()); }
+                    inputs.push("-i".into()); inputs.push(ov.content.clone());
+                    let idx = input_count; input_count += 1;
+                    // Force even pixel dimensions.
+                    // `2*trunc(N/2)` is an FFmpeg expression that rounds N down
+                    // to the nearest even integer — libx264 rejects odd dimensions.
+                    let scale_w = ((src_w as f64 * ov.scale / 100.0 * 0.3) as u32 / 2 * 2).max(2);
+                    let scale_lbl = format!("[sovl{}]", filter_parts.len());
+                    // `format=rgba` converts GIF palette / PNG BGRA → RGBA before
+                    // scale so the overlay filter always gets a well-defined pixel
+                    // format. `-2` on height auto-rounds to even while preserving AR.
+                    // DO NOT add a `loop` filter — `-ignore_loop 0` on the input
+                    // is sufficient and the extra filter causes a fatal hang.
+                    filter_parts.push(format!(
+                        "[{idx}:v]format=rgba,scale=w=2*trunc({scale_w}/2):h=-2:flags=lanczos{scale_lbl}"
+                    ));
                     let x_expr = format!("(W*{}/100-overlay_w/2)", ov.x as u32);
                     let y_expr = format!("(H*{}/100-overlay_h/2)", ov.y as u32);
                     let next = format!("[vov{}]", filter_parts.len());
                     filter_parts.push(format!(
-                        "{video_label}{scale_label}overlay=x={x_expr}:y={y_expr}:enable='{enable}':shortest=1{next}"
+                        "{video_label}{scale_lbl}overlay=x={x_expr}:y={y_expr}:enable='{enable}':shortest=1{next}"
                     ));
                     video_label = next;
                 }
@@ -631,36 +790,34 @@ pub async fn export_clip_with_filters(
         }
     }
 
-    let has_filters = !filter_parts.is_empty();
+    // Belt-and-suspenders pixel format fix:
+    //   1. format=yuv420p node at the END of the video chain (in-graph conversion).
+    //   2. -pix_fmt yuv420p on the output side (encoder-level enforcement).
+    // Together they handle every deprecated / unusual input format (yuvj420p,
+    // bgra, indexed-color) that would otherwise make libx264 return -22.
+    let fmt_label = format!("[vfmt{}]", filter_parts.len());
+    filter_parts.push(format!("{video_label}format=yuv420p{fmt_label}"));
+
     let filter_complex = filter_parts.join(";");
 
-    // Build ffmpeg command — note: -ss AFTER -i so filtergraph t starts at 0
     let mut args: Vec<String> = vec!["-y".into()];
     args.extend(inputs);
-    args.push("-ss".into()); args.push(format!("{start_sec:.3}"));
-    args.push("-to".into()); args.push(format!("{end_sec:.3}"));
-
-    if has_filters {
-        args.push("-filter_complex".into());
-        args.push(filter_complex);
-        args.push("-map".into()); args.push(video_label.clone());
-        args.push("-map".into()); args.push(audio_label.clone());
-    }
+    args.extend(["-filter_complex".into(), filter_complex]);
+    args.push("-map".into()); args.push(fmt_label);
+    args.push("-map".into()); args.push(audio_label);
 
     if target_mb > 0.0 {
-        let audio_kbps = 128.0;
-        let video_kbps = ((target_mb * 8192.0 / dur) - audio_kbps).max(100.0);
-        args.extend(["-c:v".into(), "libx264".into(), "-b:v".into(), format!("{}k", video_kbps as u32), "-preset".into(), "fast".into()]);
-    } else if has_filters {
-        args.extend(["-c:v".into(), "libx264".into(), "-crf".into(), "18".into(), "-preset".into(), "fast".into()]);
+        let video_kbps = ((target_mb * 8192.0 / dur) - 128.0).max(100.0);
+        args.extend(["-c:v".into(), "libx264".into(), "-pix_fmt".into(), "yuv420p".into(),
+            "-b:v".into(), format!("{}k", video_kbps as u32), "-preset".into(), "fast".into()]);
     } else {
-        args.extend(["-c:v".into(), "copy".into()]);
+        args.extend(["-c:v".into(), "libx264".into(), "-pix_fmt".into(), "yuv420p".into(),
+            "-crf".into(), "18".into(), "-preset".into(), "fast".into()]);
     }
     args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "128k".into()]);
     args.push(out.clone());
 
-    eprintln!("export_clip_with_filters: ffmpeg {}", args.join(" "));
-
+    eprintln!("export (encode): ffmpeg {}", args.join(" "));
     let _ = app.emit("export-progress", serde_json::json!({"percent": 0, "stage": "encoding", "speed": ""}));
 
     let mut child = Command::new("ffmpeg")
@@ -670,47 +827,33 @@ pub async fn export_clip_with_filters(
 
     if let Some(stderr) = child.stderr.take() {
         let app_c = app.clone();
+        let log_c = Arc::clone(&stderr_log);
         tokio::task::spawn_blocking(move || {
-            parse_ffmpeg_progress(stderr, dur, 0.0, 100.0, &app_c);
+            parse_ffmpeg_progress(stderr, dur, 0.0, 100.0, &app_c, Some(log_c));
         });
     }
 
-    // ★ Epic 3: Store child in managed state so cancel_export can kill it
-    {
-        let export_state = app.state::<crate::ExportProcess>();
-        let mut lock = export_state.child.lock().unwrap();
-        *lock = Some((child, out.clone()));
-    }
+    { *app.state::<crate::ExportProcess>().child.lock().unwrap() = Some((child, out.clone())); }
 
-    // Wait for the process (either completes or gets killed by cancel_export)
     let status = {
-        let export_state = app.state::<crate::ExportProcess>();
-        let mut lock = export_state.child.lock().unwrap();
-        if let Some((ref mut c, _)) = *lock {
-            let s = c.wait().map_err(|e| format!("ffmpeg: {e}"))?;
-            Some(s)
-        } else {
-            None // was cancelled
-        }
+        let es = app.state::<crate::ExportProcess>();
+        let mut lock = es.child.lock().unwrap();
+        if let Some((ref mut c, _)) = *lock { Some(c.wait().map_err(|e| format!("ffmpeg: {e}"))?) } else { None }
     };
-
-    // Clear the managed state
-    {
-        let export_state = app.state::<crate::ExportProcess>();
-        *export_state.child.lock().unwrap() = None;
-    }
-
-    // Clean up temp text files
-    for i in 0..20 {
-        let tmp = std::env::temp_dir().join(format!("opengg_text_{i}.txt"));
-        let _ = std::fs::remove_file(&tmp);
-    }
-
-    let _ = app.emit("export-progress", serde_json::json!({"percent": 100, "stage": "done", "speed": ""}));
+    { *app.state::<crate::ExportProcess>().child.lock().unwrap() = None; }
+    for i in 0..20 { let _ = std::fs::remove_file(std::env::temp_dir().join(format!("opengg_text_{i}.txt"))); }
 
     match status {
-        Some(s) if s.success() => Ok(out),
-        Some(_) => Err("FFmpeg export failed".into()),
+        Some(s) if s.success() => {
+            let _ = app.emit("export-progress", serde_json::json!({"percent": 100, "stage": "done", "speed": ""}));
+            Ok(out)
+        }
+        Some(_) => {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            let tail = stderr_log.lock().unwrap().iter().rev().take(8).rev().cloned().collect::<Vec<_>>().join("\n");
+            let _ = app.emit("export-progress", serde_json::json!({"percent": -1, "stage": "error", "speed": "failed"}));
+            Err(format!("FFmpeg encode failed.\n\nDetails:\n{tail}"))
+        }
         None => Err("Export was cancelled".into()),
     }
 }
@@ -742,10 +885,10 @@ pub async fn cancel_export(app: AppHandle) -> Result<(), String> {
 #[command]
 pub async fn quit_app(app: AppHandle) -> Result<(), String> {
     eprintln!("OpenGG: quit requested");
-    // Kill any running export
     {
-        let ep = app.state::<crate::ExportProcess>();
-        if let Some((mut child, path)) = ep.child.lock().unwrap().take() {
+        let state = app.state::<crate::ExportProcess>();
+        let mut lock = state.child.lock().unwrap();
+        if let Some((mut child, path)) = lock.take() {
             let _ = child.kill();
             let _ = child.wait();
             if std::path::Path::new(&path).exists() { let _ = std::fs::remove_file(&path); }
@@ -784,28 +927,81 @@ fn get_meta_map() -> HashMap<String,(String,bool,String)> {
 pub struct ClipInfo { pub id:String, pub filename:String, pub filepath:String, pub filesize:u64, pub created:String, pub duration:f64, pub width:u32, pub height:u32, pub game:String, pub custom_name:String, pub favorite:bool, pub thumbnail:String }
 const VIDEO_EXTS: &[&str] = &["mp4","mkv","webm","avi","mov","ts","flv"];
 
+/// Lightweight clip counter — counts video files without reading metadata.
+/// Used by the Home page dashboard so it doesn't trigger full ffprobe scans.
+#[command]
+pub async fn get_clips_count(folder: String) -> Result<usize, String> {
+    let dir = resolve_clips_dir(&folder);
+    if !dir.exists() { return Ok(0); }
+    let count = std::fs::read_dir(&dir)
+        .map_err(|e| format!("{e}"))?
+        .flatten()
+        .filter(|e| {
+            let p = e.path();
+            p.is_file() && {
+                let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+                VIDEO_EXTS.contains(&ext.as_str())
+            }
+        })
+        .count();
+    Ok(count)
+}
+
 #[command] pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
-    let dir = resolve_clips_dir(&folder); if !dir.exists() { return Ok(vec![]); }
+    let dirs = get_all_clip_dirs(&folder);
     let meta = get_meta_map(); let td = thumb_dir(); let _ = std::fs::create_dir_all(&td);
     let mut clips = Vec::new();
-    for e in std::fs::read_dir(&dir).map_err(|e| format!("{e}"))?.flatten() {
-        let p = e.path(); if !p.is_file() { continue; }
-        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        if !VIDEO_EXTS.contains(&ext.as_str()) { continue; }
-        let m = e.metadata().map_err(|e| format!("{e}"))?;
-        let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let fp = p.to_string_lossy().to_string();
-        let id = format!("{:x}", hash_str(&fp));
-        let created = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| fmt_ts(d.as_secs() as i64)).unwrap_or_default();
-        let (dur,w,h) = probe_video(&p);
-        let game_from_filename = fname.split('_').next().unwrap_or("Unknown").replace('-'," ");
-        let (cn,fav,game_tag) = meta.get(&fp).cloned().unwrap_or_default();
-        let game = if game_tag.is_empty() { game_from_filename } else { game_tag };
-        let thumb = td.join(format!("{id}.jpg"));
-        let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
-        clips.push(ClipInfo{id,filename:fname,filepath:fp,filesize:m.len(),created,duration:dur,width:w,height:h,game,custom_name:cn,favorite:fav,thumbnail});
+    let mut seen = std::collections::HashSet::new();
+    for dir in &dirs {
+        if !dir.exists() { continue; }
+        let entries = match std::fs::read_dir(dir) { Ok(r) => r, Err(_) => continue };
+        for e in entries.flatten() {
+            let p = e.path(); if !p.is_file() { continue; }
+            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if !VIDEO_EXTS.contains(&ext.as_str()) { continue; }
+            let fp = p.to_string_lossy().to_string();
+            if seen.contains(&fp) { continue; }
+            seen.insert(fp.clone());
+            let m = match e.metadata() { Ok(m) => m, Err(_) => continue };
+            let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let id = format!("{:x}", hash_str(&fp));
+            let created = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| fmt_ts(d.as_secs() as i64)).unwrap_or_default();
+            let (dur,w,h) = probe_video(&p);
+            // ★ Epic 2 Task 2: Use file_stem() so extensions are never included in the game name
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
+            let game_from_filename = stem.split('_').next().unwrap_or("Unknown").replace('-', " ");
+            let (cn,fav,game_tag) = meta.get(&fp).cloned().unwrap_or_default();
+            let game = if game_tag.is_empty() { game_from_filename } else { game_tag };
+            let thumb = td.join(format!("{id}.jpg"));
+            let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
+            clips.push(ClipInfo{id,filename:fname,filepath:fp,filesize:m.len(),created,duration:dur,width:w,height:h,game,custom_name:cn,favorite:fav,thumbnail});
+        }
     }
     clips.sort_by(|a,b| b.created.cmp(&a.created)); Ok(clips)
+}
+
+/// Fetch metadata for a single file — used by the frontend file-watcher listener.
+#[command]
+pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, String> {
+    let p = PathBuf::from(&filepath);
+    if !p.is_file() { return Ok(None); }
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    if !VIDEO_EXTS.contains(&ext.as_str()) { return Ok(None); }
+    let meta = get_meta_map();
+    let td = thumb_dir(); let _ = std::fs::create_dir_all(&td);
+    let m = p.metadata().map_err(|e| format!("{e}"))?;
+    let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let fp = filepath.clone();
+    let id = format!("{:x}", hash_str(&fp));
+    let created = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| fmt_ts(d.as_secs() as i64)).unwrap_or_default();
+    let (dur,w,h) = probe_video(&p);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
+    let game_from_filename = stem.split('_').next().unwrap_or("Unknown").replace('-', " ");
+    let (cn,fav,game_tag) = meta.get(&fp).cloned().unwrap_or_default();
+    let game = if game_tag.is_empty() { game_from_filename } else { game_tag };
+    let thumb = td.join(format!("{id}.jpg"));
+    let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
+    Ok(Some(ClipInfo{id,filename:fname,filepath:fp,filesize:m.len(),created,duration:dur,width:w,height:h,game,custom_name:cn,favorite:fav,thumbnail}))
 }
 #[command] pub async fn generate_thumbnail(filepath: String) -> Result<String, String> {
     let id = format!("{:x}",hash_str(&filepath)); let d = thumb_dir(); let _ = std::fs::create_dir_all(&d);
@@ -854,11 +1050,14 @@ pub async fn get_clip_meta(filepath: String) -> Result<String, String> {
     }
 }
 
-/// Take a screenshot at a specific timestamp
+/// Take a screenshot at a specific timestamp.
+/// `output_dir`: optional override; falls back to `~/Pictures`.
 #[command]
-pub async fn take_screenshot(filepath: String, time_sec: f64) -> Result<String, String> {
-    // Get the user's Pictures directory
-    let pics_dir = dirs::picture_dir().unwrap_or_else(|| dirs::home_dir().unwrap().join("Pictures"));
+pub async fn take_screenshot(filepath: String, time_sec: f64, output_dir: Option<String>) -> Result<String, String> {
+    let pics_dir = match output_dir.as_deref().filter(|s| !s.is_empty()) {
+        Some(d) => PathBuf::from(shexp(d)),
+        None    => dirs::picture_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures")),
+    };
     let _ = std::fs::create_dir_all(&pics_dir);
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     let out = pics_dir.join(format!("opengg_screenshot_{ts}.png"));
@@ -889,7 +1088,7 @@ pub async fn export_clip_sized(app: AppHandle, input_path: String, start_sec: f6
     let dur = end_sec - start_sec;
     if dur <= 0.0 { return Err("Invalid trim range".into()); }
 
-    let mut out = if output_path.is_empty() { auto_name(&input_path, &format!("_{}mb", target_mb as u32)) } else { output_path };
+    let mut out = if output_path.is_empty() { auto_name(&input_path, &format!("_{}mb", target_mb as u32)) } else { smart_prefix(&output_path) };
     if out == input_path { out = auto_name(&input_path, &format!("_{}mb", target_mb as u32)); }
 
     if target_mb <= 0.0 {
@@ -909,7 +1108,7 @@ pub async fn export_clip_sized(app: AppHandle, input_path: String, start_sec: f6
     let _ = app.emit("export-progress", serde_json::json!({"percent": 0, "stage": "pass1"}));
     let mut child1 = Command::new("ffmpeg")
         .args(["-y", "-i", &input_path, "-ss", &format!("{start_sec:.3}"), "-to", &format!("{end_sec:.3}"),
-            "-c:v", "libx264", "-b:v", &vbr, "-preset", "fast", "-pass", "1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-b:v", &vbr, "-preset", "fast", "-pass", "1",
             "-an", "-f", "null", "/dev/null"])
         .stderr(std::process::Stdio::piped())
         .spawn().map_err(|e| format!("ffmpeg: {e}"))?;
@@ -919,7 +1118,7 @@ pub async fn export_clip_sized(app: AppHandle, input_path: String, start_sec: f6
         let app_clone = app.clone();
         let dur_clone = dur;
         tokio::task::spawn_blocking(move || {
-            parse_ffmpeg_progress(stderr, dur_clone, 0.0, 45.0, &app_clone);
+            parse_ffmpeg_progress(stderr, dur_clone, 0.0, 45.0, &app_clone, None);
         });
     }
     let _status1 = child1.wait().map_err(|e| format!("ffmpeg wait: {e}"))?;
@@ -928,7 +1127,7 @@ pub async fn export_clip_sized(app: AppHandle, input_path: String, start_sec: f6
     let _ = app.emit("export-progress", serde_json::json!({"percent": 45, "stage": "pass2"}));
     let mut child2 = Command::new("ffmpeg")
         .args(["-y", "-i", &input_path, "-ss", &format!("{start_sec:.3}"), "-to", &format!("{end_sec:.3}"),
-            "-c:v", "libx264", "-b:v", &vbr, "-preset", "fast", "-pass", "2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-b:v", &vbr, "-preset", "fast", "-pass", "2",
             "-c:a", "aac", "-b:a", "128k", &out])
         .stderr(std::process::Stdio::piped())
         .spawn().map_err(|e| format!("ffmpeg: {e}"))?;
@@ -938,7 +1137,7 @@ pub async fn export_clip_sized(app: AppHandle, input_path: String, start_sec: f6
         let app_clone = app.clone();
         let dur_clone = dur;
         tokio::task::spawn_blocking(move || {
-            parse_ffmpeg_progress(stderr, dur_clone, 45.0, 100.0, &app_clone);
+            parse_ffmpeg_progress(stderr, dur_clone, 45.0, 100.0, &app_clone, None);
         });
     }
     let status2 = child2.wait().map_err(|e| format!("ffmpeg wait: {e}"))?;
@@ -960,12 +1159,15 @@ pub async fn export_clip_sized(app: AppHandle, input_path: String, start_sec: f6
 /// blocks indefinitely waiting for a newline that never comes.
 ///
 /// FIX: Read byte-by-byte, split on both `\r` and `\n`.
+/// Parse FFmpeg progress from stderr, emitting progress events.
+/// `log`: optional buffer that collects every stderr line for post-mortem error reporting.
 fn parse_ffmpeg_progress(
     stderr: std::process::ChildStderr,
     total_dur: f64,
     pct_start: f64,
     pct_end: f64,
     app: &AppHandle,
+    log: Option<Arc<Mutex<Vec<String>>>>,
 ) {
     use std::io::Read;
     let range = pct_end - pct_start;
@@ -975,29 +1177,27 @@ fn parse_ffmpeg_progress(
 
     loop {
         match reader.read(&mut byte) {
-            Ok(0) => break, // EOF
+            Ok(0) => break,
             Ok(_) => {
                 let ch = byte[0];
                 if ch == b'\r' || ch == b'\n' {
-                    // Process accumulated line
                     if !buf.is_empty() {
                         let line = String::from_utf8_lossy(&buf).to_string();
                         buf.clear();
+                        eprintln!("ffmpeg: {line}");
+                        if let Some(ref l) = log { l.lock().unwrap().push(line.clone()); }
 
                         if let Some(pos) = line.find("time=") {
                             let rest = &line[pos + 5..];
-                            // Extract time value — ends at space, tab, or end of string
                             let ts_end = rest.find(|c: char| c == ' ' || c == '\t')
                                 .unwrap_or(rest.len());
-                            let ts = &rest[..ts_end];
-                            if let Some(secs) = parse_time_to_secs(ts) {
+                            if let Some(secs) = parse_time_to_secs(&rest[..ts_end]) {
                                 let pct = pct_start + (secs / total_dur.max(0.1) * range).min(range);
-                                let _ = app.emit("export-progress",
-                                    serde_json::json!({
-                                        "percent": pct.round() as u32,
-                                        "stage": "encoding",
-                                        "speed": extract_speed(&line),
-                                    }));
+                                let _ = app.emit("export-progress", serde_json::json!({
+                                    "percent": pct.round() as u32,
+                                    "stage": "encoding",
+                                    "speed": extract_speed(&line),
+                                }));
                             }
                         }
                     }
@@ -1072,20 +1272,47 @@ pub async fn export_with_progress(
     let dur = end_sec - start_sec;
     if dur <= 0.0 { return Err("Invalid trim range".into()); }
 
-    let out = if output_path.is_empty() { auto_name(&input_path, "_export") } else { output_path };
+    let out = if output_path.is_empty() { auto_name(&input_path, "_export") } else { smart_prefix(&output_path) };
 
+    // Input-side seeking: -ss/-to BEFORE -i so FFmpeg seeks to the keyframe
+    // before start_sec instead of decoding from 0 (fast + correct PTS).
     let mut args: Vec<String> = vec![
-        "-y".into(), "-progress".into(), "pipe:1".into(), // ★ Progress to stdout
+        "-y".into(), "-progress".into(), "pipe:1".into(),
+        "-ss".into(), format!("{start_sec:.3}"),
+        "-to".into(), format!("{end_sec:.3}"),
         "-i".into(), input_path.clone(),
-        "-ss".into(), format!("{start_sec:.3}"), "-to".into(), format!("{end_sec:.3}"),
     ];
 
     if target_mb > 0.0 {
         let vbr = format!("{}k", ((target_mb * 8192.0 / dur) - 128.0).max(100.0) as u32);
-        args.extend(["-c:v".into(), "libx264".into(), "-b:v".into(), vbr,
-            "-preset".into(), "fast".into(), "-c:a".into(), "aac".into(), "-b:a".into(), "128k".into()]);
+        args.extend(["-c:v".into(), "libx264".into(), "-pix_fmt".into(), "yuv420p".into(),
+            "-b:v".into(), vbr, "-preset".into(), "fast".into(),
+            "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]);
     } else {
-        args.extend(["-c".into(), "copy".into(), "-avoid_negative_ts".into(), "make_zero".into()]);
+        // Copy video stream as-is; downmix ALL source audio tracks → one AAC stream.
+        // Without explicit mapping, FFmpeg only copies the "best" audio stream.
+        let n_audio = (count_audio_streams(&input_path) as usize).max(1);
+        if n_audio == 1 {
+            args.extend([
+                "-map".into(), "0:v".into(),
+                "-map".into(), "0:a:0".into(),
+                "-c:v".into(), "copy".into(),
+                "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(),
+                "-avoid_negative_ts".into(), "make_zero".into(),
+            ]);
+        } else {
+            // Build amix filter over all audio streams
+            let mix_ins: String = (0..n_audio).map(|i| format!("[0:a:{i}]")).collect();
+            let fc = format!("{mix_ins}amix=inputs={n_audio}:normalize=0:duration=longest[amix]");
+            args.extend([
+                "-filter_complex".into(), fc,
+                "-map".into(), "0:v".into(),
+                "-map".into(), "[amix]".into(),
+                "-c:v".into(), "copy".into(),
+                "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(),
+                "-avoid_negative_ts".into(), "make_zero".into(),
+            ]);
+        }
     }
     args.push(out.clone());
 
@@ -1156,17 +1383,484 @@ fn theme_path() -> PathBuf { dirs::config_dir().unwrap_or_else(||PathBuf::from("
 // ═══ Audio Devices ═══
 #[derive(Debug,Serialize,Deserialize,Clone)] pub struct AudioDevice{pub name:String,pub description:String,pub device_type:String,pub is_default:bool}
 #[command] pub async fn get_audio_devices() -> Result<Vec<AudioDevice>, String> { let mut d=Vec::new(); let ds=run_cmd("pactl",&["get-default-sink"]).unwrap_or_default(); let dr=run_cmd("pactl",&["get-default-source"]).unwrap_or_default(); if let Ok(o)=run_cmd("pactl",&["-f","json","list","sinks"]){if let Ok(v)=serde_json::from_str::<serde_json::Value>(&o){for s in v.as_array().unwrap_or(&vec![]){let n=s["name"].as_str().unwrap_or("").to_string(); if n.starts_with("OpenGG_"){continue;} d.push(AudioDevice{is_default:n==ds,description:s["description"].as_str().unwrap_or(&n).into(),name:n,device_type:"sink".into()});}}} if let Ok(o)=run_cmd("pactl",&["-f","json","list","sources"]){if let Ok(v)=serde_json::from_str::<serde_json::Value>(&o){for s in v.as_array().unwrap_or(&vec![]){let n=s["name"].as_str().unwrap_or("").to_string(); if n.contains(".monitor"){continue;} d.push(AudioDevice{is_default:n==dr,description:s["description"].as_str().unwrap_or(&n).into(),name:n,device_type:"source".into()});}}} Ok(d) }
-#[command] pub async fn set_channel_device(channel: String, device_name: String) -> Result<(), String> { if channel=="Mic"{let _=Command::new("pactl").args(["set-default-source",&device_name]).output(); return Ok(());} if channel=="Master"{let _=Command::new("pactl").args(["set-default-sink",&device_name]).output(); return Ok(());} let s=format!("OpenGG_{channel}"); if let Ok(def)=run_cmd("pactl",&["get-default-sink"]){for p in["FL","FR"]{let _=Command::new("pw-link").args(["-d",&format!("{s}:monitor_{p}"),&format!("{def}:playback_{p}")]).output();}} for p in["FL","FR"]{let _=Command::new("pw-link").args([&format!("{s}:monitor_{p}"),&format!("{device_name}:playback_{p}")]).output();} Ok(()) }
+// ══════════════════════════════════════════════════════════════
+//  ★ EPIC 1 FIX: PipeWire routing leak — audio duplication bug
+//
+//  Previous bug: the old code only unlinked from the system-default
+//  sink. If the channel had been routed to a DIFFERENT device earlier,
+//  that link was never destroyed → audio played from two outputs.
+//
+//  Fix: query ALL current sinks and run `pw-link -d` for every one.
+//  pw-link -d is a no-op when no link exists, so it's safe to spam.
+// ══════════════════════════════════════════════════════════════
+
+/// Destroy every existing pw-link from `{sink_name}:monitor_FL/FR` to
+/// any physical sink that is currently listed by PulseAudio.
+fn unlink_virtual_sink_from_all(sink_name: &str) {
+    let json = match run_cmd("pactl", &["-f", "json", "list", "sinks"]) {
+        Ok(j) => j,
+        Err(_) => return,
+    };
+    let sinks: Vec<serde_json::Value> = match serde_json::from_str(&json) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    for s in &sinks {
+        if let Some(target) = s["name"].as_str() {
+            for p in ["FL", "FR"] {
+                // pw-link -d silently exits 0 when the link doesn't exist
+                Command::new("pw-link")
+                    .args(["-d",
+                        &format!("{sink_name}:monitor_{p}"),
+                        &format!("{target}:playback_{p}"),
+                    ])
+                    .output()
+                    .ok();
+            }
+        }
+    }
+    eprintln!("set_channel_device: unlinked {sink_name} from {} sinks", sinks.len());
+}
+
+#[command]
+pub async fn set_channel_device(channel: String, device_name: String) -> Result<(), String> {
+    if channel == "Mic" {
+        let _ = Command::new("pactl").args(["set-default-source", &device_name]).output();
+        return Ok(());
+    }
+    if channel == "Master" {
+        let _ = Command::new("pactl").args(["set-default-sink", &device_name]).output();
+        return Ok(());
+    }
+
+    let sink = format!("OpenGG_{channel}");
+
+    // ★ Step 1: tear down ALL existing links for this virtual sink.
+    //   This is the core fix for the routing leak / audio duplication bug.
+    unlink_virtual_sink_from_all(&sink);
+
+    // ★ Step 2: create fresh links to the newly selected device.
+    for p in ["FL", "FR"] {
+        let r = Command::new("pw-link")
+            .args([
+                &format!("{sink}:monitor_{p}"),
+                &format!("{device_name}:playback_{p}"),
+            ])
+            .output();
+        if let Ok(o) = r {
+            if o.status.success() {
+                eprintln!("set_channel_device: linked {sink}:monitor_{p} → {device_name}:playback_{p}");
+            } else {
+                eprintln!("set_channel_device: pw-link failed: {}", String::from_utf8_lossy(&o.stderr).trim());
+            }
+        }
+    }
+    Ok(())
+}
 
 // ═══ VU ═══
-#[derive(Serialize,Clone)] struct VuLevels{channels:HashMap<String,f32>}
-#[command] pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> { let st=app.state::<crate::VuState>(); if st.0.load(Ordering::Relaxed){return Ok(());} st.0.store(true,Ordering::Relaxed); let a=st.0.clone(); let h=app.clone(); tokio::spawn(async move{let cs=["Game","Chat","Media","Aux","Mic"]; while a.load(Ordering::Relaxed){let mut l=HashMap::new(); for&c in&cs{let s=if c=="Mic"{"@DEFAULT_SOURCE@".into()}else{format!("OpenGG_{c}")}; let v=get_vol(&s).unwrap_or(0.0); l.insert(c.into(),if v>0.01{(v*0.6+(rng()-0.5)*0.3).clamp(0.0,1.0)}else{0.0});} let _=h.emit("vu-levels",VuLevels{channels:l}); tokio::time::sleep(std::time::Duration::from_millis(50)).await;}}); Ok(()) }
-#[command] pub async fn stop_vu_stream(app: AppHandle) -> Result<(), String> { app.state::<crate::VuState>().0.store(false,Ordering::Relaxed); Ok(()) }
+#[derive(Serialize, Clone)] struct VuLevels { channels: HashMap<String, f32> }
+
+/// Real-time per-channel VU meters via native libpulse.
+///
+/// One `pa_simple` connection per channel reads S16LE PCM from the channel's
+/// monitor source.  Each reader runs in `spawn_blocking` so the async runtime
+/// is never stalled.  Stopping is cooperative: set the AtomicBool to false and
+/// each thread exits on its next 32 ms read; the `Simple` handle is dropped at
+/// thread exit, calling `pa_simple_free()` automatically (RAII).
+///
+/// Using native libpulse completely eliminates:
+///  • Process spawns (old pw-cat approach spawned 6 OS processes per stream)
+///  • Mic fallback bug (pw-cat silently routed unknown targets to the mic)
+///  • SIGTERM dance on shutdown
+#[command]
+pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
+    use libpulse_binding::sample::{Format, Spec};
+    use libpulse_binding::stream::Direction;
+    use libpulse_simple_binding::Simple;
+
+    let st = app.state::<crate::VuState>();
+    if st.0.load(Ordering::Relaxed) { return Ok(()); }
+    st.0.store(true, Ordering::Relaxed);
+    let running = st.0.clone();
+    let handle  = app.clone();
+
+    // Resolve default sink/source once — not inside the hot path.
+    let master_monitor = run_cmd("pactl", &["get-default-sink"])
+        .map(|s| format!("{s}.monitor"))
+        .unwrap_or_default();
+    let mic_source = run_cmd("pactl", &["get-default-source"]).unwrap_or_default();
+
+    // Guard: only connect to sources that currently exist.
+    let known_sources: std::collections::HashSet<String> = {
+        let mut set = std::collections::HashSet::new();
+        if let Ok(json) = run_cmd("pactl", &["-f", "json", "list", "sources"]) {
+            if let Ok(sources) = serde_json::from_str::<Vec<serde_json::Value>>(&json) {
+                for s in &sources {
+                    if let Some(name) = s["name"].as_str() { set.insert(name.to_string()); }
+                }
+            }
+        }
+        set
+    };
+    eprintln!("start_vu_stream: {} PA sources: {:?}", known_sources.len(), known_sources);
+
+    let levels: Arc<Mutex<HashMap<String, f32>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    let channel_targets: Vec<(&'static str, String)> = vec![
+        ("Master", master_monitor),
+        ("Game",   "OpenGG_Game.monitor".into()),
+        ("Chat",   "OpenGG_Chat.monitor".into()),
+        ("Media",  "OpenGG_Media.monitor".into()),
+        ("Aux",    "OpenGG_Aux.monitor".into()),
+        ("Mic",    mic_source),
+    ];
+
+    let spec = Spec { format: Format::S16le, rate: 8000, channels: 1 };
+
+    for (name, target) in channel_targets {
+        if target.is_empty() || !known_sources.contains(target.as_str()) {
+            eprintln!("start_vu_stream: {name} → '{target}' not in PA sources, level=0");
+            levels.lock().unwrap().insert(name.to_string(), 0.0);
+            continue;
+        }
+
+        let levels_clone  = Arc::clone(&levels);
+        let running_clone = running.clone();
+
+        tokio::task::spawn_blocking(move || {
+            // Create the PA simple connection inside spawn_blocking — Simple is !Send.
+            let pa = match Simple::new(
+                None, "OpenGG VU", Direction::Record,
+                Some(target.as_str()), name,
+                &spec, None, None,
+            ) {
+                Ok(p)  => p,
+                Err(e) => {
+                    eprintln!("libpulse: {name} → failed to open '{target}': {e:?}");
+                    return;
+                }
+            };
+            eprintln!("start_vu_stream: {name} → libpulse connected to '{target}'");
+
+            // 512 bytes = 256 i16 samples = 32 ms at 8 kHz mono — fast enough to
+            // check `running` frequently while producing smooth meter values.
+            let mut buf = vec![0u8; 512];
+            let mut prev = 0.0f32;
+
+            while running_clone.load(Ordering::Relaxed) {
+                if pa.read(&mut buf).is_err() { break; }
+
+                // RMS for perceptual loudness (vs peak which looks jittery).
+                let sum_sq: f32 = buf.chunks_exact(2)
+                    .map(|c| { let s = i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0; s * s })
+                    .sum();
+                let rms = (sum_sq / (buf.len() / 2) as f32).sqrt().min(1.0);
+
+                // Fast attack, slow decay for natural VU ballistics.
+                let smoothed = if rms > prev { rms * 0.9 + prev * 0.1 }
+                                         else { rms * 0.3 + prev * 0.7 };
+                prev = smoothed;
+                levels_clone.lock().unwrap().insert(name.to_string(), smoothed);
+            }
+            // `pa` is dropped here → pa_simple_free() called automatically (RAII).
+        });
+    }
+
+    // Emitter: publishes the shared map at ~30 fps.
+    tokio::spawn(async move {
+        while running.load(Ordering::Relaxed) {
+            let snapshot = levels.lock().unwrap().clone();
+            let _ = handle.emit("vu-levels", VuLevels { channels: snapshot });
+            tokio::time::sleep(std::time::Duration::from_millis(16)).await; // ~60 Hz
+        }
+    });
+
+    Ok(())
+}
+
+/// Stops the VU stream. Reader threads exit cooperatively within one read
+/// period (~32 ms) and free their PA connections via RAII.
+#[command]
+pub async fn stop_vu_stream(app: AppHandle) -> Result<(), String> {
+    app.state::<crate::VuState>().0.store(false, Ordering::Relaxed);
+    Ok(())
+}
 
 // ═══ Settings ═══
 fn settings_path() -> PathBuf { dirs::config_dir().unwrap_or_else(||PathBuf::from("~/.config")).join("opengg/ui-settings.json") }
 #[command] pub async fn save_ui_settings(settings_json: String) -> Result<(), String> { let p=settings_path(); if let Some(d)=p.parent(){std::fs::create_dir_all(d).ok();} std::fs::write(&p,&settings_json).map_err(|e| format!("{e}")) }
 #[command] pub async fn load_ui_settings() -> Result<String, String> { let p=settings_path(); if p.exists(){std::fs::read_to_string(&p).map_err(|e| format!("{e}"))}else{Ok("null".into())} }
+
+/// Opens the user-facing locales directory in the system file manager.
+/// Creates `~/.config/opengg/locales/` if it does not yet exist.
+/// If `en.json` is absent, writes the bundled English template so translators
+/// immediately have a complete base file to duplicate and translate.
+#[command]
+pub async fn open_locales_folder() -> Result<String, String> {
+    let dir = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.config"))
+        .join("opengg/locales");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
+
+    // Embed the shipped English locale at compile time — always stays in sync
+    // with the app's built-in translations.
+    const EN_TEMPLATE: &str = include_str!("../../src/locales/en.json");
+    let template_path = dir.join("en.json");
+    if !template_path.exists() {
+        std::fs::write(&template_path, EN_TEMPLATE)
+            .map_err(|e| format!("write en.json template: {e}"))?;
+    }
+
+    let path_str = dir.to_string_lossy().to_string();
+    Command::new("xdg-open")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| format!("xdg-open: {e}"))?;
+    Ok(path_str)
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ★ EPIC 3: Modular Plugin / Extensions System
+// ══════════════════════════════════════════════════════════════
+
+/// Developer guide written to the plugins folder on first open.
+const EXTENSIONS_GUIDE: &str = r#"# How to Create an OpenGG Extension
+
+## Directory Structure
+
+Place your extension in its own subdirectory inside this `plugins/` folder:
+
+```
+plugins/
+  my-extension/
+    manifest.json      ← required
+    README.md          ← optional
+```
+
+## manifest.json Schema
+
+```json
+{
+  "id":          "my-extension",
+  "name":        "My Extension",
+  "description": "A one-line description shown in Settings → Extensions.",
+  "version":     "1.0.0",
+  "author":      "Your Name",
+  "hooks": {
+    "sidebar_tab": false,
+    "export_filter": false,
+    "settings_section": false
+  }
+}
+```
+
+### Fields
+
+| Field         | Required | Description |
+|---------------|----------|-------------|
+| `id`          | ✓        | Unique kebab-case identifier (a-z, 0-9, hyphen). |
+| `name`        | ✓        | Human-readable display name. |
+| `description` | ✗        | Short description (≤ 120 chars). |
+| `version`     | ✗        | SemVer string e.g. `"1.0.0"`. |
+| `hooks`       | ✗        | Future hook declarations (currently informational). |
+
+## Future Hook Points (Roadmap)
+
+- **sidebar_tab** — Inject a custom Vue component tab into the Advanced Editor sidebar.
+- **export_filter** — Register an FFmpeg filter that runs after the main video pipeline.
+- **settings_section** — Add a custom card to the Settings page.
+
+Once the hook API is stable this guide will be updated with working examples.
+"#;
+
+fn plugins_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("opengg/plugins")
+}
+
+#[derive(Serialize)]
+pub struct ExtensionInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub path: String,
+}
+
+/// Creates `~/.local/share/opengg/plugins/` if needed, writes the developer
+/// guide on the first visit, then opens the folder in the file manager.
+#[command]
+pub async fn open_extensions_folder() -> Result<String, String> {
+    let dir = plugins_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
+
+    let guide = dir.join("HOW_TO_CREATE_EXTENSIONS.md");
+    if !guide.exists() {
+        std::fs::write(&guide, EXTENSIONS_GUIDE)
+            .map_err(|e| format!("write guide: {e}"))?;
+    }
+
+    let path_str = dir.to_string_lossy().to_string();
+    Command::new("xdg-open")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| format!("xdg-open: {e}"))?;
+    Ok(path_str)
+}
+
+/// Scans `~/.local/share/opengg/plugins/` for subdirectories containing a
+/// `manifest.json`. Returns the parsed metadata for each valid extension.
+#[command]
+pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
+    let dir = plugins_dir();
+    if !dir.exists() { return Ok(vec![]); }
+
+    let mut exts = Vec::new();
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("read dir: {e}"))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() { continue; }
+
+        let manifest_path = path.join("manifest.json");
+        if !manifest_path.exists() { continue; }
+
+        let raw = match std::fs::read_to_string(&manifest_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let v: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(_) => continue, // skip malformed manifests silently
+        };
+
+        let id   = v["id"].as_str().unwrap_or("").to_string();
+        let name = v["name"].as_str().unwrap_or(&id).to_string();
+        if id.is_empty() || name.is_empty() { continue; }
+
+        exts.push(ExtensionInfo {
+            id,
+            name,
+            description: v["description"].as_str().unwrap_or("").to_string(),
+            version:     v["version"].as_str().unwrap_or("0.0.0").to_string(),
+            path:        path.to_string_lossy().to_string(),
+        });
+    }
+
+    exts.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(exts)
+}
+
+/// Reads every `*.json` file in `~/.config/opengg/locales/` and returns their
+/// raw content. The frontend parses each file, extracts `_meta.{name,dir}`,
+/// and registers the locale dynamically via `i18n.global.setLocaleMessage`.
+#[derive(Serialize)]
+pub struct UserLocale {
+    pub code: String,
+    pub json_content: String,
+}
+
+#[command]
+pub async fn list_user_locales() -> Result<Vec<UserLocale>, String> {
+    let dir = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.config"))
+        .join("opengg/locales");
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut locales = Vec::new();
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("read dir: {e}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let code = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(c) if !c.is_empty() => c.to_string(),
+            _ => continue,
+        };
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            locales.push(UserLocale { code, json_content: content });
+        }
+    }
+    Ok(locales)
+}
+
+#[derive(Serialize)]
+pub struct StorageInfo {
+    pub clip_count: u64,
+    pub used_bytes: u64,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+}
+
+/// Returns disk usage for the clips folder plus filesystem free/total space.
+#[command]
+pub async fn get_storage_info(clips_folder: String) -> Result<StorageInfo, String> {
+    use std::fs;
+    let folder = PathBuf::from(&clips_folder);
+    let (clip_count, used_bytes) = if folder.exists() {
+        let mut count = 0u64;
+        let mut bytes = 0u64;
+        if let Ok(entries) = fs::read_dir(&folder) {
+            for e in entries.flatten() {
+                if let Ok(meta) = e.metadata() {
+                    if meta.is_file() {
+                        let name = e.file_name().to_string_lossy().to_lowercase();
+                        if name.ends_with(".mp4") || name.ends_with(".mkv") || name.ends_with(".webm") || name.ends_with(".mov") {
+                            count += 1;
+                            bytes += meta.len();
+                        }
+                    }
+                }
+            }
+        }
+        (count, bytes)
+    } else {
+        (0, 0)
+    };
+
+    // Use statvfs via std — available on Linux.
+    let (total_bytes, free_bytes) = {
+        let path = if folder.exists() { folder.clone() } else { PathBuf::from("/") };
+        get_fs_stats(&path)
+    };
+
+    Ok(StorageInfo { clip_count, used_bytes, total_bytes, free_bytes })
+}
+
+#[cfg(unix)]
+fn get_fs_stats(path: &PathBuf) -> (u64, u64) {
+    use std::os::unix::ffi::OsStrExt;
+    let mut stat: libc_statvfs = unsafe { std::mem::zeroed() };
+    let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap_or_default();
+    unsafe {
+        if libc_statvfs_call(cpath.as_ptr(), &mut stat) == 0 {
+            let bsize = stat.f_frsize as u64;
+            return (stat.f_blocks * bsize, stat.f_bfree * bsize);
+        }
+    }
+    (0, 0)
+}
+#[cfg(not(unix))]
+fn get_fs_stats(_path: &PathBuf) -> (u64, u64) { (0, 0) }
+
+// Thin statvfs wrapper to avoid adding libc as a direct dep.
+#[cfg(unix)]
+#[repr(C)]
+struct libc_statvfs {
+    f_bsize: u64, f_frsize: u64, f_blocks: u64, f_bfree: u64, f_bavail: u64,
+    f_files: u64, f_ffree: u64, f_favail: u64, f_fsid: u64, f_flag: u64,
+    f_namemax: u64, __spare: [u64; 6],
+}
+#[cfg(unix)]
+extern "C" { fn statvfs(path: *const std::ffi::c_char, buf: *mut libc_statvfs) -> std::ffi::c_int; }
+#[cfg(unix)]
+unsafe fn libc_statvfs_call(path: *const std::ffi::c_char, buf: *mut libc_statvfs) -> std::ffi::c_int {
+    unsafe { statvfs(path, buf) }
+}
 
 // ═══ Helpers ═══
 fn thumb_dir() -> PathBuf { dirs::data_dir().unwrap_or_else(||PathBuf::from("~/.local/share")).join("opengg/thumbnails") }
@@ -1208,6 +1902,53 @@ fn probe_resolution(path: &str) -> (u32, u32) {
         }
     }
     (1920, 1080) // fallback
+}
+
+/// Resolve a font by user-chosen name (e.g. "Impact") to a system path.
+/// Falls back to the generic best-match font if the requested name is not found.
+fn find_system_font_by_name(hint: Option<&str>) -> String {
+    if let Some(name) = hint {
+        let lower = name.to_lowercase();
+        let candidates: &[&str] = match lower.as_str() {
+            "impact" => &[
+                "/usr/share/fonts/truetype/msttcorefonts/Impact.ttf",
+                "/usr/share/fonts/truetype/impact.ttf",
+                "/usr/share/fonts/impact.ttf",
+                "/usr/share/fonts/TTF/Impact.ttf",
+            ],
+            "tahoma" => &[
+                "/usr/share/fonts/truetype/msttcorefonts/Tahoma.ttf",
+                "/usr/share/fonts/truetype/tahoma.ttf",
+                "/usr/share/fonts/tahoma.ttf",
+            ],
+            "arial" | "liberation sans" => &[
+                "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/Liberation/LiberationSans-Regular.ttf",
+            ],
+            "dejavu sans" => &[
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            ],
+            _ => &[],
+        };
+        for p in candidates {
+            if Path::new(p).exists() { return p.to_string(); }
+        }
+        // Unknown name: ask fontconfig
+        if let Ok(out) = Command::new("fc-match")
+            .args(["--format=%{file}", name])
+            .output()
+        {
+            if out.status.success() {
+                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !p.is_empty() && Path::new(&p).exists() { return p; }
+            }
+        }
+    }
+    find_system_font()
 }
 
 /// Find a system font that supports Arabic/CJK/Latin characters.
@@ -1254,15 +1995,375 @@ pub async fn clear_thumbnail_cache() -> Result<u32, String> {
     Ok(count)
 }
 fn resolve_clips_dir(f:&str) -> PathBuf { if !f.is_empty(){return PathBuf::from(shexp(f));} let sp=settings_path(); if sp.exists(){if let Ok(j)=std::fs::read_to_string(&sp){if let Ok(v)=serde_json::from_str::<serde_json::Value>(&j){if let Some(f)=v["settings"]["clipsFolder"].as_str(){return PathBuf::from(shexp(f));}}}} default_clips_dir() }
-fn default_clips_dir() -> PathBuf { dirs::video_dir().unwrap_or_else(||dirs::home_dir().unwrap().join("Videos")).join("OpenGG") }
-fn shexp(p:&str) -> String { if p.starts_with("~/"){if let Some(h)=dirs::home_dir(){return p.replacen("~",&h.to_string_lossy(),1);}} p.into() }
+pub fn default_clips_dir() -> PathBuf { dirs::video_dir().unwrap_or_else(||dirs::home_dir().unwrap().join("Videos")).join("OpenGG") }
+pub fn shexp(p:&str) -> String { if p.starts_with("~/"){if let Some(h)=dirs::home_dir(){return p.replacen("~",&h.to_string_lossy(),1);}} p.into() }
+pub fn settings_path_pub() -> PathBuf { settings_path() }
+
+/// Returns all directories to scan for clips: primary + any extra `clipSources` from settings.
+fn get_all_clip_dirs(primary: &str) -> Vec<PathBuf> {
+    let primary_pb = resolve_clips_dir(primary);
+    let mut dirs = vec![primary_pb.clone()];
+    let sp = settings_path();
+    if let Ok(j) = std::fs::read_to_string(&sp) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) {
+            if let Some(arr) = v["settings"]["clipSources"].as_array() {
+                for s in arr {
+                    if let Some(p) = s.as_str() {
+                        let pb = PathBuf::from(shexp(p));
+                        if pb != primary_pb && !dirs.contains(&pb) { dirs.push(pb); }
+                    }
+                }
+            }
+        }
+    }
+    dirs
+}
 fn auto_name(input:&str,suffix:&str) -> String { let p=Path::new(input); let s=p.file_stem().unwrap_or_default().to_string_lossy(); let e=p.extension().unwrap_or_default().to_string_lossy(); p.parent().unwrap_or(Path::new(".")).join(format!("{s}{suffix}.{e}")).to_string_lossy().into() }
+
+/// Prepend "OpenGG_" to the filename if it doesn't already start with it.
+fn smart_prefix(path: &str) -> String {
+    let p = Path::new(path);
+    let stem = p.file_stem().unwrap_or_default().to_string_lossy();
+    if stem.starts_with("OpenGG_") { return path.to_string(); }
+    let ext = p.extension().unwrap_or_default().to_string_lossy();
+    let new_name = if ext.is_empty() { format!("OpenGG_{stem}") } else { format!("OpenGG_{stem}.{ext}") };
+    p.parent().unwrap_or(Path::new(".")).join(new_name).to_string_lossy().into()
+}
+
+#[tauri::command]
+pub async fn register_global_shortcuts(
+    app: tauri::AppHandle,
+    save_replay: String,
+    toggle_recording: String,
+    screenshot: String,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    let gs = app.global_shortcut();
+    gs.unregister_all().map_err(|e| e.to_string())?;
+    let combos: &[(&str, &str)] = &[
+        (&save_replay, "save_replay"),
+        (&toggle_recording, "toggle_recording"),
+        (&screenshot, "screenshot"),
+    ];
+    for (combo, action) in combos {
+        if combo.is_empty() { continue; }
+        let shortcut: tauri_plugin_global_shortcut::Shortcut = combo.parse()
+            .map_err(|_| format!("Invalid shortcut: '{combo}'"))?;
+        let a = action.to_string();
+        let app2 = app.clone();
+        gs.on_shortcut(shortcut, move |_app, _sc, event| {
+            if event.state() == ShortcutState::Pressed {
+                let _ = app2.emit(&format!("global-shortcut-{a}"), ());
+            }
+        }).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 fn probe_video(p:&Path) -> (f64,u32,u32) { let d=probe_duration(&p.to_string_lossy()); let dm=Command::new("ffprobe").args(["-v","quiet","-select_streams","v:0","-show_entries","stream=width,height","-of","csv=s=x:p=0",&p.to_string_lossy()]).output().ok().map(|o|String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default(); let ps:Vec<&str>=dm.split('x').collect(); (d,ps.first().and_then(|s|s.parse().ok()).unwrap_or(0),ps.get(1).and_then(|s|s.parse().ok()).unwrap_or(0)) }
 fn probe_duration(p:&str) -> f64 { Command::new("ffprobe").args(["-v","quiet","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",p]).output().ok().and_then(|o|String::from_utf8_lossy(&o.stdout).trim().parse().ok()).unwrap_or(0.0) }
 fn hash_str(s:&str) -> u64 { let mut h:u64=5381; for b in s.bytes(){h=h.wrapping_mul(33).wrapping_add(b as u64);} h }
-fn fmt_ts(s:i64) -> String { let d=s/86400; format!("{}-{:02}-{:02}",1970+d/365,d%365/30+1,d%30+1) }
+/// Accurate Unix-timestamp → "YYYY-MM-DD HH:MM" using Howard Hinnant's civil calendar algorithm.
+fn fmt_ts(s: i64) -> String {
+    let days    = s / 86400;
+    let rem     = s % 86400;
+    let (h, m)  = (rem / 3600, (rem % 3600) / 60);
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y   = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp  = (5 * doy + 2) / 153;
+    let d   = doy - (153 * mp + 2) / 5 + 1;
+    let mth = if mp < 10 { mp + 3 } else { mp - 9 };
+    let yr  = if mth <= 2 { y + 1 } else { y };
+    format!("{yr}-{mth:02}-{d:02} {h:02}:{m:02}")
+}
 fn get_vol(n:&str) -> Option<f32> { let o=Command::new("pactl").args(["get-sink-volume",n]).output().ok()?; for p in String::from_utf8_lossy(&o.stdout).split('/'){let s=p.trim();if s.ends_with('%'){if let Ok(v)=s.trim_end_matches('%').trim().parse::<f32>(){return Some(v/100.0);}}} None }
-fn rng() -> f32 { ((std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos()%1000) as f32)/1000.0 }
+// ══════════════════════════════════════════════════════════════
+//  ★ EPIC 2: Crash-log directory opener
+// ══════════════════════════════════════════════════════════════
+
+/// Returns the directory where opengg_crash.log lives.
+pub fn crash_log_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("opengg")
+}
+
+/// Opens the OS file manager at the crash-log directory so the user can
+/// retrieve logs for bug reports.
+#[command]
+pub async fn open_crash_logs_folder() -> Result<(), String> {
+    let dir = crash_log_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{e}"))?;
+    Command::new("xdg-open").arg(&dir).spawn().map_err(|e| format!("{e}"))?;
+    Ok(())
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ★ Virtual Audio Onboarding / Factory Reset
+// ══════════════════════════════════════════════════════════════
+
+const VIRTUAL_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
+
+/// Returns true if all 4 OpenGG virtual sinks are present in PipeWire.
+#[command]
+pub async fn check_virtual_audio_status() -> Result<bool, String> {
+    let out = run_cmd("pactl", &["list", "sinks", "short"]).unwrap_or_default();
+    let all_present = VIRTUAL_CHANNELS.iter().all(|ch| out.contains(&format!("OpenGG_{ch}")));
+    Ok(all_present)
+}
+
+/// Create all OpenGG virtual null sinks via pactl (idempotent — skips existing).
+#[command]
+pub async fn create_virtual_audio() -> Result<(), String> {
+    let existing = run_cmd("pactl", &["list", "sinks", "short"]).unwrap_or_default();
+    for ch in VIRTUAL_CHANNELS {
+        let sink_name = format!("OpenGG_{ch}");
+        if existing.contains(&sink_name) { continue; }
+        run_cmd("pactl", &[
+            "load-module", "module-null-sink",
+            &format!("sink_name={sink_name}"),
+            &format!("sink_properties=device.description=\"OpenGG {ch}\""),
+            "channels=2", "channel_map=front-left,front-right",
+        ])?;
+    }
+    log::info!("Virtual audio sinks created");
+    Ok(())
+}
+
+/// Unload all OpenGG virtual sinks and restart PipeWire + WirePlumber.
+#[command]
+pub async fn remove_virtual_audio() -> Result<(), String> {
+    let modules_json = run_cmd("pactl", &["-f", "json", "list", "modules"]).unwrap_or_default();
+    if let Ok(mods) = serde_json::from_str::<Vec<serde_json::Value>>(&modules_json) {
+        for m in &mods {
+            if m["name"].as_str() != Some("module-null-sink") { continue; }
+            let args = m["argument"].as_str().unwrap_or("");
+            if !args.contains("OpenGG_") { continue; }
+            if let Some(idx) = m["index"].as_u64() {
+                let _ = run_cmd("pactl", &["unload-module", &idx.to_string()]);
+            }
+        }
+    }
+    let _ = run_cmd("systemctl", &["--user", "restart", "pipewire"]);
+    let _ = run_cmd("systemctl", &["--user", "restart", "wireplumber"]);
+    log::info!("Virtual audio removed and PipeWire restarted");
+    Ok(())
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ★ EPIC 3: Startup audio hydration
+//
+//  Reads the saved per-channel device map from ui-settings.json
+//  and re-applies pw-link connections so virtual sinks stay
+//  routed to the correct physical output after a restart.
+// ══════════════════════════════════════════════════════════════
+
+#[command]
+pub fn hydrate_audio_routing() {
+    let settings_path = dirs::config_dir()
+        .unwrap_or_default()
+        .join("opengg/ui-settings.json");
+
+    let json = match std::fs::read_to_string(&settings_path) {
+        Ok(j) => j,
+        Err(_) => return, // no saved settings yet — nothing to hydrate
+    };
+    let v: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let devices = match v["mixer"]["devices"].as_object() {
+        Some(d) => d.clone(),
+        None => return,
+    };
+
+    for (channel, device_val) in &devices {
+        let device = match device_val.as_str() {
+            Some(d) if !d.is_empty() => d.to_string(),
+            _ => continue,
+        };
+
+        if channel == "Mic" {
+            Command::new("pactl")
+                .args(["set-default-source", &device])
+                .output()
+                .ok();
+            eprintln!("hydrate: Mic source → {device}");
+        } else if channel == "Master" {
+            // Setting default sink is intentionally skipped — it changes the
+            // system-wide default and surprises the user.  The frontend will
+            // call set_channel_device if the user actively changes it.
+        } else {
+            // Virtual sink (Game/Chat/Media/Aux): disconnect old links then
+            // reconnect to the saved physical device.
+            let sink = format!("OpenGG_{channel}");
+            if let Ok(def) = run_cmd("pactl", &["get-default-sink"]) {
+                for p in ["FL", "FR"] {
+                    Command::new("pw-link")
+                        .args(["-d", &format!("{sink}:monitor_{p}"), &format!("{def}:playback_{p}")])
+                        .output()
+                        .ok();
+                }
+            }
+            for p in ["FL", "FR"] {
+                Command::new("pw-link")
+                    .args([&format!("{sink}:monitor_{p}"), &format!("{device}:playback_{p}")])
+                    .output()
+                    .ok();
+            }
+            eprintln!("hydrate: {channel} → {device}");
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ★ EPIC 4: Background-daemon control commands
+// ══════════════════════════════════════════════════════════════
+
+/// Updates the in-process RunInBackground flag. Called from the frontend
+/// whenever the "Keep running in background when closed" toggle changes.
+#[command]
+pub async fn set_run_in_background(app: AppHandle, val: bool) -> Result<(), String> {
+    app.state::<crate::RunInBackground>()
+        .0
+        .store(val, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
+/// Returns true if the XDG autostart entry for OpenGG exists.
+#[command]
+pub async fn get_autostart() -> Result<bool, String> {
+    let desktop = dirs::home_dir()
+        .ok_or_else(|| "no home dir".to_string())?
+        .join(".config/autostart/opengg.desktop");
+    Ok(desktop.exists())
+}
+
+/// Creates or removes the XDG autostart `.desktop` entry.
+#[command]
+pub async fn set_autostart(enable: bool) -> Result<(), String> {
+    let dir = dirs::home_dir()
+        .ok_or_else(|| "no home dir".to_string())?
+        .join(".config/autostart");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{e}"))?;
+    let desktop = dir.join("opengg.desktop");
+
+    if enable {
+        let exe = std::env::current_exe().map_err(|e| format!("{e}"))?;
+        let content = format!(
+            "[Desktop Entry]\nType=Application\nName=OpenGG\nExec={}\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
+            exe.display()
+        );
+        std::fs::write(&desktop, content).map_err(|e| format!("{e}"))?;
+    } else if desktop.exists() {
+        std::fs::remove_file(&desktop).map_err(|e| format!("{e}"))?;
+    }
+    Ok(())
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ★ GPU Screen Recorder integration
+// ══════════════════════════════════════════════════════════════
+
+use crate::GsrProcess;
+
+/// Start gpu-screen-recorder in replay-buffer mode.
+/// `output_dir`: where clips are saved; `replay_secs`: buffer length; `fps`, `quality`: encode settings.
+#[command]
+pub fn start_gsr_replay(
+    app: AppHandle,
+    output_dir: String,
+    replay_secs: u32,
+    fps: u32,
+    quality: String,
+) -> Result<(), String> {
+    let state = app.state::<GsrProcess>();
+    let mut lock = state.0.lock().unwrap();
+    if lock.is_some() {
+        return Err("gpu-screen-recorder is already running".into());
+    }
+    let crf = match quality.as_str() {
+        "Low"    => "35",
+        "Medium" => "28",
+        _        => "23", // High
+    };
+    // Use the "focused" window as capture target; falls back to entire screen if not available.
+    let child = std::process::Command::new("gpu-screen-recorder")
+        .args([
+            "-w", "focused",
+            "-f", &fps.to_string(),
+            "-r", &replay_secs.to_string(),
+            "-c", "mp4",
+            "-o", &output_dir,
+            "-q", crf,
+        ])
+        .spawn()
+        .map_err(|e| format!("Failed to start gpu-screen-recorder: {e}"))?;
+    log::info!("GSR started (pid {})", child.id());
+    *lock = Some(child);
+    Ok(())
+}
+
+/// Save the current replay buffer by sending SIGUSR1 to the GSR process.
+#[command]
+pub fn save_gsr_replay(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<GsrProcess>();
+    let lock = state.0.lock().unwrap();
+    match &*lock {
+        Some(child) => {
+            let pid = child.id();
+            #[cfg(unix)]
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGUSR1); }
+            log::info!("GSR SIGUSR1 → pid {pid}");
+            Ok(())
+        }
+        None => Err("gpu-screen-recorder is not running".into()),
+    }
+}
+
+/// Stop the GSR process with SIGTERM.
+#[command]
+pub fn stop_gsr_replay(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<GsrProcess>();
+    let mut lock = state.0.lock().unwrap();
+    if let Some(mut child) = lock.take() {
+        #[cfg(unix)]
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM); }
+        let _ = child.wait();
+        log::info!("GSR stopped");
+    }
+    Ok(())
+}
+
+/// Returns true if the GSR process is currently running.
+#[command]
+pub fn is_gsr_running(app: AppHandle) -> bool {
+    let state = app.state::<GsrProcess>();
+    let mut lock = state.0.lock().unwrap();
+    match lock.as_mut() {
+        Some(child) => match child.try_wait() {
+            Ok(None) => true,    // still running
+            _        => { lock.take(); false } // exited — clean up
+        },
+        None => false,
+    }
+}
+
+/// Returns the title of the currently focused window (uses xdotool).
+#[command]
+pub fn get_active_window_title() -> String {
+    std::process::Command::new("xdotool")
+        .args(["getactivewindow", "getwindowname"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+// rng() removed — VU meters now use real PipeWire peak data
 async fn call_dbus<R:serde::de::DeserializeOwned+zbus::zvariant::Type>(m:&str,p:&str,i:&str,a:impl serde::Serialize+zbus::zvariant::Type)->Result<R,String>{let c=zbus::Connection::session().await.map_err(|e|format!("{e}"))?;let r:R=c.call_method(Some("org.opengg.Daemon"),p,Some(i),m,&a).await.map_err(|e|format!("{m}:{e}"))?.body().deserialize().map_err(|e|format!("{m}:{e}"))?;Ok(r)}
 async fn call_dbus_void(m:&str,p:&str,i:&str,a:impl serde::Serialize+zbus::zvariant::Type)->Result<(),String>{let c=zbus::Connection::session().await.map_err(|e|format!("{e}"))?;c.call_method(Some("org.opengg.Daemon"),p,Some(i),m,&a).await.map_err(|e|format!("{m}:{e}"))?;Ok(())}
 fn run_cmd(c:&str,a:&[&str])->Result<String,String>{let o=Command::new(c).args(a).output().map_err(|e|format!("{c}:{e}"))?;if o.status.success(){Ok(String::from_utf8_lossy(&o.stdout).trim().into())}else{Err(String::from_utf8_lossy(&o.stderr).trim().into())}}

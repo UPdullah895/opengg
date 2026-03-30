@@ -30,7 +30,7 @@ const items = [
     <div class="sidebar-footer">
       <div class="daemon-status">
         <span class="dot connected"></span>
-        <span>openggd</span>
+        <span>Core Active</span>
       </div>
     </div>
   </nav>
