@@ -16,9 +16,12 @@ import { registerLocale } from './i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { AudioDevice } from './stores/audio'
+import ToastContainer from './components/ToastContainer.vue'
+import { useToast } from './composables/useToast'
 
 const currentPage = ref('home')
 const persist = usePersistenceStore()
+const toast = useToast()
 
 // ★ Global media server port — provided to all components
 const mediaPort = ref(0)
@@ -54,6 +57,7 @@ async function doCreateVirtualAudio() {
   onboardLoading.value = true; onboardMsg.value = ''
   try {
     await invoke('create_virtual_audio')
+    await invoke('hydrate_audio_routing')
     await fetchOnboardDevices()
     onboardStep.value = 2
   } catch (e) { onboardMsg.value = `Setup failed: ${e}` }
@@ -113,7 +117,14 @@ onMounted(async () => {
   try {
     const ok = await invoke<boolean>('check_virtual_audio_status')
     if (!ok) showOnboarding.value = true
+    else toast.success('OpenGG Audio Engine Active')
   } catch { /* daemon or pactl not available — skip silently */ }
+
+  // ★ Epic 3: Toast on new clip saved
+  listen<{ filename: string; game_name?: string }>('clip_added', (event) => {
+    const game = event.payload.game_name || 'Unknown Game'
+    toast.info(`New Clip Saved! 🎬 ${game}`)
+  })
 
   // ★ Epic 4: Listen for audio reset flow from SettingsPage danger zone
   window.addEventListener('openOnboarding', (e: Event) => {
@@ -239,6 +250,8 @@ async function loadUserLocales() {
         </div>
       </div>
     </Teleport>
+
+    <ToastContainer />
   </div>
 </template>
 

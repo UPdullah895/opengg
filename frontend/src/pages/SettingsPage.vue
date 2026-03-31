@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
-import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { ask, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { usePersistenceStore, DEFAULTS } from '../stores/persistence'
 import { loadTheme, saveTheme, getCurrentTheme } from '../utils/theme'
@@ -255,9 +255,11 @@ function removeTrackDef(i: number) {
 
 // ─── Epic 3: Danger Zone ───
 const dangerLoading = ref(false)
+const gsrInstallOpen = ref(false)
 const dangerMsg = ref('')
 async function removeVirtualAudio() {
-  if (!confirm('This will unload all OpenGG virtual audio sinks and restart PipeWire. Your audio routing will be reset. Continue?')) return
+  const confirmed = await ask('This will unload all OpenGG virtual audio sinks and restart PipeWire. Your audio routing will be reset. Continue?', { title: 'Danger Zone', kind: 'warning' })
+  if (!confirmed) return
   dangerLoading.value = true; dangerMsg.value = ''
   try {
     await invoke('remove_virtual_audio')
@@ -593,31 +595,6 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
       <section v-if="active === 'captureSound'">
         <h2 class="sec-title">{{ t('settings.captureSound.title') }}</h2>
 
-        <!-- Video capture settings -->
-        <div class="card">
-          <div class="form-grid">
-            <div class="field">
-              <label>{{ t('settings.captureSound.quality') }}</label>
-              <SelectField
-                v-model="settings.videoQuality"
-                :options="[{value:'High',label:'High'},{value:'Medium',label:'Medium'},{value:'Low',label:'Low'}]"
-              />
-            </div>
-            <div class="field">
-              <label>{{ t('settings.captureSound.resolution') }}</label>
-              <SelectField v-model="settings.videoResolution" :options="resOptions" />
-            </div>
-            <div class="field">
-              <label>{{ t('settings.captureSound.fps') }}</label>
-              <SelectField v-model="settings.fps" :options="fpsOptions" />
-            </div>
-            <div class="field">
-              <label>{{ t('settings.captureSound.replayBuffer') }}</label>
-              <SelectField v-model="settings.replayDuration" :options="replayOptions" />
-            </div>
-          </div>
-        </div>
-
         <!-- OBS-style Audio Capture Devices -->
         <div class="card">
           <div class="card-head">{{ t('settings.captureSound.captureDevices') }}</div>
@@ -657,6 +634,21 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
             <span class="badge-beta">Beta</span>
           </div>
           <p class="hint">Uses <code>gpu-screen-recorder</code> for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately.</p>
+          <button class="gsr-install-toggle" @click="gsrInstallOpen = !gsrInstallOpen">{{ gsrInstallOpen ? '▼ Hide install guide' : '▶ How to install?' }}</button>
+          <div v-if="gsrInstallOpen" class="gsr-install-guide">
+            <div class="install-section">
+              <span class="install-distro">Ubuntu / Debian</span>
+              <code class="install-cmd">sudo add-apt-repository ppa:dec05eba/gpu-screen-recorder &amp;&amp; sudo apt install gpu-screen-recorder</code>
+            </div>
+            <div class="install-section">
+              <span class="install-distro">Arch / Manjaro</span>
+              <code class="install-cmd">yay -S gpu-screen-recorder</code>
+            </div>
+            <div class="install-section">
+              <span class="install-distro">Fedora</span>
+              <code class="install-cmd">sudo dnf install gpu-screen-recorder</code>
+            </div>
+          </div>
           <div class="gsr-toggle-row">
             <span class="gsr-label">Enable GSR Replay Buffer</span>
             <button class="toggle-btn" :class="{ on: settings.gsrEnabled }" @click="toggleGsr">
@@ -1005,6 +997,12 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 .gsr-head { display: flex; align-items: center; gap: 8px; }
 .gsr-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; }
 .gsr-label { font-size: 13px; color: var(--text-sec); }
+.gsr-install-toggle { display: block; margin: 6px 0; padding: 0; border: none; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; text-align: left; font-weight: 600; }
+.gsr-install-toggle:hover { text-decoration: underline; }
+.gsr-install-guide { margin: 8px 0 12px; padding: 12px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius, 6px); display: flex; flex-direction: column; gap: 10px; }
+.install-section { display: flex; flex-direction: column; gap: 4px; }
+.install-distro { font-size: 10px; font-weight: 700; color: var(--text-sec); text-transform: uppercase; letter-spacing: .5px; }
+.install-cmd { font-family: monospace; font-size: 11px; color: var(--text); background: var(--bg-input); padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border); display: block; word-break: break-all; }
 .badge-beta { font-size: 10px; font-weight: 700; background: var(--accent); color: #fff; padding: 2px 6px; border-radius: 4px; letter-spacing: .4px; }
 .toggle-btn {
   width: 40px; height: 22px; border-radius: 11px; border: none; cursor: pointer;

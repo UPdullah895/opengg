@@ -211,6 +211,7 @@ async function bulkFavorite() {
     try { await invoke('set_clip_meta', { update: { filepath: c.filepath, custom_name: c.custom_name || '', favorite: newFav } }) } catch {}
   }
   showToast(`${newFav ? '❤' : '💔'} ${clips.length} clip(s) ${newFav ? 'favorited' : 'unfavorited'}`)
+  replay.clearSelection()
 }
 
 // ── Epic 1 Bug 2: Bulk game change with search ──
@@ -234,6 +235,7 @@ async function bulkChangeGame() {
   }
   bulkGameOpen.value = false; bulkGameSearch.value = ''
   showToast(`🎮 Game updated for ${clips.length} clip(s)`)
+  replay.clearSelection()
 }
 
 // Close bulk-game drop when clicking outside
@@ -242,6 +244,36 @@ function onBulkOutside(e: MouseEvent) {
 }
 onMounted(() => document.addEventListener('mousedown', onBulkOutside))
 onBeforeUnmount(() => document.removeEventListener('mousedown', onBulkOutside))
+
+// ── List view context menu ──
+function openListMenu(clip: Clip, e: MouseEvent) {
+  e.preventDefault(); e.stopPropagation()
+  const menuW = 200, menuH = 270
+  const x = e.clientX + menuW > window.innerWidth  ? e.clientX - menuW : e.clientX
+  const y = e.clientY + menuH > window.innerHeight ? e.clientY - menuH : e.clientY
+  replay.activeMenuClipId = clip.id
+  replay.activeMenuPos = { x, y }
+}
+function listMenuAction(a: string) {
+  const clip = replay.clips.find(c => c.id === replay.activeMenuClipId)
+  replay.activeMenuClipId = ''
+  if (!clip) return
+  switch (a) {
+    case 'preview': openPreview(clip); break
+    case 'editor': openAdvanced(clip); break
+    case 'select': replay.toggleSelect(clip.id); break
+    case 'location': invoke('open_file_location', { filepath: clip.filepath }); break
+    case 'favorite': {
+      const newFav = !clip.favorite
+      replay.updateClipMeta(clip.filepath, { favorite: newFav })
+      invoke('set_clip_meta', { update: { filepath: clip.filepath, custom_name: clip.custom_name || '', favorite: newFav } }).catch(() => {})
+      break
+    }
+    case 'rename': startRename(clip); break
+    case 'delete': deleteClip(clip); break
+  }
+}
+onMounted(() => document.addEventListener('click', () => { if (replay.activeMenuClipId) replay.activeMenuClipId = '' }))
 </script>
 
 <template>
@@ -426,6 +458,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onBulkOutside))
           class="list-row"
           :class="{ selected: replay.isSelected(clip.id) }"
           @click="onCardClick(clip)"
+          @contextmenu.prevent="openListMenu(clip, $event)"
         >
           <img v-if="clip.thumbnail && mediaPortNum"
                class="list-thumb"
@@ -441,6 +474,9 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onBulkOutside))
             <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
             <button class="list-act" @click.stop="openAdvanced(clip)">Edit</button>
             <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
+            <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -527,6 +563,30 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onBulkOutside))
     <Transition name="fade"><div v-if="toast" class="toast">{{ toast }}</div></Transition>
     <ClipEditor v-if="editorClip && !advancedClip" :clip="editorClip" :mode="editorMode" @close="editorClip=null" @saved="refreshClips" @toast="showToast" />
     <AdvancedEditor v-if="advancedClip" :clip="advancedClip" @close="advancedClip=null" />
+
+    <!-- List view context menu -->
+    <Teleport to="body">
+      <div
+        v-if="replay.activeMenuClipId && replay.clips.find(c => c.id === replay.activeMenuClipId)"
+        class="list-ctx"
+        :style="{ left: replay.activeMenuPos.x + 'px', top: replay.activeMenuPos.y + 'px' }"
+        @click.stop
+      >
+        <template v-if="replay.clips.find(c => c.id === replay.activeMenuClipId) as any">
+          <button class="list-ctx-i" @click="listMenuAction('preview')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>Quick Preview</button>
+          <button class="list-ctx-i" @click="listMenuAction('editor')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Open in Editor</button>
+          <button class="list-ctx-i" @click="listMenuAction('select')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>{{ replay.isSelected(replay.activeMenuClipId) ? 'Deselect' : 'Select' }}</button>
+          <button class="list-ctx-i" @click="listMenuAction('location')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>Open File Location</button>
+          <div class="list-ctx-sep"></div>
+          <button class="list-ctx-i" @click="listMenuAction('favorite')">
+            <svg class="list-ctx-ic" viewBox="0 0 24 24" :fill="replay.clips.find(c=>c.id===replay.activeMenuClipId)?.favorite?'currentColor':'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+            {{ replay.clips.find(c=>c.id===replay.activeMenuClipId)?.favorite ? 'Remove from Favorites' : 'Add to Favorites' }}
+          </button>
+          <button class="list-ctx-i" @click="listMenuAction('rename')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Rename</button>
+          <button class="list-ctx-i list-ctx-d" @click="listMenuAction('delete')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>Delete</button>
+        </template>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -670,6 +730,17 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onBulkOutside))
 .list-act:hover { background:var(--bg-hover); }
 .list-act-d { color:var(--danger); }
 .list-act-d:hover { background:rgba(220,38,38,.1); }
+.list-kebab { flex-shrink:0; width:26px; height:26px; border-radius:5px; border:none; background:transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
+.list-kebab:hover { background:var(--bg-hover); color:var(--text); }
+.list-kebab svg { width:14px; height:14px; }
+
+/* List view context menu */
+.list-ctx { position:fixed; z-index:10000; min-width:200px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:4px; box-shadow:0 8px 32px rgba(0,0,0,.5); }
+.list-ctx-i { display:flex; align-items:center; gap:8px; width:100%; padding:8px 12px; border:none; border-radius:5px; background:transparent; color:var(--text); font-size:13px; cursor:pointer; text-align:left; }
+.list-ctx-i:hover { background:var(--bg-hover); }
+.list-ctx-ic { width:15px; height:15px; flex-shrink:0; color:var(--text-muted); }
+.list-ctx-sep { height:1px; background:var(--border); margin:4px 0; }
+.list-ctx-d { color:var(--danger) !important; }
 
 /* Empty state */
 .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-muted); padding:40px; min-height:200px; }

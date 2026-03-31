@@ -602,8 +602,8 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
       <button class="side-toggle" @click="sideOpen = !sideOpen">{{ sideOpen ? '›' : '‹' }}</button>
       <div v-if="sideOpen" class="side-inner">
         <div class="side-tabs">
-          <button :class="{ active: sideTab === 'info' }" @click="sideTab = 'info'">Info</button>
-          <button v-if="extOverlays" :class="{ active: sideTab === 'overlay' }" @click="sideTab = 'overlay'">Overlays<span v-if="overlays.length" class="tab-badge">{{ overlays.length }}</span></button>
+          <button :class="{ active: sideTab === 'info' }" :style="sideTab === 'info' ? { backgroundColor: 'color-mix(in srgb, var(--accent) 20%, transparent)' } : {}" @click="sideTab = 'info'">Info</button>
+          <button v-if="extOverlays" :class="{ active: sideTab === 'overlay' }" :style="sideTab === 'overlay' ? { backgroundColor: 'color-mix(in srgb, var(--accent) 20%, transparent)' } : {}" @click="sideTab = 'overlay'">Overlays<span v-if="overlays.length" class="tab-badge">{{ overlays.length }}</span></button>
         </div>
 
         <!-- Info tab -->

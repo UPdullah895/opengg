@@ -81,7 +81,7 @@ export const DEFAULTS: PersistedState = {
     micVolumeLock:   false,
   },
   modules: { audio: true, device: true, replay: true },
-  extensions: { overlays: true, tiktokExport: false },
+  extensions: { overlays: false, tiktokExport: false },
 }
 
 export const usePersistenceStore = defineStore('persistence', () => {
