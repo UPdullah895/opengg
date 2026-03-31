@@ -113,17 +113,16 @@ onMounted(async () => {
     try { await invoke('take_screenshot', { outputDir: persist.state.settings.screenshotDir || '' }) } catch (e) { console.warn('screenshot:', e) }
   })
 
-  // ★ Epic 2: Check virtual audio status — show onboarding if sinks missing
-  try {
-    const ok = await invoke<boolean>('check_virtual_audio_status')
-    if (!ok) showOnboarding.value = true
-    else toast.success('OpenGG Audio Engine Active')
-  } catch { /* daemon or pactl not available — skip silently */ }
-
-  // ★ Epic 3: Toast on new clip saved
-  listen<{ filename: string; game_name?: string }>('clip_added', (event) => {
-    const game = event.payload.game_name || 'Unknown Game'
-    toast.info(`New Clip Saved! 🎬 ${game}`)
+  // ★ Epic 3: Toast on new clip saved (event payload is filepath string)
+  listen<string>('clip_added', async (event) => {
+    const filepath = event.payload
+    try {
+      const clip = await invoke<{ game?: string; game_tag?: string } | null>('get_clip_by_path', { filepath })
+      const game = clip?.game || clip?.game_tag || 'Unknown Game'
+      toast.info(`New Clip Saved! 🎬 ${game}`)
+    } catch {
+      toast.info('New Clip Saved! 🎬 Unknown Game')
+    }
   })
 
   // ★ Epic 4: Listen for audio reset flow from SettingsPage danger zone
@@ -276,6 +275,18 @@ async function loadUserLocales() {
   --sidebar-w: 200px;
   --clips-grid-cols: 4;
   color-scheme: dark;
+}
+html.light {
+  --bg-surface: #f0f2f5;
+  --bg-card:    #ffffff;
+  --bg-deep:    #e4e7ec;
+  --bg-hover:   #dde1e8;
+  --bg-input:   #f8f9fb;
+  --border:     #d1d5db;
+  --text:       #111827;
+  --text-sec:   #4b5563;
+  --text-muted: #9ca3af;
+  color-scheme: light;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {

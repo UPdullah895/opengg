@@ -12,6 +12,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, inject } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { mediaUrl } from '../utils/assets'
+import { useReplayStore } from '../stores/replay'
 import type { Clip } from '../stores/replay'
 import type { Ref } from 'vue'
 import { usePersistenceStore } from '../stores/persistence'
@@ -28,6 +29,7 @@ const emit = defineEmits<{ 'close': []; 'toast': [string]; 'saved': [string] }>(
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 const videoSrc = computed(() => mediaUrl(props.clip.filepath, mediaPort.value))
 const persist = usePersistenceStore()
+const replay  = useReplayStore()
 
 const SKIP = 5
 const GAMES = ['Counter-Strike 2', 'League of Legends', 'Valorant', 'Overwatch 2', 'Apex Legends', 'Fortnite', 'Minecraft', 'Dota 2', 'Rocket League', 'Elden Ring', "Baldur's Gate 3", 'Cyberpunk 2077', 'Honkai: Star Rail', 'Genshin Impact', 'Helldivers 2', 'Path of Exile 2']
@@ -332,7 +334,10 @@ onMounted(async () => { try { info.value = await invoke<MInfo>('analyze_media', 
 // ★ E2-P4: Persistence with game_tag
 async function saveMeta() {
   try { await invoke('save_trim_state', { filepath: props.clip.filepath, trimStart: trimS.value, trimEnd: trimE.value }) } catch {}
-  try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: editName.value, favorite: props.clip.favorite, game_tag: gameTag.value } }) } catch {}
+  try {
+    await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: editName.value, favorite: props.clip.favorite, game_tag: gameTag.value } })
+    replay.updateClipMeta(props.clip.filepath, { custom_name: editName.value, game: gameTag.value, favorite: props.clip.favorite })
+  } catch {}
   // ★ Epic 5: Persist overlays as JSON in the notes column
   if (overlays.value.length) {
     try {
