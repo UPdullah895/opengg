@@ -10,19 +10,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{command, AppHandle, Emitter, Manager};
 
 const AU_PATH: &str = "/org/opengg/Daemon/Audio";
 const AU_IFACE: &str = "org.opengg.Daemon.Audio";
 const RP_PATH: &str = "/org/opengg/Daemon/Replay";
 const RP_IFACE: &str = "org.opengg.Daemon.Replay";
-
-// ── Mic Volume Lock (defeats OS AGC) ──────────────────────────────────────
-/// When `MIC_LOCK_ENABLED` is true the enforcement thread continuously
-/// restores the OS mic source volume to this value (0–100).
-pub static LOCKED_MIC_VOLUME: AtomicU32  = AtomicU32::new(100);
-pub static MIC_LOCK_ENABLED:  AtomicBool = AtomicBool::new(false);
 
 // ═══ Audio ═══
 #[command] pub async fn get_channels() -> Result<String, String> { call_dbus("GetChannels", AU_PATH, AU_IFACE, ()).await }
@@ -38,8 +32,6 @@ pub async fn set_volume(channel: String, volume: u32) -> Result<(), String> {
     if channel == "Master" {
         run_cmd("pactl", &["set-sink-volume", "@DEFAULT_SINK@", &pct])?;
     } else if channel == "Mic" {
-        // Store as the locked value so the enforcement thread knows the user's intent
-        LOCKED_MIC_VOLUME.store(volume, Ordering::Relaxed);
         run_cmd("pactl", &["set-source-volume", "@DEFAULT_SOURCE@", &pct])?;
     } else {
         let sink = format!("OpenGG_{channel}");
@@ -61,15 +53,6 @@ pub async fn set_mute(channel: String, muted: bool) -> Result<(), String> {
     } else {
         run_cmd("pactl", &["set-sink-mute", &format!("OpenGG_{channel}"), val])?;
     }
-    Ok(())
-}
-
-/// Enable or disable the mic volume lock (defeats OS AGC).
-/// When enabled, a background thread re-applies the last user-set mic volume
-/// any time the OS diverges from it by more than 1%.
-#[command]
-pub async fn set_mic_volume_lock(enabled: bool) -> Result<(), String> {
-    MIC_LOCK_ENABLED.store(enabled, Ordering::Relaxed);
     Ok(())
 }
 
@@ -1994,29 +1977,28 @@ pub async fn clear_thumbnail_cache() -> Result<u32, String> {
     std::fs::create_dir_all(&td).map_err(|e| format!("create: {e}"))?;
     Ok(count)
 }
-fn resolve_clips_dir(f:&str) -> PathBuf { if !f.is_empty(){return PathBuf::from(shexp(f));} let sp=settings_path(); if sp.exists(){if let Ok(j)=std::fs::read_to_string(&sp){if let Ok(v)=serde_json::from_str::<serde_json::Value>(&j){if let Some(f)=v["settings"]["clipsFolder"].as_str(){return PathBuf::from(shexp(f));}}}} default_clips_dir() }
+fn resolve_clips_dir(f:&str) -> PathBuf { if !f.is_empty(){return PathBuf::from(shexp(f));} let sp=settings_path(); if sp.exists(){if let Ok(j)=std::fs::read_to_string(&sp){if let Ok(v)=serde_json::from_str::<serde_json::Value>(&j){ if let Some(arr)=v["settings"]["clip_directories"].as_array(){if let Some(first)=arr.first(){if let Some(f)=first.as_str(){return PathBuf::from(shexp(f));}}}}}} default_clips_dir() }
 pub fn default_clips_dir() -> PathBuf { dirs::video_dir().unwrap_or_else(||dirs::home_dir().unwrap().join("Videos")).join("OpenGG") }
 pub fn shexp(p:&str) -> String { if p.starts_with("~/"){if let Some(h)=dirs::home_dir(){return p.replacen("~",&h.to_string_lossy(),1);}} p.into() }
 pub fn settings_path_pub() -> PathBuf { settings_path() }
 
-/// Returns all directories to scan for clips: primary + any extra `clipSources` from settings.
+/// Returns all directories to scan for clips: all entries from `clip_directories` in settings.
 fn get_all_clip_dirs(primary: &str) -> Vec<PathBuf> {
-    let primary_pb = resolve_clips_dir(primary);
-    let mut dirs = vec![primary_pb.clone()];
     let sp = settings_path();
     if let Ok(j) = std::fs::read_to_string(&sp) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) {
-            if let Some(arr) = v["settings"]["clipSources"].as_array() {
-                for s in arr {
-                    if let Some(p) = s.as_str() {
-                        let pb = PathBuf::from(shexp(p));
-                        if pb != primary_pb && !dirs.contains(&pb) { dirs.push(pb); }
-                    }
-                }
+            if let Some(arr) = v["settings"]["clip_directories"].as_array() {
+                let dirs: Vec<PathBuf> = arr.iter()
+                    .filter_map(|s| s.as_str())
+                    .map(|p| PathBuf::from(shexp(p)))
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                if !dirs.is_empty() { return dirs; }
             }
         }
     }
-    dirs
+    vec![resolve_clips_dir(primary)]
 }
 fn auto_name(input:&str,suffix:&str) -> String { let p=Path::new(input); let s=p.file_stem().unwrap_or_default().to_string_lossy(); let e=p.extension().unwrap_or_default().to_string_lossy(); p.parent().unwrap_or(Path::new(".")).join(format!("{s}{suffix}.{e}")).to_string_lossy().into() }
 

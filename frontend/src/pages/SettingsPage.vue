@@ -8,6 +8,7 @@ import { usePersistenceStore, DEFAULTS } from '../stores/persistence'
 import { loadTheme, saveTheme, getCurrentTheme } from '../utils/theme'
 import { LANGUAGES, registerLocale } from '../i18n'
 import SelectField from '../components/SelectField.vue'
+import IconPicker from '../components/IconPicker.vue'
 
 const { t, locale } = useI18n()
 const persist = usePersistenceStore()
@@ -18,13 +19,6 @@ onMounted(async () => {
   try { settings.value.runAtStartup = await invoke<boolean>('get_autostart') } catch { /* ignore */ }
   // ★ Epic 4: Push saved run-in-background flag to Rust state
   try { await invoke('set_run_in_background', { val: settings.value.runInBackground }) } catch { /* ignore */ }
-  // ★ EPIC 5: Re-apply mic lock state so the enforcement thread is in sync
-  try { await invoke('set_mic_volume_lock', { enabled: settings.value.micVolumeLock }) } catch { /* ignore */ }
-})
-
-// ★ EPIC 5: Propagate mic lock toggle to Rust enforcement thread whenever it changes
-watch(() => persist.state.settings.micVolumeLock, async (val) => {
-  try { await invoke('set_mic_volume_lock', { enabled: val }) } catch { /* ignore */ }
 })
 
 const settings = computed(() => persist.state.settings)
@@ -44,7 +38,7 @@ function setLanguage(code: string) {
 }
 
 // ─── Nav ───
-type Section = 'general' | 'language' | 'shortcuts' | 'mixerRouting' | 'eqAutoFlatten' | 'captureSound' | 'clipSettings' | 'trackManagement' | 'storage' | 'extensions'
+type Section = 'general' | 'language' | 'shortcuts' | 'mixerRouting' | 'eqAutoFlatten' | 'captureSound' | 'trackManagement' | 'storage' | 'extensions'
 type NavItem = { key: Section; label: string; badge?: string }
 const active = ref<Section>('general')
 
@@ -67,10 +61,9 @@ const navGroups = computed(() => [
   {
     key: 'moments', label: t('settings.groups.moments'),
     items: [
-      { key: 'captureSound' as Section, label: t('settings.sections.captureSound') } as NavItem,
-      { key: 'clipSettings'    as Section, label: t('settings.sections.clipSettings') } as NavItem,
-      { key: 'trackManagement' as Section, label: 'Timeline Tracks'                  } as NavItem,
-      { key: 'storage'         as Section, label: t('settings.sections.storage')     } as NavItem,
+      { key: 'captureSound'    as Section, label: t('settings.sections.captureSound') } as NavItem,
+      { key: 'trackManagement' as Section, label: 'Timeline Tracks'                   } as NavItem,
+      { key: 'storage'         as Section, label: t('settings.sections.storage')      } as NavItem,
     ],
   },
   {
@@ -188,12 +181,13 @@ const gsrFpsOptions    = [30, 60, 120].map(v => ({ value: v, label: `${v} FPS` }
 const gsrReplayOptions = [15, 30, 60, 120, 180].map(v => ({ value: v, label: `${v}s` }))
 
 async function toggleGsr() {
+  const outputDir = (settings.value.clip_directories?.[0] ?? '~/Videos/OpenGG').replace('~', '')
   try {
     if (settings.value.gsrEnabled) {
       await invoke('stop_gsr_replay')
     } else {
       await invoke('start_gsr_replay', {
-        outputDir: settings.value.clipsFolder.replace('~', ''),
+        outputDir,
         replaySecs: settings.value.gsrReplaySecs,
         fps: settings.value.gsrFps,
         quality: settings.value.gsrQuality,
@@ -205,10 +199,11 @@ async function toggleGsr() {
 
 async function restartGsr() {
   if (!settings.value.gsrEnabled) return
+  const outputDir = (settings.value.clip_directories?.[0] ?? '~/Videos/OpenGG').replace('~', '')
   try {
     await invoke('stop_gsr_replay')
     await invoke('start_gsr_replay', {
-      outputDir: settings.value.clipsFolder.replace('~', ''),
+      outputDir,
       replaySecs: settings.value.gsrReplaySecs,
       fps: settings.value.gsrFps,
       quality: settings.value.gsrQuality,
@@ -235,14 +230,10 @@ function removeCaptureTrack(i: number) {
 }
 
 // ─── Track definitions (Timeline Tracks) ───
-const TRACK_ICON_OPTIONS = [
-  { value: 'video',   label: 'Video' },
-  { value: 'game',    label: 'Game' },
-  { value: 'chat',    label: 'Chat / Headphones' },
-  { value: 'mic',     label: 'Microphone' },
-  { value: 'media',   label: 'Media / Music' },
-  { value: 'overlay', label: 'Overlay / Layers' },
-]
+const colorInputRefs = ref<HTMLInputElement[]>([])
+function setColorRef(el: any, idx: number) { if (el) colorInputRefs.value[idx] = el }
+function openColorPicker(idx: number) { colorInputRefs.value[idx]?.click() }
+
 
 function addTrackDef() {
   const idx = settings.value.trackDefs.length
@@ -271,26 +262,18 @@ async function removeVirtualAudio() {
   finally { dangerLoading.value = false }
 }
 
-// ─── Clips folder ───
-async function pickClipsFolder() {
-  try {
-    const s = await openDialog({ directory: true, multiple: false, title: 'Select Clips Folder' })
-    if (s && typeof s === 'string') settings.value.clipsFolder = s
-  } catch {}
-}
-
-// ─── Additional clip sources ───
+// ─── Clip directories ───
 async function addClipSource() {
   try {
     const s = await openDialog({ directory: true, multiple: false, title: 'Add Clip Directory' })
     if (s && typeof s === 'string') {
-      if (!settings.value.clipSources) settings.value.clipSources = []
-      if (!settings.value.clipSources.includes(s)) settings.value.clipSources.push(s)
+      if (!settings.value.clip_directories) settings.value.clip_directories = []
+      if (!settings.value.clip_directories.includes(s)) settings.value.clip_directories.push(s)
     }
   } catch {}
 }
 function removeClipSource(idx: number) {
-  settings.value.clipSources?.splice(idx, 1)
+  settings.value.clip_directories?.splice(idx, 1)
 }
 
 // ─── Screenshot directory ───
@@ -319,7 +302,7 @@ const storageInfo = ref<StorageInfo | null>(null)
 const storageLoading = ref(false)
 async function loadStorage() {
   storageLoading.value = true
-  try { storageInfo.value = await invoke<StorageInfo>('get_storage_info', { clipsFolder: settings.value.clipsFolder }) }
+  try { storageInfo.value = await invoke<StorageInfo>('get_storage_info', { clipsFolder: settings.value.clip_directories?.[0] ?? '~/Videos/OpenGG' }) }
   catch { storageInfo.value = null }
   finally { storageLoading.value = false }
 }
@@ -346,7 +329,6 @@ const resOptions   = [{ value:'1080p', label:'1080p' }, { value:'720p', label:'7
 const fpsOptions   = [{ value: 60, label:'60 FPS' }, { value: 30, label:'30 FPS' }, { value: 24, label:'24 FPS' }]
 const replayOptions = [{ value:15,label:'15 s' }, { value:30,label:'30 s' }, { value:60,label:'60 s' }, { value:120,label:'120 s' }]
 const clickOptions = [{ value:'preview', label: 'Quick Preview' }, { value:'editor', label: 'Advanced Editor' }]
-const rowOptions   = [{ value:3, label:'3' }, { value:4, label:'4' }, { value:5, label:'5' }]
 
 // ─── Extensions: plugin scanning ───
 interface ExtensionInfo { id: string; name: string; description: string; version: string; path: string }
@@ -416,10 +398,13 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         </div>
 
         <div class="card">
-          <div class="card-head">{{ t('settings.general.modules') }}</div>
-          <label class="toggle-row"><input type="checkbox" v-model="persist.state.modules.audio"><span class="tname">{{ t('settings.general.audioHub') }}</span><span class="tdesc">{{ t('settings.general.audioHubDesc') }}</span></label>
-          <label class="toggle-row"><input type="checkbox" v-model="persist.state.modules.device"><span class="tname">{{ t('settings.general.deviceManager') }}</span><span class="tdesc">{{ t('settings.general.deviceManagerDesc') }}</span></label>
-          <label class="toggle-row"><input type="checkbox" v-model="persist.state.modules.replay"><span class="tname">{{ t('settings.general.replayClips') }}</span><span class="tdesc">{{ t('settings.general.replayClipsDesc') }}</span></label>
+          <div class="card-head">Clip Preferences</div>
+          <div class="form-grid">
+            <div class="field">
+              <label>{{ t('settings.clipSettings.defaultClick') }}</label>
+              <SelectField v-model="settings.defaultClickAction" :options="clickOptions" />
+            </div>
+          </div>
         </div>
 
         <!-- ★ Epic 4: Daemon & Startup toggles -->
@@ -539,25 +524,6 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
           </div>
         </div>
 
-        <!-- ★ EPIC 5: Mic Volume Lock -->
-        <div class="card">
-          <div class="card-head gsr-head">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;flex-shrink:0"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-            Mic Volume Lock
-          </div>
-          <p class="hint">Prevents external apps (Discord, WebRTC) from lowering your microphone volume via OS-level Auto-Gain Control. OpenGG will continuously restore the volume you set in the mixer.</p>
-          <div class="row-setting">
-            <div class="row-label">
-              <span class="row-title">Defeat Auto-Gain Control</span>
-              <span class="row-sub">Enforce mic volume — restores OS level every ~1.5 s if changed externally</span>
-            </div>
-            <label class="tog">
-              <input type="checkbox" v-model="settings.micVolumeLock" />
-              <span class="tog-track"><span class="tog-thumb"></span></span>
-            </label>
-          </div>
-        </div>
-
         <!-- ★ Epic 3: Danger Zone -->
         <div class="card danger-zone-card">
           <div class="card-head danger-head">
@@ -595,6 +561,30 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
       <section v-if="active === 'captureSound'">
         <h2 class="sec-title">{{ t('settings.captureSound.title') }}</h2>
 
+        <!-- GPU Screen Recorder panel (top) -->
+        <div class="card">
+          <div class="card-head gsr-head">
+            <span>GPU Screen Recorder</span>
+            <span class="badge-beta">Beta</span>
+          </div>
+          <p class="hint">Uses <code>gpu-screen-recorder</code> for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately.</p>
+          <div v-if="settings.gsrEnabled" class="form-grid gsr-grid">
+            <div class="field">
+              <label>Quality</label>
+              <SelectField v-model="settings.gsrQuality" :options="gsrQualityOptions" @update:modelValue="restartGsr" />
+            </div>
+            <div class="field">
+              <label>FPS</label>
+              <SelectField v-model="settings.gsrFps" :options="gsrFpsOptions" @update:modelValue="restartGsr" />
+            </div>
+            <div class="field">
+              <label>Replay Buffer</label>
+              <SelectField v-model="settings.gsrReplaySecs" :options="gsrReplayOptions" @update:modelValue="restartGsr" />
+            </div>
+          </div>
+          <div v-else class="hint" style="margin-top:8px">Enable GPU Screen Recorder in <strong>Extensions</strong> to configure it here.</div>
+        </div>
+
         <!-- OBS-style Audio Capture Devices -->
         <div class="card">
           <div class="card-head">{{ t('settings.captureSound.captureDevices') }}</div>
@@ -626,90 +616,6 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
             {{ t('settings.captureSound.addTrack') }}
           </button>
         </div>
-
-        <!-- GPU Screen Recorder panel -->
-        <div class="card">
-          <div class="card-head gsr-head">
-            <span>GPU Screen Recorder</span>
-            <span class="badge-beta">Beta</span>
-          </div>
-          <p class="hint">Uses <code>gpu-screen-recorder</code> for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately.</p>
-          <button class="gsr-install-toggle" @click="gsrInstallOpen = !gsrInstallOpen">{{ gsrInstallOpen ? '▼ Hide install guide' : '▶ How to install?' }}</button>
-          <div v-if="gsrInstallOpen" class="gsr-install-guide">
-            <div class="install-section">
-              <span class="install-distro">Ubuntu / Debian</span>
-              <code class="install-cmd">sudo add-apt-repository ppa:dec05eba/gpu-screen-recorder &amp;&amp; sudo apt install gpu-screen-recorder</code>
-            </div>
-            <div class="install-section">
-              <span class="install-distro">Arch / Manjaro</span>
-              <code class="install-cmd">yay -S gpu-screen-recorder</code>
-            </div>
-            <div class="install-section">
-              <span class="install-distro">Fedora</span>
-              <code class="install-cmd">sudo dnf install gpu-screen-recorder</code>
-            </div>
-          </div>
-          <div class="gsr-toggle-row">
-            <span class="gsr-label">Enable GSR Replay Buffer</span>
-            <button class="toggle-btn" :class="{ on: settings.gsrEnabled }" @click="toggleGsr">
-              <span class="toggle-knob"></span>
-            </button>
-          </div>
-          <div v-if="settings.gsrEnabled" class="form-grid gsr-grid">
-            <div class="field">
-              <label>Quality</label>
-              <SelectField v-model="settings.gsrQuality" :options="gsrQualityOptions" @update:modelValue="restartGsr" />
-            </div>
-            <div class="field">
-              <label>FPS</label>
-              <SelectField v-model="settings.gsrFps" :options="gsrFpsOptions" @update:modelValue="restartGsr" />
-            </div>
-            <div class="field">
-              <label>Replay Buffer</label>
-              <SelectField v-model="settings.gsrReplaySecs" :options="gsrReplayOptions" @update:modelValue="restartGsr" />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ════════════════════ CLIP SETTINGS ════════════════════ -->
-      <section v-if="active === 'clipSettings'">
-        <h2 class="sec-title">{{ t('settings.clipSettings.title') }}</h2>
-
-        <div class="card">
-          <div class="form-grid">
-            <div class="field">
-              <label>{{ t('settings.clipSettings.defaultClick') }}</label>
-              <SelectField v-model="settings.defaultClickAction" :options="clickOptions" />
-            </div>
-            <div class="field">
-              <label>{{ t('settings.clipSettings.clipsPerRow') }}</label>
-              <SelectField v-model="settings.clipsPerRow" :options="rowOptions" />
-            </div>
-          </div>
-        </div>
-
-        <!-- Timeline Tracks shortcut -->
-        <div class="card">
-          <div class="card-head">Timeline Tracks</div>
-          <p class="hint">Customize track names, colors, and icons used in the clip editor timeline.</p>
-          <button class="btn btn-accent" @click="active = 'trackManagement'">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-            Open Timeline Tracks
-          </button>
-        </div>
-
-        <!-- Thumbnail cache -->
-        <div class="card">
-          <div class="card-head">{{ t('settings.clipSettings.thumbnailCache') }}</div>
-          <p class="hint">{{ t('settings.clipSettings.thumbnailHint') }}</p>
-          <div class="action-row">
-            <button class="btn btn-warn" @click="clearCache" :disabled="cacheClearing">
-              {{ cacheClearing ? t('settings.clipSettings.clearing') : t('settings.clipSettings.clearCache') }}
-            </button>
-            <span v-if="cacheMsg" class="cache-msg">{{ cacheMsg }}</span>
-          </div>
-        </div>
       </section>
 
       <!-- ════════════════════ TIMELINE TRACKS ════════════════════ -->
@@ -737,12 +643,11 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
           <p class="hint">Customize the name, color, and icon for each editor timeline track. Changes apply live — open the editor to see them instantly.</p>
           <div class="tdef-list">
             <div v-for="(def, idx) in settings.trackDefs" :key="def.id" class="tdef-row">
-              <div class="tdef-swatch" :style="{ background: def.color }"></div>
-              <input type="color" :value="def.color" class="tdef-color-input"
+              <div class="tdef-swatch" :style="{ background: def.color }" @click="openColorPicker(idx)" title="Pick color"></div>
+              <input type="color" :ref="(el) => setColorRef(el, idx)" :value="def.color" class="tdef-color-input tdef-color-hidden"
                 @input="def.color = ($event.target as HTMLInputElement).value" />
-              <span class="tdef-id-badge" :style="{ background: def.color + '22', color: def.color, borderColor: def.color + '55' }">{{ def.id }}</span>
               <input type="text" v-model="def.name" class="tdef-name-input" :placeholder="def.id" maxlength="20" />
-              <SelectField v-model="def.icon" :options="TRACK_ICON_OPTIONS" class="tdef-icon-field" />
+              <IconPicker v-model="def.icon" />
               <button v-if="def.id !== 'V1' && def.id !== 'O1'" class="btn-icon btn-remove" @click="removeTrackDef(idx)" title="Remove">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
               </button>
@@ -781,24 +686,15 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
       <section v-if="active === 'storage'">
         <h2 class="sec-title">{{ t('settings.storage.title') }}</h2>
 
-        <!-- Primary clips folder -->
+        <!-- Clip directories -->
         <div class="card">
-          <div class="card-head">{{ t('settings.storage.clipsFolder') }}</div>
-          <div class="folder-row">
-            <input type="text" :value="settings.clipsFolder" readonly class="folder-input" />
-            <button class="btn" @click="pickClipsFolder">{{ t('settings.storage.change') }}</button>
-          </div>
-        </div>
-
-        <!-- Additional clip sources -->
-        <div class="card">
-          <div class="card-head">Additional Clip Directories <span class="badge-count">{{ (settings.clipSources || []).length }}</span></div>
-          <p class="hint" style="margin-bottom:10px">Watched alongside the primary folder. New files in any of these directories appear instantly.</p>
-          <div v-for="(src, i) in (settings.clipSources || [])" :key="i" class="source-row">
+          <div class="card-head">Clip Directories <span class="badge-count">{{ (settings.clip_directories || []).length }}</span></div>
+          <p class="hint" style="margin-bottom:10px">OpenGG watches these folders for new clips. Files in any directory appear instantly.</p>
+          <div v-for="(src, i) in (settings.clip_directories || [])" :key="i" class="source-row">
             <span class="source-path">{{ src }}</span>
             <button class="btn-icon-sm" @click="removeClipSource(i)" title="Remove">✕</button>
           </div>
-          <div v-if="!(settings.clipSources || []).length" class="hint">No additional directories added.</div>
+          <div v-if="!(settings.clip_directories || []).length" class="hint">No directories configured. Add one below.</div>
           <button class="btn" style="margin-top:10px" @click="addClipSource">+ Add Directory</button>
         </div>
 
@@ -810,6 +706,18 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
             <input type="text" :value="settings.screenshotDir || '~/Pictures (default)'" readonly class="folder-input" />
             <button class="btn" @click="pickScreenshotDir">Change</button>
             <button v-if="settings.screenshotDir" class="btn" @click="settings.screenshotDir = ''">Reset</button>
+          </div>
+        </div>
+
+        <!-- Thumbnail cache -->
+        <div class="card">
+          <div class="card-head">{{ t('settings.clipSettings.thumbnailCache') }}</div>
+          <p class="hint">{{ t('settings.clipSettings.thumbnailHint') }}</p>
+          <div class="action-row">
+            <button class="btn btn-warn" @click="clearCache" :disabled="cacheClearing">
+              {{ cacheClearing ? t('settings.clipSettings.clearing') : t('settings.clipSettings.clearCache') }}
+            </button>
+            <span v-if="cacheMsg" class="cache-msg">{{ cacheMsg }}</span>
           </div>
         </div>
 
@@ -826,19 +734,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
                 <span class="stat-label">{{ t('settings.storage.used') }}</span>
                 <span class="stat-val">{{ fmtBytes(storageInfo.used_bytes) }}</span>
               </div>
-              <div class="stat-pill">
-                <span class="stat-label">{{ t('settings.storage.free') }}</span>
-                <span class="stat-val">{{ fmtBytes(storageInfo.free_bytes) }}</span>
-              </div>
-              <div class="stat-pill">
-                <span class="stat-label">{{ t('settings.storage.total') }}</span>
-                <span class="stat-val">{{ fmtBytes(storageInfo.total_bytes) }}</span>
-              </div>
             </div>
-            <div class="progress-bar-wrap">
-              <div class="progress-bar" :style="{ width: usedPct + '%', background: usedPct > 85 ? 'var(--danger)' : 'var(--accent)' }"></div>
-            </div>
-            <div class="progress-label">{{ usedPct.toFixed(1) }}% used of {{ fmtBytes(storageInfo.total_bytes) }}</div>
           </template>
           <div v-else class="hint">Could not read storage info.</div>
         </div>
@@ -849,6 +745,45 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         <h2 class="sec-title">{{ t('settings.extensions.title') }}</h2>
         <p class="hint">{{ t('settings.extensions.hint') }}</p>
 
+        <!-- Core Modules -->
+        <div class="card">
+          <div class="card-head">{{ t('settings.general.modules') }}</div>
+          <label class="toggle-row"><input type="checkbox" v-model="persist.state.modules.audio"><span class="tname">{{ t('settings.general.audioHub') }}</span><span class="tdesc">{{ t('settings.general.audioHubDesc') }}</span></label>
+          <label class="toggle-row"><input type="checkbox" v-model="persist.state.modules.device"><span class="tname">{{ t('settings.general.deviceManager') }}</span><span class="tdesc">{{ t('settings.general.deviceManagerDesc') }}</span></label>
+          <label class="toggle-row"><input type="checkbox" v-model="persist.state.modules.replay"><span class="tname">{{ t('settings.general.replayClips') }}</span><span class="tdesc">{{ t('settings.general.replayClipsDesc') }}</span></label>
+        </div>
+
+        <!-- GPU Screen Recorder -->
+        <div class="card">
+          <div class="card-head gsr-head">
+            <span>GPU Screen Recorder</span>
+            <span class="badge-beta">Beta</span>
+          </div>
+          <p class="hint">Uses <code>gpu-screen-recorder</code> for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately.</p>
+          <button class="gsr-install-toggle" @click="gsrInstallOpen = !gsrInstallOpen">{{ gsrInstallOpen ? '▼ Hide install guide' : '▶ How to install?' }}</button>
+          <div v-if="gsrInstallOpen" class="gsr-install-guide">
+            <div class="install-section">
+              <span class="install-distro">Ubuntu / Debian</span>
+              <code class="install-cmd">sudo add-apt-repository ppa:dec05eba/gpu-screen-recorder &amp;&amp; sudo apt install gpu-screen-recorder</code>
+            </div>
+            <div class="install-section">
+              <span class="install-distro">Arch / Manjaro</span>
+              <code class="install-cmd">yay -S gpu-screen-recorder</code>
+            </div>
+            <div class="install-section">
+              <span class="install-distro">Fedora</span>
+              <code class="install-cmd">sudo dnf install gpu-screen-recorder</code>
+            </div>
+          </div>
+          <div class="gsr-toggle-row">
+            <span class="gsr-label">Enable GSR Replay Buffer</span>
+            <button class="toggle-btn" :class="{ on: settings.gsrEnabled }" @click="toggleGsr">
+              <span class="toggle-knob"></span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Editor Features -->
         <div class="card">
           <div class="card-head">Editor Features</div>
           <label class="ext-toggle-row">
@@ -1238,31 +1173,22 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 .tdef-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .tdef-row {
   display: grid;
-  grid-template-columns: 20px 34px 42px 1fr 140px 26px;
+  grid-template-columns: 20px 1fr 32px 26px;
   align-items: center;
   gap: 8px;
 }
-.tdef-swatch { width: 20px; height: 20px; border-radius: 4px; border: 1px solid rgba(255,255,255,.1); flex-shrink: 0; }
-.tdef-color-input {
-  width: 34px; height: 30px; padding: 2px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: transparent; cursor: pointer;
+.tdef-swatch {
+  width: 20px; height: 20px; border-radius: 4px; border: 1px solid rgba(255,255,255,.1);
+  flex-shrink: 0; cursor: pointer; transition: transform .1s;
 }
-.tdef-id-badge {
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 9px; font-weight: 800; letter-spacing: .5px;
-  padding: 2px 6px; border-radius: 4px; border: 1px solid;
-  white-space: nowrap; font-family: monospace;
-}
+.tdef-swatch:hover { transform: scale(1.15); }
+.tdef-color-hidden { display: none; }
 .tdef-name-input {
   padding: 6px 10px; background: var(--bg-input); border: 1px solid var(--border);
   border-radius: var(--radius); color: var(--text); font-size: 12px;
   outline: none; width: 100%; color-scheme: dark;
 }
 .tdef-name-input:focus { border-color: var(--accent); }
-/* .tdef-icon-select replaced by SelectField — sizing via .tdef-icon-field */
-.tdef-icon-field { width: 110px; flex-shrink: 0; font-size: 11px; }
-.tdef-icon-field :deep(.sf-trigger) { padding: 5px 8px; font-size: 11px; }
-.tdef-icon-field :deep(.sf-opt)     { font-size: 11px; padding: 5px 8px; }
 
 /* ── Live Timeline Preview ── */
 .tl-preview {

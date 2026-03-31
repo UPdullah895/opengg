@@ -740,7 +740,6 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
       <div class="tl-headers">
         <div v-for="t in tracks" :key="'h' + t.id" class="tl-header" :style="{ '--tc': t.color }"
           @mouseenter="hoveredTrackId = t.id" @mouseleave="hoveredTrackId = null">
-          <span class="hdr-id">{{ t.id }}</span>
           <svg v-if="showIcons() && getTrackDef(t.id)?.icon" class="hdr-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path v-if="getTrackDef(t.id)?.icon === 'video'"   d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M3 6h10a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2z"/>
             <path v-else-if="getTrackDef(t.id)?.icon === 'game'"    d="M6 11h4m-2-2v4m7-1h.01M18 11h.01M2 6a2 2 0 012-2h16a2 2 0 012 2v10a4 4 0 01-4 4H6a4 4 0 01-4-4V6z"/>

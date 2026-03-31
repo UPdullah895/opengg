@@ -115,7 +115,7 @@ function cancelEdit() { isEditing.value = false }
 </script>
 
 <template>
-  <div ref="cardRef" class="card" :class="{ selected }" @contextmenu="openMenu" draggable="true" @dragstart="onDrag">
+  <div ref="cardRef" class="card" :class="{ selected }" @contextmenu.prevent="openMenu" draggable="true" @dragstart="onDrag">
     <div class="thumb">
       <img v-if="thumbUrl" :src="thumbUrl" class="thumb-img" loading="lazy" alt="" />
       <div v-else-if="thumbLoading" class="thumb-ph">⏳</div>

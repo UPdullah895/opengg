@@ -42,7 +42,7 @@ const renameValue  = ref('')
 const toast        = ref('')
 
 function showToast(msg: string) { toast.value = msg; setTimeout(() => toast.value = '', 3500) }
-function refreshClips() { replay.fetchClips(persist.state?.settings?.clipsFolder || '', true) }
+function refreshClips() { replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '', true) }
 
 // ── View / sizing / grouping ──
 const viewMode = ref<'grid' | 'list'>('grid')
@@ -170,7 +170,7 @@ let unlistenRemoved: UnlistenFn | null = null
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
   replay.fetchStatus()
-  replay.fetchClips(persist.state?.settings?.clipsFolder || '')
+  replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '')
 
   unlistenAdded = await listen<string>('clip_added', async (event) => {
     const fp = event.payload
@@ -491,7 +491,7 @@ onMounted(() => document.addEventListener('click', () => { if (replay.activeMenu
         <div class="empty-ic">{{ replay.filterFav?'❤':replay.search?'🔍':'📁' }}</div>
         <p v-if="replay.search">No clips matching "{{ replay.search }}"</p>
         <p v-else-if="replay.filterFav">No favorited clips</p>
-        <template v-else><p>No clips found</p><p class="empty-sub">{{ persist.state?.settings?.clipsFolder || '~/Videos/OpenGG' }}</p></template>
+        <template v-else><p>No clips found</p><p class="empty-sub">{{ persist.state?.settings?.clip_directories?.[0] || '~/Videos/OpenGG' }}</p></template>
       </div>
     </div>
 
