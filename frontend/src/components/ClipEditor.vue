@@ -163,7 +163,8 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
   min-height: 0;
   min-width: 0;
   width: 100%;
-  height: 100%;
+  height: auto;
+  max-height: 100%;
   overflow: hidden;
 }
 

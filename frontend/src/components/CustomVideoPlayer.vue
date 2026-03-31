@@ -197,7 +197,10 @@ defineExpose({ videoRef, playing, currentTime, duration, isFullscreen, seekTo, t
   background: #000;
   aspect-ratio: 16 / 9;
   width: 100%;
-  height: 100%;
+  /* Let `aspect-ratio` govern the wrapper size (avoid aspect-ratio conflicts). */
+  height: auto;
+  /* If the parent constrains height (common in flex layouts), don't overflow. */
+  max-height: 100%;
   flex-shrink: 1;
   min-height: 0;
   min-width: 0;
