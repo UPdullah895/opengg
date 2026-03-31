@@ -76,7 +76,7 @@ const current = () => ICONS.find(i => i.id === props.modelValue) ?? ICONS[0]
 .icon-btn svg { width: 15px; height: 15px; }
 
 .icon-popover {
-  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 500;
+  position: absolute; bottom: calc(100% + 6px); right: 0; left: auto; z-index: 500;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
   padding: 6px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
   box-shadow: 0 8px 24px rgba(0,0,0,.5);

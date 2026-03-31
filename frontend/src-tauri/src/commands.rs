@@ -170,7 +170,7 @@ async fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
     }
     let c = Command::new("pactl").args(["load-module", "module-null-sink",
         &format!("sink_name={name}"),
-        &format!("sink_properties=device.description=\"OpenGG {ch}\""),
+        &format!("sink_properties=node.description=\"OpenGG - {ch}\" node.nick=\"OpenGG - {ch}\" device.description=\"OpenGG - {ch}\""),
         "channels=2", "channel_map=front-left,front-right"
     ]).output().map_err(|e| format!("{e}"))?;
     if !c.status.success() { return Err(format!("{}", String::from_utf8_lossy(&c.stderr))); }
@@ -1781,37 +1781,35 @@ pub struct StorageInfo {
 
 /// Returns disk usage for the clips folder plus filesystem free/total space.
 #[command]
-pub async fn get_storage_info(clips_folder: String) -> Result<StorageInfo, String> {
+pub async fn get_storage_info(clip_directories: Vec<String>) -> Result<StorageInfo, String> {
     use std::fs;
-    let folder = PathBuf::from(&clips_folder);
-    let (clip_count, used_bytes) = if folder.exists() {
-        let mut count = 0u64;
-        let mut bytes = 0u64;
+    let mut total_count = 0u64;
+    let mut total_used = 0u64;
+    let mut first_existing: Option<PathBuf> = None;
+
+    for dir_str in &clip_directories {
+        let folder = PathBuf::from(dir_str);
+        if !folder.exists() { continue; }
+        if first_existing.is_none() { first_existing = Some(folder.clone()); }
         if let Ok(entries) = fs::read_dir(&folder) {
             for e in entries.flatten() {
                 if let Ok(meta) = e.metadata() {
                     if meta.is_file() {
                         let name = e.file_name().to_string_lossy().to_lowercase();
                         if name.ends_with(".mp4") || name.ends_with(".mkv") || name.ends_with(".webm") || name.ends_with(".mov") {
-                            count += 1;
-                            bytes += meta.len();
+                            total_count += 1;
+                            total_used += meta.len();
                         }
                     }
                 }
             }
         }
-        (count, bytes)
-    } else {
-        (0, 0)
-    };
+    }
 
-    // Use statvfs via std — available on Linux.
-    let (total_bytes, free_bytes) = {
-        let path = if folder.exists() { folder.clone() } else { PathBuf::from("/") };
-        get_fs_stats(&path)
-    };
+    let fs_root = first_existing.unwrap_or_else(|| PathBuf::from("/"));
+    let (total_bytes, free_bytes) = get_fs_stats(&fs_root);
 
-    Ok(StorageInfo { clip_count, used_bytes, total_bytes, free_bytes })
+    Ok(StorageInfo { clip_count: total_count, used_bytes: total_used, total_bytes, free_bytes })
 }
 
 #[cfg(unix)]
@@ -2107,7 +2105,7 @@ pub async fn create_virtual_audio() -> Result<(), String> {
         run_cmd("pactl", &[
             "load-module", "module-null-sink",
             &format!("sink_name={sink_name}"),
-            &format!("sink_properties=device.description=\"OpenGG {ch}\""),
+            &format!("sink_properties=node.description=\"OpenGG - {ch}\" node.nick=\"OpenGG - {ch}\" device.description=\"OpenGG - {ch}\""),
             "channels=2", "channel_map=front-left,front-right",
         ])?;
     }

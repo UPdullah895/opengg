@@ -59,6 +59,18 @@ async function saveTitle() {
   try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: name, favorite: props.clip.favorite, game_tag: gameTag.value } }) } catch {}
   titleDirty.value = false
 }
+
+async function toggleFavorite() {
+  const newFav = !props.clip.favorite
+  replay.updateClipMeta(props.clip.filepath, { favorite: newFav })
+  try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: editTitle.value.trim() || props.clip.filename, favorite: newFav, game_tag: gameTag.value } }) } catch {}
+}
+
+async function deleteClip() {
+  if (!confirm(`Delete "${editTitle.value || props.clip.filename}"?`)) return
+  try { await invoke('delete_clip', { filepath: props.clip.filepath }); emit('close') }
+  catch (e) { emit('toast', `Delete failed: ${e}`) }
+}
 function selectGame(g: string) { gameTag.value = g; gameOpen.value = false; saveTitle() }
 function closeGameDropDelayed() { setTimeout(() => { gameOpen.value = false }, 150) }
 
@@ -88,6 +100,12 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
             <button v-for="g in gameFiltered.slice(0, 8)" :key="g" @mousedown.prevent="selectGame(g)">{{ g }}</button>
           </div>
         </div>
+        <button class="fav-btn" :class="{ on: clip.favorite }" @click="toggleFavorite" title="Toggle favorite">
+          <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+        </button>
+        <button class="del-btn" @click="deleteClip" title="Delete clip">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+        </button>
         <button class="close-btn" @click="emit('close')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
 
@@ -155,6 +173,11 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
 .game-drop { position:absolute; top:100%; left:0; right:0; margin-top:2px; background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:2px; z-index:30; max-height:160px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,.3); }
 .game-drop button { width:100%; padding:4px 8px; border:none; background:transparent; color:var(--text-sec); font-size:11px; text-align:left; cursor:pointer; border-radius:4px; } .game-drop button:hover { background:var(--bg-hover); color:var(--text); }
 .title-static { font-size:15px; font-weight:700; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fav-btn, .del-btn { width:32px; height:32px; border:none; background:transparent; color:var(--text-sec); cursor:pointer; border-radius:6px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.fav-btn svg, .del-btn svg { width:16px; height:16px; }
+.fav-btn:hover { background:var(--bg-hover); color:var(--accent); }
+.fav-btn.on { color:#E94560; }
+.del-btn:hover { background:color-mix(in srgb,var(--danger) 15%,transparent); color:var(--danger); }
 .close-btn { width:32px; height:32px; border:none; background:transparent; color:var(--text-sec); cursor:pointer; border-radius:6px; display:flex; align-items:center; justify-content:center; } .close-btn svg { width:18px; height:18px; } .close-btn:hover { background:var(--bg-hover); }
 
 /* Player sizing — CustomVideoPlayer handles the video/controls */

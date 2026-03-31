@@ -14,6 +14,7 @@ import { invoke } from '@tauri-apps/api/core'
 export interface Theme {
   colors: Record<string, string>
   layout: Record<string, string>
+  mode?: 'dark' | 'light'
 }
 
 let _currentTheme: Theme | null = null
@@ -43,6 +44,23 @@ export async function saveTheme(theme: Theme): Promise<void> {
   }
 }
 
+/** Toggle dark / light mode class on <html> and optionally persist it */
+export function applyThemeMode(mode: 'dark' | 'light'): void {
+  const html = document.documentElement
+  if (mode === 'light') {
+    html.classList.add('light')
+    html.classList.remove('dark')
+  } else {
+    html.classList.remove('light')
+    html.classList.add('dark')
+  }
+}
+
+/** Return current theme mode from <html> class (defaults to 'dark') */
+export function getThemeMode(): 'dark' | 'light' {
+  return document.documentElement.classList.contains('light') ? 'light' : 'dark'
+}
+
 /** Apply a theme object to the document :root element */
 export function applyTheme(theme: Theme): void {
   const root = document.documentElement
@@ -58,6 +76,8 @@ export function applyTheme(theme: Theme): void {
       root.style.setProperty(key, value)
     }
   }
+
+  if (theme.mode) applyThemeMode(theme.mode)
 }
 
 /** Get current loaded theme */

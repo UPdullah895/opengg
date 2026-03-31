@@ -54,13 +54,13 @@ export const DEFAULTS: PersistedState = {
     },
     videoQuality: 'High', videoResolution: '1080p', language: 'en',
     trackDefs: [
+      { id: 'O1', name: 'Overlays', color: '#f97316', icon: 'overlay' },
       { id: 'V1', name: 'Video',    color: '#E94560', icon: 'video'   },
       { id: 'A1', name: 'Audio 1',  color: '#10b981', icon: 'game'    },
       { id: 'A2', name: 'Audio 2',  color: '#3b82f6', icon: 'chat'    },
       { id: 'A3', name: 'Audio 3',  color: '#f59e0b', icon: 'mic'     },
       { id: 'A4', name: 'Audio 4',  color: '#8b5cf6', icon: 'media'   },
       { id: 'A5', name: 'Audio 5',  color: '#ec4899', icon: 'media'   },
-      { id: 'O1', name: 'Overlays', color: '#f97316', icon: 'overlay' },
     ],
     showTrackIcons: true,
     captureTracks: [
@@ -97,6 +97,19 @@ export const usePersistenceStore = defineStore('persistence', () => {
         delete parsed?.settings?.clipsFolder
         delete parsed?.settings?.clipSources
         state.value = deepMerge(structuredClone(DEFAULTS), parsed)
+        // Migration: ensure O1 (Overlays) exists and is positioned before V1 (Video)
+        const defs = state.value.settings.trackDefs
+        const o1Def = DEFAULTS.settings.trackDefs.find(d => d.id === 'O1')!
+        const o1i = defs.findIndex(d => d.id === 'O1')
+        const v1i = defs.findIndex(d => d.id === 'V1')
+        if (o1i === -1 && o1Def) {
+          // O1 missing entirely — insert it before V1 (or at 0)
+          defs.splice(v1i !== -1 ? v1i : 0, 0, { ...o1Def })
+        } else if (o1i !== -1 && v1i !== -1 && o1i > v1i) {
+          // O1 exists but is below V1 — move it above
+          const [o1] = defs.splice(o1i, 1)
+          defs.splice(v1i, 0, o1)
+        }
       }
     } catch (e) { console.warn('load settings:', e) }
     loaded.value = true
