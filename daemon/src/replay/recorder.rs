@@ -73,9 +73,16 @@ impl Recorder {
             _ => "very_high",
         };
 
+        let capture_target = if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
+            "portal"
+        } else {
+            "screen"
+        };
+        tracing::info!("GSR capture target: {capture_target} (session type: {:?})", std::env::var("XDG_SESSION_TYPE"));
+
         let child = Command::new("gpu-screen-recorder")
             .args([
-                "-w", "screen",
+                "-w", capture_target,
                 "-f", &self.fps.to_string(),
                 "-q", quality_arg,
                 "-r", &duration.to_string(),
@@ -110,9 +117,16 @@ impl Recorder {
             _ => "very_high",
         };
 
+        let capture_target = if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
+            "portal"
+        } else {
+            "screen"
+        };
+        tracing::info!("GSR capture target: {capture_target} (session type: {:?})", std::env::var("XDG_SESSION_TYPE"));
+
         let child = Command::new("gpu-screen-recorder")
             .args([
-                "-w", "screen",
+                "-w", capture_target,
                 "-f", &self.fps.to_string(),
                 "-q", quality_arg,
                 "-c", "mp4",

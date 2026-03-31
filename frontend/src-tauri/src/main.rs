@@ -20,8 +20,7 @@ fn get_watch_dirs() -> Vec<std::path::PathBuf> {
     if sp.exists() {
         if let Ok(j) = std::fs::read_to_string(&sp) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) {
-                // Additional sources
-                if let Some(arr) = v["settings"]["clipSources"].as_array() {
+                if let Some(arr) = v["settings"]["clip_directories"].as_array() {
                     for s in arr {
                         if let Some(p) = s.as_str() {
                             let pb = std::path::PathBuf::from(commands::shexp(p));
@@ -29,33 +28,11 @@ fn get_watch_dirs() -> Vec<std::path::PathBuf> {
                         }
                     }
                 }
-                // Primary clips folder
-                if let Some(f) = v["settings"]["clipsFolder"].as_str() {
-                    let pb = std::path::PathBuf::from(commands::shexp(f));
-                    if !dirs.contains(&pb) { dirs.push(pb); }
-                }
             }
         }
     }
     if dirs.is_empty() { dirs.push(commands::default_clips_dir()); }
     dirs
-}
-
-// ══════════════════════════════════════════════════════
-//  ★ EPIC 5: Parse `pactl get-source-volume` output
-//  e.g. "Volume: front-left: 65536 /  100% / ..."
-//  Returns the first percentage value as u32.
-// ══════════════════════════════════════════════════════
-fn parse_pactl_volume_pct(s: &str) -> Option<u32> {
-    for part in s.split('/') {
-        let trimmed = part.trim();
-        if trimmed.ends_with('%') {
-            if let Ok(n) = trimmed.trim_end_matches('%').trim().parse::<u32>() {
-                return Some(n);
-            }
-        }
-    }
-    None
 }
 
 // ══════════════════════════════════════════════════════
@@ -107,7 +84,6 @@ fn main() {
             commands::get_audio_devices, commands::set_channel_device,
             commands::set_app_volume,
             commands::start_vu_stream, commands::stop_vu_stream,
-            commands::set_mic_volume_lock,
             // Replay
             commands::get_recorder_status, commands::start_replay,
             commands::stop_recorder, commands::save_replay,
@@ -192,34 +168,6 @@ fn main() {
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_millis(1500));
                 commands::hydrate_audio_routing();
-            });
-
-            // ★ EPIC 5: Mic Volume Lock enforcement thread — runs every 1.5 s.
-            // When enabled, reads the actual OS mic volume and snaps it back to
-            // LOCKED_MIC_VOLUME if any external process (Discord AGC, etc.) changed it.
-            std::thread::spawn(|| {
-                use std::sync::atomic::Ordering;
-                loop {
-                    std::thread::sleep(std::time::Duration::from_millis(1500));
-                    if !commands::MIC_LOCK_ENABLED.load(Ordering::Relaxed) { continue; }
-                    let locked = commands::LOCKED_MIC_VOLUME.load(Ordering::Relaxed);
-                    let out = std::process::Command::new("pactl")
-                        .args(["get-source-volume", "@DEFAULT_SOURCE@"])
-                        .output();
-                    if let Ok(out) = out {
-                        let s = String::from_utf8_lossy(&out.stdout);
-                        if let Some(current) = parse_pactl_volume_pct(&s) {
-                            if (current as i32 - locked as i32).unsigned_abs() > 1 {
-                                log::info!(
-                                    "Mic lock: OS volume {current}% diverged from locked {locked}% — restoring"
-                                );
-                                let _ = std::process::Command::new("pactl")
-                                    .args(["set-source-volume", "@DEFAULT_SOURCE@", &format!("{locked}%")])
-                                    .output();
-                            }
-                        }
-                    }
-                }
             });
 
             // ★ Power User: Live file-system watcher — emits `clip_added` / `clip_removed`

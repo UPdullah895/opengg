@@ -71,7 +71,7 @@ const items = [
 .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
 .nav-item:hover { background: var(--bg-hover); color: var(--text); }
 .nav-item.active {
-  background: rgba(233,69,96,.08);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--text);
   border-color: var(--accent);
 }

@@ -12,7 +12,7 @@ export interface TrackDef {
 export interface PersistedState {
   mixer: { volumes: Record<string, number>; mutes: Record<string, boolean>; devices: Record<string, string>; appRules: Record<string, string> }
   settings: {
-    clipsFolder: string; fps: number; quality: string; replayDuration: number
+    fps: number; quality: string; replayDuration: number
     defaultClickAction: 'preview' | 'editor'
     clipsPerRow: 2 | 3 | 4 | 5
     shortcuts: {
@@ -29,16 +29,14 @@ export interface PersistedState {
     // ★ Epic 4: daemon settings
     runAtStartup: boolean
     runInBackground: boolean
-    // ★ Power User: multi-source + screenshot dir
-    clipSources: string[]
+    // Clip directories (watched for new clips)
+    clip_directories: string[]
     screenshotDir: string
     // ★ GPU Screen Recorder
     gsrEnabled: boolean
     gsrFps: number
     gsrQuality: 'High' | 'Medium' | 'Low'
     gsrReplaySecs: number
-    // ★ EPIC 5: Mic volume lock (defeats OS AGC)
-    micVolumeLock: boolean
   }
   modules: { audio: boolean; device: boolean; replay: boolean }
   extensions: { overlays: boolean; tiktokExport: boolean }
@@ -47,7 +45,7 @@ export interface PersistedState {
 export const DEFAULTS: PersistedState = {
   mixer: { volumes: { Game:100, Chat:100, Media:100, Aux:100, Mic:100 }, mutes:{}, devices:{}, appRules:{} },
   settings: {
-    clipsFolder: '~/Videos/OpenGG', fps: 60, quality: 'High', replayDuration: 30,
+    fps: 60, quality: 'High', replayDuration: 30,
     defaultClickAction: 'preview', clipsPerRow: 4,
     shortcuts: {
       saveReplay: 'Alt+F10', toggleRecording: 'Alt+F9', screenshot: 'Alt+F12',
@@ -70,18 +68,17 @@ export const DEFAULTS: PersistedState = {
       { name: 'Track 2', source: 'Chat' },
       { name: 'Track 3', source: 'Mic'  },
     ],
-    runAtStartup:    false,
-    runInBackground: true,
-    clipSources:     [],
-    screenshotDir:   '',
-    gsrEnabled:      false,
-    gsrFps:          60,
-    gsrQuality:      'High',
-    gsrReplaySecs:   30,
-    micVolumeLock:   false,
+    runAtStartup:      false,
+    runInBackground:   true,
+    clip_directories:  ['~/Videos/OpenGG'],
+    screenshotDir:     '',
+    gsrEnabled:        false,
+    gsrFps:            60,
+    gsrQuality:        'High',
+    gsrReplaySecs:     30,
   },
   modules: { audio: true, device: true, replay: true },
-  extensions: { overlays: true, tiktokExport: false },
+  extensions: { overlays: false, tiktokExport: false },
 }
 
 export const usePersistenceStore = defineStore('persistence', () => {
@@ -91,7 +88,16 @@ export const usePersistenceStore = defineStore('persistence', () => {
   async function load() {
     try {
       const j = await invoke<string>('load_ui_settings')
-      if (j && j !== 'null') state.value = deepMerge(structuredClone(DEFAULTS), JSON.parse(j))
+      if (j && j !== 'null') {
+        const parsed = JSON.parse(j)
+        // Migration: clipsFolder → clip_directories
+        if (parsed?.settings?.clipsFolder && !parsed?.settings?.clip_directories?.length) {
+          parsed.settings.clip_directories = [parsed.settings.clipsFolder]
+        }
+        delete parsed?.settings?.clipsFolder
+        delete parsed?.settings?.clipSources
+        state.value = deepMerge(structuredClone(DEFAULTS), parsed)
+      }
     } catch (e) { console.warn('load settings:', e) }
     loaded.value = true
   }

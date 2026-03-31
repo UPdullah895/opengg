@@ -55,7 +55,7 @@ onMounted(async () => {
 
 async function saveTitle() {
   const name = editTitle.value.trim()
-  replay.updateClipMeta(props.clip.filepath, { custom_name: name })
+  replay.updateClipMeta(props.clip.filepath, { custom_name: name, game: gameTag.value })
   try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: name, favorite: props.clip.favorite, game_tag: gameTag.value } }) } catch {}
   titleDirty.value = false
 }
@@ -166,6 +166,12 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
   height: auto;
   max-height: 100%;
   overflow: hidden;
+}
+
+/* In Quick Preview (non-trim modal), always show the built-in controls */
+.modal:not(.wide) :deep(.cvp-ctrl) {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .trim-panel { padding:16px 20px; flex-shrink:0; }

@@ -41,6 +41,10 @@ async function createVirtualAudio() {
   finally { setupLoading.value = false }
 }
 
+function triggerVirtualAudioSetup() {
+  window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 1 } }))
+}
+
 const COLORS: Record<string, string> = {
   Master: '#94A3B8', Game: '#E94560', Chat: '#3B82F6',
   Media: '#10B981', Aux: '#A855F7', Mic: '#F59E0B',
@@ -96,7 +100,7 @@ onUnmounted(() => audio.stopPolling())
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
       <p class="empty-title">Virtual Audio Engine not running</p>
       <p class="empty-desc">OpenGG virtual sinks are not loaded. Create them to start routing audio.</p>
-      <button class="btn-setup" :disabled="setupLoading" @click="createVirtualAudio">
+      <button class="btn-setup" :disabled="setupLoading" @click="triggerVirtualAudioSetup">
         <svg v-if="!setupLoading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><path d="M12 5v14M5 12h14"/></svg>
         <span>{{ setupLoading ? 'Creating…' : 'Create Virtual Audio Engine' }}</span>
       </button>
