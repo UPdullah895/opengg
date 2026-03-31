@@ -181,13 +181,13 @@ onUnmounted(() => audio.stopPolling())
 }
 .rfr svg { width: 15px; height: 15px; }
 .rfr:hover { background: var(--bg-hover); color: var(--text); }
-/* ★ Epic 2: overdrive active state — amber accent */
+/* ★ Epic 2: overdrive active state */
 .rfr--active {
-  background: color-mix(in srgb, #f59e0b 12%, transparent);
-  border-color: #f59e0b88;
-  color: #f59e0b;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 53%, transparent);
+  color: var(--accent);
 }
-.rfr--active:hover { background: color-mix(in srgb, #f59e0b 20%, transparent); }
+.rfr--active:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 
 /* ★ FIX 3: strips-row fills vertical space, min 55vh for tall faders */
 .strips-row {

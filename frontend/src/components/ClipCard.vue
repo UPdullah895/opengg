@@ -41,8 +41,8 @@ function menuAction(a: string) {
   }
 }
 
-onMounted(() => { document.addEventListener('click', closeMenus, true) })
-onBeforeUnmount(() => { document.removeEventListener('click', closeMenus, true) })
+onMounted(() => { document.addEventListener('click', closeMenus) })
+onBeforeUnmount(() => { document.removeEventListener('click', closeMenus) })
 
 // ★ Lazy thumbnail — uses media server HTTP URL
 let obs: IntersectionObserver | null = null
