@@ -161,6 +161,11 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
 :deep(.cvp-wrap) {
   flex-shrink: 1;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+  overflow: hidden;
 }
 
 .trim-panel { padding:16px 20px; flex-shrink:0; }

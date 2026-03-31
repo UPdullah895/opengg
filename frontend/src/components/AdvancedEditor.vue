@@ -882,8 +882,8 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
 .tag { font-size: 8px; background: var(--bg-deep); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; color: var(--text-muted); }
 
 /* ═══ Main Area ═══ */
-.main { display: flex; min-height: 0; }
-.preview { flex: 1; background: #000; position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.main { display: flex; min-height: 0; min-width: 0; }
+.preview { flex: 1; background: #000; position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer; min-width: 0; min-height: 0; overflow: hidden; }
 .vid { max-width: 100%; max-height: 100%; object-fit: contain; }
 .play-ov { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.15); }
 /* ── Custom preview ctrl-bar ── */

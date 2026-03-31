@@ -197,10 +197,19 @@ defineExpose({ videoRef, playing, currentTime, duration, isFullscreen, seekTo, t
   background: #000;
   aspect-ratio: 16 / 9;
   width: 100%;
+  /* Let `aspect-ratio` govern the wrapper size (avoid aspect-ratio conflicts). */
+  height: auto;
+  /* If the parent constrains height (common in flex layouts), don't overflow. */
+  max-height: 100%;
   flex-shrink: 1;
   min-height: 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
-.cvp-video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cvp-video { width: 100%; height: 100%; object-fit: contain; display: block; max-width: 100%; max-height: 100%; }
 
 .cvp-wrap:fullscreen,
 .cvp-wrap:-webkit-full-screen {
@@ -223,9 +232,11 @@ defineExpose({ videoRef, playing, currentTime, duration, isFullscreen, seekTo, t
 
 .cvp-ctrl {
   position: absolute; bottom: 0; left: 0; right: 0;
+  width: 100%;
   background: linear-gradient(transparent, rgba(0,0,0,.75));
   padding: 12px 10px 8px;
   opacity: 0; transition: opacity .2s; pointer-events: none;
+  box-sizing: border-box;
 }
 .cvp-ctrl-vis { opacity: 1; pointer-events: auto; }
 
