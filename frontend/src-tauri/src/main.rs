@@ -88,7 +88,7 @@ fn main() {
             commands::get_recorder_status, commands::start_replay,
             commands::stop_recorder, commands::save_replay,
             // Clips
-            commands::get_clips, commands::generate_thumbnail,
+            commands::get_clips, commands::generate_thumbnail, commands::generate_thumbnails_batch,
             commands::set_clip_meta, commands::get_clip_meta,
             commands::take_screenshot,
             commands::clear_thumbnail_cache, commands::delete_clip,

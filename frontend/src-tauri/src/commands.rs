@@ -891,8 +891,15 @@ fn clips_db_path() -> PathBuf { dirs::data_dir().unwrap_or_else(|| PathBuf::from
 fn open_db() -> Result<Connection, String> { Connection::open(clips_db_path()).map_err(|e| format!("DB: {e}")) }
 pub fn init_clips_db() -> Result<(), String> {
     let p = clips_db_path(); if let Some(d) = p.parent() { std::fs::create_dir_all(d).ok(); }
-    open_db()?.execute_batch("CREATE TABLE IF NOT EXISTS clip_meta(filepath TEXT PRIMARY KEY,custom_name TEXT DEFAULT '',favorite INTEGER DEFAULT 0,tags TEXT DEFAULT '',notes TEXT DEFAULT '');
-     CREATE TABLE IF NOT EXISTS trim_state(filepath TEXT PRIMARY KEY,trim_start REAL DEFAULT 0,trim_end REAL DEFAULT 0);").map_err(|e| format!("{e}"))
+    let db = open_db()?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS clip_meta(filepath TEXT PRIMARY KEY,custom_name TEXT DEFAULT '',favorite INTEGER DEFAULT 0,tags TEXT DEFAULT '',notes TEXT DEFAULT '');
+     CREATE TABLE IF NOT EXISTS trim_state(filepath TEXT PRIMARY KEY,trim_start REAL DEFAULT 0,trim_end REAL DEFAULT 0);").map_err(|e| format!("{e}"))?;
+    // Phase 3a: Add ffprobe cache columns (ALTER TABLE is a no-op if column already exists)
+    let _ = db.execute("ALTER TABLE clip_meta ADD COLUMN duration REAL DEFAULT 0", []);
+    let _ = db.execute("ALTER TABLE clip_meta ADD COLUMN width INTEGER DEFAULT 0", []);
+    let _ = db.execute("ALTER TABLE clip_meta ADD COLUMN height INTEGER DEFAULT 0", []);
+    let _ = db.execute("ALTER TABLE clip_meta ADD COLUMN mtime INTEGER DEFAULT 0", []);
+    Ok(())
 }
 fn get_meta_map() -> HashMap<String,(String,bool,String)> {
     let mut m = HashMap::new();
@@ -909,6 +916,24 @@ fn get_meta_map() -> HashMap<String,(String,bool,String)> {
 #[derive(Debug,Serialize,Clone)]
 pub struct ClipInfo { pub id:String, pub filename:String, pub filepath:String, pub filesize:u64, pub created:String, pub duration:f64, pub width:u32, pub height:u32, pub game:String, pub custom_name:String, pub favorite:bool, pub thumbnail:String }
 const VIDEO_EXTS: &[&str] = &["mp4","mkv","webm","avi","mov","ts","flv"];
+
+// Phase 3a: ffprobe cache helpers
+/// Read cached (duration, width, height) for a filepath if mtime matches.
+fn probe_cache_get(db: &Connection, fp: &str, mtime: u64) -> Option<(f64, u32, u32)> {
+    db.query_row(
+        "SELECT duration, width, height FROM clip_meta WHERE filepath=?1 AND mtime=?2 AND duration>0",
+        rusqlite::params![fp, mtime as i64],
+        |r| Ok((r.get::<_, f64>(0)?, r.get::<_, u32>(1)?, r.get::<_, u32>(2)?)),
+    ).ok()
+}
+/// Write (duration, width, height, mtime) to cache.
+fn probe_cache_set(db: &Connection, fp: &str, dur: f64, w: u32, h: u32, mtime: u64) {
+    let _ = db.execute(
+        "INSERT INTO clip_meta(filepath,duration,width,height,mtime) VALUES(?1,?2,?3,?4,?5) \
+         ON CONFLICT(filepath) DO UPDATE SET duration=?2,width=?3,height=?4,mtime=?5",
+        rusqlite::params![fp, dur, w, h, mtime as i64],
+    );
+}
 
 /// Lightweight clip counter — counts video files without reading metadata.
 /// Used by the Home page dashboard so it doesn't trigger full ffprobe scans.
@@ -931,14 +956,20 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
 }
 
 #[command] pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
+    // Phase 3a+3b: cache-first ffprobe, parallel for uncached clips
+    use tokio::sync::Semaphore;
     let dirs = get_all_clip_dirs(&folder);
-    let meta = get_meta_map(); let td = thumb_dir(); let _ = std::fs::create_dir_all(&td);
-    let mut clips = Vec::new();
+    let meta = get_meta_map();
+    let td = thumb_dir(); let _ = std::fs::create_dir_all(&td);
+
+    // Collect all candidate files first (cheap filesystem scan)
+    struct Entry { fp: String, fname: String, id: String, filesize: u64, created: String, mtime: u64, game_raw: String, cn: String, fav: bool, game_tag: String, thumbnail: String }
+    let mut entries: Vec<Entry> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for dir in &dirs {
         if !dir.exists() { continue; }
-        let entries = match std::fs::read_dir(dir) { Ok(r) => r, Err(_) => continue };
-        for e in entries.flatten() {
+        let rd = match std::fs::read_dir(dir) { Ok(r) => r, Err(_) => continue };
+        for e in rd.flatten() {
             let p = e.path(); if !p.is_file() { continue; }
             let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
             if !VIDEO_EXTS.contains(&ext.as_str()) { continue; }
@@ -948,18 +979,71 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
             let m = match e.metadata() { Ok(m) => m, Err(_) => continue };
             let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
             let id = format!("{:x}", hash_str(&fp));
-            let created = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| fmt_ts(d.as_secs() as i64)).unwrap_or_default();
-            let (dur,w,h) = probe_video(&p);
-            // ★ Epic 2 Task 2: Use file_stem() so extensions are never included in the game name
+            let mtime = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+            let created = fmt_ts(mtime as i64);
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
-            let game_from_filename = stem.split('_').next().unwrap_or("Unknown").replace('-', " ");
-            let (cn,fav,game_tag) = meta.get(&fp).cloned().unwrap_or_default();
-            let game = if game_tag.is_empty() { game_from_filename } else { game_tag };
+            let game_raw = stem.split('_').next().unwrap_or("Unknown").replace('-', " ");
+            let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
             let thumb = td.join(format!("{id}.jpg"));
             let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
-            clips.push(ClipInfo{id,filename:fname,filepath:fp,filesize:m.len(),created,duration:dur,width:w,height:h,game,custom_name:cn,favorite:fav,thumbnail});
+            entries.push(Entry { fp, fname, id, filesize: m.len(), created, mtime, game_raw, cn, fav, game_tag, thumbnail });
         }
     }
+
+    // Phase 3a: check probe cache; collect uncached for parallel probing
+    let db = open_db().ok();
+    struct CachedEntry { entry_idx: usize, dur: f64, w: u32, h: u32 }
+    let mut cached: Vec<CachedEntry> = Vec::new();
+    let mut uncached_idxs: Vec<usize> = Vec::new();
+    for (i, e) in entries.iter().enumerate() {
+        if let Some(ref db) = db {
+            if let Some((dur, w, h)) = probe_cache_get(db, &e.fp, e.mtime) {
+                cached.push(CachedEntry { entry_idx: i, dur, w, h });
+                continue;
+            }
+        }
+        uncached_idxs.push(i);
+    }
+
+    // Phase 3b: parallel ffprobe for uncached clips (max 4 concurrent)
+    // acquire().await blocks until a permit is free, properly limiting concurrency.
+    let sem = Arc::new(Semaphore::new(4));
+    let mut probe_tasks = Vec::new();
+    for idx in uncached_idxs {
+        let fp = entries[idx].fp.clone();
+        let sem = Arc::clone(&sem);
+        let task = tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let fp2 = fp.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                probe_video(std::path::Path::new(&fp2))
+            }).await.unwrap_or((0.0, 0, 0));
+            (idx, fp, result)
+        });
+        probe_tasks.push(task);
+    }
+    let mut probe_results: Vec<(usize, String, (f64, u32, u32))> = Vec::new();
+    for task in probe_tasks {
+        if let Ok(r) = task.await { probe_results.push(r); }
+    }
+    // Write new probe results to cache
+    if let Some(ref db) = db {
+        for (idx, fp, (dur, w, h)) in &probe_results {
+            probe_cache_set(db, fp, *dur, *w, *h, entries[*idx].mtime);
+        }
+    }
+
+    // Assemble final ClipInfo list
+    let mut probe_map: std::collections::HashMap<usize,(f64,u32,u32)> = std::collections::HashMap::new();
+    for c in cached { probe_map.insert(c.entry_idx, (c.dur, c.w, c.h)); }
+    for (idx, _, dwh) in probe_results { probe_map.insert(idx, dwh); }
+
+    let mut clips: Vec<ClipInfo> = entries.into_iter().enumerate().map(|(i, e)| {
+        let (dur, w, h) = probe_map.get(&i).copied().unwrap_or((0.0, 0, 0));
+        let game = if e.game_tag.is_empty() { e.game_raw } else { e.game_tag };
+        ClipInfo { id: e.id, filename: e.fname, filepath: e.fp, filesize: e.filesize, created: e.created, duration: dur, width: w, height: h, game, custom_name: e.cn, favorite: e.fav, thumbnail: e.thumbnail }
+    }).collect();
+
     clips.sort_by(|a,b| b.created.cmp(&a.created)); Ok(clips)
 }
 
@@ -990,15 +1074,53 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
     let id = format!("{:x}",hash_str(&filepath)); let d = thumb_dir(); let _ = std::fs::create_dir_all(&d);
     let out = d.join(format!("{id}.jpg")); if out.exists() { return Ok(out.to_string_lossy().to_string()); }
     let dur = probe_duration(&filepath); let seek = if dur>1.0{dur*0.1}else{0.0};
-    // ★ Epic 3 P2: High-quality thumbnails — 1280px, quality 2
+    // Phase 3c: Reduced thumbnail resolution — 640px wide, quality 5 (faster + smaller)
     let r = Command::new("ffmpeg").args([
         "-ss", &format!("{seek:.2}"), "-i", &filepath,
-        "-vframes", "1", "-vf", "scale=1280:-1", "-q:v", "2", "-y",
+        "-vframes", "1", "-vf", "scale=640:-1", "-q:v", "5", "-y",
         &out.to_string_lossy()
     ]).output().map_err(|e| format!("{e}"))?;
     if r.status.success() && out.exists() { Ok(out.to_string_lossy().to_string()) }
     else { Err(format!("ffmpeg: {}", String::from_utf8_lossy(&r.stderr))) }
 }
+/// Phase 3d: Batch thumbnail generation — generates up to 3 concurrently.
+#[command]
+pub async fn generate_thumbnails_batch(filepaths: Vec<String>) -> Result<Vec<String>, String> {
+    use tokio::sync::Semaphore;
+    let sem = Arc::new(Semaphore::new(3));
+    let mut tasks = Vec::new();
+    for filepath in filepaths {
+        let sem = Arc::clone(&sem);
+        let task = tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let fp = filepath.clone();
+            tokio::task::spawn_blocking(move || {
+                let id = format!("{:x}", hash_str(&fp));
+                let d = thumb_dir(); let _ = std::fs::create_dir_all(&d);
+                let out = d.join(format!("{id}.jpg"));
+                if out.exists() { return out.to_string_lossy().to_string(); }
+                let dur = probe_duration(&fp);
+                let seek = if dur > 1.0 { dur * 0.1 } else { 0.0 };
+                let r = Command::new("ffmpeg").args([
+                    "-ss", &format!("{seek:.2}"), "-i", &fp,
+                    "-vframes", "1", "-vf", "scale=640:-1", "-q:v", "5", "-y",
+                    &out.to_string_lossy(),
+                ]).output();
+                match r {
+                    Ok(o) if o.status.success() && out.exists() => out.to_string_lossy().to_string(),
+                    _ => String::new(),
+                }
+            }).await.unwrap_or_default()
+        });
+        tasks.push(task);
+    }
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap_or_default());
+    }
+    Ok(results)
+}
+
 #[derive(Deserialize)] pub struct ClipMetaUpdate { pub filepath:String, pub custom_name:Option<String>, pub favorite:Option<bool>, pub game_tag:Option<String>, pub notes:Option<String> }
 #[command] pub async fn set_clip_meta(update: ClipMetaUpdate) -> Result<(), String> {
     let db = open_db()?;
@@ -1349,7 +1471,7 @@ pub async fn export_with_progress(
 
 // ══════════════════════════════════════════════════════════════
 //  ★ EPIC 3: Generate audio waveform peaks via ffmpeg
-#[command] pub async fn open_file_location(filepath: String) -> Result<(), String> { Command::new("xdg-open").arg(Path::new(&filepath).parent().unwrap_or(Path::new("/"))).spawn().map_err(|e| format!("{e}"))?; Ok(()) }
+#[command] pub async fn open_file_location(filepath: String) -> Result<(), String> { let parent = Path::new(&filepath).parent().unwrap_or(Path::new("/")); open::that(parent).map_err(|e| format!("{e}"))?; Ok(()) }
 
 // ═══ Recording ═══
 #[command] pub async fn start_screen_recording(save_dir: String, fps: u32, quality: String, replay_seconds: u32) -> Result<String, String> { let dir=if save_dir.is_empty(){let d=default_clips_dir(); let _=std::fs::create_dir_all(&d); d}else{let d=PathBuf::from(shexp(&save_dir)); if !d.exists(){std::fs::create_dir_all(&d).map_err(|e| format!("{e}"))?;} d}; let ts=chrono_now(); let outfile=dir.join(format!("opengg_{ts}.mp4")); let target=detect_target(); let qp=match quality.as_str(){"Low"=>"medium","Medium"=>"high","High"=>"very_high","Ultra"=>"ultra",_=>"high"}; let mut args=vec!["-w".into(),target,"-f".into(),fps.to_string(),"-q".into(),qp.into(),"-a".into(),"default_output".into(),"-o".into(),outfile.to_string_lossy().to_string()]; if replay_seconds>0{args.push("-r".into());args.push(replay_seconds.to_string());} Command::new("gpu-screen-recorder").args(&args).spawn().map_err(|e| if e.kind()==std::io::ErrorKind::NotFound{"gpu-screen-recorder not found".into()}else{format!("{e}")})?; Ok(outfile.to_string_lossy().to_string()) }
@@ -1596,10 +1718,7 @@ pub async fn open_locales_folder() -> Result<String, String> {
     }
 
     let path_str = dir.to_string_lossy().to_string();
-    Command::new("xdg-open")
-        .arg(&dir)
-        .spawn()
-        .map_err(|e| format!("xdg-open: {e}"))?;
+    open::that(&dir).map_err(|e| format!("open folder: {e}"))?;
     Ok(path_str)
 }
 
@@ -1686,10 +1805,7 @@ pub async fn open_extensions_folder() -> Result<String, String> {
     }
 
     let path_str = dir.to_string_lossy().to_string();
-    Command::new("xdg-open")
-        .arg(&dir)
-        .spawn()
-        .map_err(|e| format!("xdg-open: {e}"))?;
+    open::that(&dir).map_err(|e| format!("open folder: {e}"))?;
     Ok(path_str)
 }
 
@@ -2077,7 +2193,7 @@ pub fn crash_log_dir() -> PathBuf {
 pub async fn open_crash_logs_folder() -> Result<(), String> {
     let dir = crash_log_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("{e}"))?;
-    Command::new("xdg-open").arg(&dir).spawn().map_err(|e| format!("{e}"))?;
+    open::that(&dir).map_err(|e| format!("{e}"))?;
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, shallowRef, triggerRef, markRaw } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
 export interface Clip {
@@ -7,6 +7,7 @@ export interface Clip {
   created: string; duration: number; width: number; height: number
   game: string; custom_name: string; favorite: boolean; thumbnail: string
   isSkeleton?: boolean // ★ Epic 3: live-watcher placeholder — never persisted
+  _isNew?: boolean     // transient UI flag — cleared after card-entry animation
 }
 
 export type SortMode = 'newest' | 'oldest' | 'longest' | 'shortest'
@@ -14,7 +15,8 @@ export type SortMode = 'newest' | 'oldest' | 'longest' | 'shortest'
 export const useReplayStore = defineStore('replay', () => {
   const status = ref<'idle' | 'replay' | 'recording'>('idle')
   const replayDuration = ref(0)
-  const clips = ref<Clip[]>([])
+  // Phase 2d: shallowRef avoids deep reactivity on every clip object
+  const clips = shallowRef<Clip[]>([])
   const loading = ref(false)
   const loaded = ref(false)
   const lastFolder = ref('')
@@ -33,6 +35,10 @@ export const useReplayStore = defineStore('replay', () => {
   // ── Context menu singleton ──
   const activeMenuClipId = ref('')
   const activeMenuPos = ref({ x: 0, y: 0 })
+
+  // ── Scan state (for scan banner in grid view) ──
+  const scanActive = ref(false)
+  const scanCount = ref(0)
 
   // ── Computed ──
   const games = computed(() => {
@@ -96,42 +102,46 @@ export const useReplayStore = defineStore('replay', () => {
           if (prefix && prefix.length > 1) c.game = prefix.replace(/-/g, ' ')
         }
       }
-      clips.value = raw
+      // Phase 2d: markRaw prevents deep reactive wrapping of clip objects
+      clips.value = raw.map(c => markRaw(c))
       lastFolder.value = folder; loaded.value = true
     }
     catch (e) { console.error('fetchClips:', e); clips.value = [] }
     finally { loading.value = false }
   }
 
-  // ★ Epic 2 P6: Reactive update — changes games dropdown instantly
+  // Phase 2d: updateClipMeta uses triggerRef instead of replacing the array
   function updateClipMeta(fp: string, u: Partial<Clip>) {
     const i = clips.value.findIndex(c => c.filepath === fp)
     if (i >= 0) {
       Object.assign(clips.value[i], u)
-      // Force Vue reactivity by replacing the array item
-      clips.value = [...clips.value]
+      // triggerRef is required because clips is a shallowRef — mutating items doesn't auto-trigger
+      triggerRef(clips)
     }
   }
   function removeClip(fp: string) { clips.value = clips.value.filter(c => c.filepath !== fp && c.id !== fp); selectedIds.value.delete(fp) }
-  function setThumbnail(id: string, p: string) { const c = clips.value.find(c => c.id===id); if (c) c.thumbnail = p }
+  function setThumbnail(id: string, p: string) { const c = clips.value.find(c => c.id===id); if (c) { c.thumbnail = p; triggerRef(clips) } }
   /** Prepend a new clip (from file-watcher) without a full rescan. */
-  function addClip(clip: Clip) { if (!clips.value.find(c => c.filepath === clip.filepath)) clips.value.unshift(clip) }
+  function addClip(clip: Clip) { if (!clips.value.find(c => c.filepath === clip.filepath)) clips.value = [markRaw(clip), ...clips.value] }
 
   // ★ Epic 3: Inject a loading skeleton at the top of the list, then swap it for real data.
   // This avoids wiping the entire clips array while a new file is being parsed.
   function injectSkeleton(tempId: string, filepath: string) {
     if (clips.value.find(c => c.id === tempId)) return
-    clips.value = [{
+    clips.value = [markRaw({
       id: tempId, filename: '', filepath, filesize: 0,
       created: '', duration: 0, width: 0, height: 0,
       game: '', custom_name: '', favorite: false, thumbnail: '',
       isSkeleton: true,
-    }, ...clips.value]
+    }), ...clips.value]
   }
   function replaceSkeleton(tempId: string, clip: Clip) {
+    clip._isNew = true
+    const rawClip = markRaw(clip)
     const idx = clips.value.findIndex(c => c.id === tempId)
-    if (idx >= 0) { const arr = [...clips.value]; arr.splice(idx, 1, clip); clips.value = arr }
-    else clips.value = [clip, ...clips.value]
+    if (idx >= 0) { const arr = [...clips.value]; arr.splice(idx, 1, rawClip); clips.value = arr }
+    else clips.value = [rawClip, ...clips.value]
+    setTimeout(() => { rawClip._isNew = false }, 400)
   }
 
   // Multi-select
@@ -148,5 +158,6 @@ export const useReplayStore = defineStore('replay', () => {
     fetchClips, updateClipMeta, removeClip, setThumbnail, addClip, injectSkeleton, replaceSkeleton,
     toggleSelect, clearSelection, isSelected,
     activeMenuClipId, activeMenuPos,
+    scanActive, scanCount,
   }
 })
