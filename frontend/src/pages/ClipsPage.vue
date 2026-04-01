@@ -76,13 +76,31 @@ const groupedClips = computed<DateGroup[]>(() => {
   return groups
 })
 
+// ── Group-by-date selection helpers ──
+function groupCheckState(group: DateGroup): 'none' | 'some' | 'all' {
+  const total = group.clips.length
+  if (total === 0) return 'none'
+  const sel = group.clips.filter(c => replay.selectedIds.has(c.id)).length
+  if (sel === 0) return 'none'
+  return sel === total ? 'all' : 'some'
+}
+function toggleGroupSelect(group: DateGroup) {
+  const state = groupCheckState(group)
+  if (state === 'all') {
+    for (const c of group.clips) replay.selectedIds.delete(c.id)
+  } else {
+    for (const c of group.clips) replay.selectedIds.add(c.id)
+  }
+  replay.selectMode = replay.selectedIds.size > 0
+}
+
 // ★ Epic 2: Range slider (1–4) maps to column count (2–5)
-// slider 1→2 cols, 2→3 cols, 3→4 cols, 4→5 cols
-const gridSlider = computed<number>({
-  get: () => Math.max(1, Math.min(4, (persist.state?.settings?.clipsPerRow || 4) - 1)),
-  set: (v) => { if (persist.state?.settings) persist.state.settings.clipsPerRow = (v + 1) as 2 | 3 | 4 | 5 },
+// Local ref for instant visual feedback during drag; persistence only written on release (@change)
+const gridSlider = ref(Math.max(1, Math.min(4, (persist.state?.settings?.clipsPerRow || 4) - 1)))
+watch(() => persist.state?.settings?.clipsPerRow, (v) => {
+  if (v != null) gridSlider.value = Math.max(1, Math.min(4, v - 1))
 })
-const gridCols = computed(() => (persist.state?.settings?.clipsPerRow || 4))
+const gridCols = computed(() => gridSlider.value + 1)
 
 // Native grid host scroll ref for OverlayScrollbar
 const gridScrollRef = ref<HTMLElement | null>(null)
@@ -335,8 +353,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
           <div class="size-range-wrap">
             <input
               type="range" min="1" max="4" step="1"
-              :value="gridSlider"
-              @input="gridSlider = Number(($event.target as HTMLInputElement).value)"
+              v-model.number="gridSlider"
+              @change="if (persist.state?.settings) persist.state.settings.clipsPerRow = (gridSlider + 1) as 2|3|4|5"
               @mousedown="isDragging = true" @touchstart="isDragging = true"
               @mouseup="isDragging = false" @touchend="isDragging = false"
               @mouseleave="isDragging = false"
@@ -384,6 +402,14 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
           <div class="date-groups">
           <div v-for="group in groupedClips" :key="group.date" class="date-group">
             <div class="date-header">
+              <div
+                class="group-sel-box"
+                :class="{ checked: groupCheckState(group) === 'all', indeterminate: groupCheckState(group) === 'some' }"
+                @click.stop="toggleGroupSelect(group)"
+              >
+                <span v-if="groupCheckState(group) === 'all'">✓</span>
+                <span v-else-if="groupCheckState(group) === 'some'">−</span>
+              </div>
               <span class="date-label">{{ group.label }}</span>
               <span class="date-count">{{ group.clips.length }}</span>
             </div>
@@ -467,6 +493,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
               :clip="clip"
               :selected="replay.isSelected(clip.id)"
               :class="{ 'clip-enter': clip._isNew }"
+              @click="onCardClick(clip)"
               @preview="openPreview"
               @editor="openAdvanced"
               @rename="startRename"
@@ -893,6 +920,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .date-header { display:flex; align-items:center; gap:10px; padding-bottom:8px; border-bottom:1px solid var(--border); }
 .date-label { font-size:14px; font-weight:700; color:var(--text); }
 .date-count { font-size:11px; font-weight:600; color:var(--text-muted); background:var(--bg-deep); padding:2px 8px; border-radius:10px; }
+.group-sel-box { width:20px; height:20px; border-radius:5px; border:2px solid var(--text-muted); background:transparent; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px; color:transparent; transition:border-color .15s, background .15s; flex-shrink:0; user-select:none; }
+.group-sel-box:hover { border-color:var(--accent); }
+.group-sel-box.checked { background:var(--accent); border-color:var(--accent); color:#fff; }
+.group-sel-box.indeterminate { border-color:var(--accent); color:var(--accent); }
 
 /* Toast */
 .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--bg-card); border:1px solid var(--accent); color:var(--text); padding:10px 24px; border-radius:8px; font-size:13px; font-weight:600; z-index:9999; box-shadow:0 4px 16px rgba(0,0,0,.3); }

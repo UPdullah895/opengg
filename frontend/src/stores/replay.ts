@@ -110,17 +110,20 @@ export const useReplayStore = defineStore('replay', () => {
     finally { loading.value = false }
   }
 
-  // Phase 2d: updateClipMeta uses triggerRef instead of replacing the array
+  // Phase 2d: updateClipMeta replaces the clip object with a new markRaw copy so Vue's
+  // shallowRef prop-diffing detects the change and re-renders affected ClipCard components.
   function updateClipMeta(fp: string, u: Partial<Clip>) {
     const i = clips.value.findIndex(c => c.filepath === fp)
     if (i >= 0) {
-      Object.assign(clips.value[i], u)
-      // triggerRef is required because clips is a shallowRef — mutating items doesn't auto-trigger
+      clips.value[i] = markRaw({ ...clips.value[i], ...u })
       triggerRef(clips)
     }
   }
   function removeClip(fp: string) { clips.value = clips.value.filter(c => c.filepath !== fp && c.id !== fp); selectedIds.value.delete(fp) }
-  function setThumbnail(id: string, p: string) { const c = clips.value.find(c => c.id===id); if (c) { c.thumbnail = p; triggerRef(clips) } }
+  function setThumbnail(id: string, p: string) {
+    const i = clips.value.findIndex(c => c.id === id)
+    if (i >= 0) { clips.value[i] = markRaw({ ...clips.value[i], thumbnail: p }); triggerRef(clips) }
+  }
   /** Prepend a new clip (from file-watcher) without a full rescan. */
   function addClip(clip: Clip) { if (!clips.value.find(c => c.filepath === clip.filepath)) clips.value = [markRaw(clip), ...clips.value] }
 
