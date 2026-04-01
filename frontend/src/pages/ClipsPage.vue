@@ -101,6 +101,9 @@ watch(() => persist.state?.settings?.clipsPerRow, (v) => {
   if (v != null) gridSlider.value = Math.max(1, Math.min(4, v - 1))
 })
 const gridCols = computed(() => gridSlider.value + 1)
+function saveGridSlider() {
+  if (persist.state?.settings) persist.state.settings.clipsPerRow = (gridSlider.value + 1) as 2 | 3 | 4 | 5
+}
 
 // Native grid host scroll ref for OverlayScrollbar
 const gridScrollRef = ref<HTMLElement | null>(null)
@@ -354,7 +357,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
             <input
               type="range" min="1" max="4" step="1"
               v-model.number="gridSlider"
-              @change="if (persist.state?.settings) persist.state.settings.clipsPerRow = (gridSlider + 1) as 2|3|4|5"
+              @change="saveGridSlider"
               @mousedown="isDragging = true" @touchstart="isDragging = true"
               @mouseup="isDragging = false" @touchend="isDragging = false"
               @mouseleave="isDragging = false"
