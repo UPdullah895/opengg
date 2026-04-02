@@ -56,6 +56,51 @@ pub async fn set_mute(channel: String, muted: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Unmute any WebKit video/webaudio sink-inputs belonging to this app.
+/// Called whenever clip playback starts to counteract module-stream-restore
+/// auto-muting the media.role="video" stream.
+#[command]
+pub async fn unmute_media_streams() -> Result<(), String> {
+    let output = Command::new("pactl")
+        .args(["list", "sink-inputs"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    let mut current_id: Option<u32> = None;
+    let mut is_opengg = false;
+    let mut is_media  = false;
+
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("Sink Input #") {
+            if let Some(id) = current_id {
+                if is_opengg && is_media {
+                    let _ = Command::new("pactl")
+                        .args(["set-sink-input-mute", &id.to_string(), "0"])
+                        .output();
+                }
+            }
+            current_id = rest.parse().ok();
+            is_opengg  = false;
+            is_media   = false;
+        } else if t.contains(r#"application.name = "opengg""#) {
+            is_opengg = true;
+        } else if t.contains(r#"media.role = "video""#) || t.contains(r#"media.role = "webaudio""#) {
+            is_media = true;
+        }
+    }
+    // handle last block
+    if let Some(id) = current_id {
+        if is_opengg && is_media {
+            let _ = Command::new("pactl")
+                .args(["set-sink-input-mute", &id.to_string(), "0"])
+                .output();
+        }
+    }
+    Ok(())
+}
+
 /// Set volume for an individual app (sink-input) by its pactl index
 #[command]
 pub async fn set_app_volume(app_index: u32, volume: u32) -> Result<(), String> {

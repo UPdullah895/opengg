@@ -329,20 +329,12 @@ function fmtBytes(b: number) {
   if (b >= 1e6) return (b / 1e6).toFixed(1) + ' MB'
   return (b / 1e3).toFixed(0) + ' KB'
 }
-const usedPct = computed(() => {
-  if (!storageInfo.value?.total_bytes) return 0
-  return Math.min(100, storageInfo.value.used_bytes / storageInfo.value.total_bytes * 100)
-})
-
 // ─── Misc ───
 async function openExternal(url: string) {
   try { await openUrl(url) } catch { window.open(url, '_blank') }
 }
 
 // SelectField option helpers
-const resOptions   = [{ value:'1080p', label:'1080p' }, { value:'720p', label:'720p' }, { value:'480p', label:'480p' }]
-const fpsOptions   = [{ value: 60, label:'60 FPS' }, { value: 30, label:'30 FPS' }, { value: 24, label:'24 FPS' }]
-const replayOptions = [{ value:15,label:'15 s' }, { value:30,label:'30 s' }, { value:60,label:'60 s' }, { value:120,label:'120 s' }]
 const clickOptions = [{ value:'preview', label: 'Quick Preview' }, { value:'editor', label: 'Advanced Editor' }]
 
 // ─── Extensions: plugin scanning ───

@@ -468,6 +468,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                   <img v-if="clip.thumbnail && mediaPortNum" class="list-thumb" :src="mediaUrl(clip.thumbnail, mediaPortNum)" loading="lazy" @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
                   <div v-else class="list-thumb list-thumb-empty">▶</div>
                   <span v-if="clip.duration" class="list-badge">{{ fmtDur(clip.duration) }}</span>
+                  <button class="lt-heart" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
+                    <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                  </button>
+                  <div class="lt-sel-ov" :class="{ vis: replay.isSelected(clip.id) || replay.selectMode }" @click.stop="replay.toggleSelect(clip.id)">
+                    <div class="lt-sel-box" :class="{ checked: replay.isSelected(clip.id) }">✓</div>
+                  </div>
                 </div>
                 <div class="list-info">
                   <span class="list-name">{{ clip.custom_name || clip.filename.replace(/\.[^.]+$/, '') }}</span>
@@ -482,9 +488,6 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                   <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
                   <button class="list-act" @click.stop="openAdvanced(clip)">Edit</button>
                   <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
-                  <button class="list-fav" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
-                    <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-                  </button>
                   <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
                     <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
                   </button>
@@ -582,6 +585,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                      @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
                 <div v-else class="list-thumb list-thumb-empty">▶</div>
                 <span v-if="clip.duration" class="list-badge">{{ fmtDur(clip.duration) }}</span>
+                <button class="lt-heart" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
+                  <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                </button>
+                <div class="lt-sel-ov" :class="{ vis: replay.isSelected(clip.id) || replay.selectMode }" @click.stop="replay.toggleSelect(clip.id)">
+                  <div class="lt-sel-box" :class="{ checked: replay.isSelected(clip.id) }">✓</div>
+                </div>
               </div>
               <div class="list-info">
                 <span class="list-name">{{ clip.custom_name || clip.filename.replace(/\.[^.]+$/, '') }}</span>
@@ -596,9 +605,6 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
                 <button class="list-act" @click.stop="openAdvanced(clip)">Edit</button>
                 <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
-                <button class="list-fav" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
-                  <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-                </button>
                 <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
                   <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
                 </button>
@@ -920,9 +926,36 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .list-fav:hover { color:var(--text); }
 .list-fav.on { color:#E94560; }
 .list-fav svg { width:15px; height:15px; }
-.list-kebab { flex-shrink:0; width:28px; height:28px; border-radius:5px; border:none; background:transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
-.list-kebab:hover { background:var(--bg-hover); color:var(--text); }
-.list-kebab svg { width:14px; height:14px; }
+.list-kebab { flex-shrink:0; width:30px; height:30px; border-radius:6px; border:1px solid var(--border); background:var(--bg-deep); color:var(--text-sec); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
+.list-kebab:hover { background:var(--bg-hover); color:var(--text); border-color:var(--accent); }
+.list-kebab svg { width:15px; height:15px; }
+
+/* Thumbnail overlays for list view — heart (top-right) and select checkbox (top-left) */
+.lt-heart {
+  position: absolute; top: 5px; right: 5px;
+  width: 26px; height: 26px; border-radius: 50%;
+  border: none; background: rgba(0,0,0,.55);
+  color: var(--text-muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: all .15s;
+}
+.list-row:hover .lt-heart { opacity: 1; }
+.lt-heart.on { opacity: 1; color: #E94560; }
+.lt-heart:hover { background: rgba(0,0,0,.8); transform: scale(1.15); }
+.lt-heart svg { width: 13px; height: 13px; }
+
+.lt-sel-ov {
+  position: absolute; top: 5px; left: 5px;
+  opacity: 0; transition: opacity .15s;
+}
+.lt-sel-ov.vis, .list-row:hover .lt-sel-ov { opacity: 1; }
+.lt-sel-box {
+  width: 20px; height: 20px; border-radius: 5px;
+  border: 2px solid rgba(255,255,255,.55); background: rgba(0,0,0,.4);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: transparent; cursor: pointer;
+}
+.lt-sel-box.checked { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* List view context menu */
 .list-ctx { position:fixed; z-index:10000; min-width:200px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:4px; box-shadow:0 8px 32px rgba(0,0,0,.5); }

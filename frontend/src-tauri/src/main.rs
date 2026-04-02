@@ -82,7 +82,7 @@ fn main() {
             commands::get_channels, commands::set_volume, commands::set_mute,
             commands::get_apps, commands::route_app,
             commands::get_audio_devices, commands::set_channel_device,
-            commands::set_app_volume,
+            commands::set_app_volume, commands::unmute_media_streams,
             commands::start_vu_stream, commands::stop_vu_stream,
             // Replay
             commands::get_recorder_status, commands::start_replay,
