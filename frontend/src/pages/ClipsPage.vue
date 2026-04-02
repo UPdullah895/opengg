@@ -12,6 +12,7 @@ import AdvancedEditor from '../components/AdvancedEditor.vue'
 import SelectField from '../components/SelectField.vue'
 import GameFilterDropdown from '../components/GameFilterDropdown.vue'
 import { mediaUrl } from '../utils/assets'
+import { fmtDur, fmtSize, fmtRes, fmtDate } from '../utils/format'
 import type { Ref } from 'vue'
 
 const replay = useReplayStore()
@@ -132,6 +133,15 @@ const listStyles = computed(() => {
   }
   return map[gridSlider.value] ?? map[3]
 })
+
+// ── Scroll-suppression: disable hover transitions while scrolling ──
+const isScrolling = ref(false)
+let scrollTimer: ReturnType<typeof setTimeout> | null = null
+function onScroll() {
+  isScrolling.value = true
+  if (scrollTimer) clearTimeout(scrollTimer)
+  scrollTimer = setTimeout(() => { isScrolling.value = false }, 150)
+}
 
 // ★ Epic 2: Slider drag tooltip
 const isDragging = ref(false)
@@ -401,7 +411,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 
       <!-- ═══ Date-grouped view ═══ -->
       <div v-if="dateGrouped" key="grouped" class="scroll-host">
-        <div class="native-grid-host grouped-host" ref="groupedScrollRef">
+        <div class="native-grid-host grouped-host" ref="groupedScrollRef" :class="{ scrolling: isScrolling }" @scroll.passive="onScroll">
           <div class="date-groups">
           <div v-for="group in groupedClips" :key="group.date" class="date-group">
             <div class="date-header">
@@ -438,11 +448,24 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 :class="{ selected: replay.isSelected(clip.id) }"
                 @click="onCardClick(clip)"
               >
-                <img v-if="clip.thumbnail && mediaPortNum" class="list-thumb" :src="mediaUrl(clip.thumbnail, mediaPortNum)" loading="lazy" @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
-                <div v-else class="list-thumb list-thumb-empty">▶</div>
+                <div class="list-thumb-wrap">
+                  <img v-if="clip.thumbnail && mediaPortNum" class="list-thumb" :src="mediaUrl(clip.thumbnail, mediaPortNum)" loading="lazy" @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
+                  <div v-else class="list-thumb list-thumb-empty">▶</div>
+                  <span v-if="clip.duration" class="list-badge">{{ fmtDur(clip.duration) }}</span>
+                </div>
                 <div class="list-info">
                   <span class="list-name">{{ clip.custom_name || clip.filename.replace(/\.[^.]+$/, '') }}</span>
-                  <span class="list-meta">{{ clip.game || 'Unknown' }} · {{ clip.duration ? Math.floor(clip.duration/60)+'m '+Math.round(clip.duration%60)+'s' : '' }}</span>
+                  <span class="list-meta">
+                    <span v-if="clip.game && clip.game !== 'Unknown'">{{ clip.game }}</span>
+                    <span v-if="clip.duration" class="lm-sep">·</span>
+                    <span v-if="clip.duration">{{ fmtDur(clip.duration) }}</span>
+                    <span v-if="clip.filesize" class="lm-sep">·</span>
+                    <span v-if="clip.filesize">{{ fmtSize(clip.filesize) }}</span>
+                    <span v-if="clip.width" class="lm-sep">·</span>
+                    <span v-if="clip.width">{{ fmtRes(clip.width, clip.height) }}</span>
+                    <span v-if="clip.created" class="lm-sep">·</span>
+                    <span v-if="clip.created">{{ fmtDate(clip.created) }}</span>
+                  </span>
                 </div>
                 <div class="list-actions">
                   <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
@@ -463,7 +486,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 
       <!-- ═══ Flat grid view — native CSS Grid ═══ -->
       <div v-else-if="viewMode === 'grid'" key="grid" class="scroll-host">
-        <div class="native-grid-host" ref="gridScrollRef">
+        <div class="native-grid-host" ref="gridScrollRef" :class="{ scrolling: isScrolling }" @scroll.passive="onScroll">
           <!-- Scan banner -->
           <div v-if="scanActive" class="scan-banner">
             <div class="scan-spinner"></div>
@@ -516,6 +539,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         <div
           class="native-grid-host"
           ref="listScrollRef"
+          :class="{ scrolling: isScrolling }"
+          @scroll.passive="onScroll"
           :style="{
             '--list-thumb-w': listStyles.thumbW,
             '--list-thumb-h': listStyles.thumbH,
@@ -531,15 +556,28 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
               :class="{ selected: replay.isSelected(clip.id) }"
               @click="onCardClick(clip)"
             >
-              <img v-if="clip.thumbnail && mediaPortNum"
-                   class="list-thumb"
-                   :src="mediaUrl(clip.thumbnail, mediaPortNum)"
-                   loading="lazy"
-                   @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
-              <div v-else class="list-thumb list-thumb-empty">▶</div>
+              <div class="list-thumb-wrap">
+                <img v-if="clip.thumbnail && mediaPortNum"
+                     class="list-thumb"
+                     :src="mediaUrl(clip.thumbnail, mediaPortNum)"
+                     loading="lazy"
+                     @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
+                <div v-else class="list-thumb list-thumb-empty">▶</div>
+                <span v-if="clip.duration" class="list-badge">{{ fmtDur(clip.duration) }}</span>
+              </div>
               <div class="list-info">
                 <span class="list-name">{{ clip.custom_name || clip.filename.replace(/\.[^.]+$/, '') }}</span>
-                <span class="list-meta">{{ clip.game || 'Unknown' }} · {{ clip.duration ? Math.floor(clip.duration/60)+'m '+Math.round(clip.duration%60)+'s' : '' }} · {{ clip.created }}</span>
+                <span class="list-meta">
+                  <span v-if="clip.game && clip.game !== 'Unknown'">{{ clip.game }}</span>
+                  <span v-if="clip.duration" class="lm-sep">·</span>
+                  <span v-if="clip.duration">{{ fmtDur(clip.duration) }}</span>
+                  <span v-if="clip.filesize" class="lm-sep">·</span>
+                  <span v-if="clip.filesize">{{ fmtSize(clip.filesize) }}</span>
+                  <span v-if="clip.width" class="lm-sep">·</span>
+                  <span v-if="clip.width">{{ fmtRes(clip.width, clip.height) }}</span>
+                  <span v-if="clip.created" class="lm-sep">·</span>
+                  <span v-if="clip.created">{{ fmtDate(clip.created) }}</span>
+                </span>
               </div>
               <div class="list-actions">
                 <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
@@ -816,6 +854,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   padding: var(--list-pad, 8px) calc(var(--list-pad, 8px) + 4px);
   background:var(--bg-card); border:1px solid var(--border); border-radius:8px;
   cursor:pointer; transition: background .15s, padding .25s ease;
+  contain: layout style; content-visibility: auto; contain-intrinsic-size: auto 60px;
 }
 .list-row:hover { background:var(--bg-hover); }
 .list-row.selected { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
@@ -838,7 +877,22 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   transition: font-size .25s ease;
 }
-.list-meta { font-size:11px; color:var(--text-muted); }
+.list-thumb-wrap {
+  position: relative; flex-shrink: 0;
+  width: var(--list-thumb-w, 80px); height: var(--list-thumb-h, 45px);
+  transition: width .25s ease, height .25s ease;
+}
+.list-thumb-wrap .list-thumb { width: 100%; height: 100%; transition: none; }
+.list-thumb-wrap .list-thumb-empty { width: 100%; height: 100%; transition: none; }
+.list-badge {
+  position: absolute; bottom: 3px; right: 3px;
+  background: rgba(0,0,0,.8); color: #fff;
+  font-size: 10px; font-weight: 600;
+  padding: 1px 5px; border-radius: 3px;
+  pointer-events: none; line-height: 1.4;
+}
+.list-meta { font-size:11px; color:var(--text-muted); display:flex; align-items:center; flex-wrap:wrap; gap:3px; }
+.lm-sep { opacity: 0.4; }
 .list-actions { display:flex; gap:6px; flex-shrink:0; }
 .list-act { padding:5px 10px; border:1px solid var(--border); border-radius:5px; background:var(--bg-surface); color:var(--text-sec); font-size:11px; cursor:pointer; }
 .list-act:hover { background:var(--bg-hover); }
@@ -949,4 +1003,15 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .ctx-item-d { color:var(--danger); }
 .ctx-item-d:hover { background:rgba(220,38,38,.1); }
 .ctx-sep { height:1px; background:var(--border); margin:4px 0; }
+</style>
+
+<!-- Unscoped: suppress hover transitions on cards while scrolling -->
+<style>
+.native-grid-host.scrolling .card {
+  transition: none !important;
+}
+.native-grid-host.scrolling .card:hover {
+  transform: none !important;
+  box-shadow: none !important;
+}
 </style>
