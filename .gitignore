@@ -27,4 +27,6 @@ CLAUDE.md
 *.AppImage
 *.deb
 *.rpm
+
+# Generated from opengg.desktop.template by dev.sh setup — path is machine-specific
 opengg.desktop

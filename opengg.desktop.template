@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenGG
+Comment=Linux gaming hub — audio mixing, instant replay, device management
+Exec=OPENGG_DIR/opengg-launch.sh
+Icon=OPENGG_DIR/frontend/src-tauri/icons/256x256.png
+Terminal=false
+Categories=Game;Utility;
+StartupNotify=true

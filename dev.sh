@@ -110,6 +110,13 @@ do_setup() {
     mkdir -p "$HOME/Videos/OpenGG"
     logs "Data directories created"
 
+    # Generate opengg.desktop from template
+    if [ -f "$ROOT_DIR/opengg.desktop.template" ]; then
+        sed "s|OPENGG_DIR|$ROOT_DIR|g" "$ROOT_DIR/opengg.desktop.template" > "$ROOT_DIR/opengg.desktop"
+        chmod +x "$ROOT_DIR/opengg-launch.sh"
+        logs "opengg.desktop generated"
+    fi
+
     echo ""
     logs "${BOLD}Setup complete!${RESET} Run ${CYAN}./dev.sh${RESET} to start developing."
 }
