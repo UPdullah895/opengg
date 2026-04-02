@@ -1471,7 +1471,27 @@ pub async fn export_with_progress(
 
 // ══════════════════════════════════════════════════════════════
 //  ★ EPIC 3: Generate audio waveform peaks via ffmpeg
-#[command] pub async fn open_file_location(filepath: String) -> Result<(), String> { let parent = Path::new(&filepath).parent().unwrap_or(Path::new("/")); open::that(parent).map_err(|e| format!("{e}"))?; Ok(()) }
+#[command] pub async fn open_file_location(filepath: String) -> Result<(), String> {
+    // Try org.freedesktop.FileManager1.ShowItems — highlights the file in Nautilus/Dolphin/Nemo
+    let file_uri = format!("file://{}", filepath);
+    let ok = Command::new("dbus-send")
+        .args([
+            "--session", "--print-reply",
+            "--dest=org.freedesktop.FileManager1",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+            &format!("array:string:{}", file_uri),
+            "string:",
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if ok { return Ok(()); }
+    // Fallback: open the parent folder without file selection
+    let parent = Path::new(&filepath).parent().unwrap_or(Path::new("/"));
+    open::that(parent).map_err(|e| format!("{e}"))?;
+    Ok(())
+}
 
 // ═══ Recording ═══
 #[command] pub async fn start_screen_recording(save_dir: String, fps: u32, quality: String, replay_seconds: u32) -> Result<String, String> { let dir=if save_dir.is_empty(){let d=default_clips_dir(); let _=std::fs::create_dir_all(&d); d}else{let d=PathBuf::from(shexp(&save_dir)); if !d.exists(){std::fs::create_dir_all(&d).map_err(|e| format!("{e}"))?;} d}; let ts=chrono_now(); let outfile=dir.join(format!("opengg_{ts}.mp4")); let target=detect_target(); let qp=match quality.as_str(){"Low"=>"medium","Medium"=>"high","High"=>"very_high","Ultra"=>"ultra",_=>"high"}; let mut args=vec!["-w".into(),target,"-f".into(),fps.to_string(),"-q".into(),qp.into(),"-a".into(),"default_output".into(),"-o".into(),outfile.to_string_lossy().to_string()]; if replay_seconds>0{args.push("-r".into());args.push(replay_seconds.to_string());} Command::new("gpu-screen-recorder").args(&args).spawn().map_err(|e| if e.kind()==std::io::ErrorKind::NotFound{"gpu-screen-recorder not found".into()}else{format!("{e}")})?; Ok(outfile.to_string_lossy().to_string()) }
