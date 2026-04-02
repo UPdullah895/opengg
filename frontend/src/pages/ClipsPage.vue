@@ -126,10 +126,10 @@ const scanCount = computed(() => replay.scanCount)
 // ★ Epic 3: List view scales with the same slider — each size maps to thumb/font/padding values
 const listStyles = computed(() => {
   const map: Record<number, { thumbW: string; thumbH: string; fontSize: string; padding: string }> = {
-    1: { thumbW: '192px', thumbH: '108px', fontSize: '18px', padding: '16px' },
-    2: { thumbW: '128px', thumbH: '72px',  fontSize: '15px', padding: '12px' },
-    3: { thumbW: '80px',  thumbH: '45px',  fontSize: '13px', padding: '8px'  },
-    4: { thumbW: '56px',  thumbH: '32px',  fontSize: '11px', padding: '6px'  },
+    1: { thumbW: '320px', thumbH: '180px', fontSize: '18px', padding: '16px' },
+    2: { thumbW: '240px', thumbH: '135px', fontSize: '15px', padding: '12px' },
+    3: { thumbW: '160px', thumbH: '90px',  fontSize: '13px', padding: '8px'  },
+    4: { thumbW: '96px',  thumbH: '54px',  fontSize: '11px', padding: '6px'  },
   }
   return map[gridSlider.value] ?? map[3]
 })
@@ -363,7 +363,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
       <div class="ctrl-right">
         <div class="size-slider-wrap">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="size-ic"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-          <div class="size-range-wrap">
+          <div class="size-range-wrap" @wheel.prevent="e => { gridSlider = Math.max(1, Math.min(4, gridSlider + (e.deltaY > 0 ? 1 : -1))); saveGridSlider() }">
             <input
               type="range" min="1" max="4" step="1"
               v-model.number="gridSlider"
@@ -840,28 +840,25 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .clip-list { display:flex; flex-direction:column; gap:6px; }
 
 .list-row {
-  display:flex; align-items:center; gap:12px;
-  padding: var(--list-pad, 8px) calc(var(--list-pad, 8px) + 4px);
+  display:flex; align-items:stretch; gap:12px;
+  padding: 0 calc(var(--list-pad, 8px) + 4px) 0 0;
   background:var(--bg-card); border:1px solid var(--border); border-radius:8px;
-  cursor:pointer; transition: background .15s, padding .25s ease;
+  cursor:pointer; overflow:hidden;
+  transition: background .15s, padding .25s ease;
   contain: layout style; content-visibility: auto; contain-intrinsic-size: auto 60px;
 }
 .list-row:hover { background:var(--bg-hover); }
 .list-row.selected { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
 
 .list-thumb {
-  width: var(--list-thumb-w, 80px); height: var(--list-thumb-h, 45px);
-  object-fit:cover; border-radius:4px; flex-shrink:0; background:var(--bg-deep);
-  transition: width .25s ease, height .25s ease;
+  object-fit:cover; background:var(--bg-deep);
 }
 .list-thumb-empty {
-  width: var(--list-thumb-w, 80px); height: var(--list-thumb-h, 45px);
-  background:var(--bg-deep); border-radius:4px; flex-shrink:0;
+  background:var(--bg-deep); flex-shrink:0;
   display:flex; align-items:center; justify-content:center;
   font-size:18px; color:var(--text-muted);
-  transition: width .25s ease, height .25s ease;
 }
-.list-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+.list-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; padding: var(--list-pad, 8px) 0; justify-content: center; }
 .list-name {
   font-size: var(--list-font, 13px); font-weight:600;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -869,11 +866,11 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 }
 .list-thumb-wrap {
   position: relative; flex-shrink: 0;
-  width: var(--list-thumb-w, 80px); height: var(--list-thumb-h, 45px);
-  transition: width .25s ease, height .25s ease;
+  width: var(--list-thumb-w, 160px); align-self: stretch;
+  transition: width .25s ease;
 }
-.list-thumb-wrap .list-thumb { width: 100%; height: 100%; transition: none; }
-.list-thumb-wrap .list-thumb-empty { width: 100%; height: 100%; transition: none; }
+.list-thumb-wrap .list-thumb { width: 100%; height: 100%; object-fit: cover; display: block; transition: none; border-radius: 0; }
+.list-thumb-wrap .list-thumb-empty { width: 100%; height: 100%; transition: none; border-radius: 0; }
 .list-badge {
   position: absolute; bottom: 3px; right: 3px;
   background: rgba(0,0,0,.8); color: #fff;
@@ -885,8 +882,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .lm-game { color:var(--text-sec); font-weight:500; }
 .lm-pill { background:var(--bg-deep); padding:2px 6px; border-radius:3px; }
 .lm-date { opacity:.75; }
-.list-actions { display:flex; gap:6px; flex-shrink:0; }
-.list-act { padding: calc(var(--list-pad, 8px) * 0.5) calc(var(--list-pad, 8px) * 1.1); border:1px solid var(--border); border-radius:5px; background:var(--bg-surface); color:var(--text-sec); font-size: var(--list-font, 13px); cursor:pointer; transition: padding .25s ease, font-size .25s ease; }
+.list-actions { display:flex; gap:6px; flex-shrink:0; align-items:center; padding: var(--list-pad, 8px) 0; }
+.list-act { padding: 4px 10px; border:1px solid var(--border); border-radius:5px; background:var(--bg-surface); color:var(--text-sec); font-size:12px; cursor:pointer; white-space:nowrap; }
 .list-act:hover { background:var(--bg-hover); }
 .list-act-d { color:var(--danger); }
 .list-act-d:hover { background:rgba(220,38,38,.1); }
