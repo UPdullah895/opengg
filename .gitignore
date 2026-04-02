@@ -18,3 +18,13 @@ Thumbs.db
 # OpenGG runtime
 *.db
 .venv/
+
+# AI / Claude Code (never push these)
+CLAUDE.md
+.claude/
+
+# Build artifacts
+*.AppImage
+*.deb
+*.rpm
+opengg.desktop
