@@ -199,6 +199,21 @@ async function deleteClip(clip: Clip) {
   try { await invoke('delete_clip', { filepath: clip.filepath }); replay.removeClip(clip.filepath); showToast('Clip deleted') } catch (e) { showToast(`Error: ${e}`) }
 }
 
+function openListMenu(clip: Clip, e: MouseEvent) {
+  e.preventDefault(); e.stopPropagation()
+  const menuW = 200, menuH = 270
+  const x = e.clientX + menuW > window.innerWidth ? e.clientX - menuW : e.clientX
+  const y = e.clientY + menuH > window.innerHeight ? e.clientY - menuH : e.clientY
+  replay.activeMenuClipId = clip.id
+  replay.activeMenuPos = { x, y }
+}
+async function toggleListFav(e: Event, clip: Clip) {
+  e.stopPropagation()
+  const v = !clip.favorite
+  replay.updateClipMeta(clip.filepath, { favorite: v })
+  try { await invoke('set_clip_meta', { update: { filepath: clip.filepath, custom_name: clip.custom_name, favorite: v } }) } catch {}
+}
+
 async function deleteSelected() {
   const ids = Array.from(replay.selectedIds)
   const clips = replay.clips.filter(c => ids.includes(c.id))
@@ -447,6 +462,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 class="list-row"
                 :class="{ selected: replay.isSelected(clip.id) }"
                 @click="onCardClick(clip)"
+                @contextmenu.prevent="openListMenu(clip, $event)"
               >
                 <div class="list-thumb-wrap">
                   <img v-if="clip.thumbnail && mediaPortNum" class="list-thumb" :src="mediaUrl(clip.thumbnail, mediaPortNum)" loading="lazy" @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
@@ -466,6 +482,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                   <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
                   <button class="list-act" @click.stop="openAdvanced(clip)">Edit</button>
                   <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
+                  <button class="list-fav" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
+                    <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                  </button>
+                  <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+                  </button>
                 </div>
               </div>
             </div>
@@ -550,6 +572,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
               class="list-row"
               :class="{ selected: replay.isSelected(clip.id) }"
               @click="onCardClick(clip)"
+              @contextmenu.prevent="openListMenu(clip, $event)"
             >
               <div class="list-thumb-wrap">
                 <img v-if="clip.thumbnail && mediaPortNum"
@@ -573,6 +596,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
                 <button class="list-act" @click.stop="openAdvanced(clip)">Edit</button>
                 <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
+                <button class="list-fav" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
+                  <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                </button>
+                <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+                </button>
               </div>
             </div>
           </div>
@@ -887,7 +916,11 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .list-act:hover { background:var(--bg-hover); }
 .list-act-d { color:var(--danger); }
 .list-act-d:hover { background:rgba(220,38,38,.1); }
-.list-kebab { flex-shrink:0; width:26px; height:26px; border-radius:5px; border:none; background:transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
+.list-fav { flex-shrink:0; width:28px; height:28px; border-radius:50%; border:none; background:transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:color .15s; }
+.list-fav:hover { color:var(--text); }
+.list-fav.on { color:#E94560; }
+.list-fav svg { width:15px; height:15px; }
+.list-kebab { flex-shrink:0; width:28px; height:28px; border-radius:5px; border:none; background:transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
 .list-kebab:hover { background:var(--bg-hover); color:var(--text); }
 .list-kebab svg { width:14px; height:14px; }
 
