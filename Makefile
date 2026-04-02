@@ -15,7 +15,7 @@ ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
 FRONTEND := $(ROOT)/frontend
 
-.PHONY: dev daemon ui build setup clean install lint check help
+.PHONY: dev daemon ui build setup clean install install-desktop lint check help
 
 # ── Default ──────────────────────────────────────────────────────
 help:
@@ -68,6 +68,15 @@ install: daemon-release
 	cp $(DAEMON)/target/release/openggd $(HOME)/.local/bin/
 	@echo "✓ Installed openggd to ~/.local/bin/"
 	@echo "  Run: sudo $(DAEMON)/scripts/setup.sh"
+
+# ── Desktop launcher ─────────────────────────────────────────────
+install-desktop:
+	@mkdir -p $(HOME)/.local/share/applications
+	@sed "s|Exec=.*|Exec=$(ROOT)/opengg-launch.sh|" $(ROOT)/opengg.desktop \
+		> $(HOME)/.local/share/applications/opengg.desktop
+	@chmod +x $(ROOT)/opengg-launch.sh
+	@update-desktop-database $(HOME)/.local/share/applications 2>/dev/null || true
+	@echo "✓ Installed opengg.desktop to ~/.local/share/applications/"
 
 # ── Code Quality ─────────────────────────────────────────────────
 check:

@@ -31,15 +31,6 @@ const audioReady    = ref(false)
 const checkingAudio = ref(true)
 const setupLoading  = ref(false)
 
-async function createVirtualAudio() {
-  setupLoading.value = true
-  try {
-    await invoke('create_virtual_audio')
-    audioReady.value = true
-    audio.startPolling(2000)
-  } catch (e) { console.error('create_virtual_audio:', e) }
-  finally { setupLoading.value = false }
-}
 
 function triggerVirtualAudioSetup() {
   window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 1 } }))

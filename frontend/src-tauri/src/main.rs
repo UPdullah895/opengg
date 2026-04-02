@@ -82,13 +82,13 @@ fn main() {
             commands::get_channels, commands::set_volume, commands::set_mute,
             commands::get_apps, commands::route_app,
             commands::get_audio_devices, commands::set_channel_device,
-            commands::set_app_volume,
+            commands::set_app_volume, commands::unmute_media_streams,
             commands::start_vu_stream, commands::stop_vu_stream,
             // Replay
             commands::get_recorder_status, commands::start_replay,
             commands::stop_recorder, commands::save_replay,
             // Clips
-            commands::get_clips, commands::generate_thumbnail,
+            commands::get_clips, commands::generate_thumbnail, commands::generate_thumbnails_batch,
             commands::set_clip_meta, commands::get_clip_meta,
             commands::take_screenshot,
             commands::clear_thumbnail_cache, commands::delete_clip,

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { resumeAudioContext } from '../utils/audio'
+import { invoke } from '@tauri-apps/api/core'
 
 const props = defineProps<{
   src: string
@@ -46,7 +47,7 @@ function onMeta() {
   duration.value = videoRef.value.duration
   emit('loadedmetadata', videoRef.value.duration)
 }
-function onPlay()       { playing.value = true;  emit('play') }
+function onPlay()       { playing.value = true;  emit('play'); invoke('unmute_media_streams').catch(() => {}) }
 function onPause()      { playing.value = false; emit('pause') }
 function onEnded()      { playing.value = false; emit('ended') }
 function onTimeUpdate() { emit('timeupdate', videoRef.value?.currentTime ?? 0) }

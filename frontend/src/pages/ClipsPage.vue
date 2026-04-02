@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, inject } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, inject, watch } from 'vue'
+import { refDebounced } from '@vueuse/core'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useReplayStore, type Clip } from '../stores/replay'
 import { usePersistenceStore } from '../stores/persistence'
 import ClipCard from '../components/ClipCard.vue'
+import OverlayScrollbar from '../components/OverlayScrollbar.vue'
 import ClipEditor from '../components/ClipEditor.vue'
 import AdvancedEditor from '../components/AdvancedEditor.vue'
 import SelectField from '../components/SelectField.vue'
 import GameFilterDropdown from '../components/GameFilterDropdown.vue'
 import { mediaUrl } from '../utils/assets'
+import { fmtDur, fmtSize, fmtRes, fmtDate } from '../utils/format'
 import type { Ref } from 'vue'
 
 const replay = useReplayStore()
@@ -17,21 +20,19 @@ const persist = usePersistenceStore()
 const _mediaPortRef = inject<Ref<number>>('mediaPort', ref(0))
 const mediaPortNum  = computed(() => _mediaPortRef.value)
 
-// ── CSS-filter arch: render full sorted list, toggle visibility via isMatch() ──
-const sortedSkeletons = computed(() => replay.sortedClips.filter(c => c.isSkeleton))
-const sortedRealClips = computed(() => replay.sortedClips.filter(c => !c.isSkeleton))
+// ── Phase 4b: Debounce the raw search input by 150ms ──
+const searchRaw = ref(replay.search)
+const searchDebounced = refDebounced(searchRaw, 150)
 
-function isMatch(clip: Clip): boolean {
-  if (replay.search) {
-    const q = replay.search.toLowerCase()
-    if (!(clip.custom_name || clip.filename).toLowerCase().includes(q) && !clip.game.toLowerCase().includes(q)) return false
-  }
-  if (replay.filterFav && !clip.favorite) return false
-  if (replay.selectedGames.length > 0 && !replay.selectedGames.includes(clip.game)) return false
-  return true
-}
+// Keep store in sync with debounced value
+watch(searchDebounced, (v) => { replay.search = v })
+watch(() => replay.search, (v) => { if (v !== searchRaw.value) searchRaw.value = v })
 
-const cssVisibleCount = computed(() => sortedRealClips.value.filter(isMatch).length)
+// ── Phase 1d/4a: Use filteredClips directly — no more v-show isMatch() ──
+const sortedSkeletons = computed(() => replay.filteredClips.filter((c: Clip) => c.isSkeleton))
+const filteredRealClips = computed(() => replay.filteredClips.filter((c: Clip) => !c.isSkeleton))
+// Phase 4a: cssVisibleCount derived from filteredClips (no legacy isMatch needed)
+const cssVisibleCount = computed(() => filteredRealClips.value.length)
 
 // ── Editor / modal state ──
 const editorClip   = ref<Clip | null>(null)
@@ -52,8 +53,7 @@ interface DateGroup { date: string; label: string; clips: Clip[] }
 const groupedClips = computed<DateGroup[]>(() => {
   if (!dateGrouped.value) return []
   const map = new Map<string, Clip[]>()
-  for (const clip of sortedRealClips.value) {
-    if (!isMatch(clip)) continue
+  for (const clip of filteredRealClips.value) {
     const dateKey = clip.created ? clip.created.split(' ')[0] : 'Unknown'
     if (!map.has(dateKey)) map.set(dateKey, [])
     map.get(dateKey)!.push(clip)
@@ -77,24 +77,71 @@ const groupedClips = computed<DateGroup[]>(() => {
   return groups
 })
 
+// ── Group-by-date selection helpers ──
+function groupCheckState(group: DateGroup): 'none' | 'some' | 'all' {
+  const total = group.clips.length
+  if (total === 0) return 'none'
+  const sel = group.clips.filter(c => replay.selectedIds.has(c.id)).length
+  if (sel === 0) return 'none'
+  return sel === total ? 'all' : 'some'
+}
+function toggleGroupSelect(group: DateGroup) {
+  const state = groupCheckState(group)
+  if (state === 'all') {
+    for (const c of group.clips) replay.selectedIds.delete(c.id)
+  } else {
+    for (const c of group.clips) replay.selectedIds.add(c.id)
+  }
+  replay.selectMode = replay.selectedIds.size > 0
+}
+
 // ★ Epic 2: Range slider (1–4) maps to column count (2–5)
-// slider 1→2 cols, 2→3 cols, 3→4 cols, 4→5 cols
-const gridSlider = computed<number>({
-  get: () => Math.max(1, Math.min(4, (persist.state?.settings?.clipsPerRow || 4) - 1)),
-  set: (v) => { if (persist.state?.settings) persist.state.settings.clipsPerRow = (v + 1) as 2 | 3 | 4 | 5 },
+// Local ref for instant visual feedback during drag; persistence only written on release (@change)
+const gridSlider = ref(Math.max(1, Math.min(4, (persist.state?.settings?.clipsPerRow || 4) - 1)))
+watch(() => persist.state?.settings?.clipsPerRow, (v) => {
+  if (v != null) gridSlider.value = Math.max(1, Math.min(4, v - 1))
 })
-const gridCols = computed(() => (persist.state?.settings?.clipsPerRow || 4))
+const gridCols = computed(() => gridSlider.value + 1)
+function saveGridSlider() {
+  if (persist.state?.settings) persist.state.settings.clipsPerRow = (gridSlider.value + 1) as 2 | 3 | 4 | 5
+}
+
+// Native grid host scroll ref for OverlayScrollbar
+const gridScrollRef = ref<HTMLElement | null>(null)
+const listScrollRef = ref<HTMLElement | null>(null)
+const groupedScrollRef = ref<HTMLElement | null>(null)
+
+// Font scaling based on column count
+const fontScale = computed(() => {
+  const cols = gridCols.value
+  const nameSize = cols <= 2 ? '17px' : cols === 3 ? '15px' : cols >= 5 ? '12px' : '14px'
+  const metaSize = cols <= 2 ? '13px' : cols === 3 ? '12px' : cols >= 5 ? '10px' : '11px'
+  return { nameSize, metaSize }
+})
+
+// Scan banner state from store
+const scanActive = computed(() => replay.scanActive)
+const scanCount = computed(() => replay.scanCount)
 
 // ★ Epic 3: List view scales with the same slider — each size maps to thumb/font/padding values
 const listStyles = computed(() => {
   const map: Record<number, { thumbW: string; thumbH: string; fontSize: string; padding: string }> = {
-    1: { thumbW: '192px', thumbH: '108px', fontSize: '18px', padding: '16px' },
-    2: { thumbW: '128px', thumbH: '72px',  fontSize: '15px', padding: '12px' },
-    3: { thumbW: '80px',  thumbH: '45px',  fontSize: '13px', padding: '8px'  },
-    4: { thumbW: '56px',  thumbH: '32px',  fontSize: '11px', padding: '6px'  },
+    1: { thumbW: '320px', thumbH: '180px', fontSize: '18px', padding: '16px' },
+    2: { thumbW: '240px', thumbH: '135px', fontSize: '15px', padding: '12px' },
+    3: { thumbW: '160px', thumbH: '90px',  fontSize: '13px', padding: '8px'  },
+    4: { thumbW: '96px',  thumbH: '54px',  fontSize: '11px', padding: '6px'  },
   }
   return map[gridSlider.value] ?? map[3]
 })
+
+// ── Scroll-suppression: disable hover transitions while scrolling ──
+const isScrolling = ref(false)
+let scrollTimer: ReturnType<typeof setTimeout> | null = null
+function onScroll() {
+  isScrolling.value = true
+  if (scrollTimer) clearTimeout(scrollTimer)
+  scrollTimer = setTimeout(() => { isScrolling.value = false }, 150)
+}
 
 // ★ Epic 2: Slider drag tooltip
 const isDragging = ref(false)
@@ -150,6 +197,21 @@ async function confirmRename() {
 async function deleteClip(clip: Clip) {
   if (!confirm(`Delete "${clip.custom_name || clip.filename}"?`)) return
   try { await invoke('delete_clip', { filepath: clip.filepath }); replay.removeClip(clip.filepath); showToast('Clip deleted') } catch (e) { showToast(`Error: ${e}`) }
+}
+
+function openListMenu(clip: Clip, e: MouseEvent) {
+  e.preventDefault(); e.stopPropagation()
+  const menuW = 200, menuH = 270
+  const x = e.clientX + menuW > window.innerWidth ? e.clientX - menuW : e.clientX
+  const y = e.clientY + menuH > window.innerHeight ? e.clientY - menuH : e.clientY
+  replay.activeMenuClipId = clip.id
+  replay.activeMenuPos = { x, y }
+}
+async function toggleListFav(e: Event, clip: Clip) {
+  e.stopPropagation()
+  const v = !clip.favorite
+  replay.updateClipMeta(clip.filepath, { favorite: v })
+  try { await invoke('set_clip_meta', { update: { filepath: clip.filepath, custom_name: clip.custom_name, favorite: v } }) } catch {}
 }
 
 async function deleteSelected() {
@@ -245,35 +307,39 @@ function onBulkOutside(e: MouseEvent) {
 onMounted(() => document.addEventListener('mousedown', onBulkOutside))
 onBeforeUnmount(() => document.removeEventListener('mousedown', onBulkOutside))
 
-// ── List view context menu ──
-function openListMenu(clip: Clip, e: MouseEvent) {
-  e.preventDefault(); e.stopPropagation()
-  const menuW = 200, menuH = 270
-  const x = e.clientX + menuW > window.innerWidth  ? e.clientX - menuW : e.clientX
-  const y = e.clientY + menuH > window.innerHeight ? e.clientY - menuH : e.clientY
-  replay.activeMenuClipId = clip.id
-  replay.activeMenuPos = { x, y }
-}
-function listMenuAction(a: string) {
-  const clip = replay.clips.find(c => c.id === replay.activeMenuClipId)
+// Single page-level context menu + single global click listener
+const contextMenuClip = computed(() =>
+  replay.clips.find(c => c.id === replay.activeMenuClipId) ?? null
+)
+
+function ctxAction(action: string) {
+  const clip = contextMenuClip.value
   replay.activeMenuClipId = ''
   if (!clip) return
-  switch (a) {
+  switch (action) {
     case 'preview': openPreview(clip); break
     case 'editor': openAdvanced(clip); break
     case 'select': replay.toggleSelect(clip.id); break
-    case 'location': invoke('open_file_location', { filepath: clip.filepath }); break
     case 'favorite': {
-      const newFav = !clip.favorite
-      replay.updateClipMeta(clip.filepath, { favorite: newFav })
-      invoke('set_clip_meta', { update: { filepath: clip.filepath, custom_name: clip.custom_name || '', favorite: newFav } }).catch(() => {})
+      const v = !clip.favorite
+      replay.updateClipMeta(clip.filepath, { favorite: v })
+      invoke('set_clip_meta', { update: { filepath: clip.filepath, custom_name: clip.custom_name, favorite: v } }).catch(() => {})
       break
     }
+    case 'location': invoke('open_file_location', { filepath: clip.filepath }).catch(() => {}); break
     case 'rename': startRename(clip); break
     case 'delete': deleteClip(clip); break
   }
 }
-onMounted(() => document.addEventListener('click', () => { if (replay.activeMenuClipId) replay.activeMenuClipId = '' }))
+
+function closeContextMenu(e: MouseEvent) {
+  const t = e.target as HTMLElement
+  if (t.closest('.ctx-menu') || t.closest('.kebab')) return
+  replay.activeMenuClipId = ''
+}
+
+onMounted(() => document.addEventListener('mousedown', closeContextMenu))
+onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu))
 </script>
 
 <template>
@@ -295,7 +361,8 @@ onMounted(() => document.addEventListener('click', () => { if (replay.activeMenu
       <div class="ctrl-left">
         <div class="search-wrap">
           <svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input v-model="replay.search" placeholder="Search clips…" class="search" />
+          <!-- Phase 4b: bound to searchRaw; debounced 150ms before hitting store -->
+          <input v-model="searchRaw" placeholder="Search clips…" class="search" />
         </div>
         <SelectField class="ctrl-sort" v-model="replay.sortMode" :options="sortOptions" />
         <!-- ★ Epic 3: Multiselect game filter dropdown -->
@@ -311,11 +378,11 @@ onMounted(() => document.addEventListener('click', () => { if (replay.activeMenu
       <div class="ctrl-right">
         <div class="size-slider-wrap">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="size-ic"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-          <div class="size-range-wrap">
+          <div class="size-range-wrap" @wheel.prevent="e => { gridSlider = Math.max(1, Math.min(4, gridSlider + (e.deltaY > 0 ? 1 : -1))); saveGridSlider() }">
             <input
               type="range" min="1" max="4" step="1"
-              :value="gridSlider"
-              @input="gridSlider = Number(($event.target as HTMLInputElement).value)"
+              v-model.number="gridSlider"
+              @change="saveGridSlider"
               @mousedown="isDragging = true" @touchstart="isDragging = true"
               @mouseup="isDragging = false" @touchend="isDragging = false"
               @mouseleave="isDragging = false"
@@ -358,19 +425,120 @@ onMounted(() => document.addEventListener('click', () => { if (replay.activeMenu
       <Transition name="view-fade" mode="out-in">
 
       <!-- ═══ Date-grouped view ═══ -->
-      <div v-if="dateGrouped" key="grouped" class="date-groups">
-        <div v-for="group in groupedClips" :key="group.date" class="date-group">
-          <div class="date-header">
-            <span class="date-label">{{ group.label }}</span>
-            <span class="date-count">{{ group.clips.length }}</span>
+      <div v-if="dateGrouped" key="grouped" class="scroll-host">
+        <div class="native-grid-host grouped-host" ref="groupedScrollRef" :class="{ scrolling: isScrolling }" @scroll.passive="onScroll">
+          <div class="date-groups">
+          <div v-for="group in groupedClips" :key="group.date" class="date-group">
+            <div class="date-header">
+              <div
+                class="group-sel-box"
+                :class="{ checked: groupCheckState(group) === 'all', indeterminate: groupCheckState(group) === 'some' }"
+                @click.stop="toggleGroupSelect(group)"
+              >
+                <span v-if="groupCheckState(group) === 'all'">✓</span>
+                <span v-else-if="groupCheckState(group) === 'some'">−</span>
+              </div>
+              <span class="date-label">{{ group.label }}</span>
+              <span class="date-count">{{ group.clips.length }}</span>
+            </div>
+            <div v-if="viewMode === 'grid'" class="clip-grid" :style="{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }">
+              <ClipCard
+                v-for="clip in group.clips"
+                :key="clip.id"
+                :clip="clip"
+                :selected="replay.isSelected(clip.id)"
+                class="clip-stagger"
+                @click="onCardClick(clip)"
+                @preview="openPreview"
+                @editor="openAdvanced"
+                @rename="startRename"
+                @delete="deleteClip"
+              />
+            </div>
+            <div v-else class="clip-list" :style="{ '--list-thumb-w': listStyles.thumbW, '--list-thumb-h': listStyles.thumbH, '--list-font': listStyles.fontSize, '--list-pad': listStyles.padding }">
+              <div
+                v-for="clip in group.clips"
+                :key="clip.id"
+                class="list-row"
+                :class="{ selected: replay.isSelected(clip.id) }"
+                @click="onCardClick(clip)"
+                @contextmenu.prevent="openListMenu(clip, $event)"
+              >
+                <div class="list-thumb-wrap">
+                  <img v-if="clip.thumbnail && mediaPortNum" class="list-thumb" :src="mediaUrl(clip.thumbnail, mediaPortNum)" loading="lazy" @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
+                  <div v-else class="list-thumb list-thumb-empty">▶</div>
+                  <span v-if="clip.duration" class="list-badge">{{ fmtDur(clip.duration) }}</span>
+                  <button class="lt-heart" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
+                    <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                  </button>
+                  <div class="lt-sel-ov" :class="{ vis: replay.isSelected(clip.id) || replay.selectMode }" @click.stop="replay.toggleSelect(clip.id)">
+                    <div class="lt-sel-box" :class="{ checked: replay.isSelected(clip.id) }">✓</div>
+                  </div>
+                </div>
+                <div class="list-info">
+                  <span class="list-name">{{ clip.custom_name || clip.filename.replace(/\.[^.]+$/, '') }}</span>
+                  <span class="list-meta">
+                    <span v-if="clip.game && clip.game !== 'Unknown'" class="lm-game">{{ clip.game }}</span>
+                    <span v-if="clip.filesize" class="lm-pill">{{ fmtSize(clip.filesize) }}</span>
+                    <span v-if="clip.width" class="lm-pill">{{ fmtRes(clip.width, clip.height) }}</span>
+                    <span v-if="clip.created" class="lm-pill lm-date">{{ fmtDate(clip.created) }}</span>
+                  </span>
+                </div>
+                <div class="list-actions">
+                  <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
+                  <button class="list-act" @click.stop="openAdvanced(clip)">Edit</button>
+                  <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
+                  <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-          <div v-if="viewMode === 'grid'" class="clip-grid" :style="{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }">
+          <div v-if="groupedClips.length === 0" class="empty-state">
+            <div class="empty-ic">📅</div>
+            <p>No clips match current filters</p>
+          </div>
+          </div><!-- /date-groups -->
+        </div>
+        <OverlayScrollbar :scroll-el="groupedScrollRef" />
+      </div>
+
+      <!-- ═══ Flat grid view — native CSS Grid ═══ -->
+      <div v-else-if="viewMode === 'grid'" key="grid" class="scroll-host">
+        <div class="native-grid-host" ref="gridScrollRef" :class="{ scrolling: isScrolling }" @scroll.passive="onScroll">
+          <!-- Scan banner -->
+          <div v-if="scanActive" class="scan-banner">
+            <div class="scan-spinner"></div>
+            <span>Scanning for new clips…</span>
+            <span v-if="scanCount > 0" class="scan-count">+{{ scanCount }} found</span>
+          </div>
+          <!-- Skeleton cards from file watcher -->
+          <div v-if="sortedSkeletons.length" class="clip-grid skeletons-row" :style="{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }">
+            <div v-for="clip in sortedSkeletons" :key="clip.id" class="skeleton-card watcher-skeleton">
+              <div class="skeleton-thumb animate-pulse"></div>
+              <div class="skeleton-info">
+                <div class="skeleton-line w70 animate-pulse"></div>
+                <div class="skeleton-line w40 animate-pulse"></div>
+              </div>
+              <div class="watcher-label">New clip detected…</div>
+            </div>
+          </div>
+          <!-- Native CSS grid — all cards rendered, browser handles scroll -->
+          <div
+            class="clip-grid native-grid"
+            :style="{
+              gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
+              '--name-size': fontScale.nameSize,
+              '--meta-size': fontScale.metaSize,
+            }"
+          >
             <ClipCard
-              v-for="clip in group.clips"
+              v-for="clip in filteredRealClips"
               :key="clip.id"
               :clip="clip"
               :selected="replay.isSelected(clip.id)"
-              class="clip-stagger"
+              :class="{ 'clip-enter': clip._isNew }"
               @click="onCardClick(clip)"
               @preview="openPreview"
               @editor="openAdvanced"
@@ -378,107 +546,73 @@ onMounted(() => document.addEventListener('click', () => { if (replay.activeMenu
               @delete="deleteClip"
             />
           </div>
-          <div v-else class="clip-list" :style="{ '--list-thumb-w': listStyles.thumbW, '--list-thumb-h': listStyles.thumbH, '--list-font': listStyles.fontSize, '--list-pad': listStyles.padding }">
+        </div>
+        <OverlayScrollbar :scroll-el="gridScrollRef" />
+      </div>
+
+      <!-- ═══ Flat list view — native scroll ═══ -->
+      <div
+        v-else
+        key="list"
+        class="scroll-host"
+      >
+        <div
+          class="native-grid-host"
+          ref="listScrollRef"
+          :class="{ scrolling: isScrolling }"
+          @scroll.passive="onScroll"
+          :style="{
+            '--list-thumb-w': listStyles.thumbW,
+            '--list-thumb-h': listStyles.thumbH,
+            '--list-font':    listStyles.fontSize,
+            '--list-pad':     listStyles.padding,
+          }"
+        >
+          <div class="clip-list">
             <div
-              v-for="clip in group.clips"
+              v-for="clip in filteredRealClips"
               :key="clip.id"
               class="list-row"
               :class="{ selected: replay.isSelected(clip.id) }"
               @click="onCardClick(clip)"
+              @contextmenu.prevent="openListMenu(clip, $event)"
             >
-              <img v-if="clip.thumbnail && mediaPortNum" class="list-thumb" :src="mediaUrl(clip.thumbnail, mediaPortNum)" loading="lazy" @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
-              <div v-else class="list-thumb list-thumb-empty">▶</div>
+              <div class="list-thumb-wrap">
+                <img v-if="clip.thumbnail && mediaPortNum"
+                     class="list-thumb"
+                     :src="mediaUrl(clip.thumbnail, mediaPortNum)"
+                     loading="lazy"
+                     @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
+                <div v-else class="list-thumb list-thumb-empty">▶</div>
+                <span v-if="clip.duration" class="list-badge">{{ fmtDur(clip.duration) }}</span>
+                <button class="lt-heart" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
+                  <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                </button>
+                <div class="lt-sel-ov" :class="{ vis: replay.isSelected(clip.id) || replay.selectMode }" @click.stop="replay.toggleSelect(clip.id)">
+                  <div class="lt-sel-box" :class="{ checked: replay.isSelected(clip.id) }">✓</div>
+                </div>
+              </div>
               <div class="list-info">
                 <span class="list-name">{{ clip.custom_name || clip.filename.replace(/\.[^.]+$/, '') }}</span>
-                <span class="list-meta">{{ clip.game || 'Unknown' }} · {{ clip.duration ? Math.floor(clip.duration/60)+'m '+Math.round(clip.duration%60)+'s' : '' }}</span>
+                <span class="list-meta">
+                  <span v-if="clip.game && clip.game !== 'Unknown'" class="lm-game">{{ clip.game }}</span>
+                  <span v-if="clip.filesize" class="lm-pill">{{ fmtSize(clip.filesize) }}</span>
+                  <span v-if="clip.width" class="lm-pill">{{ fmtRes(clip.width, clip.height) }}</span>
+                  <span v-if="clip.created" class="lm-pill lm-date">{{ fmtDate(clip.created) }}</span>
+                </span>
               </div>
               <div class="list-actions">
                 <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
                 <button class="list-act" @click.stop="openAdvanced(clip)">Edit</button>
                 <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
+                <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+                </button>
               </div>
             </div>
           </div>
         </div>
-        <div v-if="groupedClips.length === 0" class="empty-state">
-          <div class="empty-ic">📅</div>
-          <p>No clips match current filters</p>
-        </div>
-      </div>
-
-      <!-- ═══ Flat grid view ═══ -->
-      <div
-        v-else-if="viewMode === 'grid'"
-        key="grid"
-        class="clip-grid"
-        :style="{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }"
-      >
-        <!-- Live-watcher skeleton cards -->
-        <div v-for="clip in sortedSkeletons" :key="clip.id" class="skeleton-card watcher-skeleton">
-          <div class="skeleton-thumb animate-pulse"></div>
-          <div class="skeleton-info">
-            <div class="skeleton-line w70 animate-pulse"></div>
-            <div class="skeleton-line w40 animate-pulse"></div>
-          </div>
-          <div class="watcher-label">New clip detected…</div>
-        </div>
-
-        <!-- Real clip cards — CSS filter: v-show preserves grid flow -->
-        <ClipCard
-          v-for="clip in sortedRealClips"
-          :key="clip.id"
-          v-show="isMatch(clip)"
-          :clip="clip"
-          :selected="replay.isSelected(clip.id)"
-          class="clip-stagger"
-          @click="onCardClick(clip)"
-          @preview="openPreview"
-          @editor="openAdvanced"
-          @rename="startRename"
-          @delete="deleteClip"
-        />
-      </div>
-
-      <!-- ═══ Flat list view ═══ -->
-      <div
-        v-else
-        key="list"
-        class="clip-list"
-        :style="{
-          '--list-thumb-w': listStyles.thumbW,
-          '--list-thumb-h': listStyles.thumbH,
-          '--list-font':    listStyles.fontSize,
-          '--list-pad':     listStyles.padding,
-        }"
-      >
-        <div
-          v-for="clip in sortedRealClips"
-          :key="clip.id"
-          v-show="isMatch(clip)"
-          class="list-row"
-          :class="{ selected: replay.isSelected(clip.id) }"
-          @click="onCardClick(clip)"
-          @contextmenu.prevent="openListMenu(clip, $event)"
-        >
-          <img v-if="clip.thumbnail && mediaPortNum"
-               class="list-thumb"
-               :src="mediaUrl(clip.thumbnail, mediaPortNum)"
-               loading="lazy"
-               @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
-          <div v-else class="list-thumb list-thumb-empty">▶</div>
-          <div class="list-info">
-            <span class="list-name">{{ clip.custom_name || clip.filename.replace(/\.[^.]+$/, '') }}</span>
-            <span class="list-meta">{{ clip.game || 'Unknown' }} · {{ clip.duration ? Math.floor(clip.duration/60)+'m '+Math.round(clip.duration%60)+'s' : '' }} · {{ clip.created }}</span>
-          </div>
-          <div class="list-actions">
-            <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
-            <button class="list-act" @click.stop="openAdvanced(clip)">Edit</button>
-            <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
-            <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
-              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
-            </button>
-          </div>
-        </div>
+        <OverlayScrollbar :scroll-el="listScrollRef" />
       </div>
 
       </Transition><!-- /view-fade -->
@@ -564,26 +698,25 @@ onMounted(() => document.addEventListener('click', () => { if (replay.activeMenu
     <ClipEditor v-if="editorClip && !advancedClip" :clip="editorClip" :mode="editorMode" @close="editorClip=null" @saved="refreshClips" @toast="showToast" />
     <AdvancedEditor v-if="advancedClip" :clip="advancedClip" @close="advancedClip=null" />
 
-    <!-- List view context menu -->
+    <!-- Single page-level context menu (grid + list views) -->
     <Teleport to="body">
       <div
-        v-if="replay.activeMenuClipId && replay.clips.find(c => c.id === replay.activeMenuClipId)"
-        class="list-ctx"
+        v-if="replay.activeMenuClipId"
+        class="ctx-menu"
         :style="{ left: replay.activeMenuPos.x + 'px', top: replay.activeMenuPos.y + 'px' }"
         @click.stop
       >
-        <template v-if="replay.clips.find(c => c.id === replay.activeMenuClipId) as any">
-          <button class="list-ctx-i" @click="listMenuAction('preview')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>Quick Preview</button>
-          <button class="list-ctx-i" @click="listMenuAction('editor')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Open in Editor</button>
-          <button class="list-ctx-i" @click="listMenuAction('select')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>{{ replay.isSelected(replay.activeMenuClipId) ? 'Deselect' : 'Select' }}</button>
-          <button class="list-ctx-i" @click="listMenuAction('location')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>Open File Location</button>
-          <div class="list-ctx-sep"></div>
-          <button class="list-ctx-i" @click="listMenuAction('favorite')">
-            <svg class="list-ctx-ic" viewBox="0 0 24 24" :fill="replay.clips.find(c=>c.id===replay.activeMenuClipId)?.favorite?'currentColor':'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-            {{ replay.clips.find(c=>c.id===replay.activeMenuClipId)?.favorite ? 'Remove from Favorites' : 'Add to Favorites' }}
-          </button>
-          <button class="list-ctx-i" @click="listMenuAction('rename')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Rename</button>
-          <button class="list-ctx-i list-ctx-d" @click="listMenuAction('delete')"><svg class="list-ctx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>Delete</button>
+        <template v-if="contextMenuClip">
+          <button class="ctx-item" @click="ctxAction('preview')">▶ Preview</button>
+          <button class="ctx-item" @click="ctxAction('editor')">✂ Edit</button>
+          <div class="ctx-sep"></div>
+          <button class="ctx-item" @click="ctxAction('select')">☑ Select</button>
+          <button class="ctx-item" @click="ctxAction('favorite')">{{ contextMenuClip.favorite ? '💔 Unfavorite' : '❤ Favorite' }}</button>
+          <div class="ctx-sep"></div>
+          <button class="ctx-item" @click="ctxAction('rename')">✏ Rename</button>
+          <button class="ctx-item" @click="ctxAction('location')">📂 Show in Folder</button>
+          <div class="ctx-sep"></div>
+          <button class="ctx-item ctx-item-d" @click="ctxAction('delete')">🗑 Delete</button>
         </template>
       </div>
     </Teleport>
@@ -668,7 +801,51 @@ onMounted(() => document.addEventListener('click', () => { if (replay.activeMenu
 .vt-btn.active { background:var(--accent); color:#fff; }
 
 /* Scroll container */
-.scroll-area { flex:1; min-height:0; overflow-y:auto; padding-bottom:16px; }
+.scroll-area { flex:1; min-height:0; overflow:hidden; display:flex; flex-direction:column; }
+
+/* scroll-host: positions the OverlayScrollbar relative to itself */
+.scroll-host {
+  flex: 1; min-height: 0;
+  position: relative;
+  display: flex; flex-direction: column;
+}
+
+/* Native grid/list host — owns its own scroll, sits inside scroll-host */
+.native-grid-host {
+  flex: 1; min-height: 0;
+  overflow-y: scroll; overflow-x: hidden;
+  padding: 8px 22px 60px 10px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  will-change: scroll-position;
+}
+.native-grid-host::-webkit-scrollbar { display: none; width: 0; }
+.native-grid { }
+
+/* Scan banner */
+.scan-banner {
+  display: flex; align-items: center; gap: 12px;
+  background: linear-gradient(90deg, rgba(var(--accent-rgb, 79,140,255), 0.12), rgba(var(--accent-rgb, 79,140,255), 0.06));
+  border: 1px solid rgba(var(--accent-rgb, 79,140,255), 0.25); border-radius: 10px;
+  padding: 10px 16px; margin-bottom: 12px; font-size: 13px; color: var(--accent);
+}
+.scan-spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(79,140,255,0.3); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.scan-count { margin-left: auto; font-size: 11px; color: var(--text-muted, #8a8a9a); }
+
+/* Card entry animation (from file watcher) */
+.clip-enter { animation: cardSlideIn 0.3s ease both; }
+@keyframes cardSlideIn {
+  from { opacity: 0; transform: translateY(-12px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Grouped view host */
+.grouped-host { padding: 8px 16px 60px 16px; }
 
 /* Grid */
 .clip-grid { display:grid; gap:16px; grid-auto-rows:max-content; align-content:start; }
@@ -698,41 +875,87 @@ onMounted(() => document.addEventListener('click', () => { if (replay.activeMenu
 .clip-list { display:flex; flex-direction:column; gap:6px; }
 
 .list-row {
-  display:flex; align-items:center; gap:12px;
-  padding: var(--list-pad, 8px) calc(var(--list-pad, 8px) + 4px);
+  display:flex; align-items:stretch; gap:12px;
+  padding: 0 calc(var(--list-pad, 8px) + 4px) 0 0;
   background:var(--bg-card); border:1px solid var(--border); border-radius:8px;
-  cursor:pointer; transition: background .15s, padding .25s ease;
+  cursor:pointer; overflow:hidden;
+  transition: background .15s, padding .25s ease;
+  contain: layout style; content-visibility: auto; contain-intrinsic-size: auto 60px;
 }
 .list-row:hover { background:var(--bg-hover); }
 .list-row.selected { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
 
 .list-thumb {
-  width: var(--list-thumb-w, 80px); height: var(--list-thumb-h, 45px);
-  object-fit:cover; border-radius:4px; flex-shrink:0; background:var(--bg-deep);
-  transition: width .25s ease, height .25s ease;
+  object-fit:cover; background:var(--bg-deep);
 }
 .list-thumb-empty {
-  width: var(--list-thumb-w, 80px); height: var(--list-thumb-h, 45px);
-  background:var(--bg-deep); border-radius:4px; flex-shrink:0;
+  background:var(--bg-deep); flex-shrink:0;
   display:flex; align-items:center; justify-content:center;
   font-size:18px; color:var(--text-muted);
-  transition: width .25s ease, height .25s ease;
 }
-.list-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+.list-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; padding: var(--list-pad, 8px) 0; justify-content: center; }
 .list-name {
   font-size: var(--list-font, 13px); font-weight:600;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   transition: font-size .25s ease;
 }
-.list-meta { font-size:11px; color:var(--text-muted); }
-.list-actions { display:flex; gap:6px; flex-shrink:0; }
-.list-act { padding:5px 10px; border:1px solid var(--border); border-radius:5px; background:var(--bg-surface); color:var(--text-sec); font-size:11px; cursor:pointer; }
+.list-thumb-wrap {
+  position: relative; flex-shrink: 0;
+  width: var(--list-thumb-w, 160px); align-self: stretch;
+  transition: width .25s ease;
+}
+.list-thumb-wrap .list-thumb { width: 100%; height: 100%; object-fit: cover; display: block; transition: none; border-radius: 0; }
+.list-thumb-wrap .list-thumb-empty { width: 100%; height: 100%; transition: none; border-radius: 0; }
+.list-badge {
+  position: absolute; bottom: 3px; right: 3px;
+  background: rgba(0,0,0,.8); color: #fff;
+  font-size: 10px; font-weight: 600;
+  padding: 1px 5px; border-radius: 3px;
+  pointer-events: none; line-height: 1.4;
+}
+.list-meta { font-size:11px; color:var(--text-muted); display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
+.lm-game { color:var(--text-sec); font-weight:500; }
+.lm-pill { background:var(--bg-deep); padding:2px 6px; border-radius:3px; }
+.lm-date { opacity:.75; }
+.list-actions { display:flex; gap:6px; flex-shrink:0; align-items:center; padding: var(--list-pad, 8px) 0; }
+.list-act { padding: 4px 10px; border:1px solid var(--border); border-radius:5px; background:var(--bg-surface); color:var(--text-sec); font-size:12px; cursor:pointer; white-space:nowrap; }
 .list-act:hover { background:var(--bg-hover); }
 .list-act-d { color:var(--danger); }
 .list-act-d:hover { background:rgba(220,38,38,.1); }
-.list-kebab { flex-shrink:0; width:26px; height:26px; border-radius:5px; border:none; background:transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
-.list-kebab:hover { background:var(--bg-hover); color:var(--text); }
-.list-kebab svg { width:14px; height:14px; }
+.list-fav { flex-shrink:0; width:28px; height:28px; border-radius:50%; border:none; background:transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:color .15s; }
+.list-fav:hover { color:var(--text); }
+.list-fav.on { color:#E94560; }
+.list-fav svg { width:15px; height:15px; }
+.list-kebab { flex-shrink:0; width:30px; height:30px; border-radius:6px; border:1px solid var(--border); background:var(--bg-deep); color:var(--text-sec); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
+.list-kebab:hover { background:var(--bg-hover); color:var(--text); border-color:var(--accent); }
+.list-kebab svg { width:15px; height:15px; }
+
+/* Thumbnail overlays for list view — heart (top-right) and select checkbox (top-left) */
+.lt-heart {
+  position: absolute; top: 5px; right: 5px;
+  width: 26px; height: 26px; border-radius: 50%;
+  border: none; background: rgba(0,0,0,.55);
+  color: var(--text-muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: all .15s;
+}
+.list-row:hover .lt-heart { opacity: 1; }
+.lt-heart.on { opacity: 1; color: #E94560; }
+.lt-heart:hover { background: rgba(0,0,0,.8); transform: scale(1.15); }
+.lt-heart svg { width: 13px; height: 13px; }
+
+.lt-sel-ov {
+  position: absolute; top: 5px; left: 5px;
+  opacity: 0; transition: opacity .15s;
+}
+.lt-sel-ov.vis, .list-row:hover .lt-sel-ov { opacity: 1; }
+.lt-sel-box {
+  width: 20px; height: 20px; border-radius: 5px;
+  border: 2px solid rgba(255,255,255,.55); background: rgba(0,0,0,.4);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: transparent; cursor: pointer;
+}
+.lt-sel-box.checked { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* List view context menu */
 .list-ctx { position:fixed; z-index:10000; min-width:200px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:4px; box-shadow:0 8px 32px rgba(0,0,0,.5); }
@@ -809,9 +1032,41 @@ onMounted(() => document.addEventListener('click', () => { if (replay.activeMenu
 .date-header { display:flex; align-items:center; gap:10px; padding-bottom:8px; border-bottom:1px solid var(--border); }
 .date-label { font-size:14px; font-weight:700; color:var(--text); }
 .date-count { font-size:11px; font-weight:600; color:var(--text-muted); background:var(--bg-deep); padding:2px 8px; border-radius:10px; }
+.group-sel-box { width:20px; height:20px; border-radius:5px; border:2px solid var(--text-muted); background:transparent; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px; color:transparent; transition:border-color .15s, background .15s; flex-shrink:0; user-select:none; }
+.group-sel-box:hover { border-color:var(--accent); }
+.group-sel-box.checked { background:var(--accent); border-color:var(--accent); color:#fff; }
+.group-sel-box.indeterminate { border-color:var(--accent); color:var(--accent); }
 
 /* Toast */
 .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--bg-card); border:1px solid var(--accent); color:var(--text); padding:10px 24px; border-radius:8px; font-size:13px; font-weight:600; z-index:9999; box-shadow:0 4px 16px rgba(0,0,0,.3); }
 .fade-enter-active,.fade-leave-active { transition:opacity .3s; }
 .fade-enter-from,.fade-leave-to { opacity:0; }
+
+/* Phase 2a: Page-level context menu */
+.ctx-menu {
+  position:fixed; z-index:5000;
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:8px; padding:4px; min-width:180px;
+  box-shadow:0 8px 24px rgba(0,0,0,.5);
+}
+.ctx-item {
+  display:block; width:100%; padding:8px 12px; background:none; border:none;
+  border-radius:5px; color:var(--text-sec); font-size:13px; text-align:left;
+  cursor:pointer; white-space:nowrap;
+}
+.ctx-item:hover { background:var(--bg-hover); color:var(--text); }
+.ctx-item-d { color:var(--danger); }
+.ctx-item-d:hover { background:rgba(220,38,38,.1); }
+.ctx-sep { height:1px; background:var(--border); margin:4px 0; }
+</style>
+
+<!-- Unscoped: suppress hover transitions on cards while scrolling -->
+<style>
+.native-grid-host.scrolling .card {
+  transition: none !important;
+}
+.native-grid-host.scrolling .card:hover {
+  transform: none !important;
+  box-shadow: none !important;
+}
 </style>
