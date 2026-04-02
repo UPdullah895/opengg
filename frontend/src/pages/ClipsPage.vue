@@ -456,15 +456,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 <div class="list-info">
                   <span class="list-name">{{ clip.custom_name || clip.filename.replace(/\.[^.]+$/, '') }}</span>
                   <span class="list-meta">
-                    <span v-if="clip.game && clip.game !== 'Unknown'">{{ clip.game }}</span>
-                    <span v-if="clip.duration" class="lm-sep">·</span>
-                    <span v-if="clip.duration">{{ fmtDur(clip.duration) }}</span>
-                    <span v-if="clip.filesize" class="lm-sep">·</span>
-                    <span v-if="clip.filesize">{{ fmtSize(clip.filesize) }}</span>
-                    <span v-if="clip.width" class="lm-sep">·</span>
-                    <span v-if="clip.width">{{ fmtRes(clip.width, clip.height) }}</span>
-                    <span v-if="clip.created" class="lm-sep">·</span>
-                    <span v-if="clip.created">{{ fmtDate(clip.created) }}</span>
+                    <span v-if="clip.game && clip.game !== 'Unknown'" class="lm-game">{{ clip.game }}</span>
+                    <span v-if="clip.filesize" class="lm-pill">{{ fmtSize(clip.filesize) }}</span>
+                    <span v-if="clip.width" class="lm-pill">{{ fmtRes(clip.width, clip.height) }}</span>
+                    <span v-if="clip.created" class="lm-pill lm-date">{{ fmtDate(clip.created) }}</span>
                   </span>
                 </div>
                 <div class="list-actions">
@@ -568,15 +563,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
               <div class="list-info">
                 <span class="list-name">{{ clip.custom_name || clip.filename.replace(/\.[^.]+$/, '') }}</span>
                 <span class="list-meta">
-                  <span v-if="clip.game && clip.game !== 'Unknown'">{{ clip.game }}</span>
-                  <span v-if="clip.duration" class="lm-sep">·</span>
-                  <span v-if="clip.duration">{{ fmtDur(clip.duration) }}</span>
-                  <span v-if="clip.filesize" class="lm-sep">·</span>
-                  <span v-if="clip.filesize">{{ fmtSize(clip.filesize) }}</span>
-                  <span v-if="clip.width" class="lm-sep">·</span>
-                  <span v-if="clip.width">{{ fmtRes(clip.width, clip.height) }}</span>
-                  <span v-if="clip.created" class="lm-sep">·</span>
-                  <span v-if="clip.created">{{ fmtDate(clip.created) }}</span>
+                  <span v-if="clip.game && clip.game !== 'Unknown'" class="lm-game">{{ clip.game }}</span>
+                  <span v-if="clip.filesize" class="lm-pill">{{ fmtSize(clip.filesize) }}</span>
+                  <span v-if="clip.width" class="lm-pill">{{ fmtRes(clip.width, clip.height) }}</span>
+                  <span v-if="clip.created" class="lm-pill lm-date">{{ fmtDate(clip.created) }}</span>
                 </span>
               </div>
               <div class="list-actions">
@@ -891,10 +881,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   padding: 1px 5px; border-radius: 3px;
   pointer-events: none; line-height: 1.4;
 }
-.list-meta { font-size:11px; color:var(--text-muted); display:flex; align-items:center; flex-wrap:wrap; gap:3px; }
-.lm-sep { opacity: 0.4; }
+.list-meta { font-size:11px; color:var(--text-muted); display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
+.lm-game { color:var(--text-sec); font-weight:500; }
+.lm-pill { background:var(--bg-deep); padding:2px 6px; border-radius:3px; }
+.lm-date { opacity:.75; }
 .list-actions { display:flex; gap:6px; flex-shrink:0; }
-.list-act { padding:5px 10px; border:1px solid var(--border); border-radius:5px; background:var(--bg-surface); color:var(--text-sec); font-size:11px; cursor:pointer; }
+.list-act { padding: calc(var(--list-pad, 8px) * 0.5) calc(var(--list-pad, 8px) * 1.1); border:1px solid var(--border); border-radius:5px; background:var(--bg-surface); color:var(--text-sec); font-size: var(--list-font, 13px); cursor:pointer; transition: padding .25s ease, font-size .25s ease; }
 .list-act:hover { background:var(--bg-hover); }
 .list-act-d { color:var(--danger); }
 .list-act-d:hover { background:rgba(220,38,38,.1); }
