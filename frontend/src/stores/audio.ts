@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { usePersistenceStore } from './persistence'
 
-export interface AppInfo { id: number; name: string; binary: string; channel: string; icon: string; volume?: number }
+export interface AppInfo { id: number; name: string; binary: string; channel: string; icon: string; volume?: number; auto_channel?: string }
 export interface Channel { name: string; volume: number; muted: boolean; node_id: number }
 export interface AudioDevice { name: string; description: string; device_type: 'sink' | 'source'; is_default: boolean }
 
@@ -88,10 +88,40 @@ export const useAudioStore = defineStore('audio', () => {
     } finally { loading.value = false }
   }
 
-  // ★ P8: fetchApps reads real PipeWire routing
+  // ★ P8: fetchApps reads real PipeWire routing.
+  // Uses full array replacement (never property mutation) so Vue's reactivity
+  // system tracks the change even for nested object properties.
+  //
+  // ★ FIX: The D-Bus path (daemon running) serializes `id` as a string inside
+  // HashMap<String,String> — coerce to number so allApps.find(a => a.id === appId)
+  // doesn't silently fail with "42" === 42 → false.
   async function fetchApps() {
-    try { const j = await invoke<string>('get_apps'); allApps.value = JSON.parse(j) }
-    catch (e) { console.error('fetchApps:', e) }
+    try {
+      const j = await invoke<string>('get_apps')
+      const fetched = JSON.parse(j) as AppInfo[]
+      const rules = usePersistenceStore().state.mixer.appRules
+      allApps.value = fetched.map(app => {
+        const normalized: AppInfo = { ...app, id: Number(app.id) }
+        const key = normalized.binary || normalized.name
+        const rule = key ? rules[key] : undefined
+        if (rule && rule !== 'default' && rule !== 'Master') {
+          return { ...normalized, channel: rule }
+        }
+        return normalized
+      })
+
+      // Smart auto-routing: for apps with no saved rule and no current channel,
+      // use the backend's classification suggestion. Only fires on first appearance
+      // (once routed, the rule is saved and this branch is never reached again).
+      for (const app of allApps.value) {
+        if (app.channel || !app.auto_channel) continue
+        const key = app.binary || app.name
+        const rule = key ? rules[key] : undefined
+        if (rule && rule !== 'default' && rule !== 'Master') continue
+        // Route without waiting — optimistic update happens inside routeApp
+        routeApp(app.id, app.auto_channel).catch(() => {})
+      }
+    } catch (e) { console.error('[opengg] fetchApps:', e) }
   }
   async function fetchDevices() {
     try { devices.value = await invoke<AudioDevice[]>('get_audio_devices') } catch {}
@@ -102,13 +132,13 @@ export const useAudioStore = defineStore('audio', () => {
     channelVolumes[ch] = vol
     markChanged(ch) // prevents polling from snapping back
     usePersistenceStore().setChannelVolume(ch, vol)
-    try { await invoke('set_volume', { channel: ch, volume: vol }) } catch {}
+    try { await invoke('set_volume', { channel: ch, volume: vol }) } catch (e) { console.error('[opengg] set_volume failed:', e) }
   }
   async function setMute(ch: string, muted: boolean) {
     channelMutes[ch] = muted
     markChanged(ch)
     usePersistenceStore().setChannelMute(ch, muted)
-    try { await invoke('set_mute', { channel: ch, muted }) } catch {}
+    try { await invoke('set_mute', { channel: ch, muted }) } catch (e) { console.error('[opengg] set_mute failed:', e) }
   }
   async function setAppVolume(appIndex: number, vol: number) {
     const app = allApps.value.find(a => a.id === appIndex); if (app) app.volume = vol
@@ -118,7 +148,8 @@ export const useAudioStore = defineStore('audio', () => {
   async function routeApp(appId: number, channel: string) {
     await invoke('route_app', { appId, channel })
     const app = allApps.value.find(a => a.id === appId)
-    if (app?.binary) usePersistenceStore().setAppRule(app.binary, channel)
+    const key = app?.binary || app?.name
+    if (key) usePersistenceStore().setAppRule(key, channel)
   }
   async function unrouteApp(id: number) { await routeApp(id, 'default') }
 
@@ -137,19 +168,30 @@ export const useAudioStore = defineStore('audio', () => {
 
   async function dropOnChannel(channel: string) {
     if (!draggedApp.value || routingInProgress.value) return
-    const app = { ...draggedApp.value }
+    await dropOnChannelById(draggedApp.value.id, channel)
+  }
+
+  // Explicit-ID variant used by DropZone when dataTransfer carries the app ID directly.
+  // This is the canonical implementation; dropOnChannel delegates to it.
+  async function dropOnChannelById(appId: number, channel: string) {
+    if (routingInProgress.value) return
+    routingInProgress.value = true
+    const app = allApps.value.find(a => a.id === appId)
+    if (!app) { routingInProgress.value = false; return }
     const prev = app.channel || ''
     draggedApp.value = null
-    routingInProgress.value = true
-    const appRef = allApps.value.find(a => a.id === app.id)
-    if (appRef) appRef.channel = (channel === 'Master') ? '' : channel
+    // Optimistic update: replace array so Vue reactivity is guaranteed
+    const targetChannel = (channel === 'Master') ? '' : channel
+    allApps.value = allApps.value.map(a => a.id === appId ? { ...a, channel: targetChannel } : a)
     try {
-      if (channel === 'Master') await unrouteApp(app.id)
-      else await routeApp(app.id, channel)
-      await fetchApps()
-    } catch {
-      const revert = allApps.value.find(a => a.id === app.id)
-      if (revert) revert.channel = prev
+      if (channel === 'Master') await unrouteApp(appId)
+      else await routeApp(appId, channel)
+      // Delay refresh — let PipeWire settle before querying; optimistic update is already applied
+      setTimeout(() => fetchApps(), 600)
+    } catch (e) {
+      console.error('[opengg] routeApp failed, reverting:', e)
+      // Revert on failure
+      allApps.value = allApps.value.map(a => a.id === appId ? { ...a, channel: prev } : a)
       await fetchApps()
     } finally { routingInProgress.value = false }
   }
@@ -173,7 +215,7 @@ export const useAudioStore = defineStore('audio', () => {
     fetchChannels, fetchApps, fetchDevices,
     setVolume, setMute, setAppVolume, routeApp, unrouteApp,
     setChannelDevice, restoreFromPersistence,
-    startDrag, endDrag, dropOnChannel,
+    startDrag, endDrag, dropOnChannel, dropOnChannelById,
     startPolling, stopPolling,
   }
 })

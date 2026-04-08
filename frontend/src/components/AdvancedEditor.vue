@@ -304,6 +304,16 @@ function sideResizeDown(e: MouseEvent) {
 }
 
 // ── Init ──
+function getCaptureTrackName(index: number): string {
+  // Priority 1: trackDefs name (Settings → Timeline Tracks is authoritative)
+  const def = getTrackDef(`A${index + 1}`)
+  if (def?.name) return def.name
+  // Priority 2: captureTracks override name
+  const ct = persist.state.settings.captureTracks?.[index]
+  if (ct?.name) return ct.name
+  return `Audio ${index + 1}`
+}
+
 function initTracks() {
   const t: Track[] = []
   // Only add the overlay track if the extension is enabled
@@ -314,15 +324,31 @@ function initTracks() {
   const audioStreams = info.value?.streams.filter(s => s.codec_type === 'audio') || []
   audioStreams.forEach((s, i) => {
     const id = `A${i + 1}`
-    t.push({ id, label: getTrackName(id), type: 'audio', color: getTrackColor(id), volume: 100, muted: false, streamIndex: s.index, peaks: [], volOpen: false })
+    t.push({ id, label: getCaptureTrackName(i), type: 'audio', color: getTrackColor(id), volume: 100, muted: false, streamIndex: s.index, peaks: [], volOpen: false })
   })
-  if (!audioStreams.length) t.push({ id: 'A1', label: getTrackName('A1'), type: 'audio', color: getTrackColor('A1'), volume: 100, muted: false, streamIndex: 1, peaks: [], volOpen: false })
+  if (!audioStreams.length) t.push({ id: 'A1', label: getCaptureTrackName(0), type: 'audio', color: getTrackColor('A1'), volume: 100, muted: false, streamIndex: 1, peaks: [], volOpen: false })
   tracks.value = t
 }
 
-// Live-update colors + names when Settings → Track Defs changes
+// Live-update colors + names when Settings → Track Defs or Capture Tracks change
 watch(() => persist.state.settings.trackDefs, () => {
-  tracks.value.forEach(t => { t.color = getTrackColor(t.id); t.label = getTrackName(t.id) })
+  tracks.value.forEach(t => {
+    t.color = getTrackColor(t.id)
+    // Update labels for all track types — trackDefs is the authoritative name source
+    if (t.type === 'audio') {
+      const i = parseInt(t.id.slice(1), 10) - 1
+      t.label = getCaptureTrackName(i)
+    } else {
+      t.label = getTrackName(t.id)
+    }
+  })
+}, { deep: true })
+watch(() => persist.state.settings.captureTracks, () => {
+  tracks.value.forEach((t, _) => {
+    if (t.type !== 'audio') return
+    const i = parseInt(t.id.slice(1), 10) - 1
+    t.label = getCaptureTrackName(i)
+  })
 }, { deep: true })
 
 // Re-init tracks when the overlays extension is toggled (adds/removes O1 row)

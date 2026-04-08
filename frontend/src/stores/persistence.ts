@@ -35,8 +35,14 @@ export interface PersistedState {
     // ★ GPU Screen Recorder
     gsrEnabled: boolean
     gsrFps: number
-    gsrQuality: 'High' | 'Medium' | 'Low'
+    gsrQuality: 'cbr' | 'medium' | 'high' | 'very_high' | 'ultra'
+    gsrCbrBitrate: number        // kbps, used only when gsrQuality === 'cbr'
     gsrReplaySecs: number
+    gsrReplayPreset: '15' | '30' | '60' | '90' | '120' | 'custom'
+    gsrRestartOnSave: boolean
+    gsrMonitorTarget: string     // 'screen' | 'DP-1' | 'HDMI-1' | ...
+    gsrAutoStart: boolean        // start replay buffer automatically on app launch
+    enableClipNotifications: boolean  // show overlay toast when a clip is saved
   }
   modules: { audio: boolean; device: boolean; replay: boolean }
   extensions: { overlays: boolean; tiktokExport: boolean }
@@ -74,8 +80,14 @@ export const DEFAULTS: PersistedState = {
     screenshotDir:     '',
     gsrEnabled:        false,
     gsrFps:            60,
-    gsrQuality:        'High',
+    gsrQuality:        'cbr',
+    gsrCbrBitrate:     8000,
     gsrReplaySecs:     30,
+    gsrReplayPreset:   '30',
+    gsrRestartOnSave:  false,
+    gsrMonitorTarget:  'screen',
+    gsrAutoStart:      true,
+    enableClipNotifications: true,
   },
   modules: { audio: true, device: true, replay: true },
   extensions: { overlays: false, tiktokExport: false },
@@ -97,6 +109,14 @@ export const usePersistenceStore = defineStore('persistence', () => {
         delete parsed?.settings?.clipsFolder
         delete parsed?.settings?.clipSources
         state.value = deepMerge(structuredClone(DEFAULTS), parsed)
+        // Migration: stale gsrMonitorTarget values from the old Tauri monitor API were
+        // EDID model names or resolution strings (e.g. "1920x1080", "BenQ GW2780").
+        // GSR only accepts connector names ("screen", "DP-1", "HDMI-A-1").
+        // Reset to "screen" if the saved value looks like a resolution or contains spaces.
+        const target = state.value.settings.gsrMonitorTarget
+        if (target && (/^\d+x\d+/.test(target) || target.includes(' '))) {
+          state.value.settings.gsrMonitorTarget = 'screen'
+        }
         // Migration: ensure O1 (Overlays) exists and is positioned before V1 (Video)
         const defs = state.value.settings.trackDefs
         const o1Def = DEFAULTS.settings.trackDefs.find(d => d.id === 'O1')!
@@ -109,6 +129,14 @@ export const usePersistenceStore = defineStore('persistence', () => {
           // O1 exists but is below V1 — move it above
           const [o1] = defs.splice(o1i, 1)
           defs.splice(v1i, 0, o1)
+        }
+        // Migration: ensure A1 exists (deepMerge replaces arrays wholesale; saved settings
+        // predating A1 will be missing it, causing a ghost "Track 1" in the editor)
+        const a1Def = DEFAULTS.settings.trackDefs.find(d => d.id === 'A1')!
+        const a1i = defs.findIndex(d => d.id === 'A1')
+        if (a1i === -1 && a1Def) {
+          const v1Pos = defs.findIndex(d => d.id === 'V1')
+          defs.splice(v1Pos !== -1 ? v1Pos + 1 : defs.length, 0, { ...a1Def })
         }
       }
     } catch (e) { console.warn('load settings:', e) }

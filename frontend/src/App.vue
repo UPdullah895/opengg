@@ -8,6 +8,7 @@ import ClipsPage from './pages/ClipsPage.vue'
 import DevicesPage from './pages/DevicesPage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
 import SelectField from './components/SelectField.vue'
+import ClipNotification from './components/ClipNotification.vue'
 import { usePersistenceStore } from './stores/persistence'
 import { loadTheme } from './utils/theme'
 import { getMediaPort } from './utils/assets'
@@ -18,6 +19,20 @@ import { listen } from '@tauri-apps/api/event'
 import type { AudioDevice } from './stores/audio'
 import ToastContainer from './components/ToastContainer.vue'
 import { useToast } from './composables/useToast'
+
+// Overlay mode: this window was opened by show_clip_notification (Rust) with ?overlay=1
+const isOverlay = typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).get('overlay') === '1'
+
+// Apply transparent background immediately (before any Vue paint) so the WebView
+// chrome doesn't flash the default white/grey before the component renders.
+// This replaces the previous non-scoped <style> block that polluted the main app.
+if (isOverlay) {
+  document.documentElement.style.background = 'transparent'
+  document.body.style.background = 'transparent'
+  const app = document.getElementById('app')
+  if (app) app.style.background = 'transparent'
+}
 
 const currentPage = ref('home')
 const persist = usePersistenceStore()
@@ -99,6 +114,13 @@ onMounted(async () => {
   await registerGlobalShortcuts()
   // Listen for global shortcut events fired from Rust
   listen('global-shortcut-save_replay', async () => {
+    // If GSR replay buffer is active, save via GSR (handles restart-on-save internally)
+    if (persist.state.settings.gsrEnabled) {
+      try {
+        await invoke('save_gsr_replay', { restartOnSave: persist.state.settings.gsrRestartOnSave })
+      } catch (e) { console.warn('save_gsr_replay:', e) }
+      return
+    }
     try { await invoke('save_replay') } catch (e) { console.warn('save_replay:', e) }
   })
   listen('global-shortcut-toggle_recording', async () => {
@@ -111,6 +133,27 @@ onMounted(async () => {
   })
   listen('global-shortcut-screenshot', async () => {
     try { await invoke('take_screenshot', { outputDir: persist.state.settings.screenshotDir || '' }) } catch (e) { console.warn('screenshot:', e) }
+  })
+
+  // ── GSR state sync: keep replay store in sync with backend process state ──
+  listen<{ running: boolean }>('gsr-status-changed', async () => {
+    const { useReplayStore } = await import('./stores/replay')
+    const replay = useReplayStore()
+    await replay.fetchStatus()
+  })
+
+  // ── Clip saved overlay notification ──
+  listen<{ game: string; filename: string; filesize_mb: number; success: boolean }>('clip-saved', async (event) => {
+    if (!persist.state.settings.enableClipNotifications) return
+    try {
+      await invoke('show_clip_notification', {
+        game:       event.payload.game,
+        filename:   event.payload.filename,
+        filesizeMb: event.payload.filesize_mb,
+        success:    event.payload.success,
+        enabled:    true,
+      })
+    } catch (e) { console.warn('show_clip_notification:', e) }
   })
 
   // ★ Epic 3: Toast on new clip saved (event payload is filepath string)
@@ -160,13 +203,16 @@ async function loadUserLocales() {
 </script>
 
 <template>
-  <div class="app-layout">
+  <!-- Overlay notification window — minimal render, no layout chrome -->
+  <ClipNotification v-if="isOverlay" />
+
+  <div v-else class="app-layout">
     <Titlebar />
     <div class="app-body">
       <Sidebar :active="currentPage" @navigate="navigate" />
       <main class="content">
         <KeepAlive include="ClipsPage">
-          <component :is="{ home: HomePage, mixer: MixerPage, clips: ClipsPage, devices: DevicesPage, settings: SettingsPage }[currentPage]" />
+          <component :is="{ home: HomePage, mixer: MixerPage, clips: ClipsPage, devices: DevicesPage, settings: SettingsPage }[currentPage]" @navigate="navigate" />
         </KeepAlive>
       </main>
     </div>
@@ -289,6 +335,9 @@ html.light {
   color-scheme: light;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* Prevent accidental highlight of non-text UI chrome during click-drag */
+img, svg { user-select: none; -webkit-user-drag: none; }
+button, .card, .sidebar-btn, .thumb, .thumb-img { user-select: none; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--bg-surface);

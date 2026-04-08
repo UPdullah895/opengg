@@ -3,7 +3,7 @@
 mod commands;
 mod media_server;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -127,15 +127,26 @@ fn main() {
             // ★ Epic 1C: Global OS shortcuts
             commands::register_global_shortcuts,
             // ★ GPU Screen Recorder
+            commands::check_gsr_installed,
             commands::start_gsr_replay, commands::save_gsr_replay,
             commands::stop_gsr_replay, commands::is_gsr_running,
+            commands::restart_gsr_replay,
             commands::get_active_window_title,
+            commands::list_audio_sinks,
+            commands::get_session_type,
+            commands::list_monitors,
+            commands::show_clip_notification,
+            // ★ DSP: EQ engine + effect stubs
+            commands::apply_eq, commands::apply_noise_gate,
+            commands::apply_compressor, commands::apply_noise_reduction,
+            commands::start_eq_engine, commands::stop_eq_engine,
         ])
         .setup(|app| {
             // ── Managed states ──
-            app.manage(VuState(Arc::new(AtomicBool::new(false))));
+            app.manage(VuState(Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(0))));
             app.manage(ExportProcess::default());
             app.manage(GsrProcess(Mutex::new(None)));
+            app.manage(JalvProcesses(Mutex::new(std::collections::HashMap::new())));
 
             // ★ Epic 4: RunInBackground defaults true; overridden from saved settings below
             let run_bg_flag = Arc::new(AtomicBool::new(true));
@@ -155,11 +166,38 @@ fn main() {
             let settings_path = dirs::config_dir()
                 .unwrap_or_default()
                 .join("opengg/ui-settings.json");
+
+            // Parameters for optional GSR auto-start (read before spawning threads)
+            let mut gsr_auto_params: Option<(String, u32, u32, String, Option<u32>, String, Vec<String>)> = None;
+
             if let Ok(json) = std::fs::read_to_string(&settings_path) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
                     // Restore run-in-background preference before the first close event
                     if let Some(run_bg) = v["settings"]["runInBackground"].as_bool() {
                         run_bg_flag.store(run_bg, Ordering::Relaxed);
+                    }
+
+                    // ★ Auto-start GSR if enabled and gsrAutoStart is true
+                    let gsr_enabled   = v["settings"]["gsrEnabled"].as_bool().unwrap_or(false);
+                    let gsr_auto      = v["settings"]["gsrAutoStart"].as_bool().unwrap_or(true);
+                    if gsr_enabled && gsr_auto {
+                        let output_dir = v["settings"]["clip_directories"][0]
+                            .as_str().unwrap_or("~/Videos/OpenGG").to_string();
+                        let replay_secs = v["settings"]["gsrReplaySecs"].as_u64().unwrap_or(30) as u32;
+                        let fps         = v["settings"]["gsrFps"].as_u64().unwrap_or(60) as u32;
+                        let quality     = v["settings"]["gsrQuality"].as_str().unwrap_or("cbr").to_string();
+                        let bitrate_kbps = if quality == "cbr" {
+                            v["settings"]["gsrCbrBitrate"].as_u64().map(|b| b as u32)
+                        } else { None };
+                        let monitor_target = v["settings"]["gsrMonitorTarget"]
+                            .as_str().unwrap_or("screen").to_string();
+                        let audio_sources: Vec<String> = v["settings"]["captureTracks"]
+                            .as_array()
+                            .map(|arr| arr.iter()
+                                .filter_map(|t| t["source"].as_str().map(|s| s.to_string()))
+                                .collect())
+                            .unwrap_or_else(|| vec!["Game".into(), "Chat".into(), "Mic".into()]);
+                        gsr_auto_params = Some((output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources));
                     }
                 }
             }
@@ -169,6 +207,18 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(1500));
                 commands::hydrate_audio_routing();
             });
+
+            // ★ Auto-start GSR replay buffer (2 s delay lets PipeWire sinks settle)
+            if let Some((output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources)) = gsr_auto_params {
+                let gsr_app = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(2000));
+                    match commands::start_gsr_replay(gsr_app, output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources) {
+                        Ok(()) => log::info!("GSR auto-started on launch"),
+                        Err(e) => log::warn!("GSR auto-start failed: {e}"),
+                    }
+                });
+            }
 
             // ★ Power User: Live file-system watcher — emits `clip_added` / `clip_removed`
             {
@@ -281,7 +331,11 @@ fn main() {
 }
 
 // ── Managed-state types ──────────────────────────────────────────────────────
-pub struct VuState(pub Arc<AtomicBool>);
+/// VU stream state: running flag + generation counter.
+/// The generation counter prevents stale reader threads (leaked from a previous
+/// `start_vu_stream` call) from re-attaching after `stop_vu_stream` returns —
+/// each thread checks `my_gen == current_gen` on every iteration.
+pub struct VuState(pub Arc<AtomicBool>, pub Arc<AtomicU64>);
 pub struct RunInBackground(pub Arc<AtomicBool>);
 pub struct MediaServerPort(pub u16);
 
@@ -295,5 +349,21 @@ pub struct ExportProcess {
 /// Wrapped in Mutex<Option<…>> so it can be taken on shutdown if needed.
 pub struct WatcherHandle(pub Mutex<Option<notify::RecommendedWatcher>>);
 
-/// Managed state for the GPU Screen Recorder (gpu-screen-recorder) child process.
-pub struct GsrProcess(pub Mutex<Option<std::process::Child>>);
+/// Spawn parameters retained so restart-on-save and hot-reload can respawn identically.
+pub struct GsrSpawnParams {
+    pub output_dir: String,
+    pub replay_secs: u32,
+    pub fps: u32,
+    pub quality: String,
+    pub bitrate_kbps: Option<u32>,
+    pub monitor_target: String,
+    pub audio_sources: Vec<String>,
+}
+
+/// Managed state for the GPU Screen Recorder child process.
+/// Stores the child AND the original spawn params so we can restart without re-reading config.
+pub struct GsrProcess(pub Mutex<Option<(std::process::Child, GsrSpawnParams)>>);
+
+/// jalv LV2-host subprocesses keyed by channel name (e.g. "Game", "Chat").
+/// Each entry is (Child, ChildStdin) — stdin is kept open for runtime parameter updates.
+pub struct JalvProcesses(pub Mutex<std::collections::HashMap<String, (std::process::Child, std::process::ChildStdin)>>);

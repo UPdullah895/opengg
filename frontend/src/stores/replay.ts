@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, shallowRef, triggerRef, markRaw } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { usePersistenceStore } from './persistence'
 
 export interface Clip {
   id: string; filename: string; filepath: string; filesize: number
@@ -35,6 +36,9 @@ export const useReplayStore = defineStore('replay', () => {
   // ── Context menu singleton ──
   const activeMenuClipId = ref('')
   const activeMenuPos = ref({ x: 0, y: 0 })
+
+  // ── Cross-page preview trigger (set before navigating to /clips) ──
+  const previewTargetClipId = ref<string | null>(null)
 
   // ── Scan state (for scan banner in grid view) ──
   const scanActive = ref(false)
@@ -88,7 +92,14 @@ export const useReplayStore = defineStore('replay', () => {
   }
   async function startReplay(d=30) { await invoke('start_replay',{duration:d}); status.value='replay'; replayDuration.value=d }
   async function stopRecorder() { await invoke('stop_recorder'); status.value='idle' }
-  async function saveReplay() { await invoke('save_replay') }
+  async function saveReplay() {
+    const persist = usePersistenceStore()
+    if (persist.state.settings.gsrEnabled) {
+      await invoke('save_gsr_replay', { restartOnSave: persist.state.settings.gsrRestartOnSave })
+      return
+    }
+    await invoke('save_replay')
+  }
 
   async function fetchClips(folder='', force=false) {
     if (loaded.value && !force && folder === lastFolder.value) return
@@ -161,6 +172,7 @@ export const useReplayStore = defineStore('replay', () => {
     fetchClips, updateClipMeta, removeClip, setThumbnail, addClip, injectSkeleton, replaceSkeleton,
     toggleSelect, clearSelection, isSelected,
     activeMenuClipId, activeMenuPos,
+    previewTargetClipId,
     scanActive, scanCount,
   }
 })

@@ -11,8 +11,10 @@ import ClipEditor from '../components/ClipEditor.vue'
 import AdvancedEditor from '../components/AdvancedEditor.vue'
 import SelectField from '../components/SelectField.vue'
 import GameFilterDropdown from '../components/GameFilterDropdown.vue'
+import RecordingDropdown from '../components/RecordingDropdown.vue'
 import { mediaUrl } from '../utils/assets'
 import { fmtDur, fmtSize, fmtRes, fmtDate } from '../utils/format'
+import { viewMode } from '../composables/useViewMode'
 import type { Ref } from 'vue'
 
 const replay = useReplayStore()
@@ -46,7 +48,7 @@ function showToast(msg: string) { toast.value = msg; setTimeout(() => toast.valu
 function refreshClips() { replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '', true) }
 
 // ── View / sizing / grouping ──
-const viewMode = ref<'grid' | 'list'>('grid')
+// viewMode is a shared module-level ref (useViewMode.ts) — synced with Dashboard popover
 const dateGrouped = ref(false)
 
 interface DateGroup { date: string; label: string; clips: Clip[] }
@@ -234,6 +236,36 @@ onMounted(async () => {
   replay.fetchStatus()
   replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '')
 
+  // ── Cross-page preview: open modal for clip navigated from Dashboard ──
+  if (replay.previewTargetClipId) {
+    const id = replay.previewTargetClipId
+    replay.previewTargetClipId = null
+    // Clips may not be loaded yet — wait for them then open
+    const tryOpen = () => {
+      const clip = replay.clips.find(c => c.id === id)
+      if (clip) { openPreview(clip); return }
+      // Retry once after fetch settles
+      const stop = watch(() => replay.clips, () => {
+        const c2 = replay.clips.find(c => c.id === id)
+        if (c2) { openPreview(c2); stop() }
+      })
+    }
+    tryOpen()
+  }
+
+  // ── Watch for subsequent same-route navigations (KeepAlive keeps this mounted) ──
+  watch(() => replay.previewTargetClipId, (id) => {
+    if (!id) return
+    replay.previewTargetClipId = null
+    const clip = replay.clips.find(c => c.id === id)
+    if (clip) { openPreview(clip); return }
+    // Clips may still be loading — retry when list updates
+    const stop = watch(() => replay.clips, () => {
+      const c2 = replay.clips.find(c => c.id === id)
+      if (c2) { openPreview(c2); stop() }
+    })
+  })
+
   unlistenAdded = await listen<string>('clip_added', async (event) => {
     const fp = event.payload
     if (replay.clips.find(c => c.filepath === fp && !c.isSkeleton)) return
@@ -347,18 +379,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
     <!-- Header -->
     <div class="header">
       <h1 class="title">Clips <span class="title-count">{{ totalClipCount }}</span></h1>
-      <div class="header-r">
-        <span class="rec-dot" :class="{ active: replay.status !== 'idle' }"></span>
-        <span class="rec-txt">{{ replay.status === 'idle' ? 'Idle' : replay.status === 'replay' ? `Replay · ${replay.replayDuration}s` : 'Recording' }}</span>
-        <button class="ib" @click="replay.status==='idle'?replay.startReplay():replay.stopRecorder()">{{ replay.status==='idle'?'▶':'■' }}</button>
-        <button class="ib" @click="replay.saveReplay()" :disabled="replay.status!=='replay'">💾</button>
-        <button class="ib" @click="refreshClips()">↻</button>
-      </div>
     </div>
 
     <!-- Controls — left group + right group so toggle is always far right -->
     <div class="ctrl-bar">
       <div class="ctrl-left">
+        <RecordingDropdown />
         <div class="search-wrap">
           <svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <!-- Phase 4b: bound to searchRaw; debounced 150ms before hitting store -->
@@ -728,10 +754,6 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .header { display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
 .title { font-size:22px; font-weight:700; }
 .header-r { display:flex; align-items:center; gap:8px; }
-.rec-dot { width:8px; height:8px; border-radius:50%; background:var(--text-muted); }
-.rec-dot.active { background:var(--danger); animation:pulse 1.2s infinite; }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
-.rec-txt { font-size:12px; color:var(--text-sec); }
 .ib { width:30px; height:30px; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); color:var(--text-sec); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px; }
 .ib:hover { background:var(--bg-hover); } .ib:disabled { opacity:.4; }
 

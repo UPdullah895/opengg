@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
+import { getVersion } from '@tauri-apps/api/app'
 import { ask, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { usePersistenceStore, DEFAULTS } from '../stores/persistence'
@@ -10,16 +11,24 @@ import { LANGUAGES, registerLocale } from '../i18n'
 import SelectField from '../components/SelectField.vue'
 import IconPicker from '../components/IconPicker.vue'
 import InfoIcon from '../components/InfoIcon.vue'
+import { settingsTargetTab } from '../composables/useNavSignal'
 
 const { t, locale } = useI18n()
 const persist = usePersistenceStore()
+const appVersion = ref('')
 onMounted(async () => {
+  try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
   if (!persist.loaded) await persist.load()
   syncLocale()
   // ★ Epic 4: Sync autostart UI with actual OS state on every open
   try { settings.value.runAtStartup = await invoke<boolean>('get_autostart') } catch { /* ignore */ }
   // ★ Epic 4: Push saved run-in-background flag to Rust state
   try { await invoke('set_run_in_background', { val: settings.value.runInBackground }) } catch { /* ignore */ }
+  // ── Cross-page deep link: auto-select tab when navigated from another page ──
+  if (settingsTargetTab.value) {
+    active.value = settingsTargetTab.value as typeof active.value
+    settingsTargetTab.value = null
+  }
 })
 
 const settings = computed(() => persist.state.settings)
@@ -39,7 +48,7 @@ function setLanguage(code: string) {
 }
 
 // ─── Nav ───
-type Section = 'general' | 'language' | 'shortcuts' | 'mixerRouting' | 'eqAutoFlatten' | 'captureSound' | 'trackManagement' | 'storage' | 'extensions'
+type Section = 'general' | 'language' | 'shortcuts' | 'mixerRouting' | 'captureSound' | 'trackManagement' | 'storage' | 'extensions'
 type NavItem = { key: Section; label: string; badge?: string }
 const active = ref<Section>('general')
 
@@ -56,14 +65,13 @@ const navGroups = computed(() => [
     key: 'audioEngine', label: t('settings.groups.audioEngine'),
     items: [
       { key: 'mixerRouting'  as Section, label: t('settings.sections.mixerRouting')  } as NavItem,
-      { key: 'eqAutoFlatten' as Section, label: t('settings.sections.eqAutoFlatten') } as NavItem,
     ],
   },
   {
     key: 'moments', label: t('settings.groups.moments'),
     items: [
       { key: 'captureSound'    as Section, label: t('settings.sections.captureSound') } as NavItem,
-      { key: 'trackManagement' as Section, label: 'Timeline Tracks'                   } as NavItem,
+      { key: 'trackManagement' as Section, label: t('settings.sections.trackManagement') } as NavItem,
       { key: 'storage'         as Section, label: t('settings.sections.storage')      } as NavItem,
     ],
   },
@@ -188,25 +196,59 @@ const shortcutActions = computed<Array<{ key: string; label: string; hint: strin
 
 // ─── GPU Screen Recorder ───
 const gsrQualityOptions = [
-  { value: 'High',   label: 'High (CRF 23)'   },
-  { value: 'Medium', label: 'Medium (CRF 28)'  },
-  { value: 'Low',    label: 'Low (CRF 35)'     },
+  { value: 'cbr',       label: 'Constant bitrate (Recommended)' },
+  { value: 'medium',    label: 'Medium'     },
+  { value: 'high',      label: 'High'       },
+  { value: 'very_high', label: 'Very high'  },
+  { value: 'ultra',     label: 'Ultra'      },
 ]
-const gsrFpsOptions    = [30, 60, 120].map(v => ({ value: v, label: `${v} FPS` }))
-const gsrReplayOptions = [15, 30, 60, 120, 180].map(v => ({ value: v, label: `${v}s` }))
+const gsrFpsOptions = [30, 60, 120].map(v => ({ value: v, label: `${v} FPS` }))
+const gsrReplayPresets = [
+  { value: '15',     label: '15s'       },
+  { value: '30',     label: '30s'       },
+  { value: '60',     label: '60s'       },
+  { value: '90',     label: '90s'       },
+  { value: '120',    label: '120s'      },
+  { value: 'custom', label: 'Custom...' },
+]
+
+function onReplayPresetChange(preset: string | number) {
+  settings.value.gsrReplayPreset = String(preset) as any
+  if (preset !== 'custom') {
+    settings.value.gsrReplaySecs = Number(preset)
+    restartGsr()
+  }
+}
+
+function onCustomReplaySecs(e: Event) {
+  const raw = Number((e.target as HTMLInputElement).value)
+  settings.value.gsrReplaySecs = Math.max(5, Math.min(600, raw || 30))
+  restartGsr()
+}
+
+const gsrAudioSources = computed(() =>
+  settings.value.captureTracks.map((t: { source: string }) => t.source)
+)
+
+function gsrInvokeParams() {
+  const outputDir = settings.value.clip_directories?.[0] ?? '~/Videos/OpenGG'
+  return {
+    outputDir,
+    replaySecs:    settings.value.gsrReplaySecs,
+    fps:           settings.value.gsrFps,
+    quality:       settings.value.gsrQuality,
+    bitrateKbps:   settings.value.gsrQuality === 'cbr' ? settings.value.gsrCbrBitrate : null,
+    monitorTarget: settings.value.gsrMonitorTarget || 'screen',
+    audioSources:  gsrAudioSources.value,
+  }
+}
 
 async function toggleGsr() {
-  const outputDir = (settings.value.clip_directories?.[0] ?? '~/Videos/OpenGG').replace('~', '')
   try {
     if (settings.value.gsrEnabled) {
       await invoke('stop_gsr_replay')
     } else {
-      await invoke('start_gsr_replay', {
-        outputDir,
-        replaySecs: settings.value.gsrReplaySecs,
-        fps: settings.value.gsrFps,
-        quality: settings.value.gsrQuality,
-      })
+      await invoke('start_gsr_replay', gsrInvokeParams())
     }
     settings.value.gsrEnabled = !settings.value.gsrEnabled
   } catch (e) { console.error('GSR toggle:', e) }
@@ -214,17 +256,28 @@ async function toggleGsr() {
 
 async function restartGsr() {
   if (!settings.value.gsrEnabled) return
-  const outputDir = (settings.value.clip_directories?.[0] ?? '~/Videos/OpenGG').replace('~', '')
   try {
-    await invoke('stop_gsr_replay')
-    await invoke('start_gsr_replay', {
-      outputDir,
-      replaySecs: settings.value.gsrReplaySecs,
-      fps: settings.value.gsrFps,
-      quality: settings.value.gsrQuality,
-    })
+    await invoke('restart_gsr_replay', gsrInvokeParams())
   } catch (e) { console.error('GSR restart:', e) }
 }
+
+// ─── Resource estimation ───
+const gsrEstFileMb = computed(() => {
+  const kbps = settings.value.gsrQuality === 'cbr'
+    ? (settings.value.gsrCbrBitrate ?? 8000)
+    : ({ medium: 4000, high: 6000, very_high: 12000, ultra: 20000 } as Record<string, number>)[settings.value.gsrQuality] ?? 8000
+  return ((kbps * settings.value.gsrReplaySecs) / 8 / 1024).toFixed(0)
+})
+const gsrEstRamMb = computed(() => {
+  // Rough heuristic: replay RAM ≈ file size × 1.2 (encoder buffers + ring buffer overhead)
+  return Math.ceil(Number(gsrEstFileMb.value) * 1.2)
+})
+
+// Restart GSR when capture track sources change
+watch(
+  () => settings.value.captureTracks.map((t: { source: string }) => t.source).join(','),
+  () => restartGsr(),
+)
 
 const isDefaultShortcuts = computed(() =>
   JSON.stringify(settings.value.shortcuts) === JSON.stringify(DEFAULTS.settings.shortcuts)
@@ -236,6 +289,37 @@ const CAPTURE_SOURCES = ['Game', 'Chat', 'Media', 'Aux', 'Mic']
 const captureSourceOptions = computed(() =>
   CAPTURE_SOURCES.map(s => ({ value: s, label: t(`settings.captureSound.sources.${s}`) }))
 )
+
+// Dynamic audio sinks from PipeWire (populated on mount via list_audio_sinks)
+const audioSinkOptions = ref<Array<{ value: string; label: string }>>([])
+
+// Session type + dynamic monitor list for GSR target dropdown
+const sessionType = ref<'x11' | 'wayland' | 'unknown'>('unknown')
+const monitorOptions = ref<Array<{ value: string; label: string }>>([
+  { value: 'screen', label: 'Primary Monitor' },
+])
+const isWayland = computed(() => sessionType.value === 'wayland')
+
+onMounted(async () => {
+  try {
+    const sinks = await invoke<string[]>('list_audio_sinks')
+    audioSinkOptions.value = sinks.map(name => ({ value: name, label: name }))
+  } catch {
+    // Fallback to static OpenGG sinks if pactl is unavailable
+    audioSinkOptions.value = CAPTURE_SOURCES.map(s => ({ value: `OpenGG_${s}`, label: `OpenGG_${s}` }))
+  }
+  try {
+    sessionType.value = (await invoke<string>('get_session_type')) as typeof sessionType.value
+  } catch { /* ignore */ }
+  try {
+    const monitors = await invoke<Array<{ name: string; label: string }>>('list_monitors')
+    const opts = monitors.map(m => ({ value: m.name, label: m.label }))
+    if (!isWayland.value) {
+      opts.push({ value: 'focused', label: 'Fullscreen Application' })
+    }
+    monitorOptions.value = opts
+  } catch { /* keep default */ }
+})
 function addCaptureTrack() {
   const n = settings.value.captureTracks.length + 1
   settings.value.captureTracks.push({ name: `Track ${n}`, source: 'Game' })
@@ -264,7 +348,7 @@ const dangerLoading = ref(false)
 const gsrInstallOpen = ref(false)
 const dangerMsg = ref('')
 async function removeVirtualAudio() {
-  const confirmed = await ask('This will unload all OpenGG virtual audio sinks and restart PipeWire. Your audio routing will be reset. Continue?', { title: 'Danger Zone', kind: 'warning' })
+  const confirmed = await ask(t('settings.dangerZone.confirmMsg'), { title: t('settings.dangerZone.title'), kind: 'warning' })
   if (!confirmed) return
   dangerLoading.value = true; dangerMsg.value = ''
   try {
@@ -413,7 +497,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         </div>
 
         <div class="card">
-          <div class="card-head">Clip Preferences</div>
+          <div class="card-head">{{ t('settings.clipPreferences.title') }}</div>
           <div class="form-grid">
             <div class="field">
               <label>{{ t('settings.clipSettings.defaultClick') }}</label>
@@ -424,33 +508,33 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 
         <!-- ★ Epic 4: Daemon & Startup toggles -->
         <div class="card">
-          <div class="card-head">Daemon &amp; Startup</div>
+          <div class="card-head">{{ t('settings.daemon.title') }}</div>
           <label class="toggle-row">
             <input type="checkbox" v-model="settings.runAtStartup" @change="onRunAtStartupChange">
-            <span class="tname">Run OpenGG when my computer starts</span>
-            <span class="tdesc">Automatically launch OpenGG on login via XDG autostart</span>
+            <span class="tname">{{ t('settings.daemon.runAtStartup') }}</span>
+            <span class="tdesc">{{ t('settings.daemon.runAtStartupDesc') }}</span>
           </label>
           <label class="toggle-row">
             <input type="checkbox" v-model="settings.runInBackground" @change="onRunInBackgroundChange">
-            <span class="tname">Keep running in background when closed</span>
-            <span class="tdesc">Closing the window hides it to the system tray instead of quitting</span>
+            <span class="tname">{{ t('settings.daemon.keepInBackground') }}</span>
+            <span class="tdesc">{{ t('settings.daemon.keepInBackgroundDesc') }}</span>
           </label>
         </div>
 
         <!-- ★ Epic 2: Diagnostics / crash log -->
         <div class="card">
-          <div class="card-head">Diagnostics <InfoIcon title="Crash and error logs are stored locally for debugging. Share them when reporting issues." /></div>
+          <div class="card-head">{{ t('settings.diagnostics.title') }} <InfoIcon :title="t('settings.diagnostics.hint')" /></div>
           <div class="action-row">
             <button class="btn btn-accent" @click="openCrashLogsFolder">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-              Open Crash Logs Folder
+              {{ t('settings.diagnostics.openCrashLogs') }}
             </button>
           </div>
         </div>
 
         <div class="card">
           <div class="card-head">{{ t('settings.general.about') }}</div>
-          <div class="about-row"><strong>OpenGG</strong> {{ t('settings.general.version') }}</div>
+          <div class="about-row"><strong>OpenGG</strong> v{{ appVersion }}</div>
           <div class="about-row muted">{{ t('settings.general.openSource') }}</div>
           <div class="about-row saved" v-if="persist.loaded">✓ {{ t('settings.saved') }}</div>
           <div class="about-row" style="margin-top:8px">
@@ -500,7 +584,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         <div class="card">
           <div class="shortcut-hdr">
             <span class="shortcut-hdr-label">{{ t('settings.shortcuts.title') }} <InfoIcon :title="t('settings.shortcuts.hint')" /></span>
-            <button class="btn-reset-sc" :disabled="isDefaultShortcuts" @click="resetShortcuts">Reset to Defaults</button>
+            <button class="btn-reset-sc" :disabled="isDefaultShortcuts" @click="resetShortcuts">{{ t('settings.shortcuts.resetToDefaults') }}</button>
           </div>
           <div class="shortcut-list">
             <div
@@ -540,9 +624,9 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         <div class="card danger-zone-card">
           <div class="card-head danger-head">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;flex-shrink:0"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            Danger Zone
+            {{ t('settings.dangerZone.title') }}
           </div>
-          <p class="hint" style="color:color-mix(in srgb,var(--danger) 80%,var(--text-sec))">These actions are destructive. Use only if your audio routing is broken and needs a full reset.</p>
+          <p class="hint" style="color:color-mix(in srgb,var(--danger) 80%,var(--text-sec))">{{ t('settings.dangerZone.subtitle') }}</p>
           <div class="danger-action-row">
             <div class="danger-info">
               <span class="danger-label">Remove Virtual Audio &amp; Restore OS Defaults</span>
@@ -557,17 +641,6 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         </div>
       </section>
 
-      <!-- ════════════════════ EQ AUTO-FLATTEN ════════════════════ -->
-      <section v-if="active === 'eqAutoFlatten'">
-        <h2 class="sec-title">{{ t('settings.sections.eqAutoFlatten') }}</h2>
-        <div class="card">
-          <div class="placeholder-box">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>
-            <span>EQ presets &amp; auto-flatten — coming soon</span>
-          </div>
-        </div>
-      </section>
-
       <!-- ════════════════════ CAPTURE & SOUND ════════════════════ -->
       <section v-if="active === 'captureSound'">
         <h2 class="sec-title">{{ t('settings.captureSound.title') }}</h2>
@@ -575,14 +648,29 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         <!-- GPU Screen Recorder panel (top) -->
         <div class="card">
           <div class="card-head gsr-head">
-            <span>GPU Screen Recorder</span>
+            <span>{{ t('settings.captureGsr.title') }}</span>
             <span class="badge-beta">Beta</span>
-            <InfoIcon title="Uses gpu-screen-recorder for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately." />
+            <InfoIcon :title="t('settings.captureGsr.hint')" />
+            <span v-if="settings.gsrEnabled" class="gsr-est">
+              Est. RAM: ~{{ gsrEstRamMb }} MB &nbsp;|&nbsp; File: ~{{ gsrEstFileMb }} MB
+            </span>
           </div>
           <div v-if="settings.gsrEnabled" class="form-grid gsr-grid">
             <div class="field">
               <label>Quality</label>
               <SelectField v-model="settings.gsrQuality" :options="gsrQualityOptions" @update:modelValue="restartGsr" />
+              <input
+                v-if="settings.gsrQuality === 'cbr'"
+                type="number"
+                class="gsr-custom-secs"
+                :value="settings.gsrCbrBitrate"
+                min="500"
+                max="100000"
+                step="500"
+                placeholder="Bitrate (kbps)"
+                title="Target bitrate in kbps (e.g. 8000 = 8 Mbps)"
+                @change="e => { settings.gsrCbrBitrate = Math.max(500, Math.min(100000, Number((e.target as HTMLInputElement).value) || 8000)); restartGsr() }"
+              />
             </div>
             <div class="field">
               <label>FPS</label>
@@ -590,10 +678,62 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
             </div>
             <div class="field">
               <label>Replay Buffer</label>
-              <SelectField v-model="settings.gsrReplaySecs" :options="gsrReplayOptions" @update:modelValue="restartGsr" />
+              <SelectField
+                :modelValue="settings.gsrReplayPreset"
+                :options="gsrReplayPresets"
+                @update:modelValue="onReplayPresetChange"
+              />
+              <input
+                v-if="settings.gsrReplayPreset === 'custom'"
+                type="number"
+                class="gsr-custom-secs"
+                :value="settings.gsrReplaySecs"
+                min="5"
+                max="600"
+                placeholder="Seconds"
+                @change="onCustomReplaySecs"
+              />
+            </div>
+            <div class="field">
+              <label>Monitor Target</label>
+              <SelectField
+                v-model="settings.gsrMonitorTarget"
+                :options="monitorOptions"
+                @update:modelValue="restartGsr"
+              />
+              <span v-if="isWayland" class="hint" style="color:var(--warn,#f59e0b);margin-top:4px;font-size:11px">
+                Wayland session detected. "Fullscreen Application" capture requires X11.
+              </span>
             </div>
           </div>
-          <div v-else class="hint" style="margin-top:8px">Enable GPU Screen Recorder in <strong>Extensions</strong> to configure it here.</div>
+          <div v-if="settings.gsrEnabled" class="gsr-toggle-row">
+            <span class="gsr-label">{{ t('notification.enableClipNotifications') }}
+              <InfoIcon :title="t('notification.enableClipNotificationsDesc')" />
+            </span>
+            <button class="toggle-btn" :class="{ on: settings.enableClipNotifications }"
+                    @click="settings.enableClipNotifications = !settings.enableClipNotifications">
+              {{ settings.enableClipNotifications ? 'On' : 'Off' }}
+            </button>
+          </div>
+          <div v-if="settings.gsrEnabled" class="gsr-toggle-row">
+            <span class="gsr-label">Auto-start on launch
+              <InfoIcon title="Automatically start the replay buffer when OpenGG opens." />
+            </span>
+            <button class="toggle-btn" :class="{ on: settings.gsrAutoStart }"
+                    @click="settings.gsrAutoStart = !settings.gsrAutoStart">
+              {{ settings.gsrAutoStart ? 'On' : 'Off' }}
+            </button>
+          </div>
+          <div v-if="settings.gsrEnabled" class="gsr-toggle-row">
+            <span class="gsr-label">Restart replay on save
+              <InfoIcon title="After saving a clip, restart the buffer so the next clip only contains new footage." />
+            </span>
+            <button class="toggle-btn" :class="{ on: settings.gsrRestartOnSave }"
+                    @click="settings.gsrRestartOnSave = !settings.gsrRestartOnSave">
+              {{ settings.gsrRestartOnSave ? 'On' : 'Off' }}
+            </button>
+          </div>
+          <div v-else class="hint" style="margin-top:8px">{{ t('settings.captureGsr.extensionsHint') }}</div>
         </div>
 
         <!-- OBS-style Audio Capture Devices -->
@@ -630,14 +770,14 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 
       <!-- ════════════════════ TIMELINE TRACKS ════════════════════ -->
       <section v-if="active === 'trackManagement'">
-        <h2 class="sec-title">Timeline Tracks</h2>
+        <h2 class="sec-title">{{ t('settings.timelineTracks.title') }}</h2>
 
         <div class="card">
-          <div class="card-head">Track Icons</div>
+          <div class="card-head">{{ t('settings.timelineTracks.trackIcons') }}</div>
           <label class="ext-toggle-row" style="border-bottom:none;padding-bottom:0">
             <div class="ext-toggle-info">
-              <span class="ext-name">Show icons in editor track headers</span>
-              <span class="ext-desc">Display a small icon next to each track label in the editor timeline</span>
+              <span class="ext-name">{{ t('settings.timelineTracks.showIconsDesc') }}</span>
+              <span class="ext-desc">{{ t('settings.timelineTracks.showIconsDesc') }}</span>
             </div>
             <div class="ext-switch-wrap">
               <label class="switch">
@@ -649,7 +789,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         </div>
 
         <div class="card">
-          <div class="card-head">Track List <InfoIcon title="Customize the name, color, and icon for each editor timeline track. Changes apply live — open the editor to see them instantly." /></div>
+          <div class="card-head">{{ t('settings.timelineTracks.trackList') }} <InfoIcon :title="t('settings.timelineTracks.trackListHint')" /></div>
           <div class="tdef-list">
             <div v-for="(def, idx) in settings.trackDefs" :key="def.id" class="tdef-row">
               <div class="tdef-swatch" :style="{ background: def.color }" @click="openColorPicker(idx)" title="Pick color"></div>
@@ -669,12 +809,12 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
               </button>
             </div>
           </div>
-          <button class="btn btn-ghost add-row" @click="addTrackDef">+ Add Audio Track</button>
+          <button class="btn btn-ghost add-row" @click="addTrackDef">{{ t('settings.timelineTracks.addAudioTrack') }}</button>
         </div>
 
         <!-- Live Preview -->
         <div class="card">
-          <div class="card-head">Live Preview <InfoIcon title="Exactly how the editor timeline headers will look. Updates as you type." /></div>
+          <div class="card-head">{{ t('settings.timelineTracks.livePreview') }} <InfoIcon :title="t('settings.timelineTracks.livePreviewHint')" /></div>
           <div class="tl-preview">
             <div v-for="def in settings.trackDefs" :key="def.id" class="tl-preview-row" :style="{ '--pv': def.color }">
               <div class="tl-pv-accent"></div>
@@ -700,27 +840,39 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
       <section v-if="active === 'storage'">
         <h2 class="sec-title">{{ t('settings.storage.title') }}</h2>
 
-        <!-- Clip directories -->
+        <!-- Media directories -->
         <div class="card">
           <div class="card-head">
-            Clip Directories <span class="badge-count">{{ (settings.clip_directories || []).length }}</span>
-            <InfoIcon title="OpenGG watches these folders for new clips. Files in any directory appear instantly." />
+            Media Directories
+            <InfoIcon title="Clip Directory is watched for new recordings. Screenshot Directory is where editor screenshots are saved." />
           </div>
-          <div v-for="(src, i) in (settings.clip_directories || [])" :key="i" class="source-row">
-            <span class="source-path">{{ src }}</span>
-            <button class="btn-icon-sm" @click="removeClipSource(i)" title="Remove">✕</button>
-          </div>
-          <div v-if="!(settings.clip_directories || []).length" class="hint">No directories configured. Add one below.</div>
-          <button class="btn" style="margin-top:10px" @click="addClipSource">+ Add Directory</button>
-        </div>
 
-        <!-- Screenshot location -->
-        <div class="card">
-          <div class="card-head">Screenshot Save Location <InfoIcon title="Where screenshots taken from the Editor are saved." /></div>
-          <div class="folder-row">
-            <input type="text" :value="settings.screenshotDir || '~/Pictures (default)'" readonly class="folder-input" />
-            <button class="btn" @click="pickScreenshotDir">Change</button>
-            <button v-if="settings.screenshotDir" class="btn" @click="settings.screenshotDir = ''">Reset</button>
+          <!-- Clip Directory row -->
+          <div class="media-dir-row">
+            <div class="media-dir-label">Clip Directory</div>
+            <div class="folder-row">
+              <input type="text" :value="(settings.clip_directories || [])[0] || '~/Videos/OpenGG (default)'" readonly class="folder-input" />
+              <button class="btn" @click="addClipSource">Change</button>
+            </div>
+            <div v-if="(settings.clip_directories || []).length > 1" class="media-dir-extra">
+              <div v-for="(src, i) in (settings.clip_directories || []).slice(1)" :key="i" class="source-row">
+                <span class="source-path">{{ src }}</span>
+                <button class="btn-icon-sm" @click="removeClipSource(i + 1)" title="Remove">✕</button>
+              </div>
+              <button class="btn btn-sm" @click="addClipSource">+ Add Directory</button>
+            </div>
+          </div>
+
+          <div class="media-dir-divider"></div>
+
+          <!-- Screenshot Directory row -->
+          <div class="media-dir-row">
+            <div class="media-dir-label">Screenshot Directory</div>
+            <div class="folder-row">
+              <input type="text" :value="settings.screenshotDir || '~/Pictures (default)'" readonly class="folder-input" />
+              <button class="btn" @click="pickScreenshotDir">Change</button>
+              <button v-if="settings.screenshotDir" class="btn" @click="settings.screenshotDir = ''">Reset</button>
+            </div>
           </div>
         </div>
 
@@ -774,9 +926,9 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         <!-- GPU Screen Recorder -->
         <div class="card">
           <div class="card-head gsr-head">
-            <span>GPU Screen Recorder</span>
+            <span>{{ t('settings.captureGsr.title') }}</span>
             <span class="badge-beta">Beta</span>
-            <InfoIcon title="Uses gpu-screen-recorder for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately." />
+            <InfoIcon :title="t('settings.captureGsr.hint')" />
           </div>
           <button class="gsr-install-toggle" @click="gsrInstallOpen = !gsrInstallOpen">{{ gsrInstallOpen ? '▼ Hide install guide' : '▶ How to install?' }}</button>
           <div v-if="gsrInstallOpen" class="gsr-install-guide">
@@ -948,7 +1100,15 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
 .gsr-grid { margin-top: 14px; }
+.gsr-custom-secs {
+  margin-top: 6px; width: 100%; padding: 5px 8px;
+  border-radius: 5px; border: 1px solid var(--border);
+  background: var(--bg-input); color: var(--text);
+  font-size: 12px; outline: none;
+}
+.gsr-custom-secs:focus { border-color: var(--accent); }
 .gsr-head { display: flex; align-items: center; gap: 8px; }
+.gsr-est { margin-left: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .gsr-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; }
 .gsr-label { font-size: 13px; color: var(--text-sec); }
 .gsr-install-toggle { display: block; margin: 6px 0; padding: 0; border: none; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; text-align: left; font-weight: 600; }
@@ -1148,6 +1308,13 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
   border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--text); outline: none; font-size: 13px; color-scheme: dark;
 }
+
+/* ── Media Directories card ── */
+.media-dir-row { display: flex; flex-direction: column; gap: 6px; }
+.media-dir-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); }
+.media-dir-extra { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.media-dir-divider { height: 1px; background: var(--border); margin: 10px 0; }
+.btn-sm { font-size: 11px; padding: 4px 10px; }
 
 /* ── Storage stats ── */
 .storage-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }

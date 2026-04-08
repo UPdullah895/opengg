@@ -28,14 +28,25 @@ function onDragLeave(e: DragEvent) {
 function onDrop(e: DragEvent) {
   e.preventDefault()
   hovering.value = false
-  const appId = e.dataTransfer?.getData('application/opengg-app-id')
-  if (appId) audio.dropOnChannel(props.channel)
+  // Dual-path: custom MIME works on desktop; text/plain is the WebKitGTK fallback
+  // because WebKitGTK silently returns '' for non-text MIME types on getData().
+  const raw = e.dataTransfer?.getData('application/opengg-app-id')
+           || e.dataTransfer?.getData('text/plain')
+           || ''
+  const parsedId = parseInt(raw, 10)
+  if (!isNaN(parsedId)) {
+    audio.dropOnChannelById(parsedId, props.channel)
+  } else if (audio.draggedApp) {
+    // Last-resort: use the store's draggedApp (same-tab drag where store is reliable)
+    audio.dropOnChannel(props.channel)
+  }
 }
 
 function startDragApp(e: DragEvent, app: { id: number; name: string; binary: string }) {
   if (!e.dataTransfer) return
   e.dataTransfer.setData('application/opengg-app-id', String(app.id))
-  e.dataTransfer.setData('text/plain', app.name)
+  // text/plain carries the numeric ID as a reliable WebKitGTK fallback
+  e.dataTransfer.setData('text/plain', String(app.id))
   e.dataTransfer.effectAllowed = 'move'
   audio.startDrag({ id: app.id, name: app.name, binary: app.binary, channel: props.channel, icon: '' })
 }

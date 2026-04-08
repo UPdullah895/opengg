@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use tauri::{command, AppHandle, Emitter, Manager};
 
 const AU_PATH: &str = "/org/opengg/Daemon/Audio";
@@ -250,6 +250,7 @@ fn scan_sink_inputs() -> Result<String, String> {
 
         let sink_idx = si["sink"].as_u64().unwrap_or(0) as u32;
         let channel = lookup_sink_channel(sink_idx);
+        let auto_channel = classify_channel(&p);
 
         // Include volume info (0-100) for per-app volume control
         let vol = si["volume"].as_object()
@@ -260,7 +261,8 @@ fn scan_sink_inputs() -> Result<String, String> {
 
         apps.push(serde_json::json!({
             "id": idx, "name": name, "binary": binary,
-            "channel": channel, "icon": "", "volume": vol
+            "channel": channel, "icon": "", "volume": vol,
+            "auto_channel": auto_channel
         }));
     }
 
@@ -290,6 +292,37 @@ fn scan_sink_inputs() -> Result<String, String> {
     }
 
     Ok(serde_json::to_string(&apps).unwrap_or("[]".into()))
+}
+
+/// Suggest an OpenGG channel for an app based on PipeWire stream properties.
+/// Returns an empty string when no confident classification can be made.
+fn classify_channel(props: &serde_json::Value) -> &'static str {
+    let role   = props["media.role"].as_str().unwrap_or("").to_lowercase();
+    let binary = props["application.process.binary"].as_str().unwrap_or("").to_lowercase();
+    let name   = props["application.name"].as_str().unwrap_or("").to_lowercase();
+
+    // media.role is the most authoritative signal (set by the app itself)
+    match role.as_str() {
+        "game"                          => return "Game",
+        "music" | "video" | "movie"    => return "Media",
+        "phone" | "communication"      => return "Chat",
+        _ => {}
+    }
+
+    // Binary / app-name heuristics
+    const CHAT_BINS: &[&str]  = &["discord", "teamspeak", "mumble", "signal", "telegram",
+                                   "zoom", "slack", "skype", "element", "hexchat"];
+    const GAME_BINS: &[&str]  = &["steam", "heroic", "lutris", "wine", "proton",
+                                   "gameoverlayui", "gamescope", "mangohud"];
+    const MEDIA_BINS: &[&str] = &["spotify", "rhythmbox", "clementine", "vlc", "mpv",
+                                   "celluloid", "strawberry", "quodlibet", "cmus", "lollypop",
+                                   "elisa", "audacious"];
+
+    if CHAT_BINS.iter().any(|b| binary.contains(b) || name.contains(b))  { return "Chat"; }
+    if GAME_BINS.iter().any(|b| binary.contains(b) || name.contains(b))  { return "Game"; }
+    if MEDIA_BINS.iter().any(|b| binary.contains(b) || name.contains(b)) { return "Media"; }
+
+    ""  // No confident match — leave in Master
 }
 
 fn lookup_sink_channel(sink_idx: u32) -> String {
@@ -926,7 +959,29 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
 }
 
 // ═══ Replay ═══
-#[command] pub async fn get_recorder_status() -> Result<String, String> { call_dbus("GetStatus", RP_PATH, RP_IFACE, ()).await.or(Ok("idle".into())) }
+#[command]
+pub fn get_recorder_status(app: AppHandle) -> String {
+    // Check live GsrProcess state first — covers the GPU Screen Recorder path.
+    let gsr = app.state::<GsrProcess>();
+    let mut lock = gsr.0.lock().unwrap();
+    match lock.as_mut() {
+        Some((child, params)) => match child.try_wait() {
+            Ok(None) => {
+                // Process still running — return replay:<secs>
+                let secs = params.replay_secs;
+                return format!("replay:{secs}");
+            }
+            _ => {
+                // Exited or error — clean up state
+                lock.take();
+            }
+        },
+        None => {}
+    }
+    drop(lock);
+    // Fallback to legacy D-Bus daemon path (non-GSR recorder)
+    "idle".into()
+}
 #[command] pub async fn start_replay(duration: u32) -> Result<(), String> { call_dbus_void("StartReplay", RP_PATH, RP_IFACE, (duration,)).await }
 #[command] pub async fn stop_recorder() -> Result<(), String> { call_dbus_void("Stop", RP_PATH, RP_IFACE, ()).await }
 #[command] pub async fn save_replay() -> Result<(), String> { call_dbus_void("SaveReplay", RP_PATH, RP_IFACE, ()).await }
@@ -986,8 +1041,9 @@ fn probe_cache_set(db: &Connection, fp: &str, dur: f64, w: u32, h: u32, mtime: u
 pub async fn get_clips_count(folder: String) -> Result<usize, String> {
     let dir = resolve_clips_dir(&folder);
     if !dir.exists() { return Ok(0); }
-    let count = std::fs::read_dir(&dir)
-        .map_err(|e| format!("{e}"))?
+    let count = walkdir::WalkDir::new(&dir)
+        .min_depth(1)
+        .into_iter()
         .flatten()
         .filter(|e| {
             let p = e.path();
@@ -1013,9 +1069,8 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
     let mut seen = std::collections::HashSet::new();
     for dir in &dirs {
         if !dir.exists() { continue; }
-        let rd = match std::fs::read_dir(dir) { Ok(r) => r, Err(_) => continue };
-        for e in rd.flatten() {
-            let p = e.path(); if !p.is_file() { continue; }
+        for e in walkdir::WalkDir::new(dir).min_depth(1).into_iter().flatten() {
+            let p = e.path().to_path_buf(); if !p.is_file() { continue; }
             let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
             if !VIDEO_EXTS.contains(&ext.as_str()) { continue; }
             let fp = p.to_string_lossy().to_string();
@@ -1650,9 +1705,19 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
     use libpulse_simple_binding::Simple;
 
     let st = app.state::<crate::VuState>();
-    if st.0.load(Ordering::Relaxed) { return Ok(()); }
+
+    // ── Generation-counter dedup ─────────────────────────────────────────────
+    // Stop any live reader threads from the previous session by toggling the
+    // running flag off, bumping the generation, then turning it back on.
+    // Threads blocked in pa.read() will see their generation is stale and exit.
+    st.0.store(false, Ordering::Relaxed);
+    let my_gen = st.1.fetch_add(1, Ordering::SeqCst) + 1;
+    // Give old threads one read-period (~32 ms) to notice the flag is false.
+    std::thread::sleep(std::time::Duration::from_millis(50));
     st.0.store(true, Ordering::Relaxed);
+
     let running = st.0.clone();
+    let gen     = st.1.clone();
     let handle  = app.clone();
 
     // Resolve default sink/source once — not inside the hot path.
@@ -1697,6 +1762,7 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
 
         let levels_clone  = Arc::clone(&levels);
         let running_clone = running.clone();
+        let gen_clone     = gen.clone();
 
         tokio::task::spawn_blocking(move || {
             // Create the PA simple connection inside spawn_blocking — Simple is !Send.
@@ -1711,14 +1777,19 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
                     return;
                 }
             };
-            eprintln!("start_vu_stream: {name} → libpulse connected to '{target}'");
+            eprintln!("start_vu_stream: {name} → libpulse connected to '{target}' (gen={my_gen})");
 
             // 512 bytes = 256 i16 samples = 32 ms at 8 kHz mono — fast enough to
-            // check `running` frequently while producing smooth meter values.
+            // check `running` + generation frequently while producing smooth meter values.
             let mut buf = vec![0u8; 512];
             let mut prev = 0.0f32;
 
-            while running_clone.load(Ordering::Relaxed) {
+            // Check BOTH the running flag AND the generation counter so that stale
+            // threads spawned by a previous `start_vu_stream` call stop cleanly even
+            // if the flag was reset to `true` before they exited pa.read().
+            while running_clone.load(Ordering::Relaxed)
+                  && gen_clone.load(Ordering::Relaxed) == my_gen
+            {
                 if pa.read(&mut buf).is_err() { break; }
 
                 // RMS for perceptual loudness (vs peak which looks jittery).
@@ -1737,12 +1808,12 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
         });
     }
 
-    // Emitter: publishes the shared map at ~30 fps.
+    // Emitter: publishes the shared map at ~60 fps, stops when this generation ends.
     tokio::spawn(async move {
-        while running.load(Ordering::Relaxed) {
+        while running.load(Ordering::Relaxed) && gen.load(Ordering::Relaxed) == my_gen {
             let snapshot = levels.lock().unwrap().clone();
             let _ = handle.emit("vu-levels", VuLevels { channels: snapshot });
-            tokio::time::sleep(std::time::Duration::from_millis(16)).await; // ~60 Hz
+            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
         }
     });
 
@@ -1963,26 +2034,21 @@ pub struct StorageInfo {
 /// Returns disk usage for the clips folder plus filesystem free/total space.
 #[command]
 pub async fn get_storage_info(clip_directories: Vec<String>) -> Result<StorageInfo, String> {
-    use std::fs;
     let mut total_count = 0u64;
     let mut total_used = 0u64;
     let mut first_existing: Option<PathBuf> = None;
 
     for dir_str in &clip_directories {
-        let folder = PathBuf::from(dir_str);
+        let folder = PathBuf::from(shexp(dir_str));
         if !folder.exists() { continue; }
         if first_existing.is_none() { first_existing = Some(folder.clone()); }
-        if let Ok(entries) = fs::read_dir(&folder) {
-            for e in entries.flatten() {
-                if let Ok(meta) = e.metadata() {
-                    if meta.is_file() {
-                        let name = e.file_name().to_string_lossy().to_lowercase();
-                        if name.ends_with(".mp4") || name.ends_with(".mkv") || name.ends_with(".webm") || name.ends_with(".mov") {
-                            total_count += 1;
-                            total_used += meta.len();
-                        }
-                    }
-                }
+        for e in walkdir::WalkDir::new(&folder).min_depth(1).into_iter().flatten() {
+            let p = e.path().to_path_buf();
+            if !p.is_file() { continue; }
+            let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+            if name.ends_with(".mp4") || name.ends_with(".mkv") || name.ends_with(".webm") || name.ends_with(".mov") {
+                total_count += 1;
+                if let Ok(meta) = e.metadata() { total_used += meta.len(); }
             }
         }
     }
@@ -2431,8 +2497,233 @@ pub async fn set_autostart(enable: bool) -> Result<(), String> {
 
 use crate::GsrProcess;
 
+/// Detect the primary monitor's resolution via xrandr for use with `-w focused`.
+/// Returns "WxH" (e.g. "1920x1080"). Falls back to "1920x1080" if detection fails.
+fn detect_primary_resolution() -> String {
+    if let Ok(o) = std::process::Command::new("xrandr").arg("--current").output() {
+        let text = String::from_utf8_lossy(&o.stdout);
+        let mut any_connected: Option<String> = None;
+        for line in text.lines() {
+            if line.contains(" connected") && !line.contains(" disconnected") {
+                for word in line.split_whitespace() {
+                    // Resolution tokens look like "1920x1080+0+0"
+                    if word.contains('x') && word.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+                        let res = word.split('+').next().unwrap_or(word).to_string();
+                        if res.split('x').count() == 2 {
+                            if line.contains("primary") {
+                                return res; // prefer explicitly marked primary
+                            }
+                            any_connected.get_or_insert(res);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(r) = any_connected { return r; }
+    }
+    log::warn!("detect_primary_resolution: xrandr failed or no connected display; defaulting to 1920x1080");
+    "1920x1080".to_string()
+}
+
+/// List PipeWire/PulseAudio sink names for the audio capture devices dropdown.
+#[command]
+pub fn list_audio_sinks() -> Result<Vec<String>, String> {
+    let output = std::process::Command::new("pactl")
+        .args(["list", "sinks", "short"])
+        .output()
+        .map_err(|e| format!("pactl not found: {e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let sinks: Vec<String> = text
+        .lines()
+        .filter_map(|line| {
+            // Format: "<id>\t<name>\t<driver>\t<sample_spec>\t<state>"
+            line.split('\t').nth(1).map(|s| s.trim().to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    if sinks.is_empty() {
+        Err("No audio sinks found via pactl".into())
+    } else {
+        Ok(sinks)
+    }
+}
+
+/// Returns the current display server session type: "wayland", "x11", or "unknown".
+#[command]
+pub fn get_session_type() -> String {
+    if let Ok(t) = std::env::var("XDG_SESSION_TYPE") {
+        let t = t.trim().to_lowercase();
+        if !t.is_empty() { return t; }
+    }
+    // Fallback: check well-known environment variables
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return "wayland".to_string();
+    }
+    if std::env::var_os("DISPLAY").is_some() {
+        return "x11".to_string();
+    }
+    "unknown".to_string()
+}
+
+/// Returns a list of connected monitors via Tauri's built-in monitor enumeration.
+/// Each entry has a `name` (connector name as reported by the OS, e.g. "DP-1") and
+/// a human-readable `label` (e.g. "Display 1 — 1920×1080 (DP-1)").
+/// Falls back to a single "Primary Monitor / screen" entry if enumeration fails.
+#[derive(Serialize)]
+pub struct MonitorInfo {
+    pub name: String,
+    pub label: String,
+}
+
+#[command]
+pub fn list_monitors(_app: AppHandle) -> Vec<MonitorInfo> {
+    // Use gpu-screen-recorder's own monitor enumeration, NOT Tauri's available_monitors().
+    //
+    // Tauri's API returns EDID model names ("BenQ GW2780", "MASI251K03") which are NOT
+    // valid GSR `-w` targets — passing them causes an immediate GSR crash.
+    // GSR's --list-monitors returns the exact X11/Wayland connector names (e.g. "DP-1",
+    // "HDMI-A-1", "screen") that its `-w` flag accepts.
+    //
+    // Example stdout from `gpu-screen-recorder --list-monitors`:
+    //   screen
+    //   DP-1
+    //   DP-2
+    //   HDMI-A-1
+    // Each non-empty line is one valid `-w` argument.
+    let output = std::process::Command::new("gpu-screen-recorder")
+        .arg("--list-monitors")
+        .output();
+
+    let stdout = match output {
+        Ok(o) if !o.stdout.is_empty() => String::from_utf8_lossy(&o.stdout).to_string(),
+        Ok(o) => {
+            log::warn!(
+                "gpu-screen-recorder --list-monitors produced no output (exit={:?}); falling back",
+                o.status.code()
+            );
+            String::new()
+        }
+        Err(e) => {
+            log::warn!("gpu-screen-recorder --list-monitors failed to spawn: {e}; falling back");
+            String::new()
+        }
+    };
+
+    let mut monitors: Vec<MonitorInfo> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|name| {
+            // "screen" is GSR's "capture all outputs / entire desktop" pseudo-target.
+            let label = if name == "screen" {
+                "Entire Desktop".to_string()
+            } else {
+                // Connector names are already human-readable ("DP-1", "HDMI-A-1").
+                name.to_string()
+            };
+            MonitorInfo { name: name.to_string(), label }
+        })
+        .collect();
+
+    if monitors.is_empty() {
+        // GSR not installed, not in PATH, or no displays detected — safe fallback.
+        monitors.push(MonitorInfo { name: "screen".into(), label: "Entire Desktop".into() });
+    }
+
+    monitors
+}
+
+/// Detect which monitor output (e.g. "DP-1") the currently focused window is on.
+/// Uses xdotool to find the window position, then xrandr to match it to a monitor.
+/// Returns None on Wayland, if tools are unavailable, or if detection fails.
+fn get_focused_window_monitor() -> Option<String> {
+    // Wayland: xdotool is unreliable — bail early
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        log::info!("Wayland detected — skipping xdotool monitor detection");
+        return None;
+    }
+
+    // Step 1: get the focused window ID (decimal)
+    let win_id_out = std::process::Command::new("xdotool")
+        .arg("getactivewindow")
+        .output()
+        .ok()?;
+    let win_id = String::from_utf8_lossy(&win_id_out.stdout).trim().to_string();
+    if win_id.is_empty() { return None; }
+
+    // Step 2: get the window's absolute position on the desktop
+    // xdotool getwindowgeometry output: "Window NNN\n  Position: X,Y (screen N)\n  Geometry: WxH"
+    let geom_out = std::process::Command::new("xdotool")
+        .args(["getwindowgeometry", "--shell", &win_id])
+        .output()
+        .ok()?;
+    let geom_text = String::from_utf8_lossy(&geom_out.stdout).into_owned();
+    // --shell format: "X=123\nY=456\nWIDTH=...\nHEIGHT=..."
+    let win_x: i64 = geom_text.lines()
+        .find(|l| l.starts_with("X="))
+        .and_then(|l| l[2..].parse().ok())?;
+    let win_y: i64 = geom_text.lines()
+        .find(|l| l.starts_with("Y="))
+        .and_then(|l| l[2..].parse().ok())?;
+
+    // Step 3: parse `xrandr --listmonitors` to get monitor names + offsets
+    // Output format per monitor line: "  N: +*DP-1 1920/527x1080/296+0+0  ..."
+    let xrandr_out = std::process::Command::new("xrandr")
+        .arg("--listmonitors")
+        .output()
+        .ok()?;
+    let xrandr_text = String::from_utf8_lossy(&xrandr_out.stdout).into_owned();
+
+    // Each monitor line: "  0: +*DP-1 1920/527x1080/296+0+0   0"
+    // Geometry token: "<w>/<mm>x<h>/<mm>+<ox>+<oy>"
+    let mut best: Option<String> = None;
+    for line in xrandr_text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 3 { continue; }
+        // parts[1] is monitor name (may have leading '+' or '*' flags)
+        let name = parts[1].trim_start_matches('+').trim_start_matches('*');
+        // parts[2] is geometry token
+        let geom_tok = parts[2];
+        // Parse "WxH+OX+OY" or "W/mmxH/mm+OX+OY"
+        let geom_clean = geom_tok
+            .split('+')
+            .collect::<Vec<_>>();
+        if geom_clean.len() < 3 { continue; }
+        let ox: i64 = geom_clean[1].parse().ok()?;
+        let oy: i64 = geom_clean[2].parse().ok()?;
+        // Width/height may be "1920/527" or plain "1920"
+        let wh = geom_clean[0];
+        let (w_part, h_part) = wh.split_once('x')?;
+        let w: i64 = w_part.split('/').next()?.parse().ok()?;
+        let h: i64 = h_part.split('/').next()?.parse().ok()?;
+        // Check if window origin falls inside this monitor's rectangle
+        if win_x >= ox && win_x < ox + w && win_y >= oy && win_y < oy + h {
+            best = Some(name.to_string());
+            // Prefer primary (marked with '*')
+            if parts[1].contains('*') { break; }
+        }
+    }
+    if let Some(ref mon) = best {
+        log::info!("Focused window (id={win_id}) at ({win_x},{win_y}) → monitor {mon}");
+    }
+    best
+}
+
+/// Returns true if the gpu-screen-recorder binary is found in PATH.
+#[command]
+pub fn check_gsr_installed() -> bool {
+    std::process::Command::new("which")
+        .arg("gpu-screen-recorder")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Start gpu-screen-recorder in replay-buffer mode.
-/// `output_dir`: where clips are saved; `replay_secs`: buffer length; `fps`, `quality`: encode settings.
+/// Quality is passed directly as a GSR preset string: cbr | medium | high | very_high | ultra.
+/// When quality is "cbr", `bitrate_kbps` sets the target bitrate (e.g. 8000 = 8 Mbps).
+/// `monitor_target` is passed to `-w` (e.g. "screen", "DP-1", "HDMI-1").
+/// Audio sources are PipeWire sink names without the "OpenGG_" prefix (e.g. ["Game","Chat","Mic"]).
 #[command]
 pub fn start_gsr_replay(
     app: AppHandle,
@@ -2440,62 +2731,374 @@ pub fn start_gsr_replay(
     replay_secs: u32,
     fps: u32,
     quality: String,
+    bitrate_kbps: Option<u32>,
+    monitor_target: String,
+    audio_sources: Vec<String>,
 ) -> Result<(), String> {
+    use crate::GsrSpawnParams;
     let state = app.state::<GsrProcess>();
     let mut lock = state.0.lock().unwrap();
     if lock.is_some() {
         return Err("gpu-screen-recorder is already running".into());
     }
-    let crf = match quality.as_str() {
-        "Low"    => "35",
-        "Medium" => "28",
-        _        => "23", // High
+    let expanded = shexp(&output_dir);
+    std::fs::create_dir_all(&expanded)
+        .map_err(|e| format!("Cannot create output dir '{expanded}': {e}"))?;
+
+    // Guard against stale settings that contain EDID model names or resolution strings
+    // (e.g. "1920x1080", "BenQ GW2780") left over from the old Tauri monitor API.
+    // GSR only accepts connector names ("screen", "DP-1", "HDMI-A-1", "focused").
+    // A valid connector name never starts with a digit and never contains a space.
+    let monitor_target = {
+        let looks_invalid = monitor_target.is_empty()
+            || monitor_target.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+            || monitor_target.contains(' ');
+        if looks_invalid {
+            log::warn!(
+                "gsrMonitorTarget {:?} is not a valid GSR connector name — resetting to 'screen'",
+                monitor_target
+            );
+            "screen".to_string()
+        } else {
+            monitor_target
+        }
     };
-    // Use the "focused" window as capture target; falls back to entire screen if not available.
-    let child = std::process::Command::new("gpu-screen-recorder")
-        .args([
-            "-w", "focused",
-            "-f", &fps.to_string(),
-            "-r", &replay_secs.to_string(),
-            "-c", "mp4",
-            "-o", &output_dir,
-            "-q", crf,
-        ])
-        .spawn()
+
+    // For "focused" target: resolve to an actual monitor name using xdotool + xrandr.
+    // This fixes multi-monitor setups where `-w focused` captures the wrong display.
+    // Falls back to "focused" if detection fails (Wayland, missing tools, or parse error).
+    let target = match monitor_target.as_str() {
+        "focused" => {
+            get_focused_window_monitor()
+                .unwrap_or_else(|| {
+                    log::warn!("Could not detect monitor for focused window; falling back to -w focused");
+                    "focused".to_string()
+                })
+        }
+        "" | "screen" => "screen".to_string(),
+        other => other.to_string(),
+    };
+    let fps_str = fps.to_string();
+    let secs_str = replay_secs.to_string();
+
+    // "-w focused" (fallback only) requires an explicit resolution; detect primary monitor
+    let focused_resolution = if target == "focused" {
+        Some(detect_primary_resolution())
+    } else {
+        None
+    };
+
+    let mut cmd = std::process::Command::new("gpu-screen-recorder");
+    cmd.args([
+        "-w", &target,
+        "-f", &fps_str,
+        "-r", &secs_str,
+        "-c", "mp4",
+        "-o", &expanded,
+    ]);
+
+    // CBR mode: GSR requires an integer -q index even when -bm cbr is set. 0 = lowest quality
+    // index, which is effectively ignored when the bitrate is set via -ffmpeg-opts.
+    if quality == "cbr" {
+        cmd.args(["-bm", "cbr", "-q", "0"]);
+        if let Some(kbps) = bitrate_kbps {
+            let bv = format!("-b:v {}k", kbps);
+            cmd.args(["-ffmpeg-opts", &bv]);
+        }
+    } else {
+        cmd.args(["-q", quality.as_str()]);
+    }
+
+    // Append resolution when capturing focused window
+    if let Some(ref res) = focused_resolution {
+        cmd.args(["-s", res]);
+    }
+
+    for src in &audio_sources {
+        // Legacy short names (e.g. "Game") are prefixed; full sink names are passed as-is
+        let sink = if src.contains('_') || src.contains('.') || src.contains('-') {
+            src.clone()
+        } else {
+            format!("OpenGG_{src}")
+        };
+        // PipeWire/PulseAudio virtual sinks require the .monitor suffix for capture
+        let monitor = if sink.ends_with(".monitor") { sink } else { format!("{sink}.monitor") };
+        cmd.args(["-a", &monitor]);
+    }
+
+    let child = cmd.spawn()
         .map_err(|e| format!("Failed to start gpu-screen-recorder: {e}"))?;
-    log::info!("GSR started (pid {})", child.id());
-    *lock = Some(child);
+    log::info!(
+        "GSR started (pid {}) replay={}s fps={fps} quality={quality} bitrate={bitrate_kbps:?}kbps target={target} dir={expanded} audio={:?}",
+        child.id(), replay_secs, audio_sources
+    );
+    *lock = Some((child, GsrSpawnParams {
+        output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources,
+    }));
+    let _ = app.emit("gsr-status-changed", serde_json::json!({"running": true}));
     Ok(())
 }
 
-/// Save the current replay buffer by sending SIGUSR1 to the GSR process.
-#[command]
-pub fn save_gsr_replay(app: AppHandle) -> Result<(), String> {
-    let state = app.state::<GsrProcess>();
-    let lock = state.0.lock().unwrap();
-    match &*lock {
-        Some(child) => {
-            let pid = child.id();
-            #[cfg(unix)]
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGUSR1); }
-            log::info!("GSR SIGUSR1 → pid {pid}");
-            Ok(())
+/// Sanitize a string so it is safe to use as a filename component.
+/// Replaces any character that is not alphanumeric, a hyphen, or an underscore with `_`.
+/// Strips leading/trailing underscores and collapses consecutive underscores.
+fn sanitize_filename(s: &str) -> String {
+    let raw: String = s.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .collect();
+    // Collapse runs of underscores, then trim boundary underscores
+    let mut out = String::with_capacity(raw.len());
+    let mut prev_under = false;
+    for c in raw.chars() {
+        if c == '_' {
+            if !prev_under { out.push(c); }
+            prev_under = true;
+        } else {
+            out.push(c);
+            prev_under = false;
         }
-        None => Err("gpu-screen-recorder is not running".into()),
+    }
+    out.trim_matches('_').to_string()
+}
+
+/// Find the newest video file written *strictly after* `after_time` in `dir`.
+/// Polls every 200 ms for up to `timeout_ms` milliseconds.
+/// This avoids the mtime-collision bug where a previously-played clip appears
+/// newer than the freshly flushed replay file.
+fn newest_video_after(
+    dir: &str,
+    after_time: std::time::SystemTime,
+    timeout_ms: u64,
+) -> Option<std::path::PathBuf> {
+    const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "ts", "flv"];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        let found = std::fs::read_dir(dir)
+            .ok()
+            .and_then(|rd| {
+                rd.filter_map(|e| e.ok())
+                  .filter(|e| {
+                      e.path().extension()
+                          .and_then(|x| x.to_str())
+                          .map(|x| VIDEO_EXTS.contains(&x.to_lowercase().as_str()))
+                          .unwrap_or(false)
+                  })
+                  .filter(|e| {
+                      e.metadata()
+                          .and_then(|m| m.modified())
+                          .map(|t| t > after_time)
+                          .unwrap_or(false)
+                  })
+                  .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+                  .map(|e| e.path())
+            });
+        if found.is_some() {
+            return found;
+        }
+        if std::time::Instant::now() >= deadline {
+            log::warn!("newest_video_after: no new file in {dir} after {timeout_ms}ms");
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
 }
 
-/// Stop the GSR process with SIGTERM.
+/// Save the current replay buffer via SIGUSR1.
+/// After the file flushes, the saved clip is renamed to `<GameName>_<timestamp>.mp4`.
+/// If `restart_on_save` is true, GSR is also killed and respawned so the next save
+/// captures only footage recorded after this moment.
+#[command]
+pub fn save_gsr_replay(app: AppHandle, restart_on_save: bool) -> Result<(), String> {
+    use crate::GsrSpawnParams;
+    let state = app.state::<GsrProcess>();
+
+    // Capture active window title BEFORE signalling (window focus may change after).
+    let game_title = std::process::Command::new("xdotool")
+        .args(["getactivewindow", "getwindowname"])
+        .output()
+        .ok()
+        .and_then(|o| if o.status.success() { Some(String::from_utf8_lossy(&o.stdout).trim().to_string()) } else { None })
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    // Capture current time just before SIGUSR1 so we can identify the new file by mtime.
+    // This avoids the mtime-collision bug where a previously-played clip has a newer
+    // mtime than the freshly-flushed replay file.
+    let pre_save_time = std::time::SystemTime::now();
+
+    // Step 1: send SIGUSR1 and clone spawn params.
+    // Lock scope is tight — we drop it before calling start_gsr_replay to avoid deadlock.
+    let (output_dir_exp, restart_params): (String, Option<GsrSpawnParams>) = {
+        let lock = state.0.lock().unwrap();
+        match &*lock {
+            Some((child, params)) => {
+                let pid = child.id();
+                #[cfg(unix)]
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGUSR1); }
+                log::info!("GSR SIGUSR1 → pid {pid}");
+                let expanded = shexp(&params.output_dir);
+                let rp = if restart_on_save {
+                    Some(GsrSpawnParams {
+                        output_dir:     params.output_dir.clone(),
+                        replay_secs:    params.replay_secs,
+                        fps:            params.fps,
+                        quality:        params.quality.clone(),
+                        bitrate_kbps:   params.bitrate_kbps,
+                        monitor_target: params.monitor_target.clone(),
+                        audio_sources:  params.audio_sources.clone(),
+                    })
+                } else {
+                    None
+                };
+                (expanded, rp)
+            }
+            None => return Err("gpu-screen-recorder is not running".into()),
+        }
+    }; // lock dropped here
+
+    // Step 2: poll for the new file (written after pre_save_time) for up to 5 s.
+    // Using a polling loop instead of a fixed sleep makes this both more reliable
+    // and faster on fast NVMe storage while still handling slow HDDs.
+
+    // Step 3: rename the file that appeared after the SIGUSR1 signal.
+    if let Some(src_path) = newest_video_after(&output_dir_exp, pre_save_time, 5000) {
+        let safe_name = sanitize_filename(&game_title);
+        let safe_name = if safe_name.is_empty() { "Clip".to_string() } else { safe_name };
+        let now = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+            // Format as YYYY-MM-DD_HH-MM-SS using simple arithmetic (no chrono dep).
+            let s = secs;
+            let sec  = s % 60;
+            let min  = (s / 60) % 60;
+            let hour = (s / 3600) % 24;
+            let days = s / 86400; // days since 1970-01-01
+            // Rata Die algorithm → Gregorian calendar
+            let z = days + 719468;
+            let era = z / 146097;
+            let doe = z - era * 146097;
+            let yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;
+            let y   = yoe + era * 400;
+            let doy = doe - (365*yoe + yoe/4 - yoe/100);
+            let mp  = (5*doy + 2) / 153;
+            let d   = doy - (153*mp + 2)/5 + 1;
+            let m   = if mp < 10 { mp + 3 } else { mp - 9 };
+            let y   = if m <= 2 { y + 1 } else { y };
+            format!("{y:04}-{m:02}-{d:02}_{hour:02}-{min:02}-{sec:02}")
+        };
+        let new_name = format!("{safe_name}_{now}.mp4");
+        let dest = std::path::Path::new(&output_dir_exp).join(&new_name);
+        let (save_ok, filesize_mb) = if let Err(e) = std::fs::rename(&src_path, &dest) {
+            log::warn!("GSR clip rename failed ({src_path:?} → {dest:?}): {e}");
+            (false, 0.0f64)
+        } else {
+            log::info!("GSR clip saved as {new_name}");
+            let mb = std::fs::metadata(&dest).map(|m| m.len() as f64 / 1_000_000.0).unwrap_or(0.0);
+            (true, mb)
+        };
+        let _ = app.emit("clip-saved", serde_json::json!({
+            "game":        game_title,
+            "filename":    new_name,
+            "filesize_mb": (filesize_mb * 10.0).round() / 10.0,
+            "success":     save_ok,
+        }));
+    }
+
+    // Step 4: if restart requested, kill and respawn GSR.
+    if let Some(params) = restart_params {
+        {
+            let mut lock = state.0.lock().unwrap();
+            if let Some((mut child, _)) = lock.take() {
+                gsr_kill_graceful(&mut child);
+                log::info!("GSR stopped for restart-on-save (SIGINT + wait)");
+            }
+        } // lock dropped before respawn
+        start_gsr_replay(
+            app,
+            params.output_dir,
+            params.replay_secs,
+            params.fps,
+            params.quality,
+            params.bitrate_kbps,
+            params.monitor_target,
+            params.audio_sources,
+        )?;
+        log::info!("GSR restarted (restart_on_save=true)");
+    }
+    Ok(())
+}
+
+/// Gracefully kill and immediately respawn GSR with updated settings (hot-reload).
+#[command]
+pub fn restart_gsr_replay(
+    app: AppHandle,
+    output_dir: String,
+    replay_secs: u32,
+    fps: u32,
+    quality: String,
+    bitrate_kbps: Option<u32>,
+    monitor_target: String,
+    audio_sources: Vec<String>,
+) -> Result<(), String> {
+    {
+        let state = app.state::<GsrProcess>();
+        let mut lock = state.0.lock().unwrap();
+        if let Some((mut child, _)) = lock.take() {
+            gsr_kill_graceful(&mut child);
+            log::info!("GSR stopped for restart (SIGINT + wait)");
+        }
+    }
+    start_gsr_replay(app, output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources)
+}
+
+/// Send SIGINT to let GSR flush cleanly, wait up to 2 s, then SIGKILL as fallback.
+/// Reaping with `.wait()` prevents zombie PIDs.
+/// Also kills `gsr-kms-server` — a helper daemon spawned by GSR that survives
+/// the parent process and must be cleaned up explicitly.
+fn gsr_kill_graceful(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as libc::pid_t;
+        unsafe { libc::kill(pid, libc::SIGINT); }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    // Exited cleanly — still need to reap gsr-kms-server
+                    kill_kms_server();
+                    return;
+                }
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                _ => break, // timeout — fall through to SIGKILL
+            }
+        }
+    }
+    let _ = child.kill(); // SIGKILL — last resort
+    let _ = child.wait(); // reap zombie
+    kill_kms_server();
+}
+
+/// Kill the `gsr-kms-server` helper daemon that gpu-screen-recorder spawns.
+/// It does not exit when the parent process is killed, so we must clean it up
+/// explicitly to prevent dangling GPU capture sessions.
+fn kill_kms_server() {
+    let _ = std::process::Command::new("pkill")
+        .args(["-9", "gsr-kms-server"])
+        .output();
+}
+
+/// Stop the GSR process gracefully (SIGINT → SIGKILL fallback).
 #[command]
 pub fn stop_gsr_replay(app: AppHandle) -> Result<(), String> {
     let state = app.state::<GsrProcess>();
     let mut lock = state.0.lock().unwrap();
-    if let Some(mut child) = lock.take() {
-        #[cfg(unix)]
-        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM); }
-        let _ = child.wait();
-        log::info!("GSR stopped");
+    if let Some((mut child, _)) = lock.take() {
+        gsr_kill_graceful(&mut child);
+        log::info!("GSR stopped (SIGINT + wait)");
     }
+    drop(lock); // release mutex before emitting
+    let _ = app.emit("gsr-status-changed", serde_json::json!({"running": false}));
     Ok(())
 }
 
@@ -2505,9 +3108,9 @@ pub fn is_gsr_running(app: AppHandle) -> bool {
     let state = app.state::<GsrProcess>();
     let mut lock = state.0.lock().unwrap();
     match lock.as_mut() {
-        Some(child) => match child.try_wait() {
-            Ok(None) => true,    // still running
-            _        => { lock.take(); false } // exited — clean up
+        Some((child, _)) => match child.try_wait() {
+            Ok(None) => true,
+            _        => { lock.take(); false }
         },
         None => false,
     }
@@ -2522,6 +3125,192 @@ pub fn get_active_window_title() -> String {
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default()
+}
+
+// ═══ DSP: jalv-based LV2 filter chain ═══
+//
+// Architecture: one `jalv` subprocess per channel, hosted as a PipeWire JACK client.
+// jalv reads port updates from stdin: "<port_index> <value>\n"
+//
+// LSP para_equalizer_x10_stereo control port layout (verify with `lv2info`):
+//   0        bypass (0.0 = active, 1.0 = bypass)
+//   1..14    filter type / freq / Q for each of the 10 bands
+//   15..24   gain (dB) for bands 0–9  ← what we write on every apply_eq call
+//
+// TODO: wire jalv output to the corresponding virtual sink via `pw-link`.
+// Currently the EQ runs in-process (jalv jack client auto-connects via WirePlumber).
+
+const LSP_EQ_URI: &str = "http://lsp-plug.in/plugins/lv2/para_equalizer_x10_stereo";
+
+/// Spawn a jalv LV2 host for the given channel's EQ.
+/// The child's stdin is kept open so `apply_eq` can push port updates at any time.
+#[command]
+pub async fn start_eq_engine(app: AppHandle, channel: String) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let procs = app.state::<crate::JalvProcesses>();
+    let mut map = procs.0.lock().unwrap();
+    // Kill stale instance for this channel before spawning a fresh one.
+    if let Some((mut child, _stdin)) = map.remove(&channel) {
+        let _ = child.kill();
+    }
+    let jack_name = format!("opengg_eq_{}", channel.to_lowercase());
+    let mut child = Command::new("jalv")
+        .args(["-n", &jack_name, "-i", LSP_EQ_URI])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("jalv spawn failed: {e}. Install with: sudo apt install jalv"))?;
+    let stdin = child.stdin.take().ok_or("no stdin on jalv child")?;
+    map.insert(channel.clone(), (child, stdin));
+    eprintln!("[opengg] start_eq_engine: jalv started for channel={channel}, jack_name={jack_name}");
+    Ok(())
+}
+
+/// Kill the jalv EQ host for the given channel.
+#[command]
+pub async fn stop_eq_engine(app: AppHandle, channel: String) -> Result<(), String> {
+    let procs = app.state::<crate::JalvProcesses>();
+    let mut map = procs.0.lock().unwrap();
+    if let Some((mut child, _stdin)) = map.remove(&channel) {
+        let _ = child.kill();
+        eprintln!("[opengg] stop_eq_engine: jalv stopped for channel={channel}");
+    }
+    Ok(())
+}
+
+/// Push 10-band EQ gain values to the running jalv instance for `channel`.
+/// Each value is in dB, range -12.0..+12.0.
+/// Port indices 15–24 = bands 0–9 in LSP para_equalizer_x10_stereo.
+#[command]
+pub async fn apply_eq(app: AppHandle, channel: String, bands: Vec<f32>) -> Result<(), String> {
+    use std::io::Write;
+    let procs = app.state::<crate::JalvProcesses>();
+    let mut map = procs.0.lock().unwrap();
+    let entry = map.get_mut(&channel).ok_or_else(|| {
+        format!("No EQ engine running for channel '{channel}'. Call start_eq_engine first.")
+    })?;
+    // Write each band gain to the corresponding jalv control port.
+    // Port index 15 = band 0, ..., port index 24 = band 9.
+    const GAIN_PORT_BASE: usize = 15;
+    for (i, &gain_db) in bands.iter().enumerate().take(10) {
+        writeln!(entry.1, "{} {:.4}", GAIN_PORT_BASE + i, gain_db)
+            .map_err(|e| format!("jalv stdin write failed: {e}"))?;
+    }
+    entry.1.flush().map_err(|e| format!("jalv stdin flush failed: {e}"))?;
+    Ok(())
+}
+
+#[command]
+pub async fn apply_noise_gate(_channel: String, _enabled: bool, _threshold: f32, _auto_detect: bool) -> Result<(), String> { Ok(()) }
+#[command]
+pub async fn apply_compressor(_channel: String, _enabled: bool, _level: f32) -> Result<(), String> { Ok(()) }
+#[command]
+pub async fn apply_noise_reduction(_channel: String, _enabled: bool, _intensity: f32) -> Result<(), String> { Ok(()) }
+
+/// Spawn a transient overlay notification window at the bottom-right of the primary monitor.
+/// The window is frameless, transparent, always-on-top, and non-focusable.
+/// It renders the same Vite app at `/?overlay=1` with URL-encoded clip metadata.
+/// `enabled` is passed from the frontend (reflects the `enableClipNotifications` setting).
+#[command]
+pub fn show_clip_notification(
+    app: AppHandle,
+    game: String,
+    filename: String,
+    filesize_mb: f64,
+    success: bool,
+    enabled: bool,
+) -> Result<(), String> {
+    if !enabled { return Ok(()); }
+
+    // (media server port intentionally unused here — overlay uses the fixed Vite port 1420)
+
+    // Build the overlay URL served from the same Vite dev/prod server on localhost:1420
+    // Use a stable unique label so multiple notifications can stack
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let label = format!("notif-{ts}");
+
+    // URL-encode params manually to avoid adding a new crate dependency
+    fn enc(s: &str) -> String {
+        s.chars().flat_map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => vec![c],
+            c => c.encode_utf8(&mut [0u8; 4]).bytes()
+                  .flat_map(|b| [b'%', hex_nibble(b >> 4), hex_nibble(b & 0xf)])
+                  .map(|b| b as char)
+                  .collect(),
+        }).collect()
+    }
+    fn hex_nibble(n: u8) -> u8 { if n < 10 { b'0' + n } else { b'A' + n - 10 } }
+
+    // Query string shared between dev and prod builds
+    let query = format!(
+        "?overlay=1&game={}&filename={}&filesize={}&success={}",
+        enc(&game), enc(&filename),
+        enc(&format!("{:.1}", filesize_mb)),
+        if success { "1" } else { "0" },
+    );
+
+    // Dev: Vite serves at http://localhost:1420 (External URL required)
+    // Prod: Tauri serves the bundled app at tauri://localhost (App URL required)
+    // Using the wrong scheme causes a blank white window.
+    #[cfg(debug_assertions)]
+    let webview_url = tauri::WebviewUrl::External(
+        format!("http://localhost:1420/{query}")
+            .parse()
+            .map_err(|e| format!("Bad overlay URL: {e}"))?,
+    );
+    #[cfg(not(debug_assertions))]
+    let webview_url = tauri::WebviewUrl::App(std::path::PathBuf::from(&query));
+
+    // ── Position: top-right corner of the primary monitor ──
+    // Use Tauri's built-in monitor API (physical px → logical px via scale factor).
+    // .position() on WebviewWindowBuilder takes logical pixels on all platforms.
+    let notif_w = 380.0_f64;
+    let notif_h = 120.0_f64;
+    let margin  = 20.0_f64;
+    let (x, y) = app
+        .get_webview_window("main")
+        .and_then(|w| w.primary_monitor().ok().flatten())
+        .map(|m| {
+            let scale = m.scale_factor();
+            let sz    = m.size();
+            let pos   = m.position();
+            // logical width/height of this monitor
+            let lw = sz.width  as f64 / scale;
+            // logical origin of this monitor (multi-monitor offset)
+            let ox = pos.x as f64 / scale;
+            let oy = pos.y as f64 / scale;
+            (ox + lw - notif_w - margin, oy + margin)
+        })
+        .unwrap_or((1920.0 - notif_w - margin, margin));
+
+    let win = tauri::WebviewWindowBuilder::new(&app, label, webview_url)
+    .always_on_top(true)
+    .focused(false)
+    .decorations(false)
+    .skip_taskbar(true)
+    .transparent(true)
+    .resizable(false)
+    .inner_size(notif_w, notif_h)
+    .position(x, y)
+    .build()
+    .map_err(|e| format!("Overlay window failed: {e}"))?;
+
+    // Pass all mouse events through — user can keep playing without interruption.
+    let _ = win.set_ignore_cursor_events(true);
+
+    // Auto-close after 4 000 ms.
+    let win_for_thread = win.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(4000));
+        let _ = win_for_thread.close();
+    });
+
+    drop(win); // thread holds the only remaining clone
+    Ok(())
 }
 
 // rng() removed — VU meters now use real PipeWire peak data

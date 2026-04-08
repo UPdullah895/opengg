@@ -7,6 +7,120 @@
     "devices": "Devices",
     "settings": "Settings"
   },
+  "dashboard": {
+    "title": "Dashboard",
+    "audioMixer": "Audio Mixer",
+    "channelSummary": "5 Channels",
+    "channelList": "Game · Chat · Media · Aux · Mic",
+    "recorder": "Recorder",
+    "idle": "Idle",
+    "active": "Active",
+    "clipsCard": "Clips",
+    "videoClipsSaved": "Video clips saved",
+    "devices": "Devices",
+    "devicesSub": "Mouse · Keyboard · RGB",
+    "scan": "Scan",
+    "quickMixer": "Quick Mixer",
+    "openMixer": "Open Mixer",
+    "captureSettings": "Capture Settings",
+    "recordingSettings": "Recording Settings",
+    "quality": "Quality",
+    "fps": "FPS",
+    "buffer": "Buffer",
+    "target": "Target",
+    "startReplayBuffer": "Start Replay Buffer",
+    "startReplay": "Start Replay",
+    "stop": "Stop",
+    "recentClips": "Recent Clips",
+    "noClips": "No clips yet",
+    "loading": "Loading…",
+    "moreClips": "More Clips",
+    "comingSoon": "Coming Soon",
+    "comingSoonDesc": "Device management is under construction. Mouse, keyboard, and RGB configuration will be available in a future release.",
+    "latestUpdates": "Latest Engine Updates",
+    "showLess": "Show less",
+    "moreUpdates": "no more updates | {n} more update | {n} more updates",
+    "gsrWarning": "GPU Screen Recorder is not installed. Install gpu-screen-recorder to enable replay buffer recording.",
+    "gsrDismiss": "✕",
+    "gsr": {
+      "estRam": "MB RAM",
+      "estFile": "MB file"
+    },
+    "mute": {
+      "mute": "Mute",
+      "unmute": "Unmute"
+    },
+    "gsrQuality": {
+      "cbr": "Constant bitrate",
+      "medium": "Medium",
+      "high": "High",
+      "very_high": "Very high",
+      "ultra": "Ultra"
+    },
+    "gsrFps": {
+      "30": "30 FPS",
+      "60": "60 FPS",
+      "120": "120 FPS"
+    },
+    "gsrReplay": {
+      "15": "15s",
+      "30": "30s",
+      "60": "60s",
+      "90": "90s",
+      "120": "120s"
+    },
+    "gsrTarget": {
+      "screen": "Primary Monitor",
+      "focused": "Fullscreen Application"
+    },
+    "recorderStatus": {
+      "idle": "Idle",
+      "replay": "Replay active",
+      "recording": "Recording"
+    },
+    "changelog": [
+      {
+        "version": "V0.1.1",
+        "date": "2026-04-06",
+        "items": [
+          "Dashboard Quick Access — popovers for Mixer, Recorder, Clips, and Devices",
+          "Virtual Mic Routing — mic strip with noise-reduction toggle and per-app routing",
+          "Global Recording Dropdown — replay buffer controls in Clips page header"
+        ]
+      },
+      {
+        "version": "V0.1.0",
+        "date": "2026-03-29",
+        "items": [
+          "PipeWire routing leak fix — no more dual-device audio bleed",
+          "Smooth 60 Hz VU meters with attack/release ballistics",
+          "Overdrive mode — faders extend to 150%",
+          "System tray with background-run and autostart support",
+          "Crash log capture → ~/.local/share/opengg/opengg_crash.log"
+        ]
+      },
+      {
+        "version": "V0.0.9",
+        "date": "2026-02-14",
+        "items": [
+          "Advanced timeline editor with per-track filters",
+          "FFmpeg export pipeline with real-time progress",
+          "Waveform preview in clip editor",
+          "Dark theme v2 — #16213E base, accent-driven borders"
+        ]
+      },
+      {
+        "version": "V0.0.8",
+        "date": "2026-01-20",
+        "items": [
+          "Lazy clip grid rendering via Intersection Observer",
+          "Mic input strip with NC toggle",
+          "Per-app volume sliders in drop zones",
+          "i18n scaffold (Arabic + English)"
+        ]
+      }
+    ]
+  },
   "settings": {
     "title": "Settings",
     "saved": "Settings auto-saved",
@@ -19,7 +133,8 @@
       "captureSound": "Capture & Sound",
       "clipSettings": "Clip Settings",
       "storage": "Storage",
-      "extensions": "Extensions"
+      "extensions": "Extensions",
+      "trackManagement": "Timeline Tracks"
     },
     "groups": {
       "general": "GENERAL",
@@ -76,7 +191,8 @@
         "toggleMic": "Mutes or unmutes your microphone across all recording tracks",
         "undo": "Undo the last trim change in the editor",
         "redo": "Redo the last undone trim change"
-      }
+      },
+      "resetToDefaults": "Reset to Defaults"
     },
     "mixerRouting": {
       "title": "Mixer Routing",
@@ -138,6 +254,52 @@
       "tiktokExport": "TikTok Vertical Export",
       "tiktokExportDesc": "Crop and export clips in 9:16 portrait mode for TikTok / Reels.",
       "restartHint": "Changes apply immediately — no restart required."
+    },
+    "clipPreferences": {
+      "title": "Clip Preferences"
+    },
+    "daemon": {
+      "title": "Daemon & Startup",
+      "runAtStartup": "Run OpenGG when my computer starts",
+      "runAtStartupDesc": "Automatically launch OpenGG on login via XDG autostart",
+      "keepInBackground": "Keep running in background when closed",
+      "keepInBackgroundDesc": "Closing the window hides it to the system tray instead of quitting"
+    },
+    "diagnostics": {
+      "title": "Diagnostics",
+      "hint": "Crash and error logs are stored locally for debugging. Share them when reporting issues.",
+      "openCrashLogs": "Open Crash Logs Folder"
+    },
+    "dangerZone": {
+      "title": "Danger Zone",
+      "subtitle": "These actions are destructive. Use only if your audio routing is broken and needs a full reset.",
+      "removeVirtualAudio": "Remove Virtual Audio & Restore OS Defaults",
+      "removeVirtualAudioDesc": "Unloads all OpenGG virtual sinks and restarts PipeWire + WirePlumber. Your physical hardware routes will be restored. The onboarding wizard will guide re-setup on next launch.",
+      "confirmMsg": "This will unload all OpenGG virtual audio sinks and restart PipeWire. Your audio routing will be reset. Continue?"
+    },
+    "timelineTracks": {
+      "title": "Timeline Tracks",
+      "trackIcons": "Track Icons",
+      "showIconsDesc": "Display a small icon next to each track label in the editor timeline",
+      "trackList": "Track List",
+      "trackListHint": "Customize the name, color, and icon for each editor timeline track. Changes apply live — open the editor to see them instantly.",
+      "livePreview": "Live Preview",
+      "livePreviewHint": "Exactly how the editor timeline headers will look. Updates as you type.",
+      "addAudioTrack": "+ Add Audio Track"
+    },
+    "captureGsr": {
+      "title": "GPU Screen Recorder",
+      "hint": "Uses gpu-screen-recorder for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately.",
+      "extensionsHint": "Enable GPU Screen Recorder in Extensions to configure it here."
     }
+  },
+  "notification": {
+    "clipSaved": "Clip Saved",
+    "clipFailed": "Clip Save Failed",
+    "game": "Game",
+    "filename": "Filename",
+    "filesize": "File Size",
+    "enableClipNotifications": "Clip Save Notifications",
+    "enableClipNotificationsDesc": "Show an overlay toast when a clip is saved successfully or fails"
   }
 }
