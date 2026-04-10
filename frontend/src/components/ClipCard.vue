@@ -18,6 +18,12 @@ const thumbUrl = ref('')
 const thumbLoading = ref(false)
 const thumbLoaded = ref(false)
 
+// Local duration/resolution — updated via liveMeta watch (same pattern as liveThumbs/thumbUrl).
+// Bypasses the filteredClips prop chain so they appear at the same time as the thumbnail.
+const liveDuration = ref(props.clip.duration)
+const liveWidth = ref(props.clip.width)
+const liveHeight = ref(props.clip.height)
+
 // ★ Get media server port from App.vue's provide()
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 
@@ -42,6 +48,16 @@ const { enqueue } = useThumbnailQueue()
 watch(() => replay.liveThumbs.get(props.clip.id), (path) => {
   if (path && mediaPort.value && !thumbUrl.value) {
     thumbUrl.value = mediaUrl(path, mediaPort.value)
+  }
+})
+
+// React to per-clip probe results — updates duration badge and resolution pill
+// at the same time as the thumbnail, bypassing the filteredClips prop chain.
+watch(() => replay.liveMeta.get(props.clip.id), (meta) => {
+  if (meta) {
+    liveDuration.value = meta.duration
+    liveWidth.value = meta.width
+    liveHeight.value = meta.height
   }
 })
 
@@ -131,7 +147,7 @@ function cancelEdit() { isEditing.value = false }
       <img v-if="thumbUrl" :src="thumbUrl" class="thumb-img" :class="{ loaded: thumbLoaded }" alt="" @load="thumbLoaded = true" />
       <div v-else-if="thumbLoading" class="thumb-ph">⏳</div>
       <div v-else class="thumb-ph">🎬</div>
-      <span v-if="clip.duration" class="badge">{{ fmtDur(clip.duration) }}</span>
+      <span v-if="liveDuration" class="badge">{{ fmtDur(liveDuration) }}</span>
       <button class="heart" :class="{ on: clip.favorite }" @click="toggleFav"><svg viewBox="0 0 24 24" :fill="clip.favorite?'currentColor':'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></button>
       <div class="sel-ov" :class="{ vis: selected || replay.selectMode }" @click.stop="replay.toggleSelect(clip.id)">
         <div class="sel-box" :class="{ checked: selected }">✓</div>
@@ -158,7 +174,7 @@ function cancelEdit() { isEditing.value = false }
       </div>
       <div class="clip-meta">
         <span class="pill">{{ fmtSize(clip.filesize) }}</span>
-        <span v-if="clip.width" class="pill">{{ fmtRes(clip.width, clip.height) }}</span>
+        <span v-if="liveWidth" class="pill">{{ fmtRes(liveWidth, liveHeight) }}</span>
         <span v-if="clip.created" class="pill date-pill">{{ fmtDate(clip.created) }}</span>
         <span v-if="clip.game && clip.game !== 'Unknown'" class="game">{{ clip.game }}</span>
       </div>

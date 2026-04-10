@@ -250,21 +250,42 @@ let unlistenAdded:   UnlistenFn | null = null
 let unlistenRemoved: UnlistenFn | null = null
 
 async function prefetchThumbnails() {
-  // Generate thumbnails sequentially, newest→oldest (clips are already sorted that way).
-  // isPrefetching gates the IntersectionObserver in ClipCard so it doesn't compete
-  // and break the ordered one-by-one appearance.
-  const missing = replay.filteredClips.filter((c: Clip) => !c.isSkeleton && !c.thumbnail && !replay.liveThumbs.get(c.id))
-  if (!missing.length) return
-  if (import.meta.env.DEV) console.debug(`[perf] prefetchThumbnails: ${missing.length} clips`)
+  // For each clip sequentially (newest→oldest): probe duration/size if uncached, then generate thumbnail.
+  // This replaces the old bulk probe_clips block so the user sees each clip fill in one by one
+  // instead of waiting for all ffprobe calls to finish before thumbnails start.
+  // Include clips missing thumbnail OR missing duration/resolution — both need processing
+  const needsWork = replay.filteredClips.filter((c: Clip) =>
+    !c.isSkeleton && ((!c.thumbnail && !replay.liveThumbs.get(c.id)) || c.duration === 0)
+  )
+  if (!needsWork.length) return
+  if (import.meta.env.DEV) console.debug(`[perf] prefetchThumbnails: ${needsWork.length} clips`)
   replay.isPrefetching = true
   try {
-    for (const clip of missing) {
+    for (const clip of needsWork) {
       try {
-        const path = await invoke<string>('generate_thumbnail', {
-          filepath: clip.filepath,
-          duration: clip.duration > 0 ? clip.duration : undefined,
-        })
-        if (path) replay.setThumbnail(clip.id, path)
+        // Step 1: probe if duration/resolution unknown
+        let duration = clip.duration
+        let width = clip.width
+        let height = clip.height
+        if (duration === 0) {
+          const probed = await invoke<[string, number, number, number][]>('probe_clips', { filepaths: [clip.filepath] })
+          if (probed.length > 0) [, duration, width, height] = probed[0]
+        }
+
+        // Step 2: generate thumbnail if missing (pass duration to skip redundant ffprobe in Rust)
+        let thumbPath = clip.thumbnail || replay.liveThumbs.get(clip.id) || ''
+        if (!thumbPath) {
+          thumbPath = await invoke<string>('generate_thumbnail', {
+            filepath: clip.filepath,
+            duration: duration > 0 ? duration : undefined,
+          })
+        }
+
+        // Step 3: single atomic store update — duration + resolution + thumbnail in one object,
+        // one triggerRef(clips), one render — so all three appear simultaneously on the card
+        if (thumbPath) {
+          replay.applyProbeAndThumb(clip.filepath, duration, width, height, clip.id, thumbPath)
+        }
       } catch {}
     }
   } finally {
@@ -519,7 +540,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 <div class="list-thumb-wrap">
                   <img v-if="(replay.liveThumbs.get(clip.id) || clip.thumbnail) && mediaPortNum" class="list-thumb" :src="mediaUrl(replay.liveThumbs.get(clip.id) || clip.thumbnail, mediaPortNum)" loading="lazy" @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
                   <div v-else class="list-thumb list-thumb-empty">▶</div>
-                  <span v-if="clip.duration" class="list-badge">{{ fmtDur(clip.duration) }}</span>
+                  <span v-if="replay.liveMeta.get(clip.id)?.duration || clip.duration" class="list-badge">{{ fmtDur(replay.liveMeta.get(clip.id)?.duration || clip.duration) }}</span>
                   <button class="lt-heart" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
                     <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
                   </button>
@@ -532,7 +553,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                   <span class="list-meta">
                     <span v-if="clip.game && clip.game !== 'Unknown'" class="lm-game">{{ clip.game }}</span>
                     <span v-if="clip.filesize" class="lm-pill">{{ fmtSize(clip.filesize) }}</span>
-                    <span v-if="clip.width" class="lm-pill">{{ fmtRes(clip.width, clip.height) }}</span>
+                    <span v-if="replay.liveMeta.get(clip.id)?.width || clip.width" class="lm-pill">{{ fmtRes(replay.liveMeta.get(clip.id)?.width || clip.width, replay.liveMeta.get(clip.id)?.height || clip.height) }}</span>
                     <span v-if="clip.created" class="lm-pill lm-date">{{ fmtDate(clip.created) }}</span>
                   </span>
                 </div>
@@ -637,7 +658,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                      loading="lazy"
                      @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
                 <div v-else class="list-thumb list-thumb-empty">▶</div>
-                <span v-if="clip.duration" class="list-badge">{{ fmtDur(clip.duration) }}</span>
+                <span v-if="replay.liveMeta.get(clip.id)?.duration || clip.duration" class="list-badge">{{ fmtDur(replay.liveMeta.get(clip.id)?.duration || clip.duration) }}</span>
                 <button class="lt-heart" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
                   <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
                 </button>
@@ -650,7 +671,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 <span class="list-meta">
                   <span v-if="clip.game && clip.game !== 'Unknown'" class="lm-game">{{ clip.game }}</span>
                   <span v-if="clip.filesize" class="lm-pill">{{ fmtSize(clip.filesize) }}</span>
-                  <span v-if="clip.width" class="lm-pill">{{ fmtRes(clip.width, clip.height) }}</span>
+                  <span v-if="replay.liveMeta.get(clip.id)?.width || clip.width" class="lm-pill">{{ fmtRes(replay.liveMeta.get(clip.id)?.width || clip.width, replay.liveMeta.get(clip.id)?.height || clip.height) }}</span>
                   <span v-if="clip.created" class="lm-pill lm-date">{{ fmtDate(clip.created) }}</span>
                 </span>
               </div>

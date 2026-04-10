@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, shallowRef, triggerRef, markRaw } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { perfWrap } from '../utils/perf'
 
 export interface Clip {
   id: string; filename: string; filepath: string; filesize: number
@@ -17,8 +18,17 @@ export const useReplayStore = defineStore('replay', () => {
   const replayDuration = ref(0)
   // Phase 2d: shallowRef avoids deep reactivity on every clip object
   const clips = shallowRef<Clip[]>([])
+  // Reactive thumbnail map — updated by setThumbnail so list view can react
+  // without triggering the expensive filteredClips/sortedClips recompute.
+  const liveThumbs = shallowRef(new Map<string, string>())
+  // Reactive probe map — mirrors liveThumbs pattern for duration/width/height.
+  // ClipCard watches this directly so duration badge and resolution pill update
+  // without relying on the filteredClips computed prop chain.
+  const liveMeta = shallowRef(new Map<string, { duration: number; width: number; height: number }>())
   const loading = ref(false)
   const loaded = ref(false)
+  const clipsProbed = ref(false)   // true after Phase 2 (probe_clips) completes or is skipped
+  const isPrefetching = ref(false) // true while prefetchThumbnails() sequential loop is running
   const lastFolder = ref('')
 
   // Search/Sort/Filter
@@ -47,7 +57,18 @@ export const useReplayStore = defineStore('replay', () => {
     return ['all', ...Array.from(s).sort()]
   })
 
+  // Dev-only recomputation counter — helps detect unexpected triggers during thumbnail bursts
+  let _fcRunCount = 0
+
   const filteredClips = computed(() => {
+    if (import.meta.env.DEV) {
+      _fcRunCount++
+      const dt = performance.now()
+      const stack = new Error().stack?.split('\n')[2]?.trim() ?? ''
+      console.debug(`[perf] filteredClips run #${_fcRunCount} ${stack}`)
+      void dt // referenced below after compute
+    }
+    const t0 = performance.now()
     // Skeletons always float to the top regardless of any filter/sort
     const skeletons = clips.value.filter(c => c.isSkeleton)
     let r = clips.value.filter(c => !c.isSkeleton)
@@ -62,11 +83,17 @@ export const useReplayStore = defineStore('replay', () => {
       case 'shortest': r = [...r].sort((a,b) => a.duration - b.duration); break
       default: r = [...r].sort((a,b) => b.created.localeCompare(a.created))
     }
-    return [...skeletons, ...r]
+    const result = [...skeletons, ...r]
+    if (import.meta.env.DEV) {
+      const dt = performance.now() - t0
+      if (dt > 1) console.debug(`[perf] filteredClips: ${dt.toFixed(1)}ms (${result.length} clips)`)
+    }
+    return result
   })
 
   // ★ CSS-filter arch: sort ONLY — no filter applied. ClipsPage uses v-show="isMatch()" instead.
   const sortedClips = computed(() => {
+    const t0 = performance.now()
     const skeletons = clips.value.filter(c => c.isSkeleton)
     let r = clips.value.filter(c => !c.isSkeleton)
     switch (sortMode.value) {
@@ -75,7 +102,12 @@ export const useReplayStore = defineStore('replay', () => {
       case 'shortest': r = [...r].sort((a,b) => a.duration - b.duration); break
       default:         r = [...r].sort((a,b) => b.created.localeCompare(a.created))
     }
-    return [...skeletons, ...r]
+    const result = [...skeletons, ...r]
+    if (import.meta.env.DEV) {
+      const dt = performance.now() - t0
+      if (dt > 1) console.debug(`[perf] sortedClips: ${dt.toFixed(1)}ms (${result.length} clips)`)
+    }
+    return result
   })
 
   const selectedCount = computed(() => selectedIds.value.size)
@@ -93,8 +125,12 @@ export const useReplayStore = defineStore('replay', () => {
   async function fetchClips(folder='', force=false) {
     if (loaded.value && !force && folder === lastFolder.value) return
     loading.value = true
+    clipsProbed.value = false
+    _fcRunCount = 0 // reset counter for fresh load
     try {
-      const raw = await invoke<Clip[]>('get_clips', { folder })
+      // Phase 1: fast load — skips ffprobe for uncached clips so grid appears immediately.
+      // Uncached clips arrive with duration=0, width=0, height=0.
+      const raw = await perfWrap('ipc:get_clips_fast', () => invoke<Clip[]>('get_clips_fast', { folder }))
       // ★ Epic 2 P5: Auto-fill game from filename prefix if empty
       for (const c of raw) {
         if (!c.game || c.game === 'Unknown') {
@@ -103,11 +139,38 @@ export const useReplayStore = defineStore('replay', () => {
         }
       }
       // Phase 2d: markRaw prevents deep reactive wrapping of clip objects
-      clips.value = raw.map(c => markRaw(c))
-      lastFolder.value = folder; loaded.value = true
+      if (import.meta.env.DEV) {
+        const t0 = performance.now()
+        clips.value = raw.map(c => markRaw(c))
+        console.debug(`[perf] markRaw map: ${(performance.now() - t0).toFixed(1)}ms (${raw.length} clips)`)
+      } else {
+        clips.value = raw.map(c => markRaw(c))
+      }
+      lastFolder.value = folder
+      loaded.value = true
+      loading.value = false // show clips NOW — probe+thumbnail handled per-clip in prefetchThumbnails
     }
     catch (e) { console.error('fetchClips:', e); clips.value = [] }
-    finally { loading.value = false }
+    finally { loading.value = false; clipsProbed.value = true }
+  }
+
+  // Update probe data (duration/width/height) AND thumbnail for a single clip atomically.
+  // Both changes go into ONE new markRaw object → ONE triggerRef(clips) → ONE render cycle.
+  // This guarantees the duration badge, resolution pill, and thumbnail all appear at the same time.
+  function applyProbeAndThumb(fp: string, dur: number, w: number, h: number, thumbId: string, thumbPath: string) {
+    const i = clips.value.findIndex(c => c.filepath === fp)
+    if (i >= 0) {
+      clips.value[i] = markRaw({ ...clips.value[i], duration: dur, width: w, height: h, thumbnail: thumbPath })
+      triggerRef(clips)
+    }
+    // Push duration/resolution via liveMeta (same pattern as liveThumbs for thumbnail).
+    // ClipCard watches this directly — no dependence on the filteredClips prop chain.
+    if (dur > 0) {
+      liveMeta.value.set(thumbId, { duration: dur, width: w, height: h })
+      triggerRef(liveMeta)
+    }
+    liveThumbs.value.set(thumbId, thumbPath)
+    triggerRef(liveThumbs)
   }
 
   // Phase 2d: updateClipMeta replaces the clip object with a new markRaw copy so Vue's
@@ -122,7 +185,15 @@ export const useReplayStore = defineStore('replay', () => {
   function removeClip(fp: string) { clips.value = clips.value.filter(c => c.filepath !== fp && c.id !== fp); selectedIds.value.delete(fp) }
   function setThumbnail(id: string, p: string) {
     const i = clips.value.findIndex(c => c.id === id)
-    if (i >= 0) { clips.value[i] = markRaw({ ...clips.value[i], thumbnail: p }); triggerRef(clips) }
+    // Mutate clip's thumbnail in-place but do NOT triggerRef(clips).
+    // ClipCard.vue already has a local `thumbUrl` ref that updates immediately.
+    // Skipping triggerRef prevents ~100 full recomputes of filteredClips/sortedClips/games
+    // during the thumbnail loading burst. The updated thumbnail will be visible in the
+    // clip object the next time filteredClips naturally recomputes (e.g., on filter change).
+    if (i >= 0) { clips.value[i] = markRaw({ ...clips.value[i], thumbnail: p }) }
+    // Update liveThumbs so list view re-renders without touching the clips computeds.
+    liveThumbs.value.set(id, p)
+    triggerRef(liveThumbs)
   }
   /** Prepend a new clip (from file-watcher) without a full rescan. */
   function addClip(clip: Clip) { if (!clips.value.find(c => c.filepath === clip.filepath)) clips.value = [markRaw(clip), ...clips.value] }
@@ -153,12 +224,14 @@ export const useReplayStore = defineStore('replay', () => {
   function isSelected(id: string) { return selectedIds.value.has(id) }
 
   return {
-    status, replayDuration, clips, loading, loaded,
+    status, replayDuration, clips, loading, loaded, clipsProbed, isPrefetching,
     search, sortMode, filterGame, selectedGames, filterFav,
     games, filteredClips, sortedClips, favCount,
     selectedIds, selectMode, selectedCount,
     fetchStatus, startReplay, stopRecorder, saveReplay,
-    fetchClips, updateClipMeta, removeClip, setThumbnail, addClip, injectSkeleton, replaceSkeleton,
+    liveThumbs,
+    fetchClips, updateClipMeta, applyProbeAndThumb, removeClip, setThumbnail, addClip, injectSkeleton, replaceSkeleton,
+    liveMeta,
     toggleSelect, clearSelection, isSelected,
     activeMenuClipId, activeMenuPos,
     scanActive, scanCount,
