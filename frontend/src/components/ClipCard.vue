@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, inject, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, inject, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { mediaUrl } from '../utils/assets'
 import type { Clip } from '../stores/replay'
@@ -36,21 +36,47 @@ function openMenu(e: MouseEvent) {
 const { observe, unobserve } = useSharedIntersectionObserver()
 const { enqueue } = useThumbnailQueue()
 
+// React to prefetchThumbnails() generating this card's thumbnail.
+// liveThumbs is updated sequentially newest→oldest, so thumbnails appear in order
+// without needing the IO observer to fire first.
+watch(() => replay.liveThumbs.get(props.clip.id), (path) => {
+  if (path && mediaPort.value && !thumbUrl.value) {
+    thumbUrl.value = mediaUrl(path, mediaPort.value)
+  }
+})
+
 onMounted(() => {
   if (props.clip.thumbnail && mediaPort.value) {
     thumbUrl.value = mediaUrl(props.clip.thumbnail, mediaPort.value)
     return  // already have thumb — never register observer
   }
   if (cardRef.value) {
+    const mountTime = import.meta.env.DEV ? performance.now() : 0
     observe(cardRef.value, async (entry) => {
       if (!entry.isIntersecting || thumbLoading.value || thumbUrl.value) return
+      // Gate 1: Phase 2 (probe_clips) not done yet — duration unknown, skip to avoid
+      // redundant ffprobe inside generate_thumbnail and badge appearing after thumbnail.
+      if (!replay.clipsProbed && props.clip.duration === 0) return
+      // Gate 2: prefetchThumbnails sequential loop is running — don't compete with it
+      // so thumbnails appear one-by-one newest→oldest without queue reordering.
+      if (replay.isPrefetching) return
       thumbLoading.value = true
       // observeOnce: stop firing callbacks now that we're loading
       if (cardRef.value) unobserve(cardRef.value)
+      // High priority for cards that are mostly visible, normal for preload zone
+      const priority = entry.intersectionRatio > 0.3 ? 'high' : 'normal'
       try {
-        const path = await enqueue(() => invoke<string>('generate_thumbnail', { filepath: props.clip.filepath }))
+        // Pass known duration to skip redundant ffprobe subprocess in Rust
+        const dur = props.clip.duration > 0 ? props.clip.duration : undefined
+        const path = await enqueue(
+          () => invoke<string>('generate_thumbnail', { filepath: props.clip.filepath, duration: dur }),
+          priority
+        )
         if (mediaPort.value) {
           thumbUrl.value = mediaUrl(path, mediaPort.value)
+        }
+        if (import.meta.env.DEV) {
+          console.debug(`[perf] card thumb loaded: ${(performance.now() - mountTime).toFixed(0)}ms (${priority}) ${props.clip.filename}`)
         }
         replay.setThumbnail(props.clip.id, path)
       } catch (e) { console.warn('thumb:', e) }
@@ -84,14 +110,14 @@ const editInput = ref<HTMLInputElement | null>(null)
 function startEdit(e: MouseEvent) {
   e.stopPropagation()
   isEditing.value = true
-  editValue.value = props.clip.custom_name || props.clip.filename.replace(/\.[^.]+$/, '')
+  editValue.value = props.clip.custom_name || (props.clip.game !== 'Unknown' ? props.clip.game : props.clip.filename.replace(/\.[^.]+$/, ''))
   nextTick(() => editInput.value?.select())
 }
 async function confirmEdit() {
   if (!isEditing.value) return
   isEditing.value = false
   const n = editValue.value.trim()
-  const orig = props.clip.custom_name || props.clip.filename.replace(/\.[^.]+$/, '')
+  const orig = props.clip.custom_name || (props.clip.game !== 'Unknown' ? props.clip.game : props.clip.filename.replace(/\.[^.]+$/, ''))
   if (!n || n === orig) return
   replay.updateClipMeta(props.clip.filepath, { custom_name: n })
   try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: n, favorite: props.clip.favorite } }) } catch {}
@@ -102,7 +128,7 @@ function cancelEdit() { isEditing.value = false }
 <template>
   <div ref="cardRef" class="card" :class="{ selected }" @contextmenu.prevent="openMenu" draggable="true" @dragstart="onDrag">
     <div class="thumb">
-      <img v-if="thumbUrl" :src="thumbUrl" class="thumb-img" :class="{ loaded: thumbLoaded }" loading="lazy" alt="" @load="thumbLoaded = true" />
+      <img v-if="thumbUrl" :src="thumbUrl" class="thumb-img" :class="{ loaded: thumbLoaded }" alt="" @load="thumbLoaded = true" />
       <div v-else-if="thumbLoading" class="thumb-ph">⏳</div>
       <div v-else class="thumb-ph">🎬</div>
       <span v-if="clip.duration" class="badge">{{ fmtDur(clip.duration) }}</span>
@@ -124,7 +150,7 @@ function cancelEdit() { isEditing.value = false }
             @keydown.escape.prevent="cancelEdit"
             @click.stop
           />
-          <span v-else>{{ clip.custom_name || clip.filename }}</span>
+          <span v-else>{{ clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename) }}</span>
         </div>
         <button class="kebab" @click.stop="openMenu" title="More options">
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
@@ -141,11 +167,11 @@ function cancelEdit() { isEditing.value = false }
 </template>
 
 <style scoped>
-.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; contain:layout style paint; content-visibility:auto; contain-intrinsic-size:auto 260px; }
+.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; contain:layout style paint; content-visibility:auto; contain-intrinsic-size:auto 260px; contain-intrinsic-block-size:auto 280px; user-select:none; }
 .card:hover { border-color:var(--accent); transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.25); }
 .card.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent); }
 .thumb { width:100%; aspect-ratio:16/9; background:var(--bg-deep); position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden; }
-.thumb-img { width:100%; height:100%; object-fit:cover; display:block; opacity:0; transition:opacity 0.25s; }
+.thumb-img { width:100%; height:100%; object-fit:cover; display:block; opacity:0; transition:opacity 0.25s; user-select:none; -webkit-user-drag:none; pointer-events:none; }
 .thumb-img.loaded { opacity:1; }
 .thumb-ph { font-size:28px; opacity:.3; }
 .badge { position:absolute; bottom:6px; right:6px; background:rgba(0,0,0,.8); color:#fff; font-size:11px; font-weight:600; padding:2px 7px; border-radius:4px; pointer-events:none; }
@@ -160,7 +186,13 @@ function cancelEdit() { isEditing.value = false }
 .clip-meta { display:flex; align-items:center; gap:6px; font-size:var(--meta-size, 11px); color:var(--text-muted); flex-wrap:wrap; }
 .pill { background:var(--bg-deep); padding:2px 6px; border-radius:3px; }
 .date-pill { opacity:.75; }
-.game { margin-left:auto; color:var(--text-sec); font-weight:500; }
+.game {
+  margin-left:auto; font-weight:700; font-size:10px;
+  color:var(--accent);
+  background:color-mix(in srgb, var(--accent) 14%, transparent);
+  padding:2px 8px; border-radius:4px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:120px;
+}
 .kebab {
   flex-shrink:0; width:22px; height:22px; border-radius:4px; border:none;
   background:transparent; color:var(--text-muted); cursor:pointer;
