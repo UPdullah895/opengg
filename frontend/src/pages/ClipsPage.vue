@@ -155,13 +155,24 @@ const listStyles = computed(() => {
 })
 
 // ── Scroll-suppression: disable hover transitions while scrolling ──
+// Also pauses prefetchThumbnails while the user is actively scrolling so the
+// frame budget goes to paint/layout, not IPC/FFmpeg. Resumes ~200ms after the
+// last scroll event.
 const isScrolling = ref(false)
 let scrollTimer: ReturnType<typeof setTimeout> | null = null
 function onScroll() {
   isScrolling.value = true
+  replay.scrolling = true
   if (scrollTimer) clearTimeout(scrollTimer)
-  scrollTimer = setTimeout(() => { isScrolling.value = false }, 150)
+  scrollTimer = setTimeout(() => {
+    isScrolling.value = false
+    replay.scrolling = false
+    // Wake up the prefetch loop if it's sleeping
+    if (prefetchWake) { prefetchWake(); prefetchWake = null }
+  }, 200)
 }
+// Fires when prefetchThumbnails resumes after a scroll pause
+let prefetchWake: (() => void) | null = null
 
 // ★ Epic 2: Slider drag tooltip
 const SLIDER_LABELS: Record<number, string> = { 1: 'Extra Large', 2: 'Large', 3: 'Medium', 4: 'Small' }
@@ -250,39 +261,68 @@ let unlistenAdded:   UnlistenFn | null = null
 let unlistenRemoved: UnlistenFn | null = null
 
 async function prefetchThumbnails() {
-  // For each clip sequentially (newest→oldest): probe duration/size if uncached, then generate thumbnail.
-  // This replaces the old bulk probe_clips block so the user sees each clip fill in one by one
-  // instead of waiting for all ffprobe calls to finish before thumbnails start.
+  // Re-entry guard. Also guards against the watch() below firing while we're already
+  // running — since applyBulkProbe/applyProbeAndThumb mutate clips[], triggerRef can
+  // cause the watch to re-fire on every flush.
+  if (replay.isPrefetching) return
   // Include clips missing thumbnail OR missing duration/resolution — both need processing
   const needsWork = replay.filteredClips.filter((c: Clip) =>
     !c.isSkeleton && ((!c.thumbnail && !replay.liveThumbs.get(c.id)) || c.duration === 0)
   )
   if (!needsWork.length) return
-  if (import.meta.env.DEV) console.debug(`[perf] prefetchThumbnails: ${needsWork.length} clips`)
+  // Set the gate SYNCHRONOUSLY before the first await so ClipCard IO observers,
+  // which also check replay.isPrefetching, can never race this function.
   replay.isPrefetching = true
+  if (import.meta.env.DEV) console.debug(`[perf] prefetchThumbnails: ${needsWork.length} clips`)
+
+  // ── Phase 1: BULK PROBE ──────────────────────────────────────────────
+  // One probe_clips call for EVERY unprobed filepath. Rust's semaphore parallelizes
+  // ffprobe 4-wide internally, so this is the fastest way to fill metadata.
+  // Previously this was N separate 1-clip calls — 224 of them in a 22s session per
+  // the perf log — each paying IPC + semaphore setup overhead and contending with
+  // thumbnail ffmpegs. Now it's one call that yields duration/resolution for every
+  // card at once, and the thumbnail loop only needs to spawn ffmpeg.
+  const unprobedFps = needsWork.filter(c => c.duration === 0).map(c => c.filepath)
+  const probeMap = new Map<string, { duration: number; width: number; height: number }>()
+  if (unprobedFps.length) {
+    try {
+      const probed = await invoke<[string, number, number, number][]>('probe_clips', { filepaths: unprobedFps })
+      for (const [fp, duration, width, height] of probed) {
+        probeMap.set(fp, { duration, width, height })
+      }
+      // Single-shot bulk apply: one triggerRef for liveMeta + one rAF flush.
+      // Duration badges + resolution pills appear on every probed card at once.
+      replay.applyBulkProbe(probed)
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn('[perf] bulk probe failed', e)
+    }
+  }
+
+  // ── Phase 2: SEQUENTIAL THUMBNAIL LOOP (newest→oldest) ───────────────
   try {
     for (const clip of needsWork) {
+      // Yield to scroll: if user is actively scrolling, wait for scroll to stop
+      // before spawning the next ffmpeg. Keeps the frame budget clean.
+      if (replay.scrolling) {
+        if (import.meta.env.DEV) console.debug('[perf] prefetch paused (scrolling)')
+        await new Promise<void>(resolve => { prefetchWake = resolve })
+        if (import.meta.env.DEV) console.debug('[perf] prefetch resumed')
+      }
       try {
-        // Step 1: probe if duration/resolution unknown
-        let duration = clip.duration
-        let width = clip.width
-        let height = clip.height
-        if (duration === 0) {
-          const probed = await invoke<[string, number, number, number][]>('probe_clips', { filepaths: [clip.filepath] })
-          if (probed.length > 0) [, duration, width, height] = probed[0]
-        }
+        // Prefer freshly-probed values from Phase 1 over the (stale) captured clip fields.
+        const probed = probeMap.get(clip.filepath)
+        const duration = probed?.duration ?? clip.duration
+        const width = probed?.width ?? clip.width
+        const height = probed?.height ?? clip.height
 
-        // Step 2: generate thumbnail if missing (pass duration to skip redundant ffprobe in Rust)
         let thumbPath = clip.thumbnail || replay.liveThumbs.get(clip.id) || ''
         if (!thumbPath) {
+          // Pass duration so Rust skips the redundant ffprobe inside generate_thumbnail
           thumbPath = await invoke<string>('generate_thumbnail', {
             filepath: clip.filepath,
             duration: duration > 0 ? duration : undefined,
           })
         }
-
-        // Step 3: single atomic store update — duration + resolution + thumbnail in one object,
-        // one triggerRef(clips), one render — so all three appear simultaneously on the card
         if (thumbPath) {
           replay.applyProbeAndThumb(clip.filepath, duration, width, height, clip.id, thumbPath)
         }
@@ -290,14 +330,27 @@ async function prefetchThumbnails() {
     }
   } finally {
     replay.isPrefetching = false
+    // Final authoritative trigger so sort-by-duration / "longest" etc. reflect
+    // the freshly-probed values on the next natural recompute.
+    replay.flushClipsNow()
   }
 }
+
+// Re-run prefetchThumbnails every time fetchClips successfully populates the store.
+// This handles the initial mount AND subsequent re-fetches (e.g., user imports clips in
+// Settings after launching with the reset sentinel path). Without this, the prefetch only
+// ran once at mount with 0 clips and all subsequent clips were handled by the IO fallback,
+// firing 200+ single-clip probe_clips calls and killing scroll perf.
+// flush: 'sync' ensures the gate is set before any ClipCard IO observers can fire.
+// prefetchThumbnails has its own re-entry guard against the triggerRef storm inside itself.
+watch(() => replay.clipsLoadedAt, () => { prefetchThumbnails() }, { flush: 'sync' })
 
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
   replay.fetchStatus()
   await replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '')
-  prefetchThumbnails() // fire-and-forget: pre-warms thumbnail cache in background
+  // The clipsLoadedAt watch above will have fired during fetchClips, kicking off prefetch.
+  // No need to call it manually here.
 
   unlistenAdded = await listen<string>('clip_added', async (event) => {
     const fp = event.payload

@@ -1003,6 +1003,7 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
 #[command] pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
     // Phase 3a+3b: cache-first ffprobe, parallel for uncached clips
     use tokio::sync::Semaphore;
+    #[cfg(debug_assertions)] let t_total = std::time::Instant::now();
     let dirs = get_all_clip_dirs(&folder);
     let meta = get_meta_map();
     let td = thumb_dir(); let _ = std::fs::create_dir_all(&td);
@@ -1025,15 +1026,22 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
             let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
             let id = format!("{:x}", hash_str(&fp));
             let mtime = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
-            let created = fmt_ts(mtime as i64);
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
-            let game_raw = stem.split('_').next().unwrap_or("Unknown").replace('-', " ");
+            let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
+            // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ to get full game name.
+            // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ to get prefix.
+            let game_raw = if let Some(pos) = stem.find("__") {
+                stem[..pos].replace('-', " ").replace('_', " ")
+            } else {
+                stem.split('_').next().unwrap_or("Unknown").replace('-', " ")
+            };
             let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
             let thumb = td.join(format!("{id}.jpg"));
             let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
             entries.push(Entry { fp, fname, id, filesize: m.len(), created, mtime, game_raw, cn, fav, game_tag, thumbnail });
         }
     }
+    #[cfg(debug_assertions)] let t_scan = t_total.elapsed().as_millis();
 
     // Phase 3a: check probe cache; collect uncached for parallel probing
     let db = open_db().ok();
@@ -1049,6 +1057,8 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
         }
         uncached_idxs.push(i);
     }
+    #[cfg(debug_assertions)] let t_cache = t_total.elapsed().as_millis();
+    #[cfg(debug_assertions)] let n_uncached = uncached_idxs.len();
 
     // Phase 3b: parallel ffprobe for uncached clips (max 4 concurrent)
     // acquire().await blocks until a permit is free, properly limiting concurrency.
@@ -1071,6 +1081,7 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
     for task in probe_tasks {
         if let Ok(r) = task.await { probe_results.push(r); }
     }
+    #[cfg(debug_assertions)] let t_probe = t_total.elapsed().as_millis();
     // Write new probe results to cache
     if let Some(ref db) = db {
         for (idx, fp, (dur, w, h)) in &probe_results {
@@ -1089,7 +1100,106 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
         ClipInfo { id: e.id, filename: e.fname, filepath: e.fp, filesize: e.filesize, created: e.created, duration: dur, width: w, height: h, game, custom_name: e.cn, favorite: e.fav, thumbnail: e.thumbnail }
     }).collect();
 
-    clips.sort_by(|a,b| b.created.cmp(&a.created)); Ok(clips)
+    clips.sort_by(|a,b| b.created.cmp(&a.created));
+    #[cfg(debug_assertions)] {
+        let t_total_ms = t_total.elapsed().as_millis();
+        eprintln!("[perf] get_clips: scan={}ms cache={}ms ffprobe={}ms ({} uncached) assemble={}ms total={}ms clips={}",
+            t_scan, t_cache - t_scan, t_probe - t_cache, n_uncached,
+            t_total_ms - t_probe, t_total_ms, clips.len());
+    }
+    Ok(clips)
+}
+
+/// Fast clip list — skips ffprobe entirely for uncached clips.
+/// Uncached clips get duration=0, width=0, height=0 so the grid can appear immediately.
+/// Call probe_clips() afterward to fill in missing metadata in the background.
+#[command] pub async fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
+    #[cfg(debug_assertions)] let t_total = std::time::Instant::now();
+    let dirs = get_all_clip_dirs(&folder);
+    let meta = get_meta_map();
+    let td = thumb_dir(); let _ = std::fs::create_dir_all(&td);
+
+    struct Entry { fp: String, fname: String, id: String, filesize: u64, created: String, mtime: u64, game_raw: String, cn: String, fav: bool, game_tag: String, thumbnail: String }
+    let mut entries: Vec<Entry> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for dir in &dirs {
+        if !dir.exists() { continue; }
+        let rd = match std::fs::read_dir(dir) { Ok(r) => r, Err(_) => continue };
+        for e in rd.flatten() {
+            let p = e.path(); if !p.is_file() { continue; }
+            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if !VIDEO_EXTS.contains(&ext.as_str()) { continue; }
+            let fp = p.to_string_lossy().to_string();
+            if seen.contains(&fp) { continue; }
+            seen.insert(fp.clone());
+            let m = match e.metadata() { Ok(m) => m, Err(_) => continue };
+            let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let id = format!("{:x}", hash_str(&fp));
+            let mtime = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
+            let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
+            // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ to get full game name.
+            // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ to get prefix.
+            let game_raw = if let Some(pos) = stem.find("__") {
+                stem[..pos].replace('-', " ").replace('_', " ")
+            } else {
+                stem.split('_').next().unwrap_or("Unknown").replace('-', " ")
+            };
+            let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
+            let thumb = td.join(format!("{id}.jpg"));
+            let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
+            entries.push(Entry { fp, fname, id, filesize: m.len(), created, mtime, game_raw, cn, fav, game_tag, thumbnail });
+        }
+    }
+
+    // Check probe cache — cached clips get real values, uncached get (0,0,0)
+    let db = open_db().ok();
+    let mut clips: Vec<ClipInfo> = entries.into_iter().map(|e| {
+        let (dur, w, h) = db.as_ref()
+            .and_then(|db| probe_cache_get(db, &e.fp, e.mtime))
+            .unwrap_or((0.0, 0, 0));
+        let game = if e.game_tag.is_empty() { e.game_raw } else { e.game_tag };
+        ClipInfo { id: e.id, filename: e.fname, filepath: e.fp, filesize: e.filesize, created: e.created, duration: dur, width: w, height: h, game, custom_name: e.cn, favorite: e.fav, thumbnail: e.thumbnail }
+    }).collect();
+
+    clips.sort_by(|a,b| b.created.cmp(&a.created));
+    #[cfg(debug_assertions)] eprintln!("[perf] get_clips_fast: total={}ms clips={}", t_total.elapsed().as_millis(), clips.len());
+    Ok(clips)
+}
+
+/// Probe duration/resolution for a list of files and write results to the SQLite cache.
+/// Used after get_clips_fast() to fill in metadata for uncached clips in the background.
+/// Returns Vec of (filepath, duration, width, height).
+#[command] pub async fn probe_clips(filepaths: Vec<String>) -> Result<Vec<(String, f64, u32, u32)>, String> {
+    use tokio::sync::Semaphore;
+    if filepaths.is_empty() { return Ok(vec![]); }
+    #[cfg(debug_assertions)] let t_start = std::time::Instant::now();
+    let sem = Arc::new(Semaphore::new(4));
+    let mut tasks = Vec::new();
+    for fp in filepaths {
+        let sem = Arc::clone(&sem);
+        tasks.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let fp2 = fp.clone();
+            let (dur, w, h) = tokio::task::spawn_blocking(move || probe_video(std::path::Path::new(&fp2)))
+                .await.unwrap_or((0.0, 0, 0));
+            (fp, dur, w, h)
+        }));
+    }
+    let mut results = Vec::new();
+    for t in tasks { if let Ok(r) = t.await { results.push(r); } }
+    // Write to cache
+    if let Ok(db) = open_db() {
+        for (fp, dur, w, h) in &results {
+            let mtime = std::fs::metadata(fp).ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs()).unwrap_or(0);
+            probe_cache_set(&db, fp, *dur, *w, *h, mtime);
+        }
+    }
+    #[cfg(debug_assertions)] eprintln!("[perf] probe_clips: {}ms ({} clips)", t_start.elapsed().as_millis(), results.len());
+    Ok(results.into_iter().map(|(fp, dur, w, h)| (fp, dur, w, h)).collect())
 }
 
 /// Fetch metadata for a single file — used by the frontend file-watcher listener.
@@ -1105,9 +1215,10 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
     let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
     let fp = filepath.clone();
     let id = format!("{:x}", hash_str(&fp));
-    let created = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| fmt_ts(d.as_secs() as i64)).unwrap_or_default();
-    let (dur,w,h) = probe_video(&p);
+    let mtime = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
+    let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
+    let (dur,w,h) = probe_video(&p);
     let game_from_filename = stem.split('_').next().unwrap_or("Unknown").replace('-', " ");
     let (cn,fav,game_tag) = meta.get(&fp).cloned().unwrap_or_default();
     let game = if game_tag.is_empty() { game_from_filename } else { game_tag };
@@ -1115,27 +1226,41 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
     let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
     Ok(Some(ClipInfo{id,filename:fname,filepath:fp,filesize:m.len(),created,duration:dur,width:w,height:h,game,custom_name:cn,favorite:fav,thumbnail}))
 }
-#[command] pub async fn generate_thumbnail(filepath: String) -> Result<String, String> {
+#[command] pub async fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Result<String, String> {
     let id = format!("{:x}",hash_str(&filepath)); let d = thumb_dir(); let _ = std::fs::create_dir_all(&d);
     let out = d.join(format!("{id}.jpg")); if out.exists() { return Ok(out.to_string_lossy().to_string()); }
-    let dur = probe_duration(&filepath); let seek = if dur>1.0{dur*0.1}else{0.0};
-    // Phase 3c: Reduced thumbnail resolution — 640px wide, quality 5 (faster + smaller)
+    #[cfg(debug_assertions)] let t_start = std::time::Instant::now();
+    // Use caller-provided duration to skip redundant probe_duration ffprobe subprocess
+    let dur = duration.filter(|&d| d > 0.0).unwrap_or_else(|| probe_duration(&filepath));
+    #[cfg(debug_assertions)] let t_probe_ms = t_start.elapsed().as_millis();
+    let seek = if dur>1.0{dur*0.1}else{0.0};
+    // Match SteelSeries thumbnail quality: 853x480 (16:9 480p), q:v 3.
+    // scale=-2:480 = force height 480, width auto-rounded to nearest even (ffmpeg requires
+    // even dimensions for many codecs). At ~90KB avg × 500+ clips = <50MB on disk, fine.
     let r = Command::new("ffmpeg").args([
         "-ss", &format!("{seek:.2}"), "-i", &filepath,
-        "-vframes", "1", "-vf", "scale=640:-1", "-q:v", "5", "-y",
+        "-vframes", "1", "-vf", "scale=-2:480", "-q:v", "3", "-y",
         &out.to_string_lossy()
     ]).output().map_err(|e| format!("{e}"))?;
+    #[cfg(debug_assertions)] {
+        let fname = filepath.rfind('/').map(|i| &filepath[i+1..]).unwrap_or(&filepath);
+        eprintln!("[perf] generate_thumbnail: probe={}ms ffmpeg={}ms total={}ms file={}",
+            t_probe_ms, t_start.elapsed().as_millis() - t_probe_ms, t_start.elapsed().as_millis(), fname);
+    }
     if r.status.success() && out.exists() { Ok(out.to_string_lossy().to_string()) }
     else { Err(format!("ffmpeg: {}", String::from_utf8_lossy(&r.stderr))) }
 }
 /// Phase 3d: Batch thumbnail generation — generates up to 3 concurrently.
+/// `durations`: optional per-filepath duration hints. When provided and non-zero,
+/// skips the redundant probe_duration ffprobe call for that clip.
 #[command]
-pub async fn generate_thumbnails_batch(filepaths: Vec<String>) -> Result<Vec<String>, String> {
+pub async fn generate_thumbnails_batch(filepaths: Vec<String>, durations: Option<Vec<f64>>) -> Result<Vec<String>, String> {
     use tokio::sync::Semaphore;
     let sem = Arc::new(Semaphore::new(3));
     let mut tasks = Vec::new();
-    for filepath in filepaths {
+    for (i, filepath) in filepaths.into_iter().enumerate() {
         let sem = Arc::clone(&sem);
+        let provided_dur = durations.as_ref().and_then(|d| d.get(i).copied()).filter(|&d| d > 0.0);
         let task = tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
             let fp = filepath.clone();
@@ -1144,11 +1269,11 @@ pub async fn generate_thumbnails_batch(filepaths: Vec<String>) -> Result<Vec<Str
                 let d = thumb_dir(); let _ = std::fs::create_dir_all(&d);
                 let out = d.join(format!("{id}.jpg"));
                 if out.exists() { return out.to_string_lossy().to_string(); }
-                let dur = probe_duration(&fp);
+                let dur = provided_dur.unwrap_or_else(|| probe_duration(&fp));
                 let seek = if dur > 1.0 { dur * 0.1 } else { 0.0 };
                 let r = Command::new("ffmpeg").args([
                     "-ss", &format!("{seek:.2}"), "-i", &fp,
-                    "-vframes", "1", "-vf", "scale=640:-1", "-q:v", "5", "-y",
+                    "-vframes", "1", "-vf", "scale=-2:480", "-q:v", "3", "-y",
                     &out.to_string_lossy(),
                 ]).output();
                 match r {
@@ -2223,6 +2348,67 @@ pub async fn register_global_shortcuts(
 fn probe_video(p:&Path) -> (f64,u32,u32) { let d=probe_duration(&p.to_string_lossy()); let dm=Command::new("ffprobe").args(["-v","quiet","-select_streams","v:0","-show_entries","stream=width,height","-of","csv=s=x:p=0",&p.to_string_lossy()]).output().ok().map(|o|String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default(); let ps:Vec<&str>=dm.split('x').collect(); (d,ps.first().and_then(|s|s.parse().ok()).unwrap_or(0),ps.get(1).and_then(|s|s.parse().ok()).unwrap_or(0)) }
 fn probe_duration(p:&str) -> f64 { Command::new("ffprobe").args(["-v","quiet","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",p]).output().ok().and_then(|o|String::from_utf8_lossy(&o.stdout).trim().parse().ok()).unwrap_or(0.0) }
 fn hash_str(s:&str) -> u64 { let mut h:u64=5381; for b in s.bytes(){h=h.wrapping_mul(33).wrapping_add(b as u64);} h }
+
+/// Extract "YYYY-MM-DD HH:MM" from a filename stem.
+/// Handles two formats:
+///   SteelSeries GG:        GameName__YYYY-MM-DD__HH-MM-SS  (double underscore)
+///   gpu-screen-recorder:   Prefix_YYYY-MM-DD_HH-MM-SS      (single underscore)
+/// Returns None if neither pattern matches.
+fn date_from_stem(stem: &str) -> Option<String> {
+    let b = stem.as_bytes();
+    // SteelSeries: YYYY-MM-DD__HH-MM-SS (20 chars)
+    // Pattern positions: DDDD-DD-DD__DD-DD-DD
+    if b.len() >= 20 {
+        for i in 0..=b.len()-20 {
+            let s = &b[i..i+20];
+            if s[4]==b'-' && s[7]==b'-' && s[10]==b'_' && s[11]==b'_' && s[14]==b'-' && s[17]==b'-'
+                && s[..4].iter().all(u8::is_ascii_digit)
+                && s[5..7].iter().all(u8::is_ascii_digit)
+                && s[8..10].iter().all(u8::is_ascii_digit)
+                && s[12..14].iter().all(u8::is_ascii_digit)
+                && s[15..17].iter().all(u8::is_ascii_digit)
+                && s[18..20].iter().all(u8::is_ascii_digit)
+            {
+                let t = std::str::from_utf8(&s[..20]).unwrap();
+                return Some(format!("{} {}:{}", &t[..10], &t[12..14], &t[15..17]));
+            }
+        }
+    }
+    // gpu-screen-recorder: YYYY-MM-DD_HH-MM-SS (19 chars)
+    // Pattern positions: DDDD-DD-DD_DD-DD-DD
+    if b.len() >= 19 {
+        for i in 0..=b.len()-19 {
+            let s = &b[i..i+19];
+            if s[4]==b'-' && s[7]==b'-' && s[10]==b'_' && s[13]==b'-' && s[16]==b'-'
+                && s[..4].iter().all(u8::is_ascii_digit)
+                && s[5..7].iter().all(u8::is_ascii_digit)
+                && s[8..10].iter().all(u8::is_ascii_digit)
+                && s[11..13].iter().all(u8::is_ascii_digit)
+                && s[14..16].iter().all(u8::is_ascii_digit)
+                && s[17..19].iter().all(u8::is_ascii_digit)
+            {
+                let t = std::str::from_utf8(&s[..19]).unwrap();
+                return Some(format!("{} {}:{}", &t[..10], &t[11..13], &t[14..16]));
+            }
+        }
+    }
+    None
+}
+
+/// Convert Unix timestamp to local-time "YYYY-MM-DD HH:MM" using libc::localtime_r.
+fn fmt_ts_local(s: i64) -> String {
+    #[cfg(unix)]
+    {
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { libc::localtime_r(&s, &mut tm); }
+        return format!("{}-{:02}-{:02} {:02}:{:02}",
+            tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+            tm.tm_hour, tm.tm_min);
+    }
+    #[allow(unreachable_code)]
+    fmt_ts(s)
+}
+
 /// Accurate Unix-timestamp → "YYYY-MM-DD HH:MM" using Howard Hinnant's civil calendar algorithm.
 fn fmt_ts(s: i64) -> String {
     let days    = s / 86400;
@@ -2245,11 +2431,15 @@ fn get_vol(n:&str) -> Option<f32> { let o=Command::new("pactl").args(["get-sink-
 //  ★ EPIC 2: Crash-log directory opener
 // ══════════════════════════════════════════════════════════════
 
-/// Returns the directory where opengg_crash.log lives.
+/// Returns the directory where per-session log files live.
+/// Mirrors main::logs_dir — kept as a standalone helper so commands can call it
+/// without pulling main into the module graph.
 pub fn crash_log_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("opengg")
+    // Same compile-time path resolution as main::LOGS_DIR — lands at <repo>/Logs.
+    const LOGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Logs");
+    let p = PathBuf::from(LOGS_DIR);
+    let _ = std::fs::create_dir_all(&p);
+    p.canonicalize().unwrap_or(p)
 }
 
 /// Opens the OS file manager at the crash-log directory so the user can

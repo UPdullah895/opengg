@@ -15,7 +15,6 @@ const emit = defineEmits<{ 'preview': [Clip]; 'editor': [Clip]; 'rename': [Clip]
 const replay = useReplayStore()
 const cardRef = ref<HTMLElement | null>(null)
 const thumbUrl = ref('')
-const thumbLoading = ref(false)
 const thumbLoaded = ref(false)
 
 // Local duration/resolution — updated via liveMeta watch (same pattern as liveThumbs/thumbUrl).
@@ -62,30 +61,48 @@ watch(() => replay.liveMeta.get(props.clip.id), (meta) => {
 })
 
 onMounted(() => {
+  // Fast-path 1: clip already has a thumbnail path from the filesystem scan (get_clips_fast)
   if (props.clip.thumbnail && mediaPort.value) {
     thumbUrl.value = mediaUrl(props.clip.thumbnail, mediaPort.value)
     return  // already have thumb — never register observer
   }
+  // Fast-path 2: prefetchThumbnails() already wrote this clip's thumb to liveThumbs
+  // before the card mounted. Read it directly — no observer needed.
+  const live = replay.liveThumbs.get(props.clip.id)
+  if (live && mediaPort.value) {
+    thumbUrl.value = mediaUrl(live, mediaPort.value)
+    return
+  }
+  // Track whether this card has already kicked off its own thumbnail load so
+  // repeated observer callbacks (e.g., scroll jitter) don't spawn duplicates.
+  let loadStarted = false
   if (cardRef.value) {
     const mountTime = import.meta.env.DEV ? performance.now() : 0
     observe(cardRef.value, async (entry) => {
-      if (!entry.isIntersecting || thumbLoading.value || thumbUrl.value) return
+      if (!entry.isIntersecting || loadStarted || thumbUrl.value) return
       // Gate 1: Phase 2 (probe_clips) not done yet — duration unknown, skip to avoid
       // redundant ffprobe inside generate_thumbnail and badge appearing after thumbnail.
       if (!replay.clipsProbed && props.clip.duration === 0) return
       // Gate 2: prefetchThumbnails sequential loop is running — don't compete with it
       // so thumbnails appear one-by-one newest→oldest without queue reordering.
       if (replay.isPrefetching) return
-      thumbLoading.value = true
+      loadStarted = true
       // observeOnce: stop firing callbacks now that we're loading
       if (cardRef.value) unobserve(cardRef.value)
       // High priority for cards that are mostly visible, normal for preload zone
       const priority = entry.intersectionRatio > 0.3 ? 'high' : 'normal'
       try {
-        // Pass known duration to skip redundant ffprobe subprocess in Rust
-        const dur = props.clip.duration > 0 ? props.clip.duration : undefined
+        // Probe duration/resolution if unknown (same pattern as prefetchThumbnails)
+        let duration = props.clip.duration
+        let width = props.clip.width
+        let height = props.clip.height
+        if (duration === 0) {
+          const probed = await invoke<[string, number, number, number][]>('probe_clips', { filepaths: [props.clip.filepath] })
+          if (probed.length > 0) [, duration, width, height] = probed[0]
+        }
+        // Generate thumbnail (pass duration to skip redundant ffprobe in Rust)
         const path = await enqueue(
-          () => invoke<string>('generate_thumbnail', { filepath: props.clip.filepath, duration: dur }),
+          () => invoke<string>('generate_thumbnail', { filepath: props.clip.filepath, duration: duration > 0 ? duration : undefined }),
           priority
         )
         if (mediaPort.value) {
@@ -94,9 +111,11 @@ onMounted(() => {
         if (import.meta.env.DEV) {
           console.debug(`[perf] card thumb loaded: ${(performance.now() - mountTime).toFixed(0)}ms (${priority}) ${props.clip.filename}`)
         }
-        replay.setThumbnail(props.clip.id, path)
-      } catch (e) { console.warn('thumb:', e) }
-      finally { thumbLoading.value = false }
+        // Apply data to the store — liveThumbs/liveMeta update immediately;
+        // clips triggerRef is rAF-coalesced so a burst of completions becomes
+        // ONE filteredClips recompute per frame instead of N per frame.
+        replay.applyProbeAndThumb(props.clip.filepath, duration, width, height, props.clip.id, path)
+      } catch (e) { console.warn('thumb:', e); loadStarted = false }
     })
   }
 })
@@ -144,8 +163,7 @@ function cancelEdit() { isEditing.value = false }
 <template>
   <div ref="cardRef" class="card" :class="{ selected }" @contextmenu.prevent="openMenu" draggable="true" @dragstart="onDrag">
     <div class="thumb">
-      <img v-if="thumbUrl" :src="thumbUrl" class="thumb-img" :class="{ loaded: thumbLoaded }" alt="" @load="thumbLoaded = true" />
-      <div v-else-if="thumbLoading" class="thumb-ph">⏳</div>
+      <img v-if="thumbUrl" :src="thumbUrl" class="thumb-img" :class="{ loaded: thumbLoaded }" alt="" decoding="async" loading="lazy" @load="thumbLoaded = true" />
       <div v-else class="thumb-ph">🎬</div>
       <span v-if="liveDuration" class="badge">{{ fmtDur(liveDuration) }}</span>
       <button class="heart" :class="{ on: clip.favorite }" @click="toggleFav"><svg viewBox="0 0 24 24" :fill="clip.favorite?'currentColor':'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></button>
