@@ -61,6 +61,7 @@ async function importFolder() {
       // file on disk. The debounced watcher (500ms) is too slow; we need the file written first.
       await persist.save()
       await replay.fetchClips(s, true)
+      try { await invoke('update_watch_dirs') } catch {}
     }
   } catch (e) { console.error('importFolder:', e) }
 }

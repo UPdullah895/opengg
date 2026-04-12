@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { ask, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { usePersistenceStore, DEFAULTS } from '../stores/persistence'
+import { useReplayStore } from '../stores/replay'
 import { loadTheme, saveTheme, getCurrentTheme, applyThemeMode, getThemeMode } from '../utils/theme'
 import { LANGUAGES, registerLocale } from '../i18n'
 import SelectField from '../components/SelectField.vue'
@@ -13,6 +14,7 @@ import InfoIcon from '../components/InfoIcon.vue'
 
 const { t, locale } = useI18n()
 const persist = usePersistenceStore()
+const replay = useReplayStore()
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
   syncLocale()
@@ -284,11 +286,17 @@ async function addClipSource() {
     if (s && typeof s === 'string') {
       if (!settings.value.clip_directories) settings.value.clip_directories = []
       if (!settings.value.clip_directories.includes(s)) settings.value.clip_directories.push(s)
+      await persist.save()
+      await replay.fetchClips('', true)
+      try { await invoke('update_watch_dirs') } catch {}
     }
   } catch {}
 }
-function removeClipSource(idx: number) {
+async function removeClipSource(idx: number) {
   settings.value.clip_directories?.splice(idx, 1)
+  await persist.save()
+  await replay.fetchClips('', true)
+  try { await invoke('update_watch_dirs') } catch {}
 }
 
 // ─── Screenshot directory ───

@@ -217,6 +217,8 @@ fn main() {
             commands::start_gsr_replay, commands::save_gsr_replay,
             commands::stop_gsr_replay, commands::is_gsr_running,
             commands::get_active_window_title,
+            // ★ Live watcher directory sync
+            commands::update_watch_dirs,
         ])
         .setup(|app| {
             // ── Managed states ──
@@ -281,6 +283,7 @@ fn main() {
                         }
                         // Keep watcher alive for the app lifetime.
                         app.manage(WatcherHandle(Mutex::new(Some(watcher))));
+                        app.manage(WatchedDirs(Mutex::new(dirs.clone())));
 
                         // Drain events in a background thread.
                         std::thread::spawn(move || {
@@ -312,6 +315,7 @@ fn main() {
                         log::error!("Watcher init failed: {e}");
                         // App still works; just no live updates.
                         app.manage(WatcherHandle(Mutex::new(None)));
+                        app.manage(WatchedDirs(Mutex::new(vec![])));
                     }
                 }
             }
@@ -381,6 +385,10 @@ pub struct ExportProcess {
 /// Keeps the notify watcher alive for the full app lifetime.
 /// Wrapped in Mutex<Option<…>> so it can be taken on shutdown if needed.
 pub struct WatcherHandle(pub Mutex<Option<notify::RecommendedWatcher>>);
+
+/// Tracks which directories the watcher is currently watching, so
+/// `update_watch_dirs` can diff current vs desired and call watch/unwatch.
+pub struct WatchedDirs(pub Mutex<Vec<std::path::PathBuf>>);
 
 /// Managed state for the GPU Screen Recorder (gpu-screen-recorder) child process.
 pub struct GsrProcess(pub Mutex<Option<std::process::Child>>);

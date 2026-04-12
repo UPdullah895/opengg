@@ -2306,6 +2306,38 @@ fn get_all_clip_dirs(primary: &str) -> Vec<PathBuf> {
 }
 fn auto_name(input:&str,suffix:&str) -> String { let p=Path::new(input); let s=p.file_stem().unwrap_or_default().to_string_lossy(); let e=p.extension().unwrap_or_default().to_string_lossy(); p.parent().unwrap_or(Path::new(".")).join(format!("{s}{suffix}.{e}")).to_string_lossy().into() }
 
+/// Diff current watched directories against the settings file and update the
+/// notify watcher accordingly (watch new dirs, unwatch removed ones).
+#[command]
+pub async fn update_watch_dirs(app: tauri::AppHandle) -> Result<(), String> {
+    use notify::{RecursiveMode, Watcher};
+    let desired = get_all_clip_dirs("");
+    let watcher_state = app.state::<crate::WatcherHandle>();
+    let watched_state = app.state::<crate::WatchedDirs>();
+    let mut guard = watcher_state.0.lock().map_err(|e| e.to_string())?;
+    let mut current = watched_state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(watcher) = guard.as_mut() {
+        for dir in current.iter() {
+            if !desired.contains(dir) {
+                let _ = watcher.unwatch(dir);
+                log::info!("Watcher: unwatched {:?}", dir);
+            }
+        }
+        for dir in &desired {
+            if !current.contains(dir) {
+                let _ = std::fs::create_dir_all(dir);
+                if let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive) {
+                    log::warn!("Watcher: cannot watch {:?}: {e}", dir);
+                } else {
+                    log::info!("Watcher: now watching {:?}", dir);
+                }
+            }
+        }
+        *current = desired;
+    }
+    Ok(())
+}
+
 /// Prepend "OpenGG_" to the filename if it doesn't already start with it.
 fn smart_prefix(path: &str) -> String {
     let p = Path::new(path);

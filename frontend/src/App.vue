@@ -160,7 +160,7 @@ async function loadUserLocales() {
 </script>
 
 <template>
-  <div class="app-layout">
+  <div class="app-layout" @contextmenu.prevent>
     <Titlebar />
     <div class="app-body">
       <Sidebar :active="currentPage" @navigate="navigate" />
@@ -294,6 +294,8 @@ body {
   background: var(--bg-surface);
   color: var(--text);
   overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .app-layout { display: flex; flex-direction: column; height: 100vh; }
 .app-body { display: flex; flex: 1; overflow: hidden; }
