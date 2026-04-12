@@ -26,6 +26,13 @@ const liveHeight = ref(props.clip.height)
 // ★ Get media server port from App.vue's provide()
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 
+// ── RAM optimization: resolved thumbnail path (non-reactive) ──
+// Stores the resolved filesystem path so we can clear/restore thumbUrl without
+// re-fetching. When card scrolls off-screen, thumbUrl is set to '' which removes
+// the <img> from the DOM and releases the decoded bitmap (~410KB–1.6MB per image).
+// When card scrolls back into view, we restore from this cached path instantly.
+let resolvedThumbPath = ''
+
 // Context menu — emit event to parent (ClipsPage) instead of managing own menu
 function openMenu(e: MouseEvent) {
   e.preventDefault(); e.stopPropagation()
@@ -45,8 +52,10 @@ const { enqueue } = useThumbnailQueue()
 // liveThumbs is updated sequentially newest→oldest, so thumbnails appear in order
 // without needing the IO observer to fire first.
 watch(() => replay.liveThumbs.get(props.clip.id), (path) => {
-  if (path && mediaPort.value && !thumbUrl.value) {
-    thumbUrl.value = mediaUrl(path, mediaPort.value)
+  if (path && mediaPort.value) {
+    resolvedThumbPath = path
+    // Only set thumbUrl if card is visible (IO will restore it otherwise)
+    if (!thumbUrl.value) thumbUrl.value = mediaUrl(path, mediaPort.value)
   }
 })
 
@@ -60,39 +69,45 @@ watch(() => replay.liveMeta.get(props.clip.id), (meta) => {
   }
 })
 
+/** Resolve the initial thumbnail path from clip data or liveThumbs. */
+function resolveInitialThumb(): string {
+  if (props.clip.thumbnail) return props.clip.thumbnail
+  return replay.liveThumbs.get(props.clip.id) || ''
+}
+
 onMounted(() => {
-  // Fast-path 1: clip already has a thumbnail path from the filesystem scan (get_clips_fast)
-  if (props.clip.thumbnail && mediaPort.value) {
-    thumbUrl.value = mediaUrl(props.clip.thumbnail, mediaPort.value)
-    return  // already have thumb — never register observer
-  }
-  // Fast-path 2: prefetchThumbnails() already wrote this clip's thumb to liveThumbs
-  // before the card mounted. Read it directly — no observer needed.
-  const live = replay.liveThumbs.get(props.clip.id)
-  if (live && mediaPort.value) {
-    thumbUrl.value = mediaUrl(live, mediaPort.value)
-    return
-  }
+  const initial = resolveInitialThumb()
+  if (initial) resolvedThumbPath = initial
+
   // Track whether this card has already kicked off its own thumbnail load so
   // repeated observer callbacks (e.g., scroll jitter) don't spawn duplicates.
   let loadStarted = false
+
   if (cardRef.value) {
     const mountTime = import.meta.env.DEV ? performance.now() : 0
     observe(cardRef.value, async (entry) => {
-      if (!entry.isIntersecting || loadStarted || thumbUrl.value) return
-      // Gate 1: Phase 2 (probe_clips) not done yet — duration unknown, skip to avoid
-      // redundant ffprobe inside generate_thumbnail and badge appearing after thumbnail.
+      // ── RAM: unload decoded bitmap when card scrolls far off-screen ──
+      if (!entry.isIntersecting) {
+        if (thumbUrl.value) {
+          thumbUrl.value = ''
+          thumbLoaded.value = false
+        }
+        return
+      }
+
+      // Card is intersecting — restore thumbnail if we already have a path
+      if (resolvedThumbPath && !thumbUrl.value && mediaPort.value) {
+        thumbUrl.value = mediaUrl(resolvedThumbPath, mediaPort.value)
+        return
+      }
+
+      // ── First-time thumbnail generation (IO fallback path) ──
+      if (loadStarted || thumbUrl.value) return
       if (!replay.clipsProbed && props.clip.duration === 0) return
-      // Gate 2: prefetchThumbnails sequential loop is running — don't compete with it
-      // so thumbnails appear one-by-one newest→oldest without queue reordering.
       if (replay.isPrefetching) return
       loadStarted = true
-      // observeOnce: stop firing callbacks now that we're loading
-      if (cardRef.value) unobserve(cardRef.value)
-      // High priority for cards that are mostly visible, normal for preload zone
       const priority = entry.intersectionRatio > 0.3 ? 'high' : 'normal'
       try {
-        // Probe duration/resolution if unknown (same pattern as prefetchThumbnails)
         let duration = props.clip.duration
         let width = props.clip.width
         let height = props.clip.height
@@ -100,25 +115,32 @@ onMounted(() => {
           const probed = await invoke<[string, number, number, number][]>('probe_clips', { filepaths: [props.clip.filepath] })
           if (probed.length > 0) [, duration, width, height] = probed[0]
         }
-        // Generate thumbnail (pass duration to skip redundant ffprobe in Rust)
         const path = await enqueue(
           () => invoke<string>('generate_thumbnail', { filepath: props.clip.filepath, duration: duration > 0 ? duration : undefined }),
           priority
         )
+        resolvedThumbPath = path
         if (mediaPort.value) {
           thumbUrl.value = mediaUrl(path, mediaPort.value)
         }
         if (import.meta.env.DEV) {
           console.debug(`[perf] card thumb loaded: ${(performance.now() - mountTime).toFixed(0)}ms (${priority}) ${props.clip.filename}`)
         }
-        // Apply data to the store — liveThumbs/liveMeta update immediately;
-        // clips triggerRef is rAF-coalesced so a burst of completions becomes
-        // ONE filteredClips recompute per frame instead of N per frame.
         replay.applyProbeAndThumb(props.clip.filepath, duration, width, height, props.clip.id, path)
       } catch (e) { console.warn('thumb:', e); loadStarted = false }
     })
   }
 })
+// ── RAM: clear/restore thumb when ClipsPage is deactivated/activated by KeepAlive ──
+watch(() => replay.pageActive, (active) => {
+  if (!active) {
+    thumbUrl.value = ''
+    thumbLoaded.value = false
+  } else if (resolvedThumbPath && mediaPort.value) {
+    thumbUrl.value = mediaUrl(resolvedThumbPath, mediaPort.value)
+  }
+})
+
 onBeforeUnmount(() => { if (cardRef.value) unobserve(cardRef.value) })
 
 

@@ -103,7 +103,7 @@ export const useReplayStore = defineStore('replay', () => {
   // Phase 2d: shallowRef avoids deep reactivity on every clip object
   const clips = shallowRef<Clip[]>([])
   // Reactive thumbnail map — updated by setThumbnail so list view can react
-  // without triggering the expensive filteredClips/sortedClips recompute.
+  // without triggering the expensive filteredClips recompute.
   const liveThumbs = shallowRef(new Map<string, string>())
   // Reactive probe map — mirrors liveThumbs pattern for duration/width/height.
   // ClipCard watches this directly so duration badge and resolution pill update
@@ -121,6 +121,7 @@ export const useReplayStore = defineStore('replay', () => {
    * path in ClipCard.vue, firing 218 single-clip probe_clips calls instead of 1 batch. */
   const clipsLoadedAt = ref(0)
   const scrolling = ref(false)     // set by ClipsPage while user is actively scrolling
+  const pageActive = ref(true)     // false when ClipsPage is deactivated by KeepAlive — ClipCard clears thumbUrl
   const lastFolder = ref('')
 
   // Search/Sort/Filter
@@ -199,25 +200,6 @@ export const useReplayStore = defineStore('replay', () => {
     if (import.meta.env.DEV) {
       const dt = performance.now() - t0
       if (dt > 1) console.debug(`[perf] filteredClips: ${dt.toFixed(1)}ms (${result.length} clips)`)
-    }
-    return result
-  })
-
-  // ★ CSS-filter arch: sort ONLY — no filter applied. ClipsPage uses v-show="isMatch()" instead.
-  const sortedClips = computed(() => {
-    const t0 = performance.now()
-    const skeletons = clips.value.filter(c => c.isSkeleton)
-    let r = clips.value.filter(c => !c.isSkeleton)
-    switch (sortMode.value) {
-      case 'oldest':   r = [...r].sort((a,b) => a.created.localeCompare(b.created)); break
-      case 'longest':  r = [...r].sort((a,b) => b.duration - a.duration); break
-      case 'shortest': r = [...r].sort((a,b) => a.duration - b.duration); break
-      default:         r = [...r].sort((a,b) => b.created.localeCompare(a.created))
-    }
-    const result = [...skeletons, ...r]
-    if (import.meta.env.DEV) {
-      const dt = performance.now() - t0
-      if (dt > 1) console.debug(`[perf] sortedClips: ${dt.toFixed(1)}ms (${result.length} clips)`)
     }
     return result
   })
@@ -356,7 +338,7 @@ export const useReplayStore = defineStore('replay', () => {
     const i = clips.value.findIndex(c => c.id === id)
     // Mutate clip's thumbnail in-place but do NOT triggerRef(clips).
     // ClipCard.vue already has a local `thumbUrl` ref that updates immediately.
-    // Skipping triggerRef prevents ~100 full recomputes of filteredClips/sortedClips/games
+    // Skipping triggerRef prevents ~100 full recomputes of filteredClips/games
     // during the thumbnail loading burst. The updated thumbnail will be visible in the
     // clip object the next time filteredClips naturally recomputes (e.g., on filter change).
     if (i >= 0) { clips.value[i] = markRaw({ ...clips.value[i], thumbnail: p }) }
@@ -399,9 +381,9 @@ export const useReplayStore = defineStore('replay', () => {
   function isSelected(id: string) { return selectedIds.value.has(id) }
 
   return {
-    status, replayDuration, clips, loading, loaded, clipsProbed, isPrefetching, scrolling, clipsLoadedAt,
+    status, replayDuration, clips, loading, loaded, clipsProbed, isPrefetching, scrolling, pageActive, clipsLoadedAt,
     search, sortMode, filterGame, selectedGames, filterFav,
-    games, filteredClips, sortedClips, favCount,
+    games, filteredClips, favCount,
     selectedIds, selectMode, selectedCount,
     fetchStatus, startReplay, stopRecorder, saveReplay,
     liveThumbs,

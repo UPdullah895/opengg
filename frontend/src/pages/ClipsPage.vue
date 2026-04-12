@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, inject, watch } from 'vue'
+defineOptions({ name: 'ClipsPage' })
+import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, inject, watch } from 'vue'
 import { refDebounced } from '@vueuse/core'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -384,6 +385,14 @@ onBeforeUnmount(() => {
   unlistenRemoved?.()
 })
 
+// ── RAM: Release decoded thumbnail bitmaps when navigating away from Clips ──
+// KeepAlive preserves the full component tree. Without this, 420 decoded images
+// (~170-670MB) stay in WebKitGTK memory while viewing Mixer/Settings/etc.
+// Setting pageActive=false causes ClipCard's IO to clear thumbUrl (removing <img>
+// from DOM). On reactivation, IO restores visible cards from resolvedThumbPath.
+onDeactivated(() => { replay.pageActive = false })
+onActivated(() => { replay.pageActive = true })
+
 // ── Epic 1 Bug 1: Smart bulk favorite (toggle) ──
 const allSelectedFavorited = computed(() => {
   const ids = Array.from(replay.selectedIds)
@@ -592,7 +601,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 @contextmenu.prevent="openListMenu(clip, $event)"
               >
                 <div class="list-thumb-wrap">
-                  <img v-if="(replay.liveThumbs.get(clip.id) || clip.thumbnail) && mediaPortNum" class="list-thumb" :src="mediaUrl(replay.liveThumbs.get(clip.id) || clip.thumbnail, mediaPortNum)" loading="lazy" @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
+                  <img v-if="(replay.liveThumbs.get(clip.id) || clip.thumbnail) && mediaPortNum" class="list-thumb" :src="mediaUrl(replay.liveThumbs.get(clip.id) || clip.thumbnail, mediaPortNum)" loading="lazy" decoding="async" @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
                   <div v-else class="list-thumb list-thumb-empty">▶</div>
                   <span v-if="replay.liveMeta.get(clip.id)?.duration || clip.duration" class="list-badge">{{ fmtDur(replay.liveMeta.get(clip.id)?.duration || clip.duration) }}</span>
                   <button class="lt-heart" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
@@ -709,7 +718,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 <img v-if="(replay.liveThumbs.get(clip.id) || clip.thumbnail) && mediaPortNum"
                      class="list-thumb"
                      :src="mediaUrl(replay.liveThumbs.get(clip.id) || clip.thumbnail, mediaPortNum)"
-                     loading="lazy"
+                     loading="lazy" decoding="async"
                      @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
                 <div v-else class="list-thumb list-thumb-empty">▶</div>
                 <span v-if="replay.liveMeta.get(clip.id)?.duration || clip.duration" class="list-badge">{{ fmtDur(replay.liveMeta.get(clip.id)?.duration || clip.duration) }}</span>
@@ -1019,7 +1028,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   background:var(--bg-card); border:1px solid var(--border); border-radius:8px;
   cursor:pointer; overflow:hidden; user-select:none;
   transition: background .15s, padding .25s ease;
-  contain: layout style; content-visibility: auto; contain-intrinsic-size: auto 60px;
+  contain: layout style paint; content-visibility: auto; contain-intrinsic-size: auto 60px;
 }
 .list-row:hover { background:var(--bg-hover); }
 .list-row.selected { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
