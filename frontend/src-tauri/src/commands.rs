@@ -1234,12 +1234,10 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
     let dur = duration.filter(|&d| d > 0.0).unwrap_or_else(|| probe_duration(&filepath));
     #[cfg(debug_assertions)] let t_probe_ms = t_start.elapsed().as_millis();
     let seek = if dur>1.0{dur*0.1}else{0.0};
-    // 240p thumbnails: ~427x240 at q:v 4 (~20-30KB each). At grid widths of 200-400px
-    // this is visually identical to 480p, but decoded bitmaps drop from ~1.6MB to ~410KB
-    // each — saving ~500MB with 420 clips rendered.
+    // 480p thumbnails: ~853x480 at q:v 3 (~90KB each). Matches SteelSeries quality.
     let r = Command::new("ffmpeg").args([
         "-ss", &format!("{seek:.2}"), "-i", &filepath,
-        "-vframes", "1", "-vf", "scale=-2:240", "-q:v", "4", "-y",
+        "-vframes", "1", "-vf", "scale=-2:480", "-q:v", "3", "-y",
         &out.to_string_lossy()
     ]).output().map_err(|e| format!("{e}"))?;
     #[cfg(debug_assertions)] {
@@ -1273,7 +1271,7 @@ pub async fn generate_thumbnails_batch(filepaths: Vec<String>, durations: Option
                 let seek = if dur > 1.0 { dur * 0.1 } else { 0.0 };
                 let r = Command::new("ffmpeg").args([
                     "-ss", &format!("{seek:.2}"), "-i", &fp,
-                    "-vframes", "1", "-vf", "scale=-2:240", "-q:v", "4", "-y",
+                    "-vframes", "1", "-vf", "scale=-2:480", "-q:v", "3", "-y",
                     &out.to_string_lossy(),
                 ]).output();
                 match r {

@@ -126,6 +126,9 @@ watch(() => persist.state?.settings?.clipsPerRow, (v) => {
 const gridCols = computed(() => gridSlider.value + 1)
 function saveGridSlider() {
   if (persist.state?.settings) persist.state.settings.clipsPerRow = (gridSlider.value + 1) as 2 | 3 | 4 | 5
+  // Reset measured row height when column count changes — the estimate
+  // will be used until the ResizeObserver fires with the new card dimensions.
+  measuredRowHeight.value = 0
 }
 
 // Native grid host scroll ref for OverlayScrollbar
@@ -162,9 +165,11 @@ const listStyles = computed(() => {
 // last scroll event.
 const isScrolling = ref(false)
 let scrollTimer: ReturnType<typeof setTimeout> | null = null
+const gridScrollTop = ref(0)
 function onScroll() {
   isScrolling.value = true
   replay.scrolling = true
+  gridScrollTop.value = gridScrollRef.value?.scrollTop ?? 0
   if (scrollTimer) clearTimeout(scrollTimer)
   scrollTimer = setTimeout(() => {
     isScrolling.value = false
@@ -175,6 +180,67 @@ function onScroll() {
 }
 // Fires when prefetchThumbnails resumes after a scroll pause
 let prefetchWake: (() => void) | null = null
+
+// ── Virtual scroll: only render visible grid rows + buffer ──
+// Without this, 420 ClipCards create 420 decoded thumbnail bitmaps (~1.6MB each)
+// in WebKitGTK memory. Virtual scroll keeps only ~40-60 cards in the DOM.
+const GRID_GAP = 16
+const VIRTUAL_BUFFER_ROWS = 3
+
+// Estimate card row height from container width + column count.
+// Card = 16:9 thumbnail + ~80px info section + gap.
+const estimatedRowHeight = computed(() => {
+  const el = gridScrollRef.value
+  if (!el) return 300
+  const containerW = el.clientWidth - 32 // subtract horizontal padding
+  const cols = gridCols.value
+  const cardW = (containerW - GRID_GAP * (cols - 1)) / cols
+  const thumbH = cardW * 9 / 16
+  const infoH = cols <= 2 ? 90 : cols >= 5 ? 65 : 78
+  return thumbH + infoH + GRID_GAP
+})
+
+// Measured row height (set after first render via ResizeObserver)
+const measuredRowHeight = ref(0)
+const rowHeight = computed(() => measuredRowHeight.value || estimatedRowHeight.value)
+
+const virtualRange = computed(() => {
+  const total = filteredRealClips.value.length
+  const cols = gridCols.value
+  const rh = rowHeight.value
+  const el = gridScrollRef.value
+  if (!el || !rh || total === 0) return { start: 0, end: total, padTop: 0, padBot: 0 }
+  const clientH = el.clientHeight
+  const totalRows = Math.ceil(total / cols)
+  const startRow = Math.max(0, Math.floor(gridScrollTop.value / rh) - VIRTUAL_BUFFER_ROWS)
+  const endRow = Math.min(totalRows, Math.ceil((gridScrollTop.value + clientH) / rh) + VIRTUAL_BUFFER_ROWS)
+  return {
+    start: startRow * cols,
+    end: Math.min(endRow * cols, total),
+    padTop: startRow * rh,
+    padBot: Math.max(0, (totalRows - endRow) * rh),
+  }
+})
+
+const visibleClips = computed(() => {
+  const { start, end } = virtualRange.value
+  return filteredRealClips.value.slice(start, end)
+})
+
+// Measure actual card height from first rendered card
+let rowMeasureRO: ResizeObserver | null = null
+function setupRowMeasure() {
+  rowMeasureRO?.disconnect()
+  rowMeasureRO = new ResizeObserver(() => {
+    const grid = gridScrollRef.value?.querySelector('.native-grid')
+    if (!grid) return
+    const firstCard = grid.querySelector('.card') as HTMLElement
+    if (firstCard) {
+      measuredRowHeight.value = firstCard.offsetHeight + GRID_GAP
+    }
+  })
+  if (gridScrollRef.value) rowMeasureRO.observe(gridScrollRef.value)
+}
 
 // ★ Epic 2: Slider drag tooltip
 const SLIDER_LABELS: Record<number, string> = { 1: 'Extra Large', 2: 'Large', 3: 'Medium', 4: 'Small' }
@@ -338,6 +404,14 @@ async function prefetchThumbnails() {
   }
 }
 
+// Reset scroll to top when filters/search change so virtual range recalculates correctly
+watch([searchDebounced, () => replay.sortMode, () => replay.filterFav, () => replay.selectedGames], () => {
+  if (gridScrollRef.value) {
+    gridScrollRef.value.scrollTop = 0
+    gridScrollTop.value = 0
+  }
+})
+
 // Re-run prefetchThumbnails every time fetchClips successfully populates the store.
 // This handles the initial mount AND subsequent re-fetches (e.g., user imports clips in
 // Settings after launching with the reset sentinel path). Without this, the prefetch only
@@ -350,6 +424,7 @@ watch(() => replay.clipsLoadedAt, () => { prefetchThumbnails() }, { flush: 'sync
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
   replay.fetchStatus()
+  setupRowMeasure()
   await replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '')
   // The clipsLoadedAt watch above will have fired during fetchClips, kicking off prefetch.
   // No need to call it manually here.
@@ -383,6 +458,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlistenAdded?.()
   unlistenRemoved?.()
+  rowMeasureRO?.disconnect()
 })
 
 // ── RAM: Release decoded thumbnail bitmaps when navigating away from Clips ──
@@ -661,17 +737,19 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
               <div class="watcher-label">New clip detected…</div>
             </div>
           </div>
-          <!-- Native CSS grid — all cards rendered, browser handles scroll -->
+          <!-- Virtual CSS grid — only visible rows + buffer rendered -->
           <div
             class="clip-grid native-grid"
             :style="{
               gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
               '--name-size': fontScale.nameSize,
               '--meta-size': fontScale.metaSize,
+              paddingTop: virtualRange.padTop + 'px',
+              paddingBottom: virtualRange.padBot + 'px',
             }"
           >
             <ClipCard
-              v-for="clip in filteredRealClips"
+              v-for="clip in visibleClips"
               :key="clip.id"
               :clip="clip"
               :selected="replay.isSelected(clip.id)"
