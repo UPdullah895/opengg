@@ -15,6 +15,9 @@ export interface PersistedState {
     fps: number; quality: string; replayDuration: number
     defaultClickAction: 'preview' | 'editor'
     clipsPerRow: 2 | 3 | 4 | 5
+    // Date format used by the clip search box when parsing typed dates.
+    // YMD = YYYY/MM/DD, YDM = YYYY/DD/MM. Clips are still stored in ISO YMD internally.
+    dateFormat: 'YMD' | 'YDM'
     shortcuts: {
       saveReplay: string; toggleRecording: string; screenshot: string
       splitClip: string; exportClip: string; toggleMic: string
@@ -53,6 +56,7 @@ export const DEFAULTS: PersistedState = {
   settings: {
     fps: 60, quality: 'High', replayDuration: 30,
     defaultClickAction: 'preview', clipsPerRow: 4,
+    dateFormat: 'YMD',
     shortcuts: {
       saveReplay: 'Alt+F10', toggleRecording: 'Alt+F9', screenshot: 'Alt+F12',
       splitClip: 'S', exportClip: 'Ctrl+E', toggleMic: 'Alt+M',

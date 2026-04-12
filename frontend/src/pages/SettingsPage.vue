@@ -6,6 +6,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { ask, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { usePersistenceStore, DEFAULTS } from '../stores/persistence'
+import { useReplayStore } from '../stores/replay'
 import { loadTheme, saveTheme, getCurrentTheme, applyThemeMode, getThemeMode } from '../utils/theme'
 import { LANGUAGES, registerLocale } from '../i18n'
 import SelectField from '../components/SelectField.vue'
@@ -15,7 +16,11 @@ import { settingsTargetTab } from '../composables/useNavSignal'
 
 const { t, locale } = useI18n()
 const persist = usePersistenceStore()
+<<<<<<< HEAD
 const appVersion = ref('')
+=======
+const replay = useReplayStore()
+>>>>>>> origin/SH3FAN-Branch
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
   if (!persist.loaded) await persist.load()
@@ -368,11 +373,17 @@ async function addClipSource() {
     if (s && typeof s === 'string') {
       if (!settings.value.clip_directories) settings.value.clip_directories = []
       if (!settings.value.clip_directories.includes(s)) settings.value.clip_directories.push(s)
+      await persist.save()
+      await replay.fetchClips('', true)
+      try { await invoke('update_watch_dirs') } catch {}
     }
   } catch {}
 }
-function removeClipSource(idx: number) {
+async function removeClipSource(idx: number) {
   settings.value.clip_directories?.splice(idx, 1)
+  await persist.save()
+  await replay.fetchClips('', true)
+  try { await invoke('update_watch_dirs') } catch {}
 }
 
 // ─── Screenshot directory ───
@@ -420,6 +431,10 @@ async function openExternal(url: string) {
 
 // SelectField option helpers
 const clickOptions = [{ value:'preview', label: 'Quick Preview' }, { value:'editor', label: 'Advanced Editor' }]
+const dateFormatOptions = [
+  { value: 'YMD', label: 'YYYY/MM/DD' },
+  { value: 'YDM', label: 'YYYY/DD/MM' },
+]
 
 // ─── Extensions: plugin scanning ───
 interface ExtensionInfo { id: string; name: string; description: string; version: string; path: string }
@@ -503,6 +518,10 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
               <label>{{ t('settings.clipSettings.defaultClick') }}</label>
               <SelectField v-model="settings.defaultClickAction" :options="clickOptions" />
             </div>
+            <div class="field">
+              <label>Search date format<InfoIcon title="How the clip search parses typed dates. YYYY/MM/DD uses month-day order; YYYY/DD/MM uses day-month order. Month names (january, feb, …) work in both." /></label>
+              <SelectField v-model="settings.dateFormat" :options="dateFormatOptions" />
+            </div>
           </div>
         </div>
 
@@ -527,7 +546,11 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
           <div class="action-row">
             <button class="btn btn-accent" @click="openCrashLogsFolder">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+<<<<<<< HEAD
               {{ t('settings.diagnostics.openCrashLogs') }}
+=======
+              Open Logs Folder
+>>>>>>> origin/SH3FAN-Branch
             </button>
           </div>
         </div>

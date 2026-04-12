@@ -203,10 +203,14 @@ async function loadUserLocales() {
 </script>
 
 <template>
+<<<<<<< HEAD
   <!-- Overlay notification window — minimal render, no layout chrome -->
   <ClipNotification v-if="isOverlay" />
 
   <div v-else class="app-layout">
+=======
+  <div class="app-layout" @contextmenu.prevent>
+>>>>>>> origin/SH3FAN-Branch
     <Titlebar />
     <div class="app-body">
       <Sidebar :active="currentPage" @navigate="navigate" />
@@ -343,6 +347,8 @@ body {
   background: var(--bg-surface);
   color: var(--text);
   overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .app-layout { display: flex; flex-direction: column; height: 100vh; }
 .app-body { display: flex; flex: 1; overflow: hidden; }

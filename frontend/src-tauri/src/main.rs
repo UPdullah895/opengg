@@ -39,19 +39,105 @@ fn get_watch_dirs() -> Vec<std::path::PathBuf> {
 //  ★ EPIC 2: File-based crash / info logger
 // ══════════════════════════════════════════════════════
 
+/// Resolves to `<repo-root>/Logs` at compile time. CARGO_MANIFEST_DIR points at
+/// `frontend/src-tauri`, so `../../Logs` lands at the repo root.
+const LOGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Logs");
+
+/// How many log files to retain before pruning the oldest.
+const MAX_LOG_FILES: usize = 10;
+
+/// Returns the absolute log directory (compile-time path above, canonicalized).
+pub fn logs_dir() -> std::path::PathBuf {
+    let p = std::path::PathBuf::from(LOGS_DIR);
+    let _ = std::fs::create_dir_all(&p);
+    p.canonicalize().unwrap_or(p)
+}
+
+/// Delete all but the `MAX_LOG_FILES` most recent `opengg_*.log` files in the
+/// log directory. Called once at startup so a new session counts against the cap.
+fn prune_old_logs(dir: &std::path::Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let name = p.file_name()?.to_string_lossy().to_string();
+            if !p.is_file() { return None }
+            if !name.starts_with("opengg_") || !name.ends_with(".log") { return None }
+            let mtime = e.metadata().ok()?.modified().ok()?;
+            Some((p, mtime))
+        })
+        .collect();
+    // Newest first
+    files.sort_by(|a, b| b.1.cmp(&a.1));
+    for (p, _) in files.into_iter().skip(MAX_LOG_FILES.saturating_sub(1)) {
+        // Leave (MAX_LOG_FILES - 1) existing files + the one we're about to create
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// Local-time "YYYY-MM-DD_HH-MM-SS" for log filenames. Uses libc::localtime_r
+/// on unix so we don't need a chrono dep just for the log filename.
+#[cfg(unix)]
+fn local_ts_filename() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&secs, &mut tm);
+        format!(
+            "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
+            tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+            tm.tm_hour, tm.tm_min, tm.tm_sec
+        )
+    }
+}
+
+#[cfg(not(unix))]
+fn local_ts_filename() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{secs}")
+}
+
 fn init_logging() {
-    use simplelog::{Config, LevelFilter, WriteLogger};
+    use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
     use std::fs::OpenOptions;
 
-    let log_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("opengg");
-    let _ = std::fs::create_dir_all(&log_dir);
-    let log_file = log_dir.join("opengg_crash.log");
+    let log_dir = logs_dir();
+    prune_old_logs(&log_dir);
 
-    // Append to existing log so successive runs accumulate
+    // One log file per session, timestamped. Session boundaries are visible
+    // and we never reopen a giant append-only file.
+    let log_name = format!("opengg_{}.log", local_ts_filename());
+    let log_file = log_dir.join(&log_name);
+
+    // Silence noisy transitive crates (zbus/zvariant/tao/wry/tracing plumbing).
+    // Info-level logging from these crates was producing hundreds of lines per
+    // DBus call and measurably slowing down the main thread via log-write syscalls.
+    let config = ConfigBuilder::new()
+        .add_filter_ignore_str("zbus")
+        .add_filter_ignore_str("zvariant")
+        .add_filter_ignore_str("zbus_names")
+        .add_filter_ignore_str("tracing")
+        .add_filter_ignore_str("tao")
+        .add_filter_ignore_str("wry")
+        .add_filter_ignore_str("webkit2gtk")
+        .add_filter_ignore_str("hyper")
+        .add_filter_ignore_str("reqwest")
+        .add_filter_ignore_str("tokio")
+        .add_filter_ignore_str("mio")
+        .add_filter_ignore_str("polling")
+        .add_filter_ignore_str("async_io")
+        .set_time_format_rfc3339()
+        .build();
+
     if let Ok(file) = OpenOptions::new().create(true).append(true).open(&log_file) {
-        let _ = WriteLogger::init(LevelFilter::Info, Config::default(), file);
+        let _ = WriteLogger::init(LevelFilter::Info, config, file);
     }
 
     // Catch panics and write them to the same log file
@@ -65,7 +151,7 @@ fn init_logging() {
         }
     }));
 
-    log::info!("=== OpenGG started ===");
+    log::info!("=== OpenGG started → {} ===", log_file.display());
 }
 
 fn main() {
@@ -88,7 +174,8 @@ fn main() {
             commands::get_recorder_status, commands::start_replay,
             commands::stop_recorder, commands::save_replay,
             // Clips
-            commands::get_clips, commands::generate_thumbnail, commands::generate_thumbnails_batch,
+            commands::get_clips, commands::get_clips_fast, commands::probe_clips,
+            commands::generate_thumbnail, commands::generate_thumbnails_batch,
             commands::set_clip_meta, commands::get_clip_meta,
             commands::take_screenshot,
             commands::clear_thumbnail_cache, commands::delete_clip,
@@ -132,6 +219,7 @@ fn main() {
             commands::stop_gsr_replay, commands::is_gsr_running,
             commands::restart_gsr_replay,
             commands::get_active_window_title,
+<<<<<<< HEAD
             commands::list_audio_sinks,
             commands::get_session_type,
             commands::list_monitors,
@@ -140,6 +228,10 @@ fn main() {
             commands::apply_eq, commands::apply_noise_gate,
             commands::apply_compressor, commands::apply_noise_reduction,
             commands::start_eq_engine, commands::stop_eq_engine,
+=======
+            // ★ Live watcher directory sync
+            commands::update_watch_dirs,
+>>>>>>> origin/SH3FAN-Branch
         ])
         .setup(|app| {
             // ── Managed states ──
@@ -244,6 +336,7 @@ fn main() {
                         }
                         // Keep watcher alive for the app lifetime.
                         app.manage(WatcherHandle(Mutex::new(Some(watcher))));
+                        app.manage(WatchedDirs(Mutex::new(dirs.clone())));
 
                         // Drain events in a background thread.
                         std::thread::spawn(move || {
@@ -275,6 +368,7 @@ fn main() {
                         log::error!("Watcher init failed: {e}");
                         // App still works; just no live updates.
                         app.manage(WatcherHandle(Mutex::new(None)));
+                        app.manage(WatchedDirs(Mutex::new(vec![])));
                     }
                 }
             }
@@ -349,6 +443,7 @@ pub struct ExportProcess {
 /// Wrapped in Mutex<Option<…>> so it can be taken on shutdown if needed.
 pub struct WatcherHandle(pub Mutex<Option<notify::RecommendedWatcher>>);
 
+<<<<<<< HEAD
 /// Spawn parameters retained so restart-on-save and hot-reload can respawn identically.
 pub struct GsrSpawnParams {
     pub output_dir: String,
@@ -367,3 +462,11 @@ pub struct GsrProcess(pub Mutex<Option<(std::process::Child, GsrSpawnParams)>>);
 /// jalv LV2-host subprocesses keyed by channel name (e.g. "Game", "Chat").
 /// Each entry is (Child, ChildStdin) — stdin is kept open for runtime parameter updates.
 pub struct JalvProcesses(pub Mutex<std::collections::HashMap<String, (std::process::Child, std::process::ChildStdin)>>);
+=======
+/// Tracks which directories the watcher is currently watching, so
+/// `update_watch_dirs` can diff current vs desired and call watch/unwatch.
+pub struct WatchedDirs(pub Mutex<Vec<std::path::PathBuf>>);
+
+/// Managed state for the GPU Screen Recorder (gpu-screen-recorder) child process.
+pub struct GsrProcess(pub Mutex<Option<std::process::Child>>);
+>>>>>>> origin/SH3FAN-Branch
