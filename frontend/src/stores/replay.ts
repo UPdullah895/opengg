@@ -1,10 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, shallowRef, triggerRef, markRaw } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-<<<<<<< HEAD
-=======
 import { perfWrap } from '../utils/perf'
->>>>>>> origin/SH3FAN-Branch
 import { usePersistenceStore } from './persistence'
 
 export interface Clip {

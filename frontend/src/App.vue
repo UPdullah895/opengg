@@ -203,14 +203,10 @@ async function loadUserLocales() {
 </script>
 
 <template>
-<<<<<<< HEAD
   <!-- Overlay notification window — minimal render, no layout chrome -->
   <ClipNotification v-if="isOverlay" />
 
-  <div v-else class="app-layout">
-=======
-  <div class="app-layout" @contextmenu.prevent>
->>>>>>> origin/SH3FAN-Branch
+  <div v-else class="app-layout" @contextmenu.prevent>
     <Titlebar />
     <div class="app-body">
       <Sidebar :active="currentPage" @navigate="navigate" />

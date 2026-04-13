@@ -219,7 +219,6 @@ fn main() {
             commands::stop_gsr_replay, commands::is_gsr_running,
             commands::restart_gsr_replay,
             commands::get_active_window_title,
-<<<<<<< HEAD
             commands::list_audio_sinks,
             commands::get_session_type,
             commands::list_monitors,
@@ -228,10 +227,8 @@ fn main() {
             commands::apply_eq, commands::apply_noise_gate,
             commands::apply_compressor, commands::apply_noise_reduction,
             commands::start_eq_engine, commands::stop_eq_engine,
-=======
             // ★ Live watcher directory sync
             commands::update_watch_dirs,
->>>>>>> origin/SH3FAN-Branch
         ])
         .setup(|app| {
             // ── Managed states ──
@@ -443,7 +440,6 @@ pub struct ExportProcess {
 /// Wrapped in Mutex<Option<…>> so it can be taken on shutdown if needed.
 pub struct WatcherHandle(pub Mutex<Option<notify::RecommendedWatcher>>);
 
-<<<<<<< HEAD
 /// Spawn parameters retained so restart-on-save and hot-reload can respawn identically.
 pub struct GsrSpawnParams {
     pub output_dir: String,
@@ -462,11 +458,7 @@ pub struct GsrProcess(pub Mutex<Option<(std::process::Child, GsrSpawnParams)>>);
 /// jalv LV2-host subprocesses keyed by channel name (e.g. "Game", "Chat").
 /// Each entry is (Child, ChildStdin) — stdin is kept open for runtime parameter updates.
 pub struct JalvProcesses(pub Mutex<std::collections::HashMap<String, (std::process::Child, std::process::ChildStdin)>>);
-=======
+
 /// Tracks which directories the watcher is currently watching, so
 /// `update_watch_dirs` can diff current vs desired and call watch/unwatch.
 pub struct WatchedDirs(pub Mutex<Vec<std::path::PathBuf>>);
-
-/// Managed state for the GPU Screen Recorder (gpu-screen-recorder) child process.
-pub struct GsrProcess(pub Mutex<Option<std::process::Child>>);
->>>>>>> origin/SH3FAN-Branch

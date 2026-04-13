@@ -16,11 +16,8 @@ import { settingsTargetTab } from '../composables/useNavSignal'
 
 const { t, locale } = useI18n()
 const persist = usePersistenceStore()
-<<<<<<< HEAD
 const appVersion = ref('')
-=======
 const replay = useReplayStore()
->>>>>>> origin/SH3FAN-Branch
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
   if (!persist.loaded) await persist.load()
@@ -546,11 +543,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
           <div class="action-row">
             <button class="btn btn-accent" @click="openCrashLogsFolder">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-<<<<<<< HEAD
               {{ t('settings.diagnostics.openCrashLogs') }}
-=======
-              Open Logs Folder
->>>>>>> origin/SH3FAN-Branch
             </button>
           </div>
         </div>
