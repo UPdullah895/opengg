@@ -6,7 +6,6 @@ const props = defineProps<{ scrollEl: HTMLElement | null }>()
 const thumbRef = ref<HTMLElement | null>(null)
 const visible = ref(false)
 
-let hideTimer: ReturnType<typeof setTimeout> | null = null
 let dragging = false
 let dragStartY = 0
 let dragStartScroll = 0
@@ -29,15 +28,8 @@ function updateThumb() {
   visible.value = true
 }
 
-function showThenHide() {
-  visible.value = true
-  if (hideTimer) clearTimeout(hideTimer)
-  hideTimer = setTimeout(() => { if (!dragging) visible.value = false }, 1500)
-}
-
 function onScroll() {
   updateThumb()
-  showThenHide()
 }
 
 function onThumbMouseDown(e: MouseEvent) {
@@ -46,8 +38,6 @@ function onThumbMouseDown(e: MouseEvent) {
   dragging = true
   dragStartY = e.clientY
   dragStartScroll = props.scrollEl?.scrollTop ?? 0
-  visible.value = true
-  if (hideTimer) clearTimeout(hideTimer)
 }
 
 function onMouseMove(e: MouseEvent) {
@@ -63,15 +53,38 @@ function onMouseMove(e: MouseEvent) {
 }
 
 function onMouseUp() {
-  if (!dragging) return
   dragging = false
-  showThenHide()
+}
+
+let mo: MutationObserver | null = null
+
+function observeChildren(el: HTMLElement) {
+  // Observe every direct child's box size. ResizeObserver on the scroll container
+  // alone is NOT enough — resizing cards changes el.scrollHeight but el's own box
+  // stays flex:1 constant, so RO on el never fires. Observing the inner content
+  // (the grid/list/grouped wrapper) catches those reflows and updates the thumb
+  // position immediately instead of waiting for the next scroll event.
+  if (!ro) return
+  for (const child of Array.from(el.children)) {
+    if (child instanceof HTMLElement) ro.observe(child)
+  }
 }
 
 function attach(el: HTMLElement) {
   el.addEventListener('scroll', onScroll, { passive: true })
   ro = new ResizeObserver(updateThumb)
   ro.observe(el)
+  observeChildren(el)
+  // Re-observe newly added children (e.g., when switching between viewMode variants
+  // or when the grid v-for initially populates) so the RO always tracks current content.
+  mo = new MutationObserver(() => {
+    if (!ro) return
+    ro.disconnect()
+    ro.observe(el)
+    observeChildren(el)
+    updateThumb()
+  })
+  mo.observe(el, { childList: true })
   // Initial position after layout settles
   requestAnimationFrame(updateThumb)
 }
@@ -80,6 +93,8 @@ function detach(el: HTMLElement) {
   el.removeEventListener('scroll', onScroll)
   ro?.disconnect()
   ro = null
+  mo?.disconnect()
+  mo = null
 }
 
 onMounted(() => {
@@ -92,7 +107,6 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousemove', onMouseMove)
   document.removeEventListener('mouseup', onMouseUp)
   if (props.scrollEl) detach(props.scrollEl)
-  if (hideTimer) clearTimeout(hideTimer)
 })
 
 watch(() => props.scrollEl, (next, prev) => {

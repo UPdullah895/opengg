@@ -1,0 +1,10 @@
+{
+  "id":          "tiktok-export",
+  "name":        "TikTok Vertical Export",
+  "description": "Export clips as 9:16 vertical video optimized for TikTok, Reels, and Shorts.",
+  "version":     "0.1.1",
+  "author":      "OpenGG Team",
+  "icon":        "icon.svg",
+  "main":        "index.iife.js",
+  "hasSettings": false
+}

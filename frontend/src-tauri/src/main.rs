@@ -3,7 +3,7 @@
 mod commands;
 mod media_server;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -39,19 +39,105 @@ fn get_watch_dirs() -> Vec<std::path::PathBuf> {
 //  ★ EPIC 2: File-based crash / info logger
 // ══════════════════════════════════════════════════════
 
+/// Resolves to `<repo-root>/Logs` at compile time. CARGO_MANIFEST_DIR points at
+/// `frontend/src-tauri`, so `../../Logs` lands at the repo root.
+const LOGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Logs");
+
+/// How many log files to retain before pruning the oldest.
+const MAX_LOG_FILES: usize = 10;
+
+/// Returns the absolute log directory (compile-time path above, canonicalized).
+pub fn logs_dir() -> std::path::PathBuf {
+    let p = std::path::PathBuf::from(LOGS_DIR);
+    let _ = std::fs::create_dir_all(&p);
+    p.canonicalize().unwrap_or(p)
+}
+
+/// Delete all but the `MAX_LOG_FILES` most recent `opengg_*.log` files in the
+/// log directory. Called once at startup so a new session counts against the cap.
+fn prune_old_logs(dir: &std::path::Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let name = p.file_name()?.to_string_lossy().to_string();
+            if !p.is_file() { return None }
+            if !name.starts_with("opengg_") || !name.ends_with(".log") { return None }
+            let mtime = e.metadata().ok()?.modified().ok()?;
+            Some((p, mtime))
+        })
+        .collect();
+    // Newest first
+    files.sort_by(|a, b| b.1.cmp(&a.1));
+    for (p, _) in files.into_iter().skip(MAX_LOG_FILES.saturating_sub(1)) {
+        // Leave (MAX_LOG_FILES - 1) existing files + the one we're about to create
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// Local-time "YYYY-MM-DD_HH-MM-SS" for log filenames. Uses libc::localtime_r
+/// on unix so we don't need a chrono dep just for the log filename.
+#[cfg(unix)]
+fn local_ts_filename() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&secs, &mut tm);
+        format!(
+            "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
+            tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+            tm.tm_hour, tm.tm_min, tm.tm_sec
+        )
+    }
+}
+
+#[cfg(not(unix))]
+fn local_ts_filename() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{secs}")
+}
+
 fn init_logging() {
-    use simplelog::{Config, LevelFilter, WriteLogger};
+    use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
     use std::fs::OpenOptions;
 
-    let log_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("opengg");
-    let _ = std::fs::create_dir_all(&log_dir);
-    let log_file = log_dir.join("opengg_crash.log");
+    let log_dir = logs_dir();
+    prune_old_logs(&log_dir);
 
-    // Append to existing log so successive runs accumulate
+    // One log file per session, timestamped. Session boundaries are visible
+    // and we never reopen a giant append-only file.
+    let log_name = format!("opengg_{}.log", local_ts_filename());
+    let log_file = log_dir.join(&log_name);
+
+    // Silence noisy transitive crates (zbus/zvariant/tao/wry/tracing plumbing).
+    // Info-level logging from these crates was producing hundreds of lines per
+    // DBus call and measurably slowing down the main thread via log-write syscalls.
+    let config = ConfigBuilder::new()
+        .add_filter_ignore_str("zbus")
+        .add_filter_ignore_str("zvariant")
+        .add_filter_ignore_str("zbus_names")
+        .add_filter_ignore_str("tracing")
+        .add_filter_ignore_str("tao")
+        .add_filter_ignore_str("wry")
+        .add_filter_ignore_str("webkit2gtk")
+        .add_filter_ignore_str("hyper")
+        .add_filter_ignore_str("reqwest")
+        .add_filter_ignore_str("tokio")
+        .add_filter_ignore_str("mio")
+        .add_filter_ignore_str("polling")
+        .add_filter_ignore_str("async_io")
+        .set_time_format_rfc3339()
+        .build();
+
     if let Ok(file) = OpenOptions::new().create(true).append(true).open(&log_file) {
-        let _ = WriteLogger::init(LevelFilter::Info, Config::default(), file);
+        let _ = WriteLogger::init(LevelFilter::Info, config, file);
     }
 
     // Catch panics and write them to the same log file
@@ -65,7 +151,7 @@ fn init_logging() {
         }
     }));
 
-    log::info!("=== OpenGG started ===");
+    log::info!("=== OpenGG started → {} ===", log_file.display());
 }
 
 fn main() {
@@ -88,7 +174,8 @@ fn main() {
             commands::get_recorder_status, commands::start_replay,
             commands::stop_recorder, commands::save_replay,
             // Clips
-            commands::get_clips, commands::generate_thumbnail, commands::generate_thumbnails_batch,
+            commands::get_clips, commands::get_clips_fast, commands::probe_clips,
+            commands::generate_thumbnail, commands::generate_thumbnails_batch,
             commands::set_clip_meta, commands::get_clip_meta,
             commands::take_screenshot,
             commands::clear_thumbnail_cache, commands::delete_clip,
@@ -127,15 +214,28 @@ fn main() {
             // ★ Epic 1C: Global OS shortcuts
             commands::register_global_shortcuts,
             // ★ GPU Screen Recorder
+            commands::check_gsr_installed,
             commands::start_gsr_replay, commands::save_gsr_replay,
             commands::stop_gsr_replay, commands::is_gsr_running,
+            commands::restart_gsr_replay,
             commands::get_active_window_title,
+            commands::list_audio_sinks,
+            commands::get_session_type,
+            commands::list_monitors,
+            commands::show_clip_notification,
+            // ★ DSP: EQ engine + effect stubs
+            commands::apply_eq, commands::apply_noise_gate,
+            commands::apply_compressor, commands::apply_noise_reduction,
+            commands::start_eq_engine, commands::stop_eq_engine,
+            // ★ Live watcher directory sync
+            commands::update_watch_dirs,
         ])
         .setup(|app| {
             // ── Managed states ──
-            app.manage(VuState(Arc::new(AtomicBool::new(false))));
+            app.manage(VuState(Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(0))));
             app.manage(ExportProcess::default());
             app.manage(GsrProcess(Mutex::new(None)));
+            app.manage(JalvProcesses(Mutex::new(std::collections::HashMap::new())));
 
             // ★ Epic 4: RunInBackground defaults true; overridden from saved settings below
             let run_bg_flag = Arc::new(AtomicBool::new(true));
@@ -155,11 +255,38 @@ fn main() {
             let settings_path = dirs::config_dir()
                 .unwrap_or_default()
                 .join("opengg/ui-settings.json");
+
+            // Parameters for optional GSR auto-start (read before spawning threads)
+            let mut gsr_auto_params: Option<(String, u32, u32, String, Option<u32>, String, Vec<String>)> = None;
+
             if let Ok(json) = std::fs::read_to_string(&settings_path) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
                     // Restore run-in-background preference before the first close event
                     if let Some(run_bg) = v["settings"]["runInBackground"].as_bool() {
                         run_bg_flag.store(run_bg, Ordering::Relaxed);
+                    }
+
+                    // ★ Auto-start GSR if enabled and gsrAutoStart is true
+                    let gsr_enabled   = v["settings"]["gsrEnabled"].as_bool().unwrap_or(false);
+                    let gsr_auto      = v["settings"]["gsrAutoStart"].as_bool().unwrap_or(true);
+                    if gsr_enabled && gsr_auto {
+                        let output_dir = v["settings"]["clip_directories"][0]
+                            .as_str().unwrap_or("~/Videos/OpenGG").to_string();
+                        let replay_secs = v["settings"]["gsrReplaySecs"].as_u64().unwrap_or(30) as u32;
+                        let fps         = v["settings"]["gsrFps"].as_u64().unwrap_or(60) as u32;
+                        let quality     = v["settings"]["gsrQuality"].as_str().unwrap_or("cbr").to_string();
+                        let bitrate_kbps = if quality == "cbr" {
+                            v["settings"]["gsrCbrBitrate"].as_u64().map(|b| b as u32)
+                        } else { None };
+                        let monitor_target = v["settings"]["gsrMonitorTarget"]
+                            .as_str().unwrap_or("screen").to_string();
+                        let audio_sources: Vec<String> = v["settings"]["captureTracks"]
+                            .as_array()
+                            .map(|arr| arr.iter()
+                                .filter_map(|t| t["source"].as_str().map(|s| s.to_string()))
+                                .collect())
+                            .unwrap_or_else(|| vec!["Game".into(), "Chat".into(), "Mic".into()]);
+                        gsr_auto_params = Some((output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources));
                     }
                 }
             }
@@ -170,10 +297,24 @@ fn main() {
                 commands::hydrate_audio_routing();
             });
 
+            // ★ Auto-start GSR replay buffer (2 s delay lets PipeWire sinks settle)
+            if let Some((output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources)) = gsr_auto_params {
+                let gsr_app = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(2000));
+                    match commands::start_gsr_replay(gsr_app, output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources) {
+                        Ok(()) => log::info!("GSR auto-started on launch"),
+                        Err(e) => log::warn!("GSR auto-start failed: {e}"),
+                    }
+                });
+            }
+
             // ★ Power User: Live file-system watcher — emits `clip_added` / `clip_removed`
+            // Also watches `~/.local/share/opengg/extensions/` and emits `plugins-changed`
+            // when a manifest.json is created, modified, or removed.
             {
                 use notify::{Config, RecursiveMode, Watcher};
-                use notify::event::{CreateKind, RemoveKind, EventKind};
+                use notify::event::{CreateKind, RemoveKind, ModifyKind, EventKind};
 
                 let watch_handle = app.handle().clone();
                 let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
@@ -186,20 +327,62 @@ fn main() {
                         let dirs = get_watch_dirs();
                         for dir in &dirs {
                             let _ = std::fs::create_dir_all(dir);
-                            if let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive) {
+                            if let Err(e) = watcher.watch(dir, RecursiveMode::Recursive) {
                                 log::warn!("Watcher: cannot watch {:?}: {e}", dir);
                             } else {
                                 log::info!("Watcher: watching {:?}", dir);
                             }
                         }
+
+                        // Also watch the extensions directory (recursive — detects manifest.json
+                        // inside any extension subdirectory).
+                        let extensions_dir = commands::extensions_dir_pub();
+                        let _ = std::fs::create_dir_all(&extensions_dir);
+                        if let Err(e) = watcher.watch(&extensions_dir, RecursiveMode::Recursive) {
+                            log::warn!("Watcher: cannot watch extensions dir {:?}: {e}", extensions_dir);
+                        } else {
+                            log::info!("Watcher: watching extensions {:?}", extensions_dir);
+                        }
+
                         // Keep watcher alive for the app lifetime.
                         app.manage(WatcherHandle(Mutex::new(Some(watcher))));
+                        app.manage(WatchedDirs(Mutex::new(dirs.clone())));
 
                         // Drain events in a background thread.
+                        // plugins-changed is debounced: we track the last emit time and
+                        // suppress duplicate events within a 500ms window.
+                        // Note: event name kept as `plugins-changed` for frontend compatibility.
                         std::thread::spawn(move || {
+                            let mut last_plugin_emit = std::time::Instant::now()
+                                .checked_sub(std::time::Duration::from_secs(10))
+                                .unwrap_or(std::time::Instant::now());
                             for res in rx {
                                 let event = match res { Ok(e) => e, Err(_) => continue };
                                 for path in &event.paths {
+                                    let filename = path.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("");
+
+                                    // Extension manifest events — debounced 500ms
+                                    if filename == "manifest.json" {
+                                        let is_manifest_event = matches!(&event.kind,
+                                            EventKind::Create(_) |
+                                            EventKind::Remove(_) |
+                                            EventKind::Modify(ModifyKind::Data(_)) |
+                                            EventKind::Modify(ModifyKind::Name(_)) |
+                                            EventKind::Modify(_)
+                                        );
+                                        if is_manifest_event
+                                            && last_plugin_emit.elapsed() > std::time::Duration::from_millis(500)
+                                        {
+                                            log::info!("Watcher: extensions-changed (manifest: {:?})", path);
+                                            let _ = watch_handle.emit("plugins-changed", ());
+                                            last_plugin_emit = std::time::Instant::now();
+                                        }
+                                        continue;
+                                    }
+
+                                    // Clip file events
                                     let ext = path.extension()
                                         .and_then(|e| e.to_str())
                                         .unwrap_or("")
@@ -225,6 +408,7 @@ fn main() {
                         log::error!("Watcher init failed: {e}");
                         // App still works; just no live updates.
                         app.manage(WatcherHandle(Mutex::new(None)));
+                        app.manage(WatchedDirs(Mutex::new(vec![])));
                     }
                 }
             }
@@ -264,7 +448,7 @@ fn main() {
                     .app_handle()
                     .try_state::<RunInBackground>()
                     .map(|s| s.0.load(Ordering::Relaxed))
-                    .unwrap_or(true);
+                    .unwrap_or(false);
 
                 if run_bg {
                     api.prevent_close();
@@ -281,7 +465,11 @@ fn main() {
 }
 
 // ── Managed-state types ──────────────────────────────────────────────────────
-pub struct VuState(pub Arc<AtomicBool>);
+/// VU stream state: running flag + generation counter.
+/// The generation counter prevents stale reader threads (leaked from a previous
+/// `start_vu_stream` call) from re-attaching after `stop_vu_stream` returns —
+/// each thread checks `my_gen == current_gen` on every iteration.
+pub struct VuState(pub Arc<AtomicBool>, pub Arc<AtomicU64>);
 pub struct RunInBackground(pub Arc<AtomicBool>);
 pub struct MediaServerPort(pub u16);
 
@@ -295,5 +483,25 @@ pub struct ExportProcess {
 /// Wrapped in Mutex<Option<…>> so it can be taken on shutdown if needed.
 pub struct WatcherHandle(pub Mutex<Option<notify::RecommendedWatcher>>);
 
-/// Managed state for the GPU Screen Recorder (gpu-screen-recorder) child process.
-pub struct GsrProcess(pub Mutex<Option<std::process::Child>>);
+/// Spawn parameters retained so restart-on-save and hot-reload can respawn identically.
+pub struct GsrSpawnParams {
+    pub output_dir: String,
+    pub replay_secs: u32,
+    pub fps: u32,
+    pub quality: String,
+    pub bitrate_kbps: Option<u32>,
+    pub monitor_target: String,
+    pub audio_sources: Vec<String>,
+}
+
+/// Managed state for the GPU Screen Recorder child process.
+/// Stores the child AND the original spawn params so we can restart without re-reading config.
+pub struct GsrProcess(pub Mutex<Option<(std::process::Child, GsrSpawnParams)>>);
+
+/// jalv LV2-host subprocesses keyed by channel name (e.g. "Game", "Chat").
+/// Each entry is (Child, ChildStdin) — stdin is kept open for runtime parameter updates.
+pub struct JalvProcesses(pub Mutex<std::collections::HashMap<String, (std::process::Child, std::process::ChildStdin)>>);
+
+/// Tracks which directories the watcher is currently watching, so
+/// `update_watch_dirs` can diff current vs desired and call watch/unwatch.
+pub struct WatchedDirs(pub Mutex<Vec<std::path::PathBuf>>);

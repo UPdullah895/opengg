@@ -1,8 +1,9 @@
 //! Local HTTP Media Server — serves video files and individual audio tracks.
 //!
 //! Routes:
-//!   /media/...     → serves files with Range support (video playback)
-//!   /audio?file=X&stream=N → extracts audio stream N from X via ffmpeg, serves as WAV
+//!   /media/...              → serves files with Range support (video playback)
+//!   /audio?file=X&stream=N  → extracts audio stream N from X via ffmpeg, serves as WAV
+//!   /ext/<extId>/<path>     → serves static files from the extensions directory (icons, IIFE bundles, locales)
 
 use percent_encoding::percent_decode_str;
 use std::net::TcpListener;
@@ -38,7 +39,13 @@ pub fn spawn_media_server() -> u16 {
                 .and(warp::query::<AudioQuery>())
                 .and_then(serve_audio_stream);
 
-            let routes = media_route.or(audio_route);
+            // Route 3: /ext/<extId>/<rest> → serves static assets from the extensions directory.
+            // Only files inside ~/.local/share/opengg/extensions/ are accessible.
+            let ext_route = warp::path("ext")
+                .and(warp::path::tail())
+                .and_then(serve_extension_asset);
+
+            let routes = media_route.or(audio_route).or(ext_route);
 
             let cors = warp::cors()
                 .allow_any_origin()
@@ -106,5 +113,68 @@ async fn serve_audio_stream(q: AudioQuery) -> Result<Response<Vec<u8>>, warp::Re
         .header("Content-Length", output.stdout.len().to_string())
         .header("Cache-Control", "public, max-age=3600")
         .body(output.stdout)
+        .unwrap())
+}
+
+/// Serve a static asset from the extensions directory.
+/// URL pattern: /ext/<extId>/<asset-path>
+/// Maps to:     ~/.local/share/opengg/extensions/<extId>/<asset-path>
+///
+/// Path-traversal protection: resolves the full canonical path and verifies
+/// it is strictly inside the extensions base directory before reading.
+async fn serve_extension_asset(tail: warp::path::Tail) -> Result<Response<Vec<u8>>, warp::Rejection> {
+    let tail_str = tail.as_str();
+    if tail_str.is_empty() {
+        return Err(warp::reject::not_found());
+    }
+
+    let base = match dirs::data_local_dir() {
+        Some(d) => d.join("opengg").join("extensions"),
+        None => return Err(warp::reject::not_found()),
+    };
+
+    // Decode percent-encoded segments from the URL
+    let decoded = percent_decode_str(tail_str).decode_utf8_lossy().to_string();
+    let candidate = base.join(&decoded);
+
+    // Resolve symlinks and normalise '..' components to get the real path
+    let real = match candidate.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return Err(warp::reject::not_found()),
+    };
+
+    // Ensure the resolved path starts with the (also canonicalised) extensions base
+    let real_base = match base.canonicalize() {
+        Ok(p) => p,
+        Err(_) => base.clone(),
+    };
+    if !real.starts_with(&real_base) {
+        return Err(warp::reject::not_found());
+    }
+
+    if !real.is_file() {
+        return Err(warp::reject::not_found());
+    }
+
+    let bytes = tokio::fs::read(&real).await.map_err(|_| warp::reject::not_found())?;
+
+    // Derive Content-Type from extension
+    let ct = match real.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "js"   | "mjs"  => "application/javascript; charset=utf-8",
+        "json"           => "application/json; charset=utf-8",
+        "svg"            => "image/svg+xml",
+        "png"            => "image/png",
+        "jpg" | "jpeg"   => "image/jpeg",
+        "webp"           => "image/webp",
+        "css"            => "text/css; charset=utf-8",
+        _                => "application/octet-stream",
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", ct)
+        .header("Content-Length", bytes.len().to_string())
+        .header("Cache-Control", "no-cache")
+        .body(bytes)
         .unwrap())
 }

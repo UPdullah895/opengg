@@ -1,25 +1,37 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, inject, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { getVersion } from '@tauri-apps/api/app'
 import { ask, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { usePersistenceStore, DEFAULTS } from '../stores/persistence'
+import { useReplayStore } from '../stores/replay'
 import { loadTheme, saveTheme, getCurrentTheme, applyThemeMode, getThemeMode } from '../utils/theme'
 import { LANGUAGES, registerLocale } from '../i18n'
 import SelectField from '../components/SelectField.vue'
 import IconPicker from '../components/IconPicker.vue'
 import InfoIcon from '../components/InfoIcon.vue'
+import { settingsTargetTab } from '../composables/useNavSignal'
 
 const { t, locale } = useI18n()
 const persist = usePersistenceStore()
+const appVersion = ref('')
+const replay = useReplayStore()
 onMounted(async () => {
+  try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
   if (!persist.loaded) await persist.load()
   syncLocale()
   // ★ Epic 4: Sync autostart UI with actual OS state on every open
   try { settings.value.runAtStartup = await invoke<boolean>('get_autostart') } catch { /* ignore */ }
   // ★ Epic 4: Push saved run-in-background flag to Rust state
   try { await invoke('set_run_in_background', { val: settings.value.runInBackground }) } catch { /* ignore */ }
+  // ── Cross-page deep link: auto-select tab when navigated from another page ──
+  if (settingsTargetTab.value) {
+    active.value = settingsTargetTab.value as typeof active.value
+    settingsTargetTab.value = null
+  }
 })
 
 const settings = computed(() => persist.state.settings)
@@ -39,7 +51,7 @@ function setLanguage(code: string) {
 }
 
 // ─── Nav ───
-type Section = 'general' | 'language' | 'shortcuts' | 'mixerRouting' | 'eqAutoFlatten' | 'captureSound' | 'trackManagement' | 'storage' | 'extensions'
+type Section = 'general' | 'language' | 'shortcuts' | 'mixerRouting' | 'captureSound' | 'trackManagement' | 'storage' | 'extensions' | 'store' | 'about' | 'notifications'
 type NavItem = { key: Section; label: string; badge?: string }
 const active = ref<Section>('general')
 
@@ -56,22 +68,28 @@ const navGroups = computed(() => [
     key: 'audioEngine', label: t('settings.groups.audioEngine'),
     items: [
       { key: 'mixerRouting'  as Section, label: t('settings.sections.mixerRouting')  } as NavItem,
-      { key: 'eqAutoFlatten' as Section, label: t('settings.sections.eqAutoFlatten') } as NavItem,
     ],
   },
   {
     key: 'moments', label: t('settings.groups.moments'),
     items: [
       { key: 'captureSound'    as Section, label: t('settings.sections.captureSound') } as NavItem,
-      { key: 'trackManagement' as Section, label: 'Timeline Tracks'                   } as NavItem,
+      { key: 'trackManagement' as Section, label: t('settings.sections.trackManagement') } as NavItem,
       { key: 'storage'         as Section, label: t('settings.sections.storage')      } as NavItem,
+      { key: 'notifications'   as Section, label: t('settings.sections.notifications') } as NavItem,
     ],
   },
   {
     key: 'extensions', label: t('settings.groups.extensions'),
     items: [
-      // ★ Epic 5: Beta badge
       { key: 'extensions' as Section, label: t('settings.sections.extensions'), badge: 'Beta' } as NavItem,
+      { key: 'store'      as Section, label: t('settings.sections.store') } as NavItem,
+    ],
+  },
+  {
+    key: 'info', label: '',
+    items: [
+      { key: 'about' as Section, label: t('settings.sections.about') } as NavItem,
     ],
   },
 ])
@@ -187,26 +205,60 @@ const shortcutActions = computed<Array<{ key: string; label: string; hint: strin
 ])
 
 // ─── GPU Screen Recorder ───
-const gsrQualityOptions = [
-  { value: 'High',   label: 'High (CRF 23)'   },
-  { value: 'Medium', label: 'Medium (CRF 28)'  },
-  { value: 'Low',    label: 'Low (CRF 35)'     },
-]
-const gsrFpsOptions    = [30, 60, 120].map(v => ({ value: v, label: `${v} FPS` }))
-const gsrReplayOptions = [15, 30, 60, 120, 180].map(v => ({ value: v, label: `${v}s` }))
+const gsrQualityOptions = computed(() => [
+  { value: 'cbr',       label: t('settings.captureGsr.qualityCbr')      },
+  { value: 'medium',    label: t('settings.captureGsr.qualityMedium')   },
+  { value: 'high',      label: t('settings.captureGsr.qualityHigh')     },
+  { value: 'very_high', label: t('settings.captureGsr.qualityVeryHigh') },
+  { value: 'ultra',     label: t('settings.captureGsr.qualityUltra')    },
+])
+const gsrFpsOptions = computed(() => [30, 60, 120].map(v => ({ value: v, label: t(`dashboard.gsrFps.${v}`) })))
+const gsrReplayPresets = computed(() => [
+  { value: '15',     label: t('dashboard.gsrReplay.15')       },
+  { value: '30',     label: t('dashboard.gsrReplay.30')       },
+  { value: '60',     label: t('dashboard.gsrReplay.60')       },
+  { value: '90',     label: t('dashboard.gsrReplay.90')       },
+  { value: '120',    label: t('dashboard.gsrReplay.120')      },
+  { value: 'custom', label: t('settings.captureGsr.replayCustom') },
+])
+
+function onReplayPresetChange(preset: string | number) {
+  settings.value.gsrReplayPreset = String(preset) as any
+  if (preset !== 'custom') {
+    settings.value.gsrReplaySecs = Number(preset)
+    restartGsr()
+  }
+}
+
+function onCustomReplaySecs(e: Event) {
+  const raw = Number((e.target as HTMLInputElement).value)
+  settings.value.gsrReplaySecs = Math.max(5, Math.min(600, raw || 30))
+  restartGsr()
+}
+
+const gsrAudioSources = computed(() =>
+  settings.value.captureTracks.map((t: { source: string }) => t.source)
+)
+
+function gsrInvokeParams() {
+  const outputDir = settings.value.clip_directories?.[0] ?? '~/Videos/OpenGG'
+  return {
+    outputDir,
+    replaySecs:    settings.value.gsrReplaySecs,
+    fps:           settings.value.gsrFps,
+    quality:       settings.value.gsrQuality,
+    bitrateKbps:   settings.value.gsrQuality === 'cbr' ? settings.value.gsrCbrBitrate : null,
+    monitorTarget: settings.value.gsrMonitorTarget || 'screen',
+    audioSources:  gsrAudioSources.value,
+  }
+}
 
 async function toggleGsr() {
-  const outputDir = (settings.value.clip_directories?.[0] ?? '~/Videos/OpenGG').replace('~', '')
   try {
     if (settings.value.gsrEnabled) {
       await invoke('stop_gsr_replay')
     } else {
-      await invoke('start_gsr_replay', {
-        outputDir,
-        replaySecs: settings.value.gsrReplaySecs,
-        fps: settings.value.gsrFps,
-        quality: settings.value.gsrQuality,
-      })
+      await invoke('start_gsr_replay', gsrInvokeParams())
     }
     settings.value.gsrEnabled = !settings.value.gsrEnabled
   } catch (e) { console.error('GSR toggle:', e) }
@@ -214,17 +266,28 @@ async function toggleGsr() {
 
 async function restartGsr() {
   if (!settings.value.gsrEnabled) return
-  const outputDir = (settings.value.clip_directories?.[0] ?? '~/Videos/OpenGG').replace('~', '')
   try {
-    await invoke('stop_gsr_replay')
-    await invoke('start_gsr_replay', {
-      outputDir,
-      replaySecs: settings.value.gsrReplaySecs,
-      fps: settings.value.gsrFps,
-      quality: settings.value.gsrQuality,
-    })
+    await invoke('restart_gsr_replay', gsrInvokeParams())
   } catch (e) { console.error('GSR restart:', e) }
 }
+
+// ─── Resource estimation ───
+const gsrEstFileMb = computed(() => {
+  const kbps = settings.value.gsrQuality === 'cbr'
+    ? (settings.value.gsrCbrBitrate ?? 8000)
+    : ({ medium: 4000, high: 6000, very_high: 12000, ultra: 20000 } as Record<string, number>)[settings.value.gsrQuality] ?? 8000
+  return ((kbps * settings.value.gsrReplaySecs) / 8 / 1024).toFixed(0)
+})
+const gsrEstRamMb = computed(() => {
+  // Rough heuristic: replay RAM ≈ file size × 1.2 (encoder buffers + ring buffer overhead)
+  return Math.ceil(Number(gsrEstFileMb.value) * 1.2)
+})
+
+// Restart GSR when capture track sources change
+watch(
+  () => settings.value.captureTracks.map((t: { source: string }) => t.source).join(','),
+  () => restartGsr(),
+)
 
 const isDefaultShortcuts = computed(() =>
   JSON.stringify(settings.value.shortcuts) === JSON.stringify(DEFAULTS.settings.shortcuts)
@@ -236,6 +299,37 @@ const CAPTURE_SOURCES = ['Game', 'Chat', 'Media', 'Aux', 'Mic']
 const captureSourceOptions = computed(() =>
   CAPTURE_SOURCES.map(s => ({ value: s, label: t(`settings.captureSound.sources.${s}`) }))
 )
+
+// Dynamic audio sinks from PipeWire (populated on mount via list_audio_sinks)
+const audioSinkOptions = ref<Array<{ value: string; label: string }>>([])
+
+// Session type + dynamic monitor list for GSR target dropdown
+const sessionType = ref<'x11' | 'wayland' | 'unknown'>('unknown')
+const monitorOptions = ref<Array<{ value: string; label: string }>>([
+  { value: 'screen', label: 'Primary Monitor' },
+])
+const isWayland = computed(() => sessionType.value === 'wayland')
+
+onMounted(async () => {
+  try {
+    const sinks = await invoke<string[]>('list_audio_sinks')
+    audioSinkOptions.value = sinks.map(name => ({ value: name, label: name }))
+  } catch {
+    // Fallback to static OpenGG sinks if pactl is unavailable
+    audioSinkOptions.value = CAPTURE_SOURCES.map(s => ({ value: `OpenGG_${s}`, label: `OpenGG_${s}` }))
+  }
+  try {
+    sessionType.value = (await invoke<string>('get_session_type')) as typeof sessionType.value
+  } catch { /* ignore */ }
+  try {
+    const monitors = await invoke<Array<{ name: string; label: string }>>('list_monitors')
+    const opts = monitors.map(m => ({ value: m.name, label: m.label }))
+    if (!isWayland.value) {
+      opts.push({ value: 'focused', label: 'Fullscreen Application' })
+    }
+    monitorOptions.value = opts
+  } catch { /* keep default */ }
+})
 function addCaptureTrack() {
   const n = settings.value.captureTracks.length + 1
   settings.value.captureTracks.push({ name: `Track ${n}`, source: 'Game' })
@@ -252,7 +346,7 @@ function openColorPicker(idx: number) { colorInputRefs.value[idx]?.click() }
 
 function addTrackDef() {
   const idx = settings.value.trackDefs.length
-  settings.value.trackDefs.push({ id: `A${idx}`, name: `Audio ${idx}`, color: '#64748b', icon: 'game' })
+  settings.value.trackDefs.push({ id: `A${idx}`, name: `Audio ${idx}`, color: '#64748b', icon: 'game', visible: true })
 }
 function removeTrackDef(i: number) {
   if (settings.value.trackDefs.length <= 1) return
@@ -264,7 +358,7 @@ const dangerLoading = ref(false)
 const gsrInstallOpen = ref(false)
 const dangerMsg = ref('')
 async function removeVirtualAudio() {
-  const confirmed = await ask('This will unload all OpenGG virtual audio sinks and restart PipeWire. Your audio routing will be reset. Continue?', { title: 'Danger Zone', kind: 'warning' })
+  const confirmed = await ask(t('settings.dangerZone.confirmMsg'), { title: t('settings.dangerZone.title'), kind: 'warning' })
   if (!confirmed) return
   dangerLoading.value = true; dangerMsg.value = ''
   try {
@@ -284,19 +378,31 @@ async function addClipSource() {
     if (s && typeof s === 'string') {
       if (!settings.value.clip_directories) settings.value.clip_directories = []
       if (!settings.value.clip_directories.includes(s)) settings.value.clip_directories.push(s)
+      await persist.save()
+      await replay.fetchClips('', true)
+      try { await invoke('update_watch_dirs') } catch {}
     }
   } catch {}
 }
-function removeClipSource(idx: number) {
+async function removeClipSource(idx: number) {
   settings.value.clip_directories?.splice(idx, 1)
+  await persist.save()
+  await replay.fetchClips('', true)
+  try { await invoke('update_watch_dirs') } catch {}
 }
 
-// ─── Screenshot directory ───
-async function pickScreenshotDir() {
+// ─── Screenshot directories ───
+async function addScreenshotDir() {
   try {
-    const s = await openDialog({ directory: true, multiple: false, title: 'Screenshot Save Location' })
-    if (s && typeof s === 'string') settings.value.screenshotDir = s
+    const s = await openDialog({ directory: true, multiple: false, title: 'Add Screenshot Directory' })
+    if (s && typeof s === 'string') {
+      if (!settings.value.screenshotDirs) settings.value.screenshotDirs = []
+      if (!settings.value.screenshotDirs.includes(s)) settings.value.screenshotDirs.push(s)
+    }
   } catch {}
+}
+function removeScreenshotDir(idx: number) {
+  settings.value.screenshotDirs?.splice(idx, 1)
 }
 
 // ─── Cache ───
@@ -336,25 +442,84 @@ async function openExternal(url: string) {
 
 // SelectField option helpers
 const clickOptions = [{ value:'preview', label: 'Quick Preview' }, { value:'editor', label: 'Advanced Editor' }]
+const dateFormatOptions = [
+  { value: 'YMD', label: 'YYYY/MM/DD' },
+  { value: 'YDM', label: 'YYYY/DD/MM' },
+]
+const notificationPositionOptions = [
+  { value: 'top-right', label: t('settings.notificationsPage.positionTopRight') },
+  { value: 'top-left', label: t('settings.notificationsPage.positionTopLeft') },
+  { value: 'bottom-right', label: t('settings.notificationsPage.positionBottomRight') },
+  { value: 'bottom-left', label: t('settings.notificationsPage.positionBottomLeft') },
+]
 
-// ─── Extensions: plugin scanning ───
-interface ExtensionInfo { id: string; name: string; description: string; version: string; path: string }
-const scannedPlugins = ref<ExtensionInfo[]>([])
-const pluginScanLoading = ref(false)
+// ─── Extensions ───
+interface ExtensionInfo {
+  id: string
+  name: string
+  description: string
+  version: string
+  path: string
+  has_settings?: boolean
+  icon?: string | null
+  main?: string | null
+  ui?: string | null
+  /** True for extensions bundled as built-in hardcoded cards (no path on disk) */
+  _builtin?: boolean
+  /** Inline SVG markup for built-in extensions */
+  _svgIcon?: string
+  /** Accent color for built-in extensions */
+  _color?: string
+}
 
-async function scanPlugins() {
-  pluginScanLoading.value = true
-  try { scannedPlugins.value = await invoke<ExtensionInfo[]>('scan_extensions') } catch { scannedPlugins.value = [] }
-  finally { pluginScanLoading.value = false }
+const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
+const scannedExtensions = ref<ExtensionInfo[]>([])
+const extensionScanLoading = ref(false)
+
+/** Returns the icon URL for an extension loaded from the extensions directory. */
+function getExtensionIconUrl(p: ExtensionInfo): string | null {
+  if (p._builtin || !p.icon || !mediaPort.value) return null
+  return `http://localhost:${mediaPort.value}/ext/${encodeURIComponent(p.id)}/${encodeURIComponent(p.icon)}`
+}
+
+/** Gear button is only shown if the extension has declared hasSettings: true. */
+function canConfigure(p: ExtensionInfo): boolean {
+  return !!p.has_settings
+}
+
+/** True if extension is currently enabled (keyed by id in persistence). */
+function isExtEnabled(p: ExtensionInfo): boolean {
+  return persist.state.extensions[p.id] ?? true
+}
+function setExtEnabled(p: ExtensionInfo, val: boolean) {
+  persist.state.extensions[p.id] = val
+}
+
+async function scanExtensions() {
+  extensionScanLoading.value = true
+  try { scannedExtensions.value = await invoke<ExtensionInfo[]>('scan_extensions') }
+  catch { scannedExtensions.value = [] }
+  finally { extensionScanLoading.value = false }
 }
 
 async function openExtensionsFolder() {
   try { await invoke('open_extensions_folder') } catch (e) { console.error(e) }
-  await scanPlugins()
+  await scanExtensions()
+}
+
+async function refreshExtensions() {
+  await scanExtensions()
 }
 
 // Scan whenever the extensions section becomes active
-watch(active, v => { if (v === 'extensions') scanPlugins() })
+watch(active, v => { if (v === 'extensions') scanExtensions() })
+
+// Auto-rescan when the extensions folder changes (file watcher event from Rust)
+onMounted(async () => {
+  await listen('plugins-changed', () => {
+    if (active.value === 'extensions') scanExtensions()
+  })
+})
 </script>
 
 <template>
@@ -413,48 +578,56 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         </div>
 
         <div class="card">
-          <div class="card-head">Clip Preferences</div>
+          <div class="card-head">{{ t('settings.clipPreferences.title') }}</div>
           <div class="form-grid">
             <div class="field">
               <label>{{ t('settings.clipSettings.defaultClick') }}</label>
               <SelectField v-model="settings.defaultClickAction" :options="clickOptions" />
+            </div>
+            <div class="field">
+              <label>{{ t('settings.general.dateFormat') }}<InfoIcon :title="t('settings.general.dateFormatHint')" /></label>
+              <SelectField v-model="settings.dateFormat" :options="dateFormatOptions" />
             </div>
           </div>
         </div>
 
         <!-- ★ Epic 4: Daemon & Startup toggles -->
         <div class="card">
-          <div class="card-head">Daemon &amp; Startup</div>
-          <label class="toggle-row">
-            <input type="checkbox" v-model="settings.runAtStartup" @change="onRunAtStartupChange">
-            <span class="tname">Run OpenGG when my computer starts</span>
-            <span class="tdesc">Automatically launch OpenGG on login via XDG autostart</span>
-          </label>
-          <label class="toggle-row">
-            <input type="checkbox" v-model="settings.runInBackground" @change="onRunInBackgroundChange">
-            <span class="tname">Keep running in background when closed</span>
-            <span class="tdesc">Closing the window hides it to the system tray instead of quitting</span>
-          </label>
-        </div>
-
-        <!-- ★ Epic 2: Diagnostics / crash log -->
-        <div class="card">
-          <div class="card-head">Diagnostics <InfoIcon title="Crash and error logs are stored locally for debugging. Share them when reporting issues." /></div>
-          <div class="action-row">
-            <button class="btn btn-accent" @click="openCrashLogsFolder">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-              Open Crash Logs Folder
+          <div class="card-head">{{ t('settings.daemon.title') }}</div>
+          <div class="daemon-toggle-row">
+            <div class="daemon-toggle-info">
+              <span class="tname">
+                {{ t('settings.daemon.runAtStartup') }}
+                <InfoIcon :title="t('settings.daemon.runAtStartupTooltip')" />
+              </span>
+            </div>
+            <button class="toggle-btn" :class="{ on: settings.runAtStartup }"
+                    @click="settings.runAtStartup = !settings.runAtStartup; onRunAtStartupChange()">
+              <span class="toggle-knob"></span>
+            </button>
+          </div>
+          <div class="daemon-toggle-row">
+            <div class="daemon-toggle-info">
+              <span class="tname">
+                {{ t('settings.daemon.keepInBackground') }}
+                <InfoIcon :title="t('settings.daemon.keepInBackgroundTooltip')" />
+              </span>
+            </div>
+            <button class="toggle-btn" :class="{ on: settings.runInBackground }"
+                    @click="settings.runInBackground = !settings.runInBackground; onRunInBackgroundChange()">
+              <span class="toggle-knob"></span>
             </button>
           </div>
         </div>
 
+        <!-- ★ Epic 2: Diagnostics / crash log -->
         <div class="card">
-          <div class="card-head">{{ t('settings.general.about') }}</div>
-          <div class="about-row"><strong>OpenGG</strong> {{ t('settings.general.version') }}</div>
-          <div class="about-row muted">{{ t('settings.general.openSource') }}</div>
-          <div class="about-row saved" v-if="persist.loaded">✓ {{ t('settings.saved') }}</div>
-          <div class="about-row" style="margin-top:8px">
-            <a href="#" class="link" @click.prevent="openExternal('https://github.com/UPdullah895/opengg')">{{ t('settings.general.github') }}</a>
+          <div class="card-head">{{ t('settings.diagnostics.title') }} <InfoIcon :title="t('settings.diagnostics.hint')" /></div>
+          <div class="action-row">
+            <button class="btn btn-accent" @click="openCrashLogsFolder">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+              {{ t('settings.diagnostics.openCrashLogs') }}
+            </button>
           </div>
         </div>
       </section>
@@ -473,7 +646,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
               </button>
               <button class="theme-icon-btn" :disabled="localesReloading" @click="loadUserLocales" aria-label="Reload languages">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="{ spinning: localesReloading }"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
-                <span class="info-tooltip-wrap"><span class="btn-tooltip">Reload languages</span></span>
+                <span class="info-tooltip-wrap"><span class="btn-tooltip">{{ t('settings.language.reloadLanguages') }}</span></span>
               </button>
             </div>
           </div>
@@ -500,7 +673,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         <div class="card">
           <div class="shortcut-hdr">
             <span class="shortcut-hdr-label">{{ t('settings.shortcuts.title') }} <InfoIcon :title="t('settings.shortcuts.hint')" /></span>
-            <button class="btn-reset-sc" :disabled="isDefaultShortcuts" @click="resetShortcuts">Reset to Defaults</button>
+            <button class="btn-reset-sc" :disabled="isDefaultShortcuts" @click="resetShortcuts">{{ t('settings.shortcuts.resetToDefaults') }}</button>
           </div>
           <div class="shortcut-list">
             <div
@@ -532,7 +705,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         <div class="card">
           <div class="placeholder-box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/></svg>
-            <span>Mixer routing config — coming soon</span>
+            <span>{{ t('settings.mixerRouting.comingSoon') }}</span>
           </div>
         </div>
 
@@ -540,31 +713,20 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         <div class="card danger-zone-card">
           <div class="card-head danger-head">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;flex-shrink:0"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            Danger Zone
+            {{ t('settings.dangerZone.title') }}
           </div>
-          <p class="hint" style="color:color-mix(in srgb,var(--danger) 80%,var(--text-sec))">These actions are destructive. Use only if your audio routing is broken and needs a full reset.</p>
+          <p class="hint" style="color:color-mix(in srgb,var(--danger) 80%,var(--text-sec))">{{ t('settings.dangerZone.subtitle') }}</p>
           <div class="danger-action-row">
             <div class="danger-info">
-              <span class="danger-label">Remove Virtual Audio &amp; Restore OS Defaults</span>
-              <span class="danger-desc">Unloads all OpenGG virtual sinks and restarts PipeWire + WirePlumber. Your physical hardware routes will be restored. The onboarding wizard will guide re-setup on next launch.</span>
+              <span class="danger-label">{{ t('settings.dangerZone.removeVirtualAudio') }}</span>
+              <span class="danger-desc">{{ t('settings.dangerZone.removeVirtualAudioDesc') }}</span>
             </div>
             <button class="btn-danger" :disabled="dangerLoading" @click="removeVirtualAudio">
               <svg v-if="!dangerLoading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
-              <span>{{ dangerLoading ? 'Removing…' : 'Remove Virtual Audio & Restore OS Defaults' }}</span>
+              <span>{{ dangerLoading ? t('settings.captureGsr.removeVirtualAudioRemoving') : t('settings.dangerZone.removeVirtualAudio') }}</span>
             </button>
           </div>
           <div v-if="dangerMsg" class="danger-msg" :class="{ 'danger-ok': dangerMsg.startsWith('✓') }">{{ dangerMsg }}</div>
-        </div>
-      </section>
-
-      <!-- ════════════════════ EQ AUTO-FLATTEN ════════════════════ -->
-      <section v-if="active === 'eqAutoFlatten'">
-        <h2 class="sec-title">{{ t('settings.sections.eqAutoFlatten') }}</h2>
-        <div class="card">
-          <div class="placeholder-box">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>
-            <span>EQ presets &amp; auto-flatten — coming soon</span>
-          </div>
         </div>
       </section>
 
@@ -575,25 +737,74 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         <!-- GPU Screen Recorder panel (top) -->
         <div class="card">
           <div class="card-head gsr-head">
-            <span>GPU Screen Recorder</span>
+            <span>{{ t('settings.captureGsr.title') }}</span>
             <span class="badge-beta">Beta</span>
-            <InfoIcon title="Uses gpu-screen-recorder for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately." />
+            <InfoIcon :title="t('settings.captureGsr.hint')" />
+            <span v-if="settings.gsrEnabled" class="gsr-est">
+              Est. RAM: ~{{ gsrEstRamMb }} MB &nbsp;|&nbsp; File: ~{{ gsrEstFileMb }} MB
+            </span>
           </div>
           <div v-if="settings.gsrEnabled" class="form-grid gsr-grid">
             <div class="field">
-              <label>Quality</label>
+              <label>{{ t('settings.captureGsr.quality') }}</label>
               <SelectField v-model="settings.gsrQuality" :options="gsrQualityOptions" @update:modelValue="restartGsr" />
+              <input
+                v-if="settings.gsrQuality === 'cbr'"
+                type="number"
+                class="gsr-custom-secs"
+                :value="settings.gsrCbrBitrate"
+                min="500"
+                max="100000"
+                step="500"
+                placeholder="Bitrate (kbps)"
+                title="Target bitrate in kbps (e.g. 8000 = 8 Mbps)"
+                @change="e => { settings.gsrCbrBitrate = Math.max(500, Math.min(100000, Number((e.target as HTMLInputElement).value) || 8000)); restartGsr() }"
+              />
             </div>
             <div class="field">
-              <label>FPS</label>
+              <label>{{ t('settings.captureGsr.fps') }}</label>
               <SelectField v-model="settings.gsrFps" :options="gsrFpsOptions" @update:modelValue="restartGsr" />
             </div>
             <div class="field">
-              <label>Replay Buffer</label>
-              <SelectField v-model="settings.gsrReplaySecs" :options="gsrReplayOptions" @update:modelValue="restartGsr" />
+              <label>{{ t('settings.captureGsr.replayBuffer') }}</label>
+              <SelectField
+                :modelValue="settings.gsrReplayPreset"
+                :options="gsrReplayPresets"
+                @update:modelValue="onReplayPresetChange"
+              />
+              <input
+                v-if="settings.gsrReplayPreset === 'custom'"
+                type="number"
+                class="gsr-custom-secs"
+                :value="settings.gsrReplaySecs"
+                min="5"
+                max="600"
+                placeholder="Seconds"
+                @change="onCustomReplaySecs"
+              />
+            </div>
+            <div class="field">
+              <label>{{ t('settings.captureGsr.monitorTarget') }}</label>
+              <SelectField
+                v-model="settings.gsrMonitorTarget"
+                :options="monitorOptions"
+                @update:modelValue="restartGsr"
+              />
+              <span v-if="isWayland" class="hint" style="color:var(--warn,#f59e0b);margin-top:4px;font-size:11px">
+                {{ t('settings.captureGsr.waylandHint') }}
+              </span>
             </div>
           </div>
-          <div v-else class="hint" style="margin-top:8px">Enable GPU Screen Recorder in <strong>Extensions</strong> to configure it here.</div>
+          <div v-if="settings.gsrEnabled" class="gsr-toggle-row">
+            <span class="gsr-label">{{ t('settings.captureGsr.autoStart') }}
+              <InfoIcon :title="t('settings.captureGsr.autoStartTooltip')" />
+            </span>
+            <button class="toggle-btn" :class="{ on: settings.gsrAutoStart }"
+                    @click="settings.gsrAutoStart = !settings.gsrAutoStart">
+              {{ settings.gsrAutoStart ? 'On' : 'Off' }}
+            </button>
+          </div>
+          <div v-else class="hint" style="margin-top:8px">{{ t('settings.captureGsr.extensionsHint') }}</div>
         </div>
 
         <!-- OBS-style Audio Capture Devices -->
@@ -630,28 +841,27 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 
       <!-- ════════════════════ TIMELINE TRACKS ════════════════════ -->
       <section v-if="active === 'trackManagement'">
-        <h2 class="sec-title">Timeline Tracks</h2>
+        <h2 class="sec-title">{{ t('settings.timelineTracks.title') }}</h2>
 
         <div class="card">
-          <div class="card-head">Track Icons</div>
-          <label class="ext-toggle-row" style="border-bottom:none;padding-bottom:0">
-            <div class="ext-toggle-info">
-              <span class="ext-name">Show icons in editor track headers</span>
-              <span class="ext-desc">Display a small icon next to each track label in the editor timeline</span>
-            </div>
-            <div class="ext-switch-wrap">
-              <label class="switch">
-                <input type="checkbox" v-model="settings.showTrackIcons" />
-                <span class="switch-track"></span>
-              </label>
-            </div>
-          </label>
-        </div>
-
-        <div class="card">
-          <div class="card-head">Track List <InfoIcon title="Customize the name, color, and icon for each editor timeline track. Changes apply live — open the editor to see them instantly." /></div>
+          <div class="card-head">{{ t('settings.timelineTracks.trackList') }} <InfoIcon :title="t('settings.timelineTracks.trackListHint')" /></div>
           <div class="tdef-list">
             <div v-for="(def, idx) in settings.trackDefs" :key="def.id" class="tdef-row">
+              <button
+                class="track-vis-btn"
+                :class="{ active: def.visible }"
+                :title="t('settings.timelineTracks.visibilityTooltip')"
+                @click="def.visible = !def.visible"
+              >
+                <svg v-if="def.visible" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/>
+                  <line x1="1" y1="1" x2="23" y2="23"/>
+                </svg>
+              </button>
               <div class="tdef-swatch" :style="{ background: def.color }" @click="openColorPicker(idx)" title="Pick color"></div>
               <input type="color" :ref="(el) => setColorRef(el, idx)" :value="def.color" class="tdef-color-input tdef-color-hidden"
                 @input="def.color = ($event.target as HTMLInputElement).value" />
@@ -669,17 +879,17 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
               </button>
             </div>
           </div>
-          <button class="btn btn-ghost add-row" @click="addTrackDef">+ Add Audio Track</button>
+          <button class="btn btn-ghost add-row" @click="addTrackDef">{{ t('settings.timelineTracks.addAudioTrack') }}</button>
         </div>
 
         <!-- Live Preview -->
         <div class="card">
-          <div class="card-head">Live Preview <InfoIcon title="Exactly how the editor timeline headers will look. Updates as you type." /></div>
+          <div class="card-head">{{ t('settings.timelineTracks.livePreview') }} <InfoIcon :title="t('settings.timelineTracks.livePreviewHint')" /></div>
           <div class="tl-preview">
             <div v-for="def in settings.trackDefs" :key="def.id" class="tl-preview-row" :style="{ '--pv': def.color }">
               <div class="tl-pv-accent"></div>
               <span class="tl-pv-id">{{ def.id }}</span>
-              <svg v-if="settings.showTrackIcons" class="tl-pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg v-if="def.visible" class="tl-pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path v-if="def.icon==='video'"   d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M3 6h10a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2z"/>
                 <path v-else-if="def.icon==='game'"    d="M6 11h4m-2-2v4m7-1h.01M18 11h.01M2 6a2 2 0 012-2h16a2 2 0 012 2v10a4 4 0 01-4 4H6a4 4 0 01-4-4V6z"/>
                 <path v-else-if="def.icon==='mic'"     d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3zM19 10v2a7 7 0 01-14 0v-2M12 19v3M8 23h8"/>
@@ -700,27 +910,45 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
       <section v-if="active === 'storage'">
         <h2 class="sec-title">{{ t('settings.storage.title') }}</h2>
 
-        <!-- Clip directories -->
+        <!-- Media directories -->
         <div class="card">
           <div class="card-head">
-            Clip Directories <span class="badge-count">{{ (settings.clip_directories || []).length }}</span>
-            <InfoIcon title="OpenGG watches these folders for new clips. Files in any directory appear instantly." />
+            {{ t('settings.storage.title') }}
+            <InfoIcon :title="t('settings.storage.mediaDirsHint')" />
           </div>
-          <div v-for="(src, i) in (settings.clip_directories || [])" :key="i" class="source-row">
-            <span class="source-path">{{ src }}</span>
-            <button class="btn-icon-sm" @click="removeClipSource(i)" title="Remove">✕</button>
-          </div>
-          <div v-if="!(settings.clip_directories || []).length" class="hint">No directories configured. Add one below.</div>
-          <button class="btn" style="margin-top:10px" @click="addClipSource">+ Add Directory</button>
-        </div>
 
-        <!-- Screenshot location -->
-        <div class="card">
-          <div class="card-head">Screenshot Save Location <InfoIcon title="Where screenshots taken from the Editor are saved." /></div>
-          <div class="folder-row">
-            <input type="text" :value="settings.screenshotDir || '~/Pictures (default)'" readonly class="folder-input" />
-            <button class="btn" @click="pickScreenshotDir">Change</button>
-            <button v-if="settings.screenshotDir" class="btn" @click="settings.screenshotDir = ''">Reset</button>
+          <!-- Clip Directories list -->
+          <div class="media-dir-row">
+            <div class="media-dir-label">{{ t('settings.storage.clipDirectories') }}</div>
+            <div class="media-dirs-list">
+              <div v-for="(src, i) in (settings.clip_directories || [])" :key="i" class="source-row">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="dir-icon"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <span class="source-path">{{ src || t('settings.storage.defaultClipPath') }}</span>
+                <button class="btn-icon-sm" @click="removeClipSource(i)" :title="t('settings.storage.removeDir')">✕</button>
+              </div>
+              <button class="btn btn-sm folder-add-btn" @click="addClipSource">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                {{ t('settings.storage.addClipPath') }}
+              </button>
+            </div>
+          </div>
+
+          <div class="media-dir-divider"></div>
+
+          <!-- Screenshot Directories list -->
+          <div class="media-dir-row">
+            <div class="media-dir-label">{{ t('settings.storage.screenshotDirectories') }}</div>
+            <div class="media-dirs-list">
+              <div v-for="(dir, i) in (settings.screenshotDirs || [])" :key="i" class="source-row">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="dir-icon"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <span class="source-path">{{ dir }}</span>
+                <button class="btn-icon-sm" @click="removeScreenshotDir(i)" :title="t('settings.storage.removeDir')">✕</button>
+              </div>
+              <button class="btn btn-sm folder-add-btn" @click="addScreenshotDir">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                {{ t('settings.storage.addScreenshotPath') }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -774,11 +1002,11 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
         <!-- GPU Screen Recorder -->
         <div class="card">
           <div class="card-head gsr-head">
-            <span>GPU Screen Recorder</span>
+            <span>{{ t('settings.captureGsr.title') }}</span>
             <span class="badge-beta">Beta</span>
-            <InfoIcon title="Uses gpu-screen-recorder for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately." />
+            <InfoIcon :title="t('settings.captureGsr.hint')" />
           </div>
-          <button class="gsr-install-toggle" @click="gsrInstallOpen = !gsrInstallOpen">{{ gsrInstallOpen ? '▼ Hide install guide' : '▶ How to install?' }}</button>
+          <button class="gsr-install-toggle" @click="gsrInstallOpen = !gsrInstallOpen">{{ gsrInstallOpen ? t('settings.captureGsr.installToggleHide') : t('settings.captureGsr.installToggleShow') }}</button>
           <div v-if="gsrInstallOpen" class="gsr-install-guide">
             <div class="install-section">
               <span class="install-distro">Ubuntu / Debian</span>
@@ -801,62 +1029,200 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
           </div>
         </div>
 
-        <!-- Editor Features -->
+        <!-- ─── Unified Extensions List ─── -->
         <div class="card">
-          <div class="card-head">Editor Features</div>
-          <label class="ext-toggle-row">
-            <div class="ext-toggle-info">
-              <span class="ext-name">{{ t('settings.extensions.overlays') }}</span>
-              <span class="ext-desc">{{ t('settings.extensions.overlaysDesc') }}</span>
+          <div class="card-head ext-section-head">
+            <span>{{ t('settings.extensions.sectionTitle') }}</span>
+            <div class="ext-head-actions">
+              <!-- Refresh button — manually re-triggers scan_extensions -->
+              <button class="ext-icon-btn" :title="t('settings.extensions.refresh')" @click="refreshExtensions" :disabled="extensionScanLoading">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="23 4 23 10 17 10"/>
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                </svg>
+              </button>
+              <!-- Open folder button -->
+              <button class="ext-icon-btn" :title="t('settings.extensions.openFolder')" @click="openExtensionsFolder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+                </svg>
+              </button>
             </div>
-            <div class="ext-switch-wrap">
-              <label class="switch">
-                <input type="checkbox" v-model="persist.state.extensions.overlays" />
-                <span class="switch-track"></span>
-              </label>
-            </div>
-          </label>
+          </div>
 
-          <label class="ext-toggle-row">
-            <div class="ext-toggle-info">
-              <span class="ext-name">{{ t('settings.extensions.tiktokExport') }}</span>
-              <span class="ext-desc">{{ t('settings.extensions.tiktokExportDesc') }}</span>
-            </div>
-            <div class="ext-switch-wrap">
-              <label class="switch">
-                <input type="checkbox" v-model="persist.state.extensions.tiktokExport" />
+          <div v-if="extensionScanLoading" class="hint" style="padding:8px 0">{{ t('settings.extensions.scanning') }}</div>
+          <div v-else-if="!scannedExtensions.length" class="hint" style="padding:8px 0">{{ t('settings.extensions.noExtensions') }}</div>
+          <div v-else>
+            <div v-for="p in scannedExtensions" :key="p.id" class="ext-card-row">
+              <!-- Icon: from extension folder or fallback SVG -->
+              <div class="ext-card-icon-wrap" :style="p._color ? `--ext-clr: ${p._color}` : ''">
+                <img v-if="getExtensionIconUrl(p)"
+                     :src="getExtensionIconUrl(p)!"
+                     class="plugin-icon"
+                     alt=""
+                     @error="($event.target as HTMLImageElement).style.display='none'" />
+                <!-- Generic plugin icon fallback -->
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/>
+                  <line x1="16" y1="8" x2="2" y2="22"/>
+                  <line x1="17.5" y1="15" x2="9" y2="15"/>
+                </svg>
+              </div>
+              <div class="ext-card-info">
+                <div class="ext-card-title-row">
+                  <span class="ext-name">{{ p.name }}</span>
+                  <span class="plugin-ver">v{{ p.version }}</span>
+                  <!-- Gear button only if extension declares hasSettings: true in manifest -->
+                  <button v-if="canConfigure(p)" class="ext-gear-btn" :title="t('settings.extensions.title')" @click.stop>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="3"/>
+                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                  </button>
+                </div>
+                <p class="ext-desc">{{ p.description }}</p>
+              </div>
+              <!-- Enable/disable toggle keyed by extension id -->
+              <label class="switch ext-card-switch">
+                <input type="checkbox" :checked="isExtEnabled(p)" @change="setExtEnabled(p, ($event.target as HTMLInputElement).checked)" />
                 <span class="switch-track"></span>
               </label>
             </div>
-          </label>
+          </div>
         </div>
 
         <p class="hint ext-restart-hint">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;vertical-align:middle;margin-right:4px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           {{ t('settings.extensions.restartHint') }}
         </p>
+      </section>
 
-        <!-- ─── Installed Plugins ─── -->
-        <div class="card">
-          <div class="card-head" style="display:flex;align-items:center;justify-content:space-between">
-            <span>Installed Plugins</span>
-            <button class="btn btn-sm" @click="openExtensionsFolder">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;height:11px"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-              Open Folder
+      <!-- ════════════════════ STORE ════════════════════ -->
+      <section v-if="active === 'store'">
+        <h2 class="sec-title">{{ t('settings.store.title') }}</h2>
+        <div class="card store-coming-soon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="store-icon">
+            <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <path d="M16 10a4 4 0 0 1-8 0"/>
+          </svg>
+          <p class="store-coming-soon-title">{{ t('settings.store.comingSoon') }}</p>
+          <p class="hint">{{ t('settings.store.comingSoonDesc') }}</p>
+        </div>
+      </section>
+
+      <!-- ════════════════════ ABOUT ════════════════════ -->
+      <section v-if="active === 'about'">
+        <h2 class="sec-title">{{ t('settings.sections.about') }}</h2>
+
+        <!-- Hero card -->
+        <div class="hero-card">
+          <svg class="logo-svg" viewBox="0 0 512 512" width="90" height="90" style="fill-rule:evenodd;clip-rule:evenodd;">
+            <g transform="matrix(2.778643,0,0,2.778643,-447.380743,-285.942888)">
+              <path d="M291.671,187.47L332.636,187.47L340.205,195.039L280.739,254.504L259.3,232.814L271.068,221.046L280.97,230.948L307.949,203.97L291.671,203.97L291.671,187.47ZM285.002,195.039L225.537,254.504L166.072,195.039L225.537,135.573L247.24,157.276L235.885,168.632L226.383,159.129L190.473,195.039L226.383,230.948L241.783,215.548L221.274,195.039L280.739,135.573L311.599,166.433L300.04,177.991L280.97,159.129L265.032,175.068L285.002,195.039ZM253.289,211.821L270.072,195.039L253.289,178.256L236.507,195.039L253.289,211.821Z" fill="var(--accent)"/>
+            </g>
+          </svg>
+          <h1 class="about-app-name">OpenGG</h1>
+          <p class="version-badge">v{{ appVersion }}</p>
+          <p class="about-tagline">{{ t('settings.aboutPage.tagline') }}</p>
+          <p class="about-desc">{{ t('settings.aboutPage.description') }}</p>
+        </div>
+
+        <!-- Project Goals -->
+        <div class="card goals-card">
+          <div class="card-head">{{ t('settings.aboutPage.projectGoals') }}</div>
+          <ul class="goals-list">
+            <li>{{ t('settings.aboutPage.goal_1') }}</li>
+            <li>{{ t('settings.aboutPage.goal_2') }}</li>
+            <li>{{ t('settings.aboutPage.goal_3') }}</li>
+          </ul>
+        </div>
+
+        <!-- Connect With Us -->
+        <div class="card connect-card">
+          <div class="card-head">{{ t('settings.aboutPage.connectWithUs') }}</div>
+          <div class="social-links">
+            <button class="social-btn" @click="openExternal('https://github.com/UPdullah895/opengg')">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+              {{ t('settings.aboutPage.github') }}
+            </button>
+            <button class="social-btn" @click="openExternal('#')">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.617-1.25.077.077 0 00-.079-.037A19.736 19.736 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028 14.09 14.09 0 001.226-1.994.076.076 0 00-.041-.106 13.107 13.107 0 01-1.872-.892.077.077 0 01-.008-.128 10.2 10.2 0 00.372-.292.074.074 0 01.077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 01.078.01c.12.098.246.198.373.292a.077.077 0 01-.006.127 12.299 12.299 0 01-1.873.892.077.077 0 00-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.839 19.839 0 006.002-3.03.077.077 0 00.032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
+              {{ t('settings.aboutPage.discord') }}
+            </button>
+            <button class="social-btn" @click="openExternal('#')">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+              {{ t('settings.aboutPage.website') }}
             </button>
           </div>
-          <div v-if="pluginScanLoading" class="hint" style="padding:8px 0">Scanning…</div>
-          <div v-else-if="!scannedPlugins.length" class="hint" style="padding:8px 0">
-            No plugins installed. Drop a plugin folder with a <code>manifest.json</code> into the plugins directory.
-          </div>
-          <div v-else>
-            <div v-for="p in scannedPlugins" :key="p.id" class="plugin-row">
-              <div class="plugin-info">
-                <span class="plugin-name">{{ p.name }}</span>
-                <span class="plugin-ver">v{{ p.version }}</span>
+        </div>
+
+        <p class="about-contributors">{{ t('settings.aboutPage.contributors') }}</p>
+      </section>
+
+      <!-- ════════════════════ NOTIFICATIONS ════════════════════ -->
+      <section v-if="active === 'notifications'">
+        <h2 class="sec-title">{{ t('settings.notificationsPage.title') }}</h2>
+
+        <!-- Notification Style card -->
+        <div class="card">
+          <div class="card-head">{{ t('settings.notificationsPage.style') }} <InfoIcon :title="t('settings.notificationsPage.description')" /></div>
+
+          <!-- Style selection grid -->
+          <div class="notif-style-grid">
+            <div class="notif-option" :class="{ active: settings.notificationStyle === 'auto' }" @click="settings.notificationStyle = 'auto'">
+              <div class="notif-option-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
               </div>
-              <p class="plugin-desc">{{ p.description }}</p>
+              <span class="notif-option-label">{{ t('settings.notificationsPage.styleAuto') }}</span>
             </div>
+            <div class="notif-option" :class="{ active: settings.notificationStyle === 'gsr-notify' }" @click="settings.notificationStyle = 'gsr-notify'">
+              <div class="notif-option-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              </div>
+              <span class="notif-option-label">{{ t('settings.notificationsPage.styleGsrNotify') }}</span>
+            </div>
+            <div class="notif-option" :class="{ active: settings.notificationStyle === 'x11-overlay' }" @click="settings.notificationStyle = 'x11-overlay'">
+              <div class="notif-option-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              </div>
+              <span class="notif-option-label">{{ t('settings.notificationsPage.styleX11Overlay') }}</span>
+            </div>
+            <div class="notif-option" :class="{ active: settings.notificationStyle === 'system' }" @click="settings.notificationStyle = 'system'">
+              <div class="notif-option-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+              </div>
+              <span class="notif-option-label">{{ t('settings.notificationsPage.styleSystem') }}</span>
+            </div>
+            <div class="notif-option" :class="{ active: settings.notificationStyle === 'disabled' }" @click="settings.notificationStyle = 'disabled'">
+              <div class="notif-option-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+              </div>
+              <span class="notif-option-label">{{ t('settings.notificationsPage.styleDisabled') }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Position + Duration card — hidden when disabled -->
+        <div class="card" v-if="settings.notificationStyle !== 'disabled'">
+          <!-- Position -->
+          <div class="field">
+            <label>{{ t('settings.notificationsPage.position') }} <InfoIcon :title="t('settings.notificationsPage.positionDesc')" /></label>
+            <SelectField v-model="settings.notificationPosition" :options="notificationPositionOptions" />
+          </div>
+
+          <!-- Duration — only for X11 Overlay -->
+          <div class="field notif-duration-field" v-if="settings.notificationStyle === 'x11-overlay'">
+            <label>{{ t('settings.notificationsPage.duration') }}: {{ settings.notificationDuration }}s <InfoIcon :title="t('settings.notificationsPage.durationDesc')" /></label>
+            <input
+              type="range"
+              class="notif-duration-slider"
+              :value="settings.notificationDuration"
+              min="1"
+              max="10"
+              step="1"
+              @input="settings.notificationDuration = Number(($event.target as HTMLInputElement).value)"
+            />
           </div>
         </div>
       </section>
@@ -883,6 +1249,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
   text-transform: uppercase; color: var(--text-muted);
   padding: 12px 16px 5px;
 }
+.nav-group-label:empty { display: none; padding: 4px 16px; }
 .nav-item {
   display: flex; align-items: center; gap: 6px;
   width: 100%; padding: 8px 16px;
@@ -898,7 +1265,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 }
 /* ★ Epic 5: Beta badge */
 .nav-badge {
-  margin-left: auto;
+  margin-inline-start: auto;
   background: var(--accent); color: #fff;
   font-size: 9px; font-weight: 700; letter-spacing: .4px;
   padding: 1px 5px; border-radius: 4px; line-height: 1.5;
@@ -924,6 +1291,12 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
   font-size: 13px; font-weight: 700; margin-bottom: 14px;
   padding-bottom: 10px; border-bottom: 1px solid var(--border);
 }
+.card-head-row {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; font-weight: 700; margin-bottom: 14px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.card-head-label { font-size: 13px; font-weight: 700; color: var(--text); }
 .hint { font-size: 12px; color: var(--text-sec); margin-bottom: 14px; line-height: 1.5; }
 
 /* ── Row setting (label + toggle) ── */
@@ -948,7 +1321,15 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
 .gsr-grid { margin-top: 14px; }
+.gsr-custom-secs {
+  margin-top: 6px; width: 100%; padding: 5px 8px;
+  border-radius: 5px; border: 1px solid var(--border);
+  background: var(--bg-input); color: var(--text);
+  font-size: 12px; outline: none;
+}
+.gsr-custom-secs:focus { border-color: var(--accent); }
 .gsr-head { display: flex; align-items: center; gap: 8px; }
+.gsr-est { margin-inline-start: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .gsr-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; }
 .gsr-label { font-size: 13px; color: var(--text-sec); }
 .gsr-install-toggle { display: block; margin: 6px 0; padding: 0; border: none; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; text-align: left; font-weight: 600; }
@@ -1009,6 +1390,15 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 .toggle-row input { accent-color: var(--accent); width: 15px; height: 15px; flex-shrink: 0; }
 .tname { font-weight: 600; min-width: 140px; }
 .tdesc { color: var(--text-sec); flex: 1; font-size: 12px; }
+/* ── Daemon toggle rows (On/Off switch style) ── */
+.daemon-toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.daemon-toggle-row:last-child { border-bottom: none; padding-bottom: 0; }
+.daemon-toggle-info { display: flex; flex-direction: column; gap: 3px; flex: 1; margin-right: 16px; }
+.daemon-toggle-info .tname { font-weight: 600; font-size: 13px; color: var(--text); min-width: unset; }
+.daemon-toggle-info .tdesc { color: var(--text-sec); font-size: 12px; line-height: 1.4; }
 .mode-toggle-row {
   display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px;
   background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
@@ -1148,6 +1538,23 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
   border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--text); outline: none; font-size: 13px; color-scheme: dark;
 }
+.folder-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-input); color: var(--text-sec); font-size: 13px; cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+  text-align: left; flex: 1; font-family: inherit;
+}
+.folder-btn:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--text); }
+.folder-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; -webkit-user-select: text; }
+.folder-chevron { width: 14px; height: 14px; flex-shrink: 0; opacity: .5; }
+
+/* ── Media Directories card ── */
+.media-dir-row { display: flex; flex-direction: column; gap: 6px; }
+.media-dir-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); }
+.media-dir-extra { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.media-dir-divider { height: 1px; background: var(--border); margin: 10px 0; }
+.btn-sm { font-size: 11px; padding: 4px 10px; }
 
 /* ── Storage stats ── */
 .storage-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -1202,6 +1609,52 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
   left: calc(100% - 17px); background: var(--accent);
 }
 
+/* ── Extension card rows (professional card layout) ── */
+.ext-card-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.ext-card-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+.ext-card-icon-wrap {
+  flex-shrink: 0;
+  width: 42px; height: 42px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ext-clr, var(--accent)) 18%, var(--bg-deep));
+  border: 1px solid color-mix(in srgb, var(--ext-clr, var(--accent)) 35%, transparent);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ext-clr, var(--accent));
+}
+.ext-card-icon-wrap svg { width: 20px; height: 20px; }
+.plugin-icon { width: 24px; height: 24px; object-fit: contain; }
+
+.ext-card-info {
+  flex: 1;
+  display: flex; flex-direction: column; gap: 3px;
+  min-width: 0;
+}
+
+.ext-card-title-row {
+  display: flex; align-items: center; gap: 6px;
+}
+
+.ext-gear-btn {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent;
+  color: var(--text-muted); border-radius: 4px;
+  cursor: pointer; transition: all .15s;
+  padding: 0;
+}
+.ext-gear-btn svg { width: 13px; height: 13px; }
+.ext-gear-btn:hover { background: var(--bg-hover); color: var(--text); }
+
+.ext-card-switch { flex-shrink: 0; }
+
+.plugin-ver { font-size: 10px; color: var(--text-muted); margin-left: 2px; }
+
 /* ── Plugin list ── */
 .plugin-row { padding: 10px 0; border-bottom: 1px solid var(--border); }
 .plugin-row:last-child { border-bottom: none; padding-bottom: 0; }
@@ -1215,7 +1668,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 .tdef-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .tdef-row {
   display: grid;
-  grid-template-columns: 20px 1fr 32px 26px;
+  grid-template-columns: 28px 20px 1fr auto 28px;
   align-items: center;
   gap: 8px;
 }
@@ -1273,7 +1726,7 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 .danger-ok  { color: var(--success); background: color-mix(in srgb, var(--success) 8%, transparent); border-color: color-mix(in srgb, var(--success) 25%, transparent); }
 
 /* ── Theme icon buttons ── */
-.theme-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.theme-actions { display: flex; align-items: center; gap: 4px; margin-inline-start: auto; }
 .theme-icon-btn {
   width: 28px; height: 28px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--bg-deep);
@@ -1293,4 +1746,113 @@ watch(active, v => { if (v === 'extensions') scanPlugins() })
 
 /* ── Shortcut header label ── */
 .shortcut-hdr-label { font-size: 12px; color: var(--text-sec); display: flex; align-items: center; }
+
+/* ── About page ── */
+.hero-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 32px 28px;
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px;
+}
+.logo-svg { margin-bottom: 4px; }
+.about-app-name { font-size: 28px; font-weight: 800; color: var(--text); letter-spacing: -0.5px; margin: 0; }
+.version-badge {
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  padding: 3px 12px; border-radius: 20px; margin: 0;
+}
+.about-tagline { font-size: 14px; font-weight: 600; color: var(--text-sec); margin: 4px 0 0; }
+.about-desc { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin: 0; max-width: 420px; }
+.goals-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; }
+.goals-list { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 12px; }
+.goals-list li { font-size: 13px; color: var(--text-sec); line-height: 1.5; padding-left: 18px; position: relative; }
+.goals-list li::before { content: '▸'; position: absolute; left: 0; color: var(--accent); font-size: 12px; top: 2px; }
+.connect-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; }
+.social-links { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.social-btn {
+  display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text-sec); font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; text-align: left;
+}
+.social-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent); }
+.social-btn svg { flex-shrink: 0; opacity: .8; }
+.social-btn:hover svg { opacity: 1; color: var(--accent); }
+.about-contributors { font-size: 12px; color: var(--text-muted); text-align: center; margin: 0; padding: 8px 0 16px; }
+
+/* ── Notifications page ── */
+.section-desc { font-size: 13px; color: var(--text-sec); margin: -8px 0 16px; line-height: 1.5; }
+.notif-duration-field { margin-top: 16px; }
+.notif-style-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 4px; }
+.notif-option {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; transition: all .15s;
+}
+.notif-option:hover { background: var(--bg-hover); border-color: var(--accent); }
+.notif-option.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.notif-option-icon { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: var(--text-sec); flex-shrink: 0; }
+.notif-option.active .notif-option-icon { color: var(--accent); }
+.notif-option-icon svg { width: 18px; height: 18px; }
+.notif-option-label { font-size: 12px; font-weight: 600; color: var(--text-sec); }
+.notif-option.active .notif-option-label { color: var(--accent); }
+.notif-duration-slider {
+  width: 100%; margin-top: 8px;
+  -webkit-appearance: none; appearance: none;
+  height: 4px; background: var(--border); border-radius: 2px; outline: none;
+}
+.notif-duration-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--bg-card);
+}
+.notif-duration-slider::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--bg-card);
+}
+
+/* ── Track visibility button ── */
+.track-vis-btn {
+  width: 26px; height: 26px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--text-muted); transition: color .12s; border-radius: 4px;
+}
+.track-vis-btn:hover { color: var(--text); background: var(--bg-hover); }
+.track-vis-btn svg { width: 14px; height: 14px; }
+.track-vis-btn.active { color: var(--accent); }
+
+/* ── Screenshot dirs list ── */
+.media-dirs-list { display: flex; flex-direction: column; gap: 6px; }
+.dir-icon { width: 16px; height: 16px; color: var(--text-muted); flex-shrink: 0; }
+.folder-add-btn { align-self: flex-start; margin-top: 4px; }
+
+/* ── Extensions unified header ── */
+.ext-section-head {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.ext-head-actions {
+  display: flex; align-items: center; gap: 4px; margin-inline-start: auto;
+}
+.ext-icon-btn {
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-deep);
+  color: var(--text-muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .15s; flex-shrink: 0;
+}
+.ext-icon-btn svg { width: 14px; height: 14px; }
+.ext-icon-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent); }
+.ext-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── Store placeholder ── */
+.store-coming-soon {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; padding: 48px 28px; text-align: center;
+}
+.store-icon {
+  width: 56px; height: 56px; opacity: .3; color: var(--text-sec);
+}
+.store-coming-soon-title {
+  font-size: 18px; font-weight: 700; color: var(--text); margin: 0;
+}
 </style>

@@ -1,0 +1,10 @@
+{
+  "id":          "overlays-system",
+  "name":        "Overlays System",
+  "description": "Text and image overlays on the clip editor timeline. Renders O1 track in the advanced editor.",
+  "version":     "0.1.1",
+  "author":      "OpenGG Team",
+  "icon":        "icon.svg",
+  "main":        "index.iife.js",
+  "hasSettings": false
+}

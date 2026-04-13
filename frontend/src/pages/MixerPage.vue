@@ -14,17 +14,31 @@
 
 import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { useAudioStore } from '../stores/audio'
 import { usePersistenceStore } from '../stores/persistence'
 import ChannelStrip from '../components/ChannelStrip.vue'
 import DropZone from '../components/DropZone.vue'
 import ChatMix from '../components/ChatMix.vue'
+import GraphicEQ from '../components/GraphicEQ.vue'
+import DspControls from '../components/DspControls.vue'
 
 const audio  = useAudioStore()
 const persist = usePersistenceStore()
 
 // ★ Epic 2: Overdrive toggle — expands all faders from 100% max to 150%
 const overdriveEnabled = ref(false)
+
+type Tab = 'mixer' | 'game' | 'chat' | 'media' | 'aux' | 'mic'
+const activeTab = ref<Tab>('mixer')
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'mixer', label: 'Mixer' },
+  { id: 'game',  label: 'Game'  },
+  { id: 'chat',  label: 'Chat'  },
+  { id: 'media', label: 'Media' },
+  { id: 'aux',   label: 'Aux'   },
+  { id: 'mic',   label: 'Mic'   },
+]
 
 // ★ Virtual Audio Engine state
 const audioReady    = ref(false)
@@ -43,11 +57,24 @@ const COLORS: Record<string, string> = {
 
 function onChatMix(g: number, c: number) { audio.setVolume('Game', g); audio.setVolume('Chat', c) }
 
-function devDesc(ch: string, t: 'sink' | 'source') {
+function devDesc(ch: string, type: 'sink' | 'source') {
   const n = audio.channelDevices[ch]
-  if (n) { const d = audio.devices.find(d => d.name === n); return d?.description || n }
-  return audio.devices.find(d => d.device_type === t && d.is_default)?.description || 'Default'
+  if (n) {
+    const d = audio.devices.find(d => d.name === n)
+    const desc = d?.description || n
+    if (ch === 'Mic' && (n.toLowerCase().includes('opengg') || desc.toLowerCase().includes('opengg'))) {
+      return 'mic OpenGG (Virtual)'
+    }
+    return desc
+  }
+  const defDev = audio.devices.find(d => d.device_type === type && d.is_default)
+  if (ch === 'Mic' && defDev && (defDev.name.toLowerCase().includes('opengg') || (defDev.description || '').toLowerCase().includes('opengg'))) {
+    return 'mic OpenGG (Virtual)'
+  }
+  return defDev?.description || 'Default'
 }
+
+let unlistenRefresh: (() => void) | null = null
 
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
@@ -55,8 +82,15 @@ onMounted(async () => {
   checkingAudio.value = false
   // ★ FIX 4: Poll every 2s (down from 3s) for tighter PipeWire sync
   if (audioReady.value) audio.startPolling(2000)
+
+  // Push-based refresh: backend emits 'audio-mixer-refresh' after every successful
+  // route_app call so the UI updates immediately instead of waiting for the next poll.
+  unlistenRefresh = await listen('audio-mixer-refresh', () => { audio.fetchApps() })
 })
-onUnmounted(() => audio.stopPolling())
+onUnmounted(() => {
+  audio.stopPolling()
+  unlistenRefresh?.()
+})
 </script>
 
 <template>
@@ -64,6 +98,15 @@ onUnmounted(() => audio.stopPolling())
     <div class="mixer-hdr">
       <div><h1 class="t">Audio Mixer</h1><span class="sub">OpenGG Virtual Audio Router</span></div>
       <div class="hdr-actions">
+        <!-- Tab bar -->
+        <nav class="tab-bar">
+          <button
+            v-for="tab in TABS" :key="tab.id"
+            class="tab-btn"
+            :class="{ 'tab-btn--active': activeTab === tab.id }"
+            @click="activeTab = tab.id"
+          >{{ tab.label }}</button>
+        </nav>
         <!-- ★ Epic 2: Overdrive toggle — unlocks faders beyond 100% -->
         <button
           class="rfr"
@@ -75,9 +118,6 @@ onUnmounted(() => audio.stopPolling())
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
           </svg>
-        </button>
-        <button class="rfr" title="Refresh" @click="audio.fetchChannels(); audio.fetchApps()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
         </button>
       </div>
     </div>
@@ -97,14 +137,26 @@ onUnmounted(() => audio.stopPolling())
       </button>
     </div>
 
-    <!--
-      ★ FIX 3: strips-row now uses min-height:55vh so faders are tall.
-      The flex:1 lets it grow if the window is maximized.
-    -->
-    <div v-else class="strips-row">
+    <template v-else>
+      <!-- DSP / EQ tab panels -->
+      <div v-if="activeTab !== 'mixer'" class="tab-panel">
+        <GraphicEQ   v-if="activeTab === 'game'"  channel="Game"  :color="COLORS.Game"  />
+        <GraphicEQ   v-if="activeTab === 'media'" channel="Media" :color="COLORS.Media" />
+        <GraphicEQ   v-if="activeTab === 'aux'"   channel="Aux"   :color="COLORS.Aux"   />
+        <template v-if="activeTab === 'chat'">
+          <GraphicEQ   channel="Chat" :color="COLORS.Chat" />
+          <DspControls channel="Chat" :color="COLORS.Chat" />
+        </template>
+        <DspControls v-if="activeTab === 'mic'"   channel="Mic"   :color="COLORS.Mic"   />
+      </div>
+
+      <!--
+        ★ FIX 3: strips-row now uses min-height:55vh so faders are tall.
+        The flex:1 lets it grow if the window is maximized.
+      -->
+      <div v-else class="strips-row">
       <!-- MASTER -->
       <div class="col">
-        <div class="col-lbl col-lbl--master">MASTER</div>
         <ChannelStrip :channel="audio.masterChannel" :color="COLORS.Master" type="master" :vuLevel="audio.vuLevels['Master'] ?? 0"
           :overdrive="overdriveEnabled"
           :devices="audio.outputDevices" :selectedDevice="devDesc('Master','sink')"
@@ -117,7 +169,6 @@ onUnmounted(() => audio.stopPolling())
 
       <!-- OUTPUTS -->
       <div class="col" v-for="ch in ['Game','Chat','Media','Aux']" :key="ch">
-        <div class="col-lbl">{{ ch.toUpperCase() }}</div>
         <ChannelStrip
           :channel="audio.channelMap[ch] || { name: ch, volume: 100, muted: false, node_id: 0, apps: [] }"
           :color="COLORS[ch]" type="output" :vuLevel="audio.vuLevels[ch] ?? 0"
@@ -138,9 +189,8 @@ onUnmounted(() => audio.stopPolling())
 
       <!-- INPUT: Mic -->
       <div class="col">
-        <div class="col-lbl col-lbl--input">INPUT</div>
         <ChannelStrip
-          :channel="audio.micChannel"
+          :channel="{ ...audio.micChannel, name: 'Mic' }"
           :color="COLORS.Mic" type="input" :vuLevel="audio.vuLevels['Mic'] ?? 0"
           :overdrive="overdriveEnabled"
           :devices="audio.inputDevices" :selectedDevice="devDesc('Mic','source')"
@@ -150,7 +200,8 @@ onUnmounted(() => audio.stopPolling())
         </ChannelStrip>
         <DropZone channel="Mic" :color="COLORS.Mic" :apps="audio.micChannel.apps" />
       </div>
-    </div>
+      </div><!-- end strips-row -->
+    </template><!-- end v-else audioReady -->
 
     <ChatMix v-if="audioReady" :gameVolume="audio.channelMap['Game']?.volume ?? 100"
       :chatVolume="audio.channelMap['Chat']?.volume ?? 100" @update:balance="onChatMix" />
@@ -159,10 +210,23 @@ onUnmounted(() => audio.stopPolling())
 
 <style scoped>
 .mixer     { display: flex; flex-direction: column; gap: 14px; height: 100%; }
-.mixer-hdr { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+.mixer-hdr { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; flex-wrap: wrap; gap: 8px; }
 .t   { font-size: 20px; font-weight: 800; letter-spacing: -.3px; line-height: 1.1; }
 .sub { font-size: 11px; color: var(--text-muted); }
-.hdr-actions { display: flex; gap: 6px; align-items: center; }
+.hdr-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+/* Tab navigation */
+.tab-bar { display: flex; gap: 2px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+.tab-btn {
+  padding: 5px 12px; border-radius: 6px; border: none; background: transparent;
+  color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: all .15s; white-space: nowrap;
+}
+.tab-btn:hover { color: var(--text); background: var(--bg-hover); }
+.tab-btn--active { background: var(--bg-card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+
+/* DSP / EQ tab panel */
+.tab-panel { flex: 1; overflow-y: auto; padding: 4px 2px; display: flex; flex-direction: column; gap: 16px; }
 .rfr {
   width: 34px; height: 34px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--bg-card);
@@ -201,11 +265,8 @@ onUnmounted(() => audio.stopPolling())
 }
 /* ★ Epic 1: Strict flex rules — strip grows to fill, dropzone is fixed-height scrollable */
 .col :deep(.strip)    { width: 100% !important; flex: 1 1 0% !important; min-height: 0 !important; height: auto !important; }
-.col :deep(.dropzone) { width: 100% !important; flex: 0 0 auto !important; max-height: 6rem !important; overflow-y: auto !important; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.col :deep(.dropzone) { width: 100% !important; flex: 0 0 70px !important; height: 70px !important; overflow-y: auto !important; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
-.col-lbl { font-size: 9px; font-weight: 800; letter-spacing: 2px; color: var(--text-muted); text-align: center; min-height: 14px; flex-shrink: 0; }
-.col-lbl--input { color: #F59E0B; }
-.col-lbl--master { color: #94A3B8; }
 
 .divider { display: flex; align-items: center; padding: 0 4px; align-self: stretch; flex-shrink: 0; }
 .dv { width: 1px; height: 100%; background: linear-gradient(180deg, transparent, var(--border) 15%, var(--text-muted) 50%, var(--border) 85%, transparent); opacity: .4; }

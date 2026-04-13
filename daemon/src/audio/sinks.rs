@@ -16,8 +16,10 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 pub const CHANNEL_NAMES: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
-/// Only these get virtual sinks (Mic uses the real input device)
-const SINK_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
+/// All channels get virtual null-sinks, including Mic.
+/// The Mic sink is fed by a loopback from the hardware source — its monitor
+/// port becomes the capturable "OpenGG_Mic" node for GSR and DSP chains.
+const SINK_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
 
 #[derive(Debug, Clone)]
 pub struct ChannelInfo {
@@ -90,6 +92,12 @@ impl SinkManager {
             tracing::warn!("Loopback setup had issues: {e}");
         }
 
+        // Step 4: Wire hardware mic → OpenGG_Mic virtual sink via loopback.
+        // The sink's monitor port is what GSR and DSP chains capture from.
+        if let Err(e) = setup_mic_loopback() {
+            tracing::warn!("Mic loopback setup failed (raw HW mic will be used as fallback): {e}");
+        }
+
         tracing::info!("Virtual sinks ready (no PipeWire restart)");
         Ok(Self { channels, module_ids })
     }
@@ -100,13 +108,15 @@ impl SinkManager {
             info.volume = volume;
         }
         let vol_pct = (volume * 100.0) as u32;
+        let pct_str = format!("{vol_pct}%");
+        // All channels (including Mic) now have a virtual null-sink — control it uniformly.
+        let _ = Command::new("pactl")
+            .args(["set-sink-volume", &format!("OpenGG_{channel}"), &pct_str])
+            .output();
+        // Additionally mirror volume to hardware source so recording level tracks the slider.
         if channel == "Mic" {
             let _ = Command::new("pactl")
-                .args(["set-source-volume", "@DEFAULT_SOURCE@", &format!("{vol_pct}%")])
-                .output();
-        } else {
-            let _ = Command::new("pactl")
-                .args(["set-sink-volume", &format!("OpenGG_{channel}"), &format!("{vol_pct}%")])
+                .args(["set-source-volume", "@DEFAULT_SOURCE@", &pct_str])
                 .output();
         }
         Ok(())
@@ -117,10 +127,12 @@ impl SinkManager {
             info.muted = muted;
         }
         let val = if muted { "1" } else { "0" };
+        let _ = Command::new("pactl")
+            .args(["set-sink-mute", &format!("OpenGG_{channel}"), val])
+            .output();
         if channel == "Mic" {
+            // Mirror mute to hardware source so the loopback input is also silenced.
             let _ = Command::new("pactl").args(["set-source-mute", "@DEFAULT_SOURCE@", val]).output();
-        } else {
-            let _ = Command::new("pactl").args(["set-sink-mute", &format!("OpenGG_{channel}"), val]).output();
         }
         Ok(())
     }
@@ -145,12 +157,20 @@ fn sink_exists(name: &str) -> bool {
 ///   OLD: Write config file → restart PipeWire → all apps lose audio
 ///   NEW: Load module at runtime → zero disruption to existing streams
 fn create_null_sink(sink_name: &str, description: &str) -> Result<u32> {
+    // All three property keys are set so the sink shows correctly in every
+    // sound panel (GNOME Settings, pavucontrol, KDE, etc.)
+    let display_name = format!("OpenGG - {description}");
+    let sink_props = format!(
+        "sink_properties=device.description=\"{display_name}\" \
+         node.description=\"{display_name}\" \
+         media.name=\"{display_name}\""
+    );
     let output = Command::new("pactl")
         .args([
             "load-module",
             "module-null-sink",
             &format!("sink_name={sink_name}"),
-            &format!("sink_properties=device.description=\"OpenGG {description}\""),
+            &sink_props,
             "channels=2",
             "channel_map=front-left,front-right",
         ])
@@ -167,6 +187,57 @@ fn create_null_sink(sink_name: &str, description: &str) -> Result<u32> {
     }
 }
 
+/// Route the hardware microphone into the OpenGG_Mic virtual null-sink via a loopback module.
+///
+/// Graph after this call:
+///   [@DEFAULT_SOURCE@] → [module-loopback] → [OpenGG_Mic null-sink]
+///                                                     ↓
+///                                          OpenGG_Mic.monitor  ← GSR `-a OpenGG_Mic`
+///                                                     ↓
+///                                          (future jalv DSP chain: gate → compressor → EQ)
+fn setup_mic_loopback() -> Result<()> {
+    // Discover the hardware source (never let it be our own virtual sink)
+    let hw_out = Command::new("pactl")
+        .args(["get-default-source"])
+        .output()
+        .context("pactl get-default-source failed")?;
+    let hw_source = String::from_utf8_lossy(&hw_out.stdout).trim().to_string();
+
+    if hw_source.is_empty() {
+        anyhow::bail!("No default source found — skipping mic loopback");
+    }
+    if hw_source.contains("OpenGG") || hw_source.contains("monitor") {
+        anyhow::bail!("Default source appears to be a virtual node ({hw_source}) — skipping to avoid loop");
+    }
+
+    // Idempotency: check if our loopback already exists
+    let list_out = Command::new("pactl").args(["list", "modules", "short"]).output()?;
+    let list = String::from_utf8_lossy(&list_out.stdout);
+    if list.lines().any(|l| l.contains("module-loopback") && l.contains("OpenGG_Mic")) {
+        tracing::info!("Mic loopback already active — skipping");
+        return Ok(());
+    }
+
+    let out = Command::new("pactl")
+        .args([
+            "load-module", "module-loopback",
+            &format!("source={hw_source}"),
+            "sink=OpenGG_Mic",
+            "latency_msec=10",
+            "source_dont_move=true",
+            "sink_dont_move=true",
+        ])
+        .output()
+        .context("pactl load-module module-loopback failed")?;
+
+    if out.status.success() {
+        tracing::info!("Mic loopback active: {hw_source} → OpenGG_Mic");
+        Ok(())
+    } else {
+        anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 /// Link each virtual sink's monitor output to the default audio device.
 pub fn setup_loopbacks() -> Result<()> {
     let output = Command::new("pactl")
@@ -180,8 +251,10 @@ pub fn setup_loopbacks() -> Result<()> {
         return Ok(());
     }
 
+    // Output channels only — Mic is a capture sink, not a playback sink.
+    const OUTPUT_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
     tracing::info!("Linking virtual sinks → {default_sink}");
-    for &ch in SINK_CHANNELS {
+    for &ch in OUTPUT_CHANNELS {
         let sink_name = format!("OpenGG_{ch}");
         for port in ["FL", "FR"] {
             // pw-link is idempotent — linking an already-linked pair does nothing

@@ -1,6 +1,7 @@
 //! Audio App Routing — discovers streams and moves them between sinks.
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::process::Command;
 
 use super::sinks::AppInfo;
@@ -13,6 +14,22 @@ pub struct StreamInfo {
     pub binary: String,
     pub icon: String,
     pub channel: String,
+}
+
+/// Build a sink-index → sink-name map from `pactl list sinks`.
+/// Used to resolve the integer `sink` field in sink-input records.
+fn build_sink_map() -> HashMap<u32, String> {
+    let Ok(out) = Command::new("pactl").args(["-f", "json", "list", "sinks"]).output() else {
+        return HashMap::new();
+    };
+    let Ok(sinks) = serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout) else {
+        return HashMap::new();
+    };
+    sinks.iter().filter_map(|s| {
+        let idx = s["index"].as_u64()? as u32;
+        let name = s["name"].as_str()?.to_string();
+        Some((idx, name))
+    }).collect()
 }
 
 pub fn list_streams() -> Result<Vec<StreamInfo>> {
@@ -28,6 +45,10 @@ pub fn list_streams() -> Result<Vec<StreamInfo>> {
     let raw: serde_json::Value =
         serde_json::from_slice(&output.stdout).context("Failed to parse pactl JSON")?;
 
+    // ★ FIX: `sink` field in pactl JSON is an integer index, not a name string.
+    // Build a lookup map once and resolve each sink-input's sink name from it.
+    let sink_map = build_sink_map();
+
     let empty = vec![];
     let inputs = raw.as_array().unwrap_or(&empty);
     let mut streams = Vec::new();
@@ -35,7 +56,11 @@ pub fn list_streams() -> Result<Vec<StreamInfo>> {
     for input in inputs {
         let props = &input["properties"];
         let index = input["index"].as_u64().unwrap_or(0) as u32;
-        let sink_name = input["sink"].as_str().unwrap_or("").to_string();
+
+        // ★ FIX: was input["sink"].as_str() — always None since it's a u32
+        let sink_idx = input["sink"].as_u64().unwrap_or(u64::MAX) as u32;
+        let sink_name = sink_map.get(&sink_idx).cloned().unwrap_or_default();
+
         let app_name = props["application.name"]
             .as_str()
             .or_else(|| props["media.name"].as_str())
@@ -105,10 +130,16 @@ pub fn route_stream(stream_id: u32, channel: &str) -> Result<()> {
     } else {
         format!("OpenGG_{channel}")
     };
-    Command::new("pactl")
+    // ★ FIX: check exit code — pactl returns non-zero on failure (wrong index,
+    // sink not found, etc.) but .output() only errors if the binary isn't found.
+    let out = Command::new("pactl")
         .args(["move-sink-input", &stream_id.to_string(), &target])
         .output()
-        .context(format!("Failed to route {stream_id} → {target}"))?;
+        .context(format!("pactl not found while routing {stream_id} → {target}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("pactl move-sink-input {stream_id} {target} failed: {err}");
+    }
     tracing::info!("Routed stream {stream_id} → {target}");
     Ok(())
 }

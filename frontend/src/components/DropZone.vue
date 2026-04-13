@@ -28,14 +28,25 @@ function onDragLeave(e: DragEvent) {
 function onDrop(e: DragEvent) {
   e.preventDefault()
   hovering.value = false
-  const appId = e.dataTransfer?.getData('application/opengg-app-id')
-  if (appId) audio.dropOnChannel(props.channel)
+  // Dual-path: custom MIME works on desktop; text/plain is the WebKitGTK fallback
+  // because WebKitGTK silently returns '' for non-text MIME types on getData().
+  const raw = e.dataTransfer?.getData('application/opengg-app-id')
+           || e.dataTransfer?.getData('text/plain')
+           || ''
+  const parsedId = parseInt(raw, 10)
+  if (!isNaN(parsedId)) {
+    audio.dropOnChannelById(parsedId, props.channel)
+  } else if (audio.draggedApp) {
+    // Last-resort: use the store's draggedApp (same-tab drag where store is reliable)
+    audio.dropOnChannel(props.channel)
+  }
 }
 
 function startDragApp(e: DragEvent, app: { id: number; name: string; binary: string }) {
   if (!e.dataTransfer) return
   e.dataTransfer.setData('application/opengg-app-id', String(app.id))
-  e.dataTransfer.setData('text/plain', app.name)
+  // text/plain carries the numeric ID as a reliable WebKitGTK fallback
+  e.dataTransfer.setData('text/plain', String(app.id))
   e.dataTransfer.effectAllowed = 'move'
   audio.startDrag({ id: app.id, name: app.name, binary: app.binary, channel: props.channel, icon: '' })
 }
@@ -59,7 +70,7 @@ function startDragApp(e: DragEvent, app: { id: number; name: string; binary: str
 </template>
 
 <style scoped>
-.dropzone { width: 100%; min-height: 40px; max-height: 140px; overflow-y: auto; border: 1px dashed var(--border); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; transition: all .15s; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.dropzone { width: 100%; height: 70px; overflow-y: auto; border: 1px dashed var(--border); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; transition: all .15s; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 .show-target { border-color: color-mix(in srgb, var(--dz) 40%, var(--border)); background: color-mix(in srgb, var(--dz) 3%, transparent); }
 .hovering { border-color: var(--dz) !important; background: color-mix(in srgb, var(--dz) 10%, transparent) !important; border-style: solid !important; box-shadow: 0 0 12px color-mix(in srgb, var(--dz) 20%, transparent); }
 .dz-apps { display: flex; flex-direction: column; gap: 2px; }
@@ -68,6 +79,6 @@ function startDragApp(e: DragEvent, app: { id: number; name: string; binary: str
 .dz-chip:active { cursor: grabbing; opacity: .6; }
 .dz-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
 .dz-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dz-empty { text-align: center; font-size: 9px; color: var(--text-muted); padding: 8px 0; opacity: .6; }
+.dz-empty { display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--text-muted); opacity: .6; flex: 1; }
 .dz-empty.active { color: var(--dz); opacity: 1; font-weight: 600; }
 </style>

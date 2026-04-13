@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use tauri::{command, AppHandle, Emitter, Manager};
 
 const AU_PATH: &str = "/org/opengg/Daemon/Audio";
@@ -126,49 +126,112 @@ pub async fn set_app_volume(app_index: u32, volume: u32) -> Result<(), String> {
 // ══════════════════════════════════════════════════════════════════════
 
 #[command]
-pub async fn route_app(app_id: u32, channel: String) -> Result<(), String> {
+pub async fn route_app(app: tauri::AppHandle, app_id: u32, channel: String) -> Result<(), String> {
     // Try D-Bus daemon first
-    if call_dbus_void("RouteApp", AU_PATH, AU_IFACE, (app_id, channel.as_str())).await.is_ok() {
-        return Ok(());
+    match call_dbus_void("RouteApp", AU_PATH, AU_IFACE, (app_id, channel.as_str())).await {
+        Ok(()) => {
+            let _ = app.emit("audio-mixer-refresh", ());
+            return Ok(());
+        }
+        Err(e) => eprintln!("route_app: D-Bus route failed ({e}), falling back to pactl"),
     }
 
-    eprintln!("route_app: D-Bus unavailable, using pactl (index={app_id} → {channel})");
+    log_routing_context(app_id, &channel);
 
-    // Get target sink's INTEGER INDEX (not name)
-    let sink_idx = if channel == "default" || channel == "Master" {
-        get_default_sink_index()?
+    // Resolve the target sink name once — used by both pactl and pw-metadata paths
+    let sink_name = if channel == "default" || channel == "Master" {
+        run_cmd("pactl", &["get-default-sink"])?
     } else {
         let name = format!("OpenGG_{channel}");
         ensure_sink_exists(&name, &channel).await?;
-        get_sink_index_by_name(&name)?
+        name
     };
 
-    // Attempt 1: app_id IS the correct pactl sink-input index
-    let r = Command::new("pactl")
-        .args(["move-sink-input", &app_id.to_string(), &sink_idx.to_string()])
-        .output().map_err(|e| format!("pactl: {e}"))?;
+    // Get target sink's INTEGER INDEX (needed by pactl move-sink-input)
+    let sink_idx = get_sink_index_by_name(&sink_name)?;
 
-    if r.status.success() {
-        eprintln!("route_app: ✓ sink-input {app_id} → sink #{sink_idx} ({channel})");
-        return Ok(());
-    }
+    let cmd_str = format!("pactl move-sink-input {} {}", app_id, sink_idx);
 
-    let err = String::from_utf8_lossy(&r.stderr);
-    eprintln!("route_app: attempt 1 failed ({err}), scanning for correct index...");
+    // Attempt 1: app_id IS the correct pactl sink-input index — with 3 retries
+    for attempt in 0..=2 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
 
-    // Attempt 2: app_id might be a PipeWire node ID — find the correct pactl index
-    if let Ok(si_idx) = find_pactl_si_for_pw_id(app_id) {
-        let r2 = Command::new("pactl")
-            .args(["move-sink-input", &si_idx.to_string(), &sink_idx.to_string()])
-            .output().map_err(|e| format!("pactl: {e}"))?;
-        if r2.status.success() {
-            eprintln!("route_app: ✓ corrected: PW#{app_id} → pactl si#{si_idx} → sink #{sink_idx}");
+        if !validate_sink_input_exists(app_id) {
+            if attempt == 0 {
+                eprintln!("route_app: sink-input {app_id} not found in pactl list, skipping to PW-ID scan...");
+            }
+            break;
+        }
+
+        eprintln!("route_app: [attempt {}/3] executing: {cmd_str}", attempt + 1);
+        let r = Command::new("pactl")
+            .args(["move-sink-input", &app_id.to_string(), &sink_idx.to_string()])
+            .output()
+            .map_err(|e| format!("{cmd_str} — exec error: {e}"))?;
+
+        if r.status.success() {
+            eprintln!("route_app: ✓ attempt {}/3: sink-input {app_id} → sink #{sink_idx} ({channel})", attempt + 1);
+            let _ = app.emit("audio-mixer-refresh", ());
             return Ok(());
         }
-        return Err(format!("pactl: {}", String::from_utf8_lossy(&r2.stderr)));
+
+        let err = String::from_utf8_lossy(&r.stderr);
+        eprintln!("route_app: attempt {}/3 failed ({err})", attempt + 1);
+
+        if attempt == 2 {
+            eprintln!("route_app: all 3 attempts exhausted for direct index, scanning for correct sink-input...");
+        }
     }
 
-    Err(format!("route_app: no matching sink-input for id {app_id}"))
+    // Attempt 2: app_id might be a PipeWire node ID — find the correct pactl sink-input index
+    if let Ok(si_idx) = find_pactl_si_for_pw_id(app_id) {
+        let cmd2 = format!("pactl move-sink-input {} {}", si_idx, sink_idx);
+        eprintln!("route_app: found PW#{app_id} → pactl si#{si_idx}, executing: {cmd2}");
+        let r2 = Command::new("pactl")
+            .args(["move-sink-input", &si_idx.to_string(), &sink_idx.to_string()])
+            .output()
+            .map_err(|e| format!("{cmd2} — exec error: {e}"))?;
+        if r2.status.success() {
+            eprintln!("route_app: ✓ PW#{app_id} → pactl si#{si_idx} → sink #{sink_idx} ({channel})");
+            let _ = app.emit("audio-mixer-refresh", ());
+            return Ok(());
+        }
+        let err2 = String::from_utf8_lossy(&r2.stderr);
+        eprintln!("route_app: corrected pactl index also failed ({err2}), trying pw-metadata...");
+    } else {
+        eprintln!("route_app: no pactl sink-input found for PW#{app_id}, trying pw-metadata...");
+    }
+
+    // Attempt 3: pw-metadata target.node — WirePlumber-native stream move.
+    // Resolves the sink's PipeWire node.id (different from the pactl integer index)
+    // and writes it into the WirePlumber settings metadata so WirePlumber moves the stream.
+    match get_pw_node_id_for_sink(&sink_name) {
+        Ok(sink_pw_id) => {
+            eprintln!(
+                "route_app: [pw-metadata] node#{app_id} → target.node={sink_pw_id} (sink '{}', channel '{channel}')",
+                sink_name
+            );
+            if let Err(e) = route_via_pw_metadata(app_id, sink_pw_id) {
+                eprintln!("route_app: pw-metadata failed: {e}");
+                return Err(format!(
+                    "route_app: all routing methods failed for id {app_id} → {channel}. \
+                     See logs above for diagnostics."
+                ));
+            }
+            eprintln!("route_app: ✓ pw-metadata succeeded for {app_id} → {channel}");
+            let _ = app.emit("audio-mixer-refresh", ());
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("route_app: cannot resolve sink '{}' PW node.id: {e}", sink_name);
+            Err(format!(
+                "route_app: all routing methods failed for id {app_id} → {channel}. \
+                 Sink PW node.id unavailable: {e}"
+            ))
+        }
+    }
 }
 
 /// Get default sink's pactl integer index
@@ -189,40 +252,200 @@ fn get_sink_index_by_name(sink_name: &str) -> Result<u32, String> {
     Err(format!("sink '{sink_name}' not found"))
 }
 
-/// Cross-reference PipeWire node ID → pactl sink-input index
-fn find_pactl_si_for_pw_id(pw_id: u32) -> Result<u32, String> {
+/// Extended sink-input info for cross-referencing PipeWire IDs
+#[derive(Debug)]
+struct SiInfo {
+    idx: u32,
+    app_name: String,
+    binary: String,
+    pw_ids: Vec<u32>,
+}
+
+/// Build a comprehensive map of all sink-inputs with their PW node IDs and app metadata.
+fn build_si_map() -> Result<HashMap<u32, SiInfo>, String> {
     let j = run_cmd("pactl", &["-f", "json", "list", "sink-inputs"])?;
-    let sis: Vec<serde_json::Value> = serde_json::from_str(&j).map_err(|e| format!("{e}"))?;
-    let pw_str = pw_id.to_string();
-    for si in &sis {
+    let sis: Vec<serde_json::Value> = serde_json::from_str(&j).map_err(|e| format!("parse sink-inputs: {e}"))?;
+    let mut map = HashMap::new();
+    for si in sis {
         let idx = si["index"].as_u64().unwrap_or(0) as u32;
         let p = &si["properties"];
-        // PipeWire exposes its ID via multiple property keys
-        if p["object.serial"].as_str() == Some(&pw_str)
-            || p["object.id"].as_str() == Some(&pw_str)
-            || p["node.id"].as_str() == Some(&pw_str)
-        {
-            return Ok(idx);
+        let app_name = p["application.name"].as_str()
+            .or(p["media.name"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let binary = p["application.process.binary"].as_str().unwrap_or("").to_string();
+
+        let mut pw_ids = Vec::new();
+        for key in ["object.serial", "object.id", "node.id",
+                    "pipewire.access.portal.app_id", "pipewire.client.access"] {
+            if let Some(s) = p[key].as_str() {
+                if let Ok(id) = s.parse::<u32>() {
+                    pw_ids.push(id);
+                }
+            }
+        }
+        // Some clients expose the node ID embedded in media.name or application.name
+        if let Some(s) = p["media.name"].as_str() {
+            if let Ok(id) = s.parse::<u32>() { pw_ids.push(id); }
+        }
+
+        map.insert(idx, SiInfo { idx, app_name, binary, pw_ids });
+    }
+    Ok(map)
+}
+
+/// Check whether a sink-input index currently exists in the system.
+fn validate_sink_input_exists(si_idx: u32) -> bool {
+    if let Ok(j) = run_cmd("pactl", &["-f", "json", "list", "sink-inputs"]) {
+        if let Ok(sis) = serde_json::from_str::<Vec<serde_json::Value>>(&j) {
+            return sis.iter().any(|si| si["index"].as_u64() == Some(si_idx as u64));
+        }
+    }
+    false
+}
+
+/// Cross-reference PipeWire node ID → pactl sink-input index using the full SI map.
+fn find_pactl_si_for_pw_id(pw_id: u32) -> Result<u32, String> {
+    let map = build_si_map()?;
+    for (idx, info) in &map {
+        if info.pw_ids.contains(&pw_id) {
+            return Ok(*idx);
         }
     }
     Err(format!("no pactl si for PW#{pw_id}"))
 }
 
-/// Ensure virtual sink exists (non-blocking)
+/// Resolve a PipeWire sink's node.id (PW namespace) from its pactl name.
+/// The PW node.id is stored in the sink's properties["node.id"] in pactl JSON output
+/// and is the correct identifier for pw-metadata target.node writes.
+fn get_pw_node_id_for_sink(sink_name: &str) -> Result<u32, String> {
+    let j = run_cmd("pactl", &["-f", "json", "list", "sinks"])?;
+    let sinks: Vec<serde_json::Value> = serde_json::from_str(&j)
+        .map_err(|e| format!("parse sinks: {e}"))?;
+    for s in &sinks {
+        if s["name"].as_str() == Some(sink_name) {
+            // WirePlumber surfaces the PW node.id as a string property
+            if let Some(nid) = s["properties"]["node.id"].as_str()
+                .and_then(|v| v.parse::<u32>().ok())
+            {
+                return Ok(nid);
+            }
+            // Fallback: object.id is the same value on older PipeWire builds
+            if let Some(nid) = s["properties"]["object.id"].as_str()
+                .and_then(|v| v.parse::<u32>().ok())
+            {
+                return Ok(nid);
+            }
+        }
+    }
+    Err(format!("no PW node.id found for sink '{sink_name}'"))
+}
+
+/// Route a stream via WirePlumber metadata — the correct PipeWire-native move.
+///
+/// `pw-metadata -n settings <stream_node_id> target.node <sink_node_id>`
+///
+/// WirePlumber watches the "settings" metadata namespace and moves the stream
+/// when it sees a `target.node` entry for a managed stream node. This is
+/// the same mechanism used internally by pavucontrol and the GNOME audio panel.
+fn route_via_pw_metadata(stream_pw_id: u32, sink_pw_id: u32) -> Result<(), String> {
+    eprintln!(
+        "route_via_pw_metadata: pw-metadata -n settings {} target.node {}",
+        stream_pw_id, sink_pw_id
+    );
+    let r = Command::new("pw-metadata")
+        .args([
+            "-n", "settings",
+            &stream_pw_id.to_string(),
+            "target.node",
+            &sink_pw_id.to_string(),
+        ])
+        .output()
+        .map_err(|e| format!("pw-metadata exec error: {e}"))?;
+    if r.status.success() { return Ok(()); }
+    Err(format!("pw-metadata: {}", String::from_utf8_lossy(&r.stderr).trim()))
+}
+
+/// Log full environment context and PipeWire state before routing attempts.
+fn log_routing_context(app_id: u32, channel: &str) {
+    eprintln!("=== route_app[{} → {channel}] environment context ===", app_id);
+    eprintln!("  PULSE_SERVER:        {:?}", std::env::var("PULSE_SERVER").ok());
+    eprintln!("  PIPEWIRE_DEBUG:      {:?}", std::env::var("PIPEWIRE_DEBUG").ok());
+    eprintln!("  XDG_SESSION_TYPE:    {:?}", std::env::var("XDG_SESSION_TYPE").ok());
+    eprintln!("  WAYLAND_DISPLAY:     {:?}", std::env::var("WAYLAND_DISPLAY").ok());
+    eprintln!("  DISPLAY:             {:?}", std::env::var("DISPLAY").ok());
+    eprintln!("  XDG_CURRENT_DESKTOP: {:?}", std::env::var("XDG_CURRENT_DESKTOP").ok());
+
+    // Resolve stream identity: find node.name and binary for app_id in the SI map
+    match build_si_map() {
+        Ok(map) => {
+            let matched: Vec<_> = map.values()
+                .filter(|info| info.pw_ids.contains(&app_id) || info.idx == app_id)
+                .collect();
+            if matched.is_empty() {
+                eprintln!("  stream id={app_id}: not found in current pactl sink-inputs (may be a PW node ID)");
+            } else {
+                for info in &matched {
+                    eprintln!(
+                        "  stream id={app_id}: pactl-idx={} name='{}' binary='{}'",
+                        info.idx, info.app_name, info.binary
+                    );
+                }
+            }
+        }
+        Err(e) => eprintln!("  stream id={app_id}: SI map unavailable ({e})"),
+    }
+
+    // Resolve target sink PW node.id (what pw-metadata will use)
+    let sink_name = if channel == "default" || channel == "Master" {
+        run_cmd("pactl", &["get-default-sink"]).unwrap_or_default()
+    } else {
+        format!("OpenGG_{channel}")
+    };
+    match get_pw_node_id_for_sink(&sink_name) {
+        Ok(nid) => eprintln!("  target sink '{}' → PW node.id={}", sink_name, nid),
+        Err(e)  => eprintln!("  target sink '{}' → PW node.id unavailable: {}", sink_name, e),
+    }
+
+    if let Ok(j) = run_cmd("pactl", &["-f", "json", "list", "sinks"]) {
+        let count = serde_json::from_str::<Vec<serde_json::Value>>(&j).map(|v| v.len()).unwrap_or(0);
+        eprintln!("  pactl sinks visible: {count}");
+    }
+
+    eprintln!("====================================================");
+}
+
+/// Ensure virtual sink exists (non-blocking, with extended settling time)
 async fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
     if let Ok(o) = Command::new("pactl").args(["list", "sinks", "short"]).output() {
         if String::from_utf8_lossy(&o.stdout).contains(name) { return Ok(()); }
     }
+    eprintln!("ensure_sink_exists: creating virtual sink '{name}' for channel '{ch}'");
     let c = Command::new("pactl").args(["load-module", "module-null-sink",
         &format!("sink_name={name}"),
         &format!("sink_properties=node.description=\"OpenGG - {ch}\" node.nick=\"OpenGG - {ch}\" device.description=\"OpenGG - {ch}\""),
         "channels=2", "channel_map=front-left,front-right"
     ]).output().map_err(|e| format!("{e}"))?;
-    if !c.status.success() { return Err(format!("{}", String::from_utf8_lossy(&c.stderr))); }
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    if let Ok(def) = run_cmd("pactl", &["get-default-sink"]) {
-        for p in ["FL","FR"] { let _ = Command::new("pw-link").args([&format!("{name}:monitor_{p}"), &format!("{def}:playback_{p}")]).output(); }
+    if !c.status.success() {
+        let err = String::from_utf8_lossy(&c.stderr);
+        eprintln!("ensure_sink_exists: pactl load-module FAILED: {err}");
+        return Err(err.to_string());
     }
+    // Increase settling time: 600ms to allow PipeWire to fully enumerate the new sink
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+    // Set up loopback links to default sink
+    if let Ok(def) = run_cmd("pactl", &["get-default-sink"]) {
+        for p in ["FL", "FR"] {
+            let result = Command::new("pw-link")
+                .args([&format!("{name}:monitor_{p}"), &format!("{def}:playback_{p}")])
+                .output();
+            if let Err(e) = result {
+                eprintln!("ensure_sink_exists: pw-link {name}:monitor_{p} → {def}:playback_{p}: {e}");
+            }
+        }
+    }
+    eprintln!("ensure_sink_exists: sink '{name}' ready");
     Ok(())
 }
 
@@ -250,6 +473,7 @@ fn scan_sink_inputs() -> Result<String, String> {
 
         let sink_idx = si["sink"].as_u64().unwrap_or(0) as u32;
         let channel = lookup_sink_channel(sink_idx);
+        let auto_channel = classify_channel(&p);
 
         // Include volume info (0-100) for per-app volume control
         let vol = si["volume"].as_object()
@@ -260,7 +484,8 @@ fn scan_sink_inputs() -> Result<String, String> {
 
         apps.push(serde_json::json!({
             "id": idx, "name": name, "binary": binary,
-            "channel": channel, "icon": "", "volume": vol
+            "channel": channel, "icon": "", "volume": vol,
+            "auto_channel": auto_channel
         }));
     }
 
@@ -290,6 +515,37 @@ fn scan_sink_inputs() -> Result<String, String> {
     }
 
     Ok(serde_json::to_string(&apps).unwrap_or("[]".into()))
+}
+
+/// Suggest an OpenGG channel for an app based on PipeWire stream properties.
+/// Returns an empty string when no confident classification can be made.
+fn classify_channel(props: &serde_json::Value) -> &'static str {
+    let role   = props["media.role"].as_str().unwrap_or("").to_lowercase();
+    let binary = props["application.process.binary"].as_str().unwrap_or("").to_lowercase();
+    let name   = props["application.name"].as_str().unwrap_or("").to_lowercase();
+
+    // media.role is the most authoritative signal (set by the app itself)
+    match role.as_str() {
+        "game"                          => return "Game",
+        "music" | "video" | "movie"    => return "Media",
+        "phone" | "communication"      => return "Chat",
+        _ => {}
+    }
+
+    // Binary / app-name heuristics
+    const CHAT_BINS: &[&str]  = &["discord", "teamspeak", "mumble", "signal", "telegram",
+                                   "zoom", "slack", "skype", "element", "hexchat"];
+    const GAME_BINS: &[&str]  = &["steam", "heroic", "lutris", "wine", "proton",
+                                   "gameoverlayui", "gamescope", "mangohud"];
+    const MEDIA_BINS: &[&str] = &["spotify", "rhythmbox", "clementine", "vlc", "mpv",
+                                   "celluloid", "strawberry", "quodlibet", "cmus", "lollypop",
+                                   "elisa", "audacious"];
+
+    if CHAT_BINS.iter().any(|b| binary.contains(b) || name.contains(b))  { return "Chat"; }
+    if GAME_BINS.iter().any(|b| binary.contains(b) || name.contains(b))  { return "Game"; }
+    if MEDIA_BINS.iter().any(|b| binary.contains(b) || name.contains(b)) { return "Media"; }
+
+    ""  // No confident match — leave in Master
 }
 
 fn lookup_sink_channel(sink_idx: u32) -> String {
@@ -926,7 +1182,29 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
 }
 
 // ═══ Replay ═══
-#[command] pub async fn get_recorder_status() -> Result<String, String> { call_dbus("GetStatus", RP_PATH, RP_IFACE, ()).await.or(Ok("idle".into())) }
+#[command]
+pub fn get_recorder_status(app: AppHandle) -> String {
+    // Check live GsrProcess state first — covers the GPU Screen Recorder path.
+    let gsr = app.state::<GsrProcess>();
+    let mut lock = gsr.0.lock().unwrap();
+    match lock.as_mut() {
+        Some((child, params)) => match child.try_wait() {
+            Ok(None) => {
+                // Process still running — return replay:<secs>
+                let secs = params.replay_secs;
+                return format!("replay:{secs}");
+            }
+            _ => {
+                // Exited or error — clean up state
+                lock.take();
+            }
+        },
+        None => {}
+    }
+    drop(lock);
+    // Fallback to legacy D-Bus daemon path (non-GSR recorder)
+    "idle".into()
+}
 #[command] pub async fn start_replay(duration: u32) -> Result<(), String> { call_dbus_void("StartReplay", RP_PATH, RP_IFACE, (duration,)).await }
 #[command] pub async fn stop_recorder() -> Result<(), String> { call_dbus_void("Stop", RP_PATH, RP_IFACE, ()).await }
 #[command] pub async fn save_replay() -> Result<(), String> { call_dbus_void("SaveReplay", RP_PATH, RP_IFACE, ()).await }
@@ -986,8 +1264,9 @@ fn probe_cache_set(db: &Connection, fp: &str, dur: f64, w: u32, h: u32, mtime: u
 pub async fn get_clips_count(folder: String) -> Result<usize, String> {
     let dir = resolve_clips_dir(&folder);
     if !dir.exists() { return Ok(0); }
-    let count = std::fs::read_dir(&dir)
-        .map_err(|e| format!("{e}"))?
+    let count = walkdir::WalkDir::new(&dir)
+        .min_depth(1)
+        .into_iter()
         .flatten()
         .filter(|e| {
             let p = e.path();
@@ -1003,6 +1282,7 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
 #[command] pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
     // Phase 3a+3b: cache-first ffprobe, parallel for uncached clips
     use tokio::sync::Semaphore;
+    #[cfg(debug_assertions)] let t_total = std::time::Instant::now();
     let dirs = get_all_clip_dirs(&folder);
     let meta = get_meta_map();
     let td = thumb_dir(); let _ = std::fs::create_dir_all(&td);
@@ -1013,9 +1293,8 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
     let mut seen = std::collections::HashSet::new();
     for dir in &dirs {
         if !dir.exists() { continue; }
-        let rd = match std::fs::read_dir(dir) { Ok(r) => r, Err(_) => continue };
-        for e in rd.flatten() {
-            let p = e.path(); if !p.is_file() { continue; }
+        for e in walkdir::WalkDir::new(dir).min_depth(1).into_iter().flatten() {
+            let p = e.path().to_path_buf(); if !p.is_file() { continue; }
             let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
             if !VIDEO_EXTS.contains(&ext.as_str()) { continue; }
             let fp = p.to_string_lossy().to_string();
@@ -1025,15 +1304,22 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
             let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
             let id = format!("{:x}", hash_str(&fp));
             let mtime = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
-            let created = fmt_ts(mtime as i64);
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
-            let game_raw = stem.split('_').next().unwrap_or("Unknown").replace('-', " ");
+            let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
+            // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ to get full game name.
+            // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ to get prefix.
+            let game_raw = if let Some(pos) = stem.find("__") {
+                stem[..pos].replace('-', " ").replace('_', " ")
+            } else {
+                stem.split('_').next().unwrap_or("Unknown").replace('-', " ")
+            };
             let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
             let thumb = td.join(format!("{id}.jpg"));
             let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
             entries.push(Entry { fp, fname, id, filesize: m.len(), created, mtime, game_raw, cn, fav, game_tag, thumbnail });
         }
     }
+    #[cfg(debug_assertions)] let t_scan = t_total.elapsed().as_millis();
 
     // Phase 3a: check probe cache; collect uncached for parallel probing
     let db = open_db().ok();
@@ -1049,6 +1335,8 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
         }
         uncached_idxs.push(i);
     }
+    #[cfg(debug_assertions)] let t_cache = t_total.elapsed().as_millis();
+    #[cfg(debug_assertions)] let n_uncached = uncached_idxs.len();
 
     // Phase 3b: parallel ffprobe for uncached clips (max 4 concurrent)
     // acquire().await blocks until a permit is free, properly limiting concurrency.
@@ -1071,6 +1359,7 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
     for task in probe_tasks {
         if let Ok(r) = task.await { probe_results.push(r); }
     }
+    #[cfg(debug_assertions)] let t_probe = t_total.elapsed().as_millis();
     // Write new probe results to cache
     if let Some(ref db) = db {
         for (idx, fp, (dur, w, h)) in &probe_results {
@@ -1089,7 +1378,105 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
         ClipInfo { id: e.id, filename: e.fname, filepath: e.fp, filesize: e.filesize, created: e.created, duration: dur, width: w, height: h, game, custom_name: e.cn, favorite: e.fav, thumbnail: e.thumbnail }
     }).collect();
 
-    clips.sort_by(|a,b| b.created.cmp(&a.created)); Ok(clips)
+    clips.sort_by(|a,b| b.created.cmp(&a.created));
+    #[cfg(debug_assertions)] {
+        let t_total_ms = t_total.elapsed().as_millis();
+        eprintln!("[perf] get_clips: scan={}ms cache={}ms ffprobe={}ms ({} uncached) assemble={}ms total={}ms clips={}",
+            t_scan, t_cache - t_scan, t_probe - t_cache, n_uncached,
+            t_total_ms - t_probe, t_total_ms, clips.len());
+    }
+    Ok(clips)
+}
+
+/// Fast clip list — skips ffprobe entirely for uncached clips.
+/// Uncached clips get duration=0, width=0, height=0 so the grid can appear immediately.
+/// Call probe_clips() afterward to fill in missing metadata in the background.
+#[command] pub async fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
+    #[cfg(debug_assertions)] let t_total = std::time::Instant::now();
+    let dirs = get_all_clip_dirs(&folder);
+    let meta = get_meta_map();
+    let td = thumb_dir(); let _ = std::fs::create_dir_all(&td);
+
+    struct Entry { fp: String, fname: String, id: String, filesize: u64, created: String, mtime: u64, game_raw: String, cn: String, fav: bool, game_tag: String, thumbnail: String }
+    let mut entries: Vec<Entry> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for dir in &dirs {
+        if !dir.exists() { continue; }
+        for e in walkdir::WalkDir::new(dir).min_depth(1).into_iter().flatten() {
+            let p = e.path().to_path_buf(); if !p.is_file() { continue; }
+            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if !VIDEO_EXTS.contains(&ext.as_str()) { continue; }
+            let fp = p.to_string_lossy().to_string();
+            if seen.contains(&fp) { continue; }
+            seen.insert(fp.clone());
+            let m = match e.metadata() { Ok(m) => m, Err(_) => continue };
+            let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let id = format!("{:x}", hash_str(&fp));
+            let mtime = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
+            let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
+            // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ to get full game name.
+            // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ to get prefix.
+            let game_raw = if let Some(pos) = stem.find("__") {
+                stem[..pos].replace('-', " ").replace('_', " ")
+            } else {
+                stem.split('_').next().unwrap_or("Unknown").replace('-', " ")
+            };
+            let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
+            let thumb = td.join(format!("{id}.jpg"));
+            let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
+            entries.push(Entry { fp, fname, id, filesize: m.len(), created, mtime, game_raw, cn, fav, game_tag, thumbnail });
+        }
+    }
+
+    // Check probe cache — cached clips get real values, uncached get (0,0,0)
+    let db = open_db().ok();
+    let mut clips: Vec<ClipInfo> = entries.into_iter().map(|e| {
+        let (dur, w, h) = db.as_ref()
+            .and_then(|db| probe_cache_get(db, &e.fp, e.mtime))
+            .unwrap_or((0.0, 0, 0));
+        let game = if e.game_tag.is_empty() { e.game_raw } else { e.game_tag };
+        ClipInfo { id: e.id, filename: e.fname, filepath: e.fp, filesize: e.filesize, created: e.created, duration: dur, width: w, height: h, game, custom_name: e.cn, favorite: e.fav, thumbnail: e.thumbnail }
+    }).collect();
+
+    clips.sort_by(|a,b| b.created.cmp(&a.created));
+    #[cfg(debug_assertions)] eprintln!("[perf] get_clips_fast: total={}ms clips={}", t_total.elapsed().as_millis(), clips.len());
+    Ok(clips)
+}
+
+/// Probe duration/resolution for a list of files and write results to the SQLite cache.
+/// Used after get_clips_fast() to fill in metadata for uncached clips in the background.
+/// Returns Vec of (filepath, duration, width, height).
+#[command] pub async fn probe_clips(filepaths: Vec<String>) -> Result<Vec<(String, f64, u32, u32)>, String> {
+    use tokio::sync::Semaphore;
+    if filepaths.is_empty() { return Ok(vec![]); }
+    #[cfg(debug_assertions)] let t_start = std::time::Instant::now();
+    let sem = Arc::new(Semaphore::new(4));
+    let mut tasks = Vec::new();
+    for fp in filepaths {
+        let sem = Arc::clone(&sem);
+        tasks.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let fp2 = fp.clone();
+            let (dur, w, h) = tokio::task::spawn_blocking(move || probe_video(std::path::Path::new(&fp2)))
+                .await.unwrap_or((0.0, 0, 0));
+            (fp, dur, w, h)
+        }));
+    }
+    let mut results = Vec::new();
+    for t in tasks { if let Ok(r) = t.await { results.push(r); } }
+    // Write to cache
+    if let Ok(db) = open_db() {
+        for (fp, dur, w, h) in &results {
+            let mtime = std::fs::metadata(fp).ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs()).unwrap_or(0);
+            probe_cache_set(&db, fp, *dur, *w, *h, mtime);
+        }
+    }
+    #[cfg(debug_assertions)] eprintln!("[perf] probe_clips: {}ms ({} clips)", t_start.elapsed().as_millis(), results.len());
+    Ok(results.into_iter().map(|(fp, dur, w, h)| (fp, dur, w, h)).collect())
 }
 
 /// Fetch metadata for a single file — used by the frontend file-watcher listener.
@@ -1105,9 +1492,10 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
     let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
     let fp = filepath.clone();
     let id = format!("{:x}", hash_str(&fp));
-    let created = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| fmt_ts(d.as_secs() as i64)).unwrap_or_default();
-    let (dur,w,h) = probe_video(&p);
+    let mtime = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
+    let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
+    let (dur,w,h) = probe_video(&p);
     let game_from_filename = stem.split('_').next().unwrap_or("Unknown").replace('-', " ");
     let (cn,fav,game_tag) = meta.get(&fp).cloned().unwrap_or_default();
     let game = if game_tag.is_empty() { game_from_filename } else { game_tag };
@@ -1115,27 +1503,39 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
     let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
     Ok(Some(ClipInfo{id,filename:fname,filepath:fp,filesize:m.len(),created,duration:dur,width:w,height:h,game,custom_name:cn,favorite:fav,thumbnail}))
 }
-#[command] pub async fn generate_thumbnail(filepath: String) -> Result<String, String> {
+#[command] pub async fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Result<String, String> {
     let id = format!("{:x}",hash_str(&filepath)); let d = thumb_dir(); let _ = std::fs::create_dir_all(&d);
     let out = d.join(format!("{id}.jpg")); if out.exists() { return Ok(out.to_string_lossy().to_string()); }
-    let dur = probe_duration(&filepath); let seek = if dur>1.0{dur*0.1}else{0.0};
-    // Phase 3c: Reduced thumbnail resolution — 640px wide, quality 5 (faster + smaller)
+    #[cfg(debug_assertions)] let t_start = std::time::Instant::now();
+    // Use caller-provided duration to skip redundant probe_duration ffprobe subprocess
+    let dur = duration.filter(|&d| d > 0.0).unwrap_or_else(|| probe_duration(&filepath));
+    #[cfg(debug_assertions)] let t_probe_ms = t_start.elapsed().as_millis();
+    let seek = if dur>1.0{dur*0.1}else{0.0};
+    // 480p thumbnails: ~853x480 at q:v 3 (~90KB each). Matches SteelSeries quality.
     let r = Command::new("ffmpeg").args([
         "-ss", &format!("{seek:.2}"), "-i", &filepath,
-        "-vframes", "1", "-vf", "scale=640:-1", "-q:v", "5", "-y",
+        "-vframes", "1", "-vf", "scale=-2:480", "-q:v", "3", "-y",
         &out.to_string_lossy()
     ]).output().map_err(|e| format!("{e}"))?;
+    #[cfg(debug_assertions)] {
+        let fname = filepath.rfind('/').map(|i| &filepath[i+1..]).unwrap_or(&filepath);
+        eprintln!("[perf] generate_thumbnail: probe={}ms ffmpeg={}ms total={}ms file={}",
+            t_probe_ms, t_start.elapsed().as_millis() - t_probe_ms, t_start.elapsed().as_millis(), fname);
+    }
     if r.status.success() && out.exists() { Ok(out.to_string_lossy().to_string()) }
     else { Err(format!("ffmpeg: {}", String::from_utf8_lossy(&r.stderr))) }
 }
 /// Phase 3d: Batch thumbnail generation — generates up to 3 concurrently.
+/// `durations`: optional per-filepath duration hints. When provided and non-zero,
+/// skips the redundant probe_duration ffprobe call for that clip.
 #[command]
-pub async fn generate_thumbnails_batch(filepaths: Vec<String>) -> Result<Vec<String>, String> {
+pub async fn generate_thumbnails_batch(filepaths: Vec<String>, durations: Option<Vec<f64>>) -> Result<Vec<String>, String> {
     use tokio::sync::Semaphore;
     let sem = Arc::new(Semaphore::new(3));
     let mut tasks = Vec::new();
-    for filepath in filepaths {
+    for (i, filepath) in filepaths.into_iter().enumerate() {
         let sem = Arc::clone(&sem);
+        let provided_dur = durations.as_ref().and_then(|d| d.get(i).copied()).filter(|&d| d > 0.0);
         let task = tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
             let fp = filepath.clone();
@@ -1144,11 +1544,11 @@ pub async fn generate_thumbnails_batch(filepaths: Vec<String>) -> Result<Vec<Str
                 let d = thumb_dir(); let _ = std::fs::create_dir_all(&d);
                 let out = d.join(format!("{id}.jpg"));
                 if out.exists() { return out.to_string_lossy().to_string(); }
-                let dur = probe_duration(&fp);
+                let dur = provided_dur.unwrap_or_else(|| probe_duration(&fp));
                 let seek = if dur > 1.0 { dur * 0.1 } else { 0.0 };
                 let r = Command::new("ffmpeg").args([
                     "-ss", &format!("{seek:.2}"), "-i", &fp,
-                    "-vframes", "1", "-vf", "scale=640:-1", "-q:v", "5", "-y",
+                    "-vframes", "1", "-vf", "scale=-2:480", "-q:v", "3", "-y",
                     &out.to_string_lossy(),
                 ]).output();
                 match r {
@@ -1650,9 +2050,19 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
     use libpulse_simple_binding::Simple;
 
     let st = app.state::<crate::VuState>();
-    if st.0.load(Ordering::Relaxed) { return Ok(()); }
+
+    // ── Generation-counter dedup ─────────────────────────────────────────────
+    // Stop any live reader threads from the previous session by toggling the
+    // running flag off, bumping the generation, then turning it back on.
+    // Threads blocked in pa.read() will see their generation is stale and exit.
+    st.0.store(false, Ordering::Relaxed);
+    let my_gen = st.1.fetch_add(1, Ordering::SeqCst) + 1;
+    // Give old threads one read-period (~32 ms) to notice the flag is false.
+    std::thread::sleep(std::time::Duration::from_millis(50));
     st.0.store(true, Ordering::Relaxed);
+
     let running = st.0.clone();
+    let gen     = st.1.clone();
     let handle  = app.clone();
 
     // Resolve default sink/source once — not inside the hot path.
@@ -1697,6 +2107,7 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
 
         let levels_clone  = Arc::clone(&levels);
         let running_clone = running.clone();
+        let gen_clone     = gen.clone();
 
         tokio::task::spawn_blocking(move || {
             // Create the PA simple connection inside spawn_blocking — Simple is !Send.
@@ -1711,14 +2122,19 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
                     return;
                 }
             };
-            eprintln!("start_vu_stream: {name} → libpulse connected to '{target}'");
+            eprintln!("start_vu_stream: {name} → libpulse connected to '{target}' (gen={my_gen})");
 
             // 512 bytes = 256 i16 samples = 32 ms at 8 kHz mono — fast enough to
-            // check `running` frequently while producing smooth meter values.
+            // check `running` + generation frequently while producing smooth meter values.
             let mut buf = vec![0u8; 512];
             let mut prev = 0.0f32;
 
-            while running_clone.load(Ordering::Relaxed) {
+            // Check BOTH the running flag AND the generation counter so that stale
+            // threads spawned by a previous `start_vu_stream` call stop cleanly even
+            // if the flag was reset to `true` before they exited pa.read().
+            while running_clone.load(Ordering::Relaxed)
+                  && gen_clone.load(Ordering::Relaxed) == my_gen
+            {
                 if pa.read(&mut buf).is_err() { break; }
 
                 // RMS for perceptual loudness (vs peak which looks jittery).
@@ -1737,12 +2153,12 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
         });
     }
 
-    // Emitter: publishes the shared map at ~30 fps.
+    // Emitter: publishes the shared map at ~60 fps, stops when this generation ends.
     tokio::spawn(async move {
-        while running.load(Ordering::Relaxed) {
+        while running.load(Ordering::Relaxed) && gen.load(Ordering::Relaxed) == my_gen {
             let snapshot = levels.lock().unwrap().clone();
             let _ = handle.emit("vu-levels", VuLevels { channels: snapshot });
-            tokio::time::sleep(std::time::Duration::from_millis(16)).await; // ~60 Hz
+            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
         }
     });
 
@@ -1791,19 +2207,30 @@ pub async fn open_locales_folder() -> Result<String, String> {
 //  ★ EPIC 3: Modular Plugin / Extensions System
 // ══════════════════════════════════════════════════════════════
 
-/// Developer guide written to the plugins folder on first open.
+/// Developer guide written to the extensions folder on first open.
 const EXTENSIONS_GUIDE: &str = r#"# How to Create an OpenGG Extension
+
+Extensions are self-contained directories placed here.
+Each one is an IIFE JavaScript bundle that registers a Vue 3 component on `window.__ext_<id>`.
+
+---
 
 ## Directory Structure
 
-Place your extension in its own subdirectory inside this `plugins/` folder:
-
 ```
-plugins/
+~/.local/share/opengg/extensions/
   my-extension/
-    manifest.json      ← required
-    README.md          ← optional
+    manifest.json        ← required — metadata + capability declarations
+    index.iife.js        ← IIFE bundle built with Vite/Rollup
+    icon.svg             ← optional — shown in Settings → Extensions
+    locales/
+      en.json            ← optional — i18n strings for this extension
+      ar.json
 ```
+
+The folder name is treated as the extension's `id`.
+
+---
 
 ## manifest.json Schema
 
@@ -1814,38 +2241,122 @@ plugins/
   "description": "A one-line description shown in Settings → Extensions.",
   "version":     "1.0.0",
   "author":      "Your Name",
-  "hooks": {
-    "sidebar_tab": false,
-    "export_filter": false,
-    "settings_section": false
-  }
+  "icon":        "icon.svg",
+  "main":        "index.iife.js",
+  "hasSettings": true
 }
 ```
 
-### Fields
+| Field          | Required | Description |
+|----------------|----------|-------------|
+| `id`           | ✓        | Unique kebab-case identifier. |
+| `name`         | ✓        | Display name. |
+| `description`  | ✗        | Short description (≤ 120 chars). |
+| `version`      | ✗        | SemVer string e.g. `"1.0.0"`. |
+| `author`       | ✗        | Author name or handle. |
+| `icon`         | ✗        | Icon filename relative to the extension root (SVG/PNG). |
+| `main`         | ✗        | IIFE bundle filename. Omit for metadata-only extensions. |
+| `hasSettings`  | ✗        | Set `true` to show a gear button that opens your settings panel. |
 
-| Field         | Required | Description |
-|---------------|----------|-------------|
-| `id`          | ✓        | Unique kebab-case identifier (a-z, 0-9, hyphen). |
-| `name`        | ✓        | Human-readable display name. |
-| `description` | ✗        | Short description (≤ 120 chars). |
-| `version`     | ✗        | SemVer string e.g. `"1.0.0"`. |
-| `hooks`       | ✗        | Future hook declarations (currently informational). |
+---
 
-## Future Hook Points (Roadmap)
+## IIFE Bundle Pattern
 
-- **sidebar_tab** — Inject a custom Vue component tab into the Advanced Editor sidebar.
-- **export_filter** — Register an FFmpeg filter that runs after the main video pipeline.
-- **settings_section** — Add a custom card to the Settings page.
+Your bundle must set `window.__ext_<id>` (dashes → underscores in the key):
 
-Once the hook API is stable this guide will be updated with working examples.
+```js
+// index.iife.js
+(function () {
+  const { defineComponent, ref, h } = window.Vue;
+
+  const SettingsPanel = defineComponent({
+    name: 'MyExtSettings',
+    setup() {
+      const count = ref(0);
+      return () => h('div', { style: 'padding:16px' }, [
+        h('p', `Count: ${count.value}`),
+        h('button', { onClick: () => count.value++ }, 'Increment'),
+      ]);
+    },
+  });
+
+  // Extension id "my-extension" → global key "__ext_my_extension"
+  window.__ext_my_extension = {
+    settingsComponent: SettingsPanel,
+  };
+})();
+```
+
+`window.Vue` is populated by OpenGG before any extension loads and exposes the
+full Vue 3 composition API (`ref`, `computed`, `defineComponent`, `h`, …).
+
+---
+
+## Extension API — window.opengg
+
+OpenGG exposes a restricted bridge for read-only Tauri commands:
+
+```js
+const clips = await window.opengg.invoke('get_clip_list');
+const port  = window.opengg.mediaPort;  // local media-server port
+```
+
+Only a whitelist of non-destructive commands are allowed. Calling a command
+not on the whitelist returns a rejected promise with an explanatory error.
+
+---
+
+## Locales
+
+Place `locales/<lang>.json` files alongside `manifest.json`.
+OpenGG merges them into the running vue-i18n instance under the namespace
+`ext.<your-extension-id>.*` so strings don't collide with core translations.
+
+```json
+// locales/en.json
+{
+  "settingsTitle": "My Extension Settings",
+  "countLabel":    "Count"
+}
+```
+
+Inside your component access them via the injected i18n instance or
+`window.Vue.inject('$i18n')`.
+
+---
+
+## Build Setup (Vite)
+
+```js
+// vite.config.js
+export default {
+  build: {
+    lib: {
+      entry: 'src/index.ts',
+      name:  'MyExt',
+      formats: ['iife'],
+      fileName: () => 'index.iife.js',
+    },
+    rollupOptions: {
+      // Exclude Vue from the bundle — OpenGG provides it via window.Vue
+      external: ['vue'],
+      output: { globals: { vue: 'Vue' } },
+    },
+  },
+};
+```
+
+See `extension-template/` in the OpenGG repository for a complete starter.
 "#;
 
-fn plugins_dir() -> PathBuf {
+fn extensions_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("opengg/plugins")
+        .join("opengg/extensions")
 }
+
+/// Public re-export so `main.rs` can add the extensions directory to the watcher.
+pub fn extensions_dir_pub() -> PathBuf { extensions_dir() }
 
 #[derive(Serialize)]
 pub struct ExtensionInfo {
@@ -1854,13 +2365,21 @@ pub struct ExtensionInfo {
     pub description: String,
     pub version: String,
     pub path: String,
+    #[serde(default)]
+    pub has_settings: bool,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub main: Option<String>,
+    #[serde(default)]
+    pub ui: Option<String>,
 }
 
-/// Creates `~/.local/share/opengg/plugins/` if needed, writes the developer
+/// Creates `~/.local/share/opengg/extensions/` if needed, writes the developer
 /// guide on the first visit, then opens the folder in the file manager.
 #[command]
 pub async fn open_extensions_folder() -> Result<String, String> {
-    let dir = plugins_dir();
+    let dir = extensions_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
 
     let guide = dir.join("HOW_TO_CREATE_EXTENSIONS.md");
@@ -1874,11 +2393,11 @@ pub async fn open_extensions_folder() -> Result<String, String> {
     Ok(path_str)
 }
 
-/// Scans `~/.local/share/opengg/plugins/` for subdirectories containing a
+/// Scans `~/.local/share/opengg/extensions/` for subdirectories containing a
 /// `manifest.json`. Returns the parsed metadata for each valid extension.
 #[command]
 pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
-    let dir = plugins_dir();
+    let dir = extensions_dir();
     if !dir.exists() { return Ok(vec![]); }
 
     let mut exts = Vec::new();
@@ -1907,9 +2426,13 @@ pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
         exts.push(ExtensionInfo {
             id,
             name,
-            description: v["description"].as_str().unwrap_or("").to_string(),
-            version:     v["version"].as_str().unwrap_or("0.0.0").to_string(),
-            path:        path.to_string_lossy().to_string(),
+            description:  v["description"].as_str().unwrap_or("").to_string(),
+            version:      v["version"].as_str().unwrap_or("0.0.0").to_string(),
+            path:         path.to_string_lossy().to_string(),
+            has_settings: v["hasSettings"].as_bool().unwrap_or(false),
+            icon:         v["icon"].as_str().map(|s| s.to_string()),
+            main:         v["main"].as_str().map(|s| s.to_string()),
+            ui:           v["ui"].as_str().map(|s| s.to_string()),
         });
     }
 
@@ -1963,26 +2486,21 @@ pub struct StorageInfo {
 /// Returns disk usage for the clips folder plus filesystem free/total space.
 #[command]
 pub async fn get_storage_info(clip_directories: Vec<String>) -> Result<StorageInfo, String> {
-    use std::fs;
     let mut total_count = 0u64;
     let mut total_used = 0u64;
     let mut first_existing: Option<PathBuf> = None;
 
     for dir_str in &clip_directories {
-        let folder = PathBuf::from(dir_str);
+        let folder = PathBuf::from(shexp(dir_str));
         if !folder.exists() { continue; }
         if first_existing.is_none() { first_existing = Some(folder.clone()); }
-        if let Ok(entries) = fs::read_dir(&folder) {
-            for e in entries.flatten() {
-                if let Ok(meta) = e.metadata() {
-                    if meta.is_file() {
-                        let name = e.file_name().to_string_lossy().to_lowercase();
-                        if name.ends_with(".mp4") || name.ends_with(".mkv") || name.ends_with(".webm") || name.ends_with(".mov") {
-                            total_count += 1;
-                            total_used += meta.len();
-                        }
-                    }
-                }
+        for e in walkdir::WalkDir::new(&folder).min_depth(1).into_iter().flatten() {
+            let p = e.path().to_path_buf();
+            if !p.is_file() { continue; }
+            let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+            if name.ends_with(".mp4") || name.ends_with(".mkv") || name.ends_with(".webm") || name.ends_with(".mov") {
+                total_count += 1;
+                if let Ok(meta) = e.metadata() { total_used += meta.len(); }
             }
         }
     }
@@ -2181,6 +2699,38 @@ fn get_all_clip_dirs(primary: &str) -> Vec<PathBuf> {
 }
 fn auto_name(input:&str,suffix:&str) -> String { let p=Path::new(input); let s=p.file_stem().unwrap_or_default().to_string_lossy(); let e=p.extension().unwrap_or_default().to_string_lossy(); p.parent().unwrap_or(Path::new(".")).join(format!("{s}{suffix}.{e}")).to_string_lossy().into() }
 
+/// Diff current watched directories against the settings file and update the
+/// notify watcher accordingly (watch new dirs, unwatch removed ones).
+#[command]
+pub async fn update_watch_dirs(app: tauri::AppHandle) -> Result<(), String> {
+    use notify::{RecursiveMode, Watcher};
+    let desired = get_all_clip_dirs("");
+    let watcher_state = app.state::<crate::WatcherHandle>();
+    let watched_state = app.state::<crate::WatchedDirs>();
+    let mut guard = watcher_state.0.lock().map_err(|e| e.to_string())?;
+    let mut current = watched_state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(watcher) = guard.as_mut() {
+        for dir in current.iter() {
+            if !desired.contains(dir) {
+                let _ = watcher.unwatch(dir);
+                log::info!("Watcher: unwatched {:?}", dir);
+            }
+        }
+        for dir in &desired {
+            if !current.contains(dir) {
+                let _ = std::fs::create_dir_all(dir);
+                if let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive) {
+                    log::warn!("Watcher: cannot watch {:?}: {e}", dir);
+                } else {
+                    log::info!("Watcher: now watching {:?}", dir);
+                }
+            }
+        }
+        *current = desired;
+    }
+    Ok(())
+}
+
 /// Prepend "OpenGG_" to the filename if it doesn't already start with it.
 fn smart_prefix(path: &str) -> String {
     let p = Path::new(path);
@@ -2223,6 +2773,67 @@ pub async fn register_global_shortcuts(
 fn probe_video(p:&Path) -> (f64,u32,u32) { let d=probe_duration(&p.to_string_lossy()); let dm=Command::new("ffprobe").args(["-v","quiet","-select_streams","v:0","-show_entries","stream=width,height","-of","csv=s=x:p=0",&p.to_string_lossy()]).output().ok().map(|o|String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default(); let ps:Vec<&str>=dm.split('x').collect(); (d,ps.first().and_then(|s|s.parse().ok()).unwrap_or(0),ps.get(1).and_then(|s|s.parse().ok()).unwrap_or(0)) }
 fn probe_duration(p:&str) -> f64 { Command::new("ffprobe").args(["-v","quiet","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",p]).output().ok().and_then(|o|String::from_utf8_lossy(&o.stdout).trim().parse().ok()).unwrap_or(0.0) }
 fn hash_str(s:&str) -> u64 { let mut h:u64=5381; for b in s.bytes(){h=h.wrapping_mul(33).wrapping_add(b as u64);} h }
+
+/// Extract "YYYY-MM-DD HH:MM" from a filename stem.
+/// Handles two formats:
+///   SteelSeries GG:        GameName__YYYY-MM-DD__HH-MM-SS  (double underscore)
+///   gpu-screen-recorder:   Prefix_YYYY-MM-DD_HH-MM-SS      (single underscore)
+/// Returns None if neither pattern matches.
+fn date_from_stem(stem: &str) -> Option<String> {
+    let b = stem.as_bytes();
+    // SteelSeries: YYYY-MM-DD__HH-MM-SS (20 chars)
+    // Pattern positions: DDDD-DD-DD__DD-DD-DD
+    if b.len() >= 20 {
+        for i in 0..=b.len()-20 {
+            let s = &b[i..i+20];
+            if s[4]==b'-' && s[7]==b'-' && s[10]==b'_' && s[11]==b'_' && s[14]==b'-' && s[17]==b'-'
+                && s[..4].iter().all(u8::is_ascii_digit)
+                && s[5..7].iter().all(u8::is_ascii_digit)
+                && s[8..10].iter().all(u8::is_ascii_digit)
+                && s[12..14].iter().all(u8::is_ascii_digit)
+                && s[15..17].iter().all(u8::is_ascii_digit)
+                && s[18..20].iter().all(u8::is_ascii_digit)
+            {
+                let t = std::str::from_utf8(&s[..20]).unwrap();
+                return Some(format!("{} {}:{}", &t[..10], &t[12..14], &t[15..17]));
+            }
+        }
+    }
+    // gpu-screen-recorder: YYYY-MM-DD_HH-MM-SS (19 chars)
+    // Pattern positions: DDDD-DD-DD_DD-DD-DD
+    if b.len() >= 19 {
+        for i in 0..=b.len()-19 {
+            let s = &b[i..i+19];
+            if s[4]==b'-' && s[7]==b'-' && s[10]==b'_' && s[13]==b'-' && s[16]==b'-'
+                && s[..4].iter().all(u8::is_ascii_digit)
+                && s[5..7].iter().all(u8::is_ascii_digit)
+                && s[8..10].iter().all(u8::is_ascii_digit)
+                && s[11..13].iter().all(u8::is_ascii_digit)
+                && s[14..16].iter().all(u8::is_ascii_digit)
+                && s[17..19].iter().all(u8::is_ascii_digit)
+            {
+                let t = std::str::from_utf8(&s[..19]).unwrap();
+                return Some(format!("{} {}:{}", &t[..10], &t[11..13], &t[14..16]));
+            }
+        }
+    }
+    None
+}
+
+/// Convert Unix timestamp to local-time "YYYY-MM-DD HH:MM" using libc::localtime_r.
+fn fmt_ts_local(s: i64) -> String {
+    #[cfg(unix)]
+    {
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { libc::localtime_r(&s, &mut tm); }
+        return format!("{}-{:02}-{:02} {:02}:{:02}",
+            tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+            tm.tm_hour, tm.tm_min);
+    }
+    #[allow(unreachable_code)]
+    fmt_ts(s)
+}
+
 /// Accurate Unix-timestamp → "YYYY-MM-DD HH:MM" using Howard Hinnant's civil calendar algorithm.
 fn fmt_ts(s: i64) -> String {
     let days    = s / 86400;
@@ -2245,11 +2856,15 @@ fn get_vol(n:&str) -> Option<f32> { let o=Command::new("pactl").args(["get-sink-
 //  ★ EPIC 2: Crash-log directory opener
 // ══════════════════════════════════════════════════════════════
 
-/// Returns the directory where opengg_crash.log lives.
+/// Returns the directory where per-session log files live.
+/// Mirrors main::logs_dir — kept as a standalone helper so commands can call it
+/// without pulling main into the module graph.
 pub fn crash_log_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("opengg")
+    // Same compile-time path resolution as main::LOGS_DIR — lands at <repo>/Logs.
+    const LOGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Logs");
+    let p = PathBuf::from(LOGS_DIR);
+    let _ = std::fs::create_dir_all(&p);
+    p.canonicalize().unwrap_or(p)
 }
 
 /// Opens the OS file manager at the crash-log directory so the user can
@@ -2431,8 +3046,233 @@ pub async fn set_autostart(enable: bool) -> Result<(), String> {
 
 use crate::GsrProcess;
 
+/// Detect the primary monitor's resolution via xrandr for use with `-w focused`.
+/// Returns "WxH" (e.g. "1920x1080"). Falls back to "1920x1080" if detection fails.
+fn detect_primary_resolution() -> String {
+    if let Ok(o) = std::process::Command::new("xrandr").arg("--current").output() {
+        let text = String::from_utf8_lossy(&o.stdout);
+        let mut any_connected: Option<String> = None;
+        for line in text.lines() {
+            if line.contains(" connected") && !line.contains(" disconnected") {
+                for word in line.split_whitespace() {
+                    // Resolution tokens look like "1920x1080+0+0"
+                    if word.contains('x') && word.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+                        let res = word.split('+').next().unwrap_or(word).to_string();
+                        if res.split('x').count() == 2 {
+                            if line.contains("primary") {
+                                return res; // prefer explicitly marked primary
+                            }
+                            any_connected.get_or_insert(res);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(r) = any_connected { return r; }
+    }
+    log::warn!("detect_primary_resolution: xrandr failed or no connected display; defaulting to 1920x1080");
+    "1920x1080".to_string()
+}
+
+/// List PipeWire/PulseAudio sink names for the audio capture devices dropdown.
+#[command]
+pub fn list_audio_sinks() -> Result<Vec<String>, String> {
+    let output = std::process::Command::new("pactl")
+        .args(["list", "sinks", "short"])
+        .output()
+        .map_err(|e| format!("pactl not found: {e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let sinks: Vec<String> = text
+        .lines()
+        .filter_map(|line| {
+            // Format: "<id>\t<name>\t<driver>\t<sample_spec>\t<state>"
+            line.split('\t').nth(1).map(|s| s.trim().to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    if sinks.is_empty() {
+        Err("No audio sinks found via pactl".into())
+    } else {
+        Ok(sinks)
+    }
+}
+
+/// Returns the current display server session type: "wayland", "x11", or "unknown".
+#[command]
+pub fn get_session_type() -> String {
+    if let Ok(t) = std::env::var("XDG_SESSION_TYPE") {
+        let t = t.trim().to_lowercase();
+        if !t.is_empty() { return t; }
+    }
+    // Fallback: check well-known environment variables
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return "wayland".to_string();
+    }
+    if std::env::var_os("DISPLAY").is_some() {
+        return "x11".to_string();
+    }
+    "unknown".to_string()
+}
+
+/// Returns a list of connected monitors via Tauri's built-in monitor enumeration.
+/// Each entry has a `name` (connector name as reported by the OS, e.g. "DP-1") and
+/// a human-readable `label` (e.g. "Display 1 — 1920×1080 (DP-1)").
+/// Falls back to a single "Primary Monitor / screen" entry if enumeration fails.
+#[derive(Serialize)]
+pub struct MonitorInfo {
+    pub name: String,
+    pub label: String,
+}
+
+#[command]
+pub fn list_monitors(_app: AppHandle) -> Vec<MonitorInfo> {
+    // Use gpu-screen-recorder's own monitor enumeration, NOT Tauri's available_monitors().
+    //
+    // Tauri's API returns EDID model names ("BenQ GW2780", "MASI251K03") which are NOT
+    // valid GSR `-w` targets — passing them causes an immediate GSR crash.
+    // GSR's --list-monitors returns the exact X11/Wayland connector names (e.g. "DP-1",
+    // "HDMI-A-1", "screen") that its `-w` flag accepts.
+    //
+    // Example stdout from `gpu-screen-recorder --list-monitors`:
+    //   screen
+    //   DP-1
+    //   DP-2
+    //   HDMI-A-1
+    // Each non-empty line is one valid `-w` argument.
+    let output = std::process::Command::new("gpu-screen-recorder")
+        .arg("--list-monitors")
+        .output();
+
+    let stdout = match output {
+        Ok(o) if !o.stdout.is_empty() => String::from_utf8_lossy(&o.stdout).to_string(),
+        Ok(o) => {
+            log::warn!(
+                "gpu-screen-recorder --list-monitors produced no output (exit={:?}); falling back",
+                o.status.code()
+            );
+            String::new()
+        }
+        Err(e) => {
+            log::warn!("gpu-screen-recorder --list-monitors failed to spawn: {e}; falling back");
+            String::new()
+        }
+    };
+
+    let mut monitors: Vec<MonitorInfo> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|name| {
+            // "screen" is GSR's "capture all outputs / entire desktop" pseudo-target.
+            let label = if name == "screen" {
+                "Entire Desktop".to_string()
+            } else {
+                // Connector names are already human-readable ("DP-1", "HDMI-A-1").
+                name.to_string()
+            };
+            MonitorInfo { name: name.to_string(), label }
+        })
+        .collect();
+
+    if monitors.is_empty() {
+        // GSR not installed, not in PATH, or no displays detected — safe fallback.
+        monitors.push(MonitorInfo { name: "screen".into(), label: "Entire Desktop".into() });
+    }
+
+    monitors
+}
+
+/// Detect which monitor output (e.g. "DP-1") the currently focused window is on.
+/// Uses xdotool to find the window position, then xrandr to match it to a monitor.
+/// Returns None on Wayland, if tools are unavailable, or if detection fails.
+fn get_focused_window_monitor() -> Option<String> {
+    // Wayland: xdotool is unreliable — bail early
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        log::info!("Wayland detected — skipping xdotool monitor detection");
+        return None;
+    }
+
+    // Step 1: get the focused window ID (decimal)
+    let win_id_out = std::process::Command::new("xdotool")
+        .arg("getactivewindow")
+        .output()
+        .ok()?;
+    let win_id = String::from_utf8_lossy(&win_id_out.stdout).trim().to_string();
+    if win_id.is_empty() { return None; }
+
+    // Step 2: get the window's absolute position on the desktop
+    // xdotool getwindowgeometry output: "Window NNN\n  Position: X,Y (screen N)\n  Geometry: WxH"
+    let geom_out = std::process::Command::new("xdotool")
+        .args(["getwindowgeometry", "--shell", &win_id])
+        .output()
+        .ok()?;
+    let geom_text = String::from_utf8_lossy(&geom_out.stdout).into_owned();
+    // --shell format: "X=123\nY=456\nWIDTH=...\nHEIGHT=..."
+    let win_x: i64 = geom_text.lines()
+        .find(|l| l.starts_with("X="))
+        .and_then(|l| l[2..].parse().ok())?;
+    let win_y: i64 = geom_text.lines()
+        .find(|l| l.starts_with("Y="))
+        .and_then(|l| l[2..].parse().ok())?;
+
+    // Step 3: parse `xrandr --listmonitors` to get monitor names + offsets
+    // Output format per monitor line: "  N: +*DP-1 1920/527x1080/296+0+0  ..."
+    let xrandr_out = std::process::Command::new("xrandr")
+        .arg("--listmonitors")
+        .output()
+        .ok()?;
+    let xrandr_text = String::from_utf8_lossy(&xrandr_out.stdout).into_owned();
+
+    // Each monitor line: "  0: +*DP-1 1920/527x1080/296+0+0   0"
+    // Geometry token: "<w>/<mm>x<h>/<mm>+<ox>+<oy>"
+    let mut best: Option<String> = None;
+    for line in xrandr_text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 3 { continue; }
+        // parts[1] is monitor name (may have leading '+' or '*' flags)
+        let name = parts[1].trim_start_matches('+').trim_start_matches('*');
+        // parts[2] is geometry token
+        let geom_tok = parts[2];
+        // Parse "WxH+OX+OY" or "W/mmxH/mm+OX+OY"
+        let geom_clean = geom_tok
+            .split('+')
+            .collect::<Vec<_>>();
+        if geom_clean.len() < 3 { continue; }
+        let ox: i64 = geom_clean[1].parse().ok()?;
+        let oy: i64 = geom_clean[2].parse().ok()?;
+        // Width/height may be "1920/527" or plain "1920"
+        let wh = geom_clean[0];
+        let (w_part, h_part) = wh.split_once('x')?;
+        let w: i64 = w_part.split('/').next()?.parse().ok()?;
+        let h: i64 = h_part.split('/').next()?.parse().ok()?;
+        // Check if window origin falls inside this monitor's rectangle
+        if win_x >= ox && win_x < ox + w && win_y >= oy && win_y < oy + h {
+            best = Some(name.to_string());
+            // Prefer primary (marked with '*')
+            if parts[1].contains('*') { break; }
+        }
+    }
+    if let Some(ref mon) = best {
+        log::info!("Focused window (id={win_id}) at ({win_x},{win_y}) → monitor {mon}");
+    }
+    best
+}
+
+/// Returns true if the gpu-screen-recorder binary is found in PATH.
+#[command]
+pub fn check_gsr_installed() -> bool {
+    std::process::Command::new("which")
+        .arg("gpu-screen-recorder")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Start gpu-screen-recorder in replay-buffer mode.
-/// `output_dir`: where clips are saved; `replay_secs`: buffer length; `fps`, `quality`: encode settings.
+/// Quality is passed directly as a GSR preset string: cbr | medium | high | very_high | ultra.
+/// When quality is "cbr", `bitrate_kbps` sets the target bitrate (e.g. 8000 = 8 Mbps).
+/// `monitor_target` is passed to `-w` (e.g. "screen", "DP-1", "HDMI-1").
+/// Audio sources are PipeWire sink names without the "OpenGG_" prefix (e.g. ["Game","Chat","Mic"]).
 #[command]
 pub fn start_gsr_replay(
     app: AppHandle,
@@ -2440,62 +3280,374 @@ pub fn start_gsr_replay(
     replay_secs: u32,
     fps: u32,
     quality: String,
+    bitrate_kbps: Option<u32>,
+    monitor_target: String,
+    audio_sources: Vec<String>,
 ) -> Result<(), String> {
+    use crate::GsrSpawnParams;
     let state = app.state::<GsrProcess>();
     let mut lock = state.0.lock().unwrap();
     if lock.is_some() {
         return Err("gpu-screen-recorder is already running".into());
     }
-    let crf = match quality.as_str() {
-        "Low"    => "35",
-        "Medium" => "28",
-        _        => "23", // High
+    let expanded = shexp(&output_dir);
+    std::fs::create_dir_all(&expanded)
+        .map_err(|e| format!("Cannot create output dir '{expanded}': {e}"))?;
+
+    // Guard against stale settings that contain EDID model names or resolution strings
+    // (e.g. "1920x1080", "BenQ GW2780") left over from the old Tauri monitor API.
+    // GSR only accepts connector names ("screen", "DP-1", "HDMI-A-1", "focused").
+    // A valid connector name never starts with a digit and never contains a space.
+    let monitor_target = {
+        let looks_invalid = monitor_target.is_empty()
+            || monitor_target.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+            || monitor_target.contains(' ');
+        if looks_invalid {
+            log::warn!(
+                "gsrMonitorTarget {:?} is not a valid GSR connector name — resetting to 'screen'",
+                monitor_target
+            );
+            "screen".to_string()
+        } else {
+            monitor_target
+        }
     };
-    // Use the "focused" window as capture target; falls back to entire screen if not available.
-    let child = std::process::Command::new("gpu-screen-recorder")
-        .args([
-            "-w", "focused",
-            "-f", &fps.to_string(),
-            "-r", &replay_secs.to_string(),
-            "-c", "mp4",
-            "-o", &output_dir,
-            "-q", crf,
-        ])
-        .spawn()
+
+    // For "focused" target: resolve to an actual monitor name using xdotool + xrandr.
+    // This fixes multi-monitor setups where `-w focused` captures the wrong display.
+    // Falls back to "focused" if detection fails (Wayland, missing tools, or parse error).
+    let target = match monitor_target.as_str() {
+        "focused" => {
+            get_focused_window_monitor()
+                .unwrap_or_else(|| {
+                    log::warn!("Could not detect monitor for focused window; falling back to -w focused");
+                    "focused".to_string()
+                })
+        }
+        "" | "screen" => "screen".to_string(),
+        other => other.to_string(),
+    };
+    let fps_str = fps.to_string();
+    let secs_str = replay_secs.to_string();
+
+    // "-w focused" (fallback only) requires an explicit resolution; detect primary monitor
+    let focused_resolution = if target == "focused" {
+        Some(detect_primary_resolution())
+    } else {
+        None
+    };
+
+    let mut cmd = std::process::Command::new("gpu-screen-recorder");
+    cmd.args([
+        "-w", &target,
+        "-f", &fps_str,
+        "-r", &secs_str,
+        "-c", "mp4",
+        "-o", &expanded,
+    ]);
+
+    // CBR mode: GSR requires an integer -q index even when -bm cbr is set. 0 = lowest quality
+    // index, which is effectively ignored when the bitrate is set via -ffmpeg-opts.
+    if quality == "cbr" {
+        cmd.args(["-bm", "cbr", "-q", "0"]);
+        if let Some(kbps) = bitrate_kbps {
+            let bv = format!("-b:v {}k", kbps);
+            cmd.args(["-ffmpeg-opts", &bv]);
+        }
+    } else {
+        cmd.args(["-q", quality.as_str()]);
+    }
+
+    // Append resolution when capturing focused window
+    if let Some(ref res) = focused_resolution {
+        cmd.args(["-s", res]);
+    }
+
+    for src in &audio_sources {
+        // Legacy short names (e.g. "Game") are prefixed; full sink names are passed as-is
+        let sink = if src.contains('_') || src.contains('.') || src.contains('-') {
+            src.clone()
+        } else {
+            format!("OpenGG_{src}")
+        };
+        // PipeWire/PulseAudio virtual sinks require the .monitor suffix for capture
+        let monitor = if sink.ends_with(".monitor") { sink } else { format!("{sink}.monitor") };
+        cmd.args(["-a", &monitor]);
+    }
+
+    let child = cmd.spawn()
         .map_err(|e| format!("Failed to start gpu-screen-recorder: {e}"))?;
-    log::info!("GSR started (pid {})", child.id());
-    *lock = Some(child);
+    log::info!(
+        "GSR started (pid {}) replay={}s fps={fps} quality={quality} bitrate={bitrate_kbps:?}kbps target={target} dir={expanded} audio={:?}",
+        child.id(), replay_secs, audio_sources
+    );
+    *lock = Some((child, GsrSpawnParams {
+        output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources,
+    }));
+    let _ = app.emit("gsr-status-changed", serde_json::json!({"running": true}));
     Ok(())
 }
 
-/// Save the current replay buffer by sending SIGUSR1 to the GSR process.
-#[command]
-pub fn save_gsr_replay(app: AppHandle) -> Result<(), String> {
-    let state = app.state::<GsrProcess>();
-    let lock = state.0.lock().unwrap();
-    match &*lock {
-        Some(child) => {
-            let pid = child.id();
-            #[cfg(unix)]
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGUSR1); }
-            log::info!("GSR SIGUSR1 → pid {pid}");
-            Ok(())
+/// Sanitize a string so it is safe to use as a filename component.
+/// Replaces any character that is not alphanumeric, a hyphen, or an underscore with `_`.
+/// Strips leading/trailing underscores and collapses consecutive underscores.
+fn sanitize_filename(s: &str) -> String {
+    let raw: String = s.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .collect();
+    // Collapse runs of underscores, then trim boundary underscores
+    let mut out = String::with_capacity(raw.len());
+    let mut prev_under = false;
+    for c in raw.chars() {
+        if c == '_' {
+            if !prev_under { out.push(c); }
+            prev_under = true;
+        } else {
+            out.push(c);
+            prev_under = false;
         }
-        None => Err("gpu-screen-recorder is not running".into()),
+    }
+    out.trim_matches('_').to_string()
+}
+
+/// Find the newest video file written *strictly after* `after_time` in `dir`.
+/// Polls every 200 ms for up to `timeout_ms` milliseconds.
+/// This avoids the mtime-collision bug where a previously-played clip appears
+/// newer than the freshly flushed replay file.
+fn newest_video_after(
+    dir: &str,
+    after_time: std::time::SystemTime,
+    timeout_ms: u64,
+) -> Option<std::path::PathBuf> {
+    const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "ts", "flv"];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        let found = std::fs::read_dir(dir)
+            .ok()
+            .and_then(|rd| {
+                rd.filter_map(|e| e.ok())
+                  .filter(|e| {
+                      e.path().extension()
+                          .and_then(|x| x.to_str())
+                          .map(|x| VIDEO_EXTS.contains(&x.to_lowercase().as_str()))
+                          .unwrap_or(false)
+                  })
+                  .filter(|e| {
+                      e.metadata()
+                          .and_then(|m| m.modified())
+                          .map(|t| t > after_time)
+                          .unwrap_or(false)
+                  })
+                  .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+                  .map(|e| e.path())
+            });
+        if found.is_some() {
+            return found;
+        }
+        if std::time::Instant::now() >= deadline {
+            log::warn!("newest_video_after: no new file in {dir} after {timeout_ms}ms");
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
 }
 
-/// Stop the GSR process with SIGTERM.
+/// Save the current replay buffer via SIGUSR1.
+/// After the file flushes, the saved clip is renamed to `<GameName>_<timestamp>.mp4`.
+/// If `restart_on_save` is true, GSR is also killed and respawned so the next save
+/// captures only footage recorded after this moment.
+#[command]
+pub fn save_gsr_replay(app: AppHandle, restart_on_save: bool) -> Result<(), String> {
+    use crate::GsrSpawnParams;
+    let state = app.state::<GsrProcess>();
+
+    // Capture active window title BEFORE signalling (window focus may change after).
+    let game_title = std::process::Command::new("xdotool")
+        .args(["getactivewindow", "getwindowname"])
+        .output()
+        .ok()
+        .and_then(|o| if o.status.success() { Some(String::from_utf8_lossy(&o.stdout).trim().to_string()) } else { None })
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    // Capture current time just before SIGUSR1 so we can identify the new file by mtime.
+    // This avoids the mtime-collision bug where a previously-played clip has a newer
+    // mtime than the freshly-flushed replay file.
+    let pre_save_time = std::time::SystemTime::now();
+
+    // Step 1: send SIGUSR1 and clone spawn params.
+    // Lock scope is tight — we drop it before calling start_gsr_replay to avoid deadlock.
+    let (output_dir_exp, restart_params): (String, Option<GsrSpawnParams>) = {
+        let lock = state.0.lock().unwrap();
+        match &*lock {
+            Some((child, params)) => {
+                let pid = child.id();
+                #[cfg(unix)]
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGUSR1); }
+                log::info!("GSR SIGUSR1 → pid {pid}");
+                let expanded = shexp(&params.output_dir);
+                let rp = if restart_on_save {
+                    Some(GsrSpawnParams {
+                        output_dir:     params.output_dir.clone(),
+                        replay_secs:    params.replay_secs,
+                        fps:            params.fps,
+                        quality:        params.quality.clone(),
+                        bitrate_kbps:   params.bitrate_kbps,
+                        monitor_target: params.monitor_target.clone(),
+                        audio_sources:  params.audio_sources.clone(),
+                    })
+                } else {
+                    None
+                };
+                (expanded, rp)
+            }
+            None => return Err("gpu-screen-recorder is not running".into()),
+        }
+    }; // lock dropped here
+
+    // Step 2: poll for the new file (written after pre_save_time) for up to 5 s.
+    // Using a polling loop instead of a fixed sleep makes this both more reliable
+    // and faster on fast NVMe storage while still handling slow HDDs.
+
+    // Step 3: rename the file that appeared after the SIGUSR1 signal.
+    if let Some(src_path) = newest_video_after(&output_dir_exp, pre_save_time, 5000) {
+        let safe_name = sanitize_filename(&game_title);
+        let safe_name = if safe_name.is_empty() { "Clip".to_string() } else { safe_name };
+        let now = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+            // Format as YYYY-MM-DD_HH-MM-SS using simple arithmetic (no chrono dep).
+            let s = secs;
+            let sec  = s % 60;
+            let min  = (s / 60) % 60;
+            let hour = (s / 3600) % 24;
+            let days = s / 86400; // days since 1970-01-01
+            // Rata Die algorithm → Gregorian calendar
+            let z = days + 719468;
+            let era = z / 146097;
+            let doe = z - era * 146097;
+            let yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;
+            let y   = yoe + era * 400;
+            let doy = doe - (365*yoe + yoe/4 - yoe/100);
+            let mp  = (5*doy + 2) / 153;
+            let d   = doy - (153*mp + 2)/5 + 1;
+            let m   = if mp < 10 { mp + 3 } else { mp - 9 };
+            let y   = if m <= 2 { y + 1 } else { y };
+            format!("{y:04}-{m:02}-{d:02}_{hour:02}-{min:02}-{sec:02}")
+        };
+        let new_name = format!("{safe_name}_{now}.mp4");
+        let dest = std::path::Path::new(&output_dir_exp).join(&new_name);
+        let (save_ok, filesize_mb) = if let Err(e) = std::fs::rename(&src_path, &dest) {
+            log::warn!("GSR clip rename failed ({src_path:?} → {dest:?}): {e}");
+            (false, 0.0f64)
+        } else {
+            log::info!("GSR clip saved as {new_name}");
+            let mb = std::fs::metadata(&dest).map(|m| m.len() as f64 / 1_000_000.0).unwrap_or(0.0);
+            (true, mb)
+        };
+        let _ = app.emit("clip-saved", serde_json::json!({
+            "game":        game_title,
+            "filename":    new_name,
+            "filesize_mb": (filesize_mb * 10.0).round() / 10.0,
+            "success":     save_ok,
+        }));
+    }
+
+    // Step 4: if restart requested, kill and respawn GSR.
+    if let Some(params) = restart_params {
+        {
+            let mut lock = state.0.lock().unwrap();
+            if let Some((mut child, _)) = lock.take() {
+                gsr_kill_graceful(&mut child);
+                log::info!("GSR stopped for restart-on-save (SIGINT + wait)");
+            }
+        } // lock dropped before respawn
+        start_gsr_replay(
+            app,
+            params.output_dir,
+            params.replay_secs,
+            params.fps,
+            params.quality,
+            params.bitrate_kbps,
+            params.monitor_target,
+            params.audio_sources,
+        )?;
+        log::info!("GSR restarted (restart_on_save=true)");
+    }
+    Ok(())
+}
+
+/// Gracefully kill and immediately respawn GSR with updated settings (hot-reload).
+#[command]
+pub fn restart_gsr_replay(
+    app: AppHandle,
+    output_dir: String,
+    replay_secs: u32,
+    fps: u32,
+    quality: String,
+    bitrate_kbps: Option<u32>,
+    monitor_target: String,
+    audio_sources: Vec<String>,
+) -> Result<(), String> {
+    {
+        let state = app.state::<GsrProcess>();
+        let mut lock = state.0.lock().unwrap();
+        if let Some((mut child, _)) = lock.take() {
+            gsr_kill_graceful(&mut child);
+            log::info!("GSR stopped for restart (SIGINT + wait)");
+        }
+    }
+    start_gsr_replay(app, output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources)
+}
+
+/// Send SIGINT to let GSR flush cleanly, wait up to 2 s, then SIGKILL as fallback.
+/// Reaping with `.wait()` prevents zombie PIDs.
+/// Also kills `gsr-kms-server` — a helper daemon spawned by GSR that survives
+/// the parent process and must be cleaned up explicitly.
+fn gsr_kill_graceful(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as libc::pid_t;
+        unsafe { libc::kill(pid, libc::SIGINT); }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    // Exited cleanly — still need to reap gsr-kms-server
+                    kill_kms_server();
+                    return;
+                }
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                _ => break, // timeout — fall through to SIGKILL
+            }
+        }
+    }
+    let _ = child.kill(); // SIGKILL — last resort
+    let _ = child.wait(); // reap zombie
+    kill_kms_server();
+}
+
+/// Kill the `gsr-kms-server` helper daemon that gpu-screen-recorder spawns.
+/// It does not exit when the parent process is killed, so we must clean it up
+/// explicitly to prevent dangling GPU capture sessions.
+fn kill_kms_server() {
+    let _ = std::process::Command::new("pkill")
+        .args(["-9", "gsr-kms-server"])
+        .output();
+}
+
+/// Stop the GSR process gracefully (SIGINT → SIGKILL fallback).
 #[command]
 pub fn stop_gsr_replay(app: AppHandle) -> Result<(), String> {
     let state = app.state::<GsrProcess>();
     let mut lock = state.0.lock().unwrap();
-    if let Some(mut child) = lock.take() {
-        #[cfg(unix)]
-        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM); }
-        let _ = child.wait();
-        log::info!("GSR stopped");
+    if let Some((mut child, _)) = lock.take() {
+        gsr_kill_graceful(&mut child);
+        log::info!("GSR stopped (SIGINT + wait)");
     }
+    drop(lock); // release mutex before emitting
+    let _ = app.emit("gsr-status-changed", serde_json::json!({"running": false}));
     Ok(())
 }
 
@@ -2505,9 +3657,9 @@ pub fn is_gsr_running(app: AppHandle) -> bool {
     let state = app.state::<GsrProcess>();
     let mut lock = state.0.lock().unwrap();
     match lock.as_mut() {
-        Some(child) => match child.try_wait() {
-            Ok(None) => true,    // still running
-            _        => { lock.take(); false } // exited — clean up
+        Some((child, _)) => match child.try_wait() {
+            Ok(None) => true,
+            _        => { lock.take(); false }
         },
         None => false,
     }
@@ -2524,7 +3676,233 @@ pub fn get_active_window_title() -> String {
         .unwrap_or_default()
 }
 
+// ═══ DSP: jalv-based LV2 filter chain ═══
+//
+// Architecture: one `jalv` subprocess per channel, hosted as a PipeWire JACK client.
+// jalv reads port updates from stdin: "<port_index> <value>\n"
+//
+// LSP para_equalizer_x10_stereo control port layout (verify with `lv2info`):
+//   0        bypass (0.0 = active, 1.0 = bypass)
+//   1..14    filter type / freq / Q for each of the 10 bands
+//   15..24   gain (dB) for bands 0–9  ← what we write on every apply_eq call
+//
+// TODO: wire jalv output to the corresponding virtual sink via `pw-link`.
+// Currently the EQ runs in-process (jalv jack client auto-connects via WirePlumber).
+
+const LSP_EQ_URI: &str = "http://lsp-plug.in/plugins/lv2/para_equalizer_x10_stereo";
+
+/// Spawn a jalv LV2 host for the given channel's EQ.
+/// The child's stdin is kept open so `apply_eq` can push port updates at any time.
+#[command]
+pub async fn start_eq_engine(app: AppHandle, channel: String) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let procs = app.state::<crate::JalvProcesses>();
+    let mut map = procs.0.lock().unwrap();
+    // Kill stale instance for this channel before spawning a fresh one.
+    if let Some((mut child, _stdin)) = map.remove(&channel) {
+        let _ = child.kill();
+    }
+    let jack_name = format!("opengg_eq_{}", channel.to_lowercase());
+    let mut child = Command::new("jalv")
+        .args(["-n", &jack_name, "-i", LSP_EQ_URI])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("jalv spawn failed: {e}. Install with: sudo apt install jalv"))?;
+    let stdin = child.stdin.take().ok_or("no stdin on jalv child")?;
+    map.insert(channel.clone(), (child, stdin));
+    eprintln!("[opengg] start_eq_engine: jalv started for channel={channel}, jack_name={jack_name}");
+    Ok(())
+}
+
+/// Kill the jalv EQ host for the given channel.
+#[command]
+pub async fn stop_eq_engine(app: AppHandle, channel: String) -> Result<(), String> {
+    let procs = app.state::<crate::JalvProcesses>();
+    let mut map = procs.0.lock().unwrap();
+    if let Some((mut child, _stdin)) = map.remove(&channel) {
+        let _ = child.kill();
+        eprintln!("[opengg] stop_eq_engine: jalv stopped for channel={channel}");
+    }
+    Ok(())
+}
+
+/// Push 10-band EQ gain values to the running jalv instance for `channel`.
+/// Each value is in dB, range -12.0..+12.0.
+/// Port indices 15–24 = bands 0–9 in LSP para_equalizer_x10_stereo.
+#[command]
+pub async fn apply_eq(app: AppHandle, channel: String, bands: Vec<f32>) -> Result<(), String> {
+    use std::io::Write;
+    let procs = app.state::<crate::JalvProcesses>();
+    let mut map = procs.0.lock().unwrap();
+    let entry = map.get_mut(&channel).ok_or_else(|| {
+        format!("No EQ engine running for channel '{channel}'. Call start_eq_engine first.")
+    })?;
+    // Write each band gain to the corresponding jalv control port.
+    // Port index 15 = band 0, ..., port index 24 = band 9.
+    const GAIN_PORT_BASE: usize = 15;
+    for (i, &gain_db) in bands.iter().enumerate().take(10) {
+        writeln!(entry.1, "{} {:.4}", GAIN_PORT_BASE + i, gain_db)
+            .map_err(|e| format!("jalv stdin write failed: {e}"))?;
+    }
+    entry.1.flush().map_err(|e| format!("jalv stdin flush failed: {e}"))?;
+    Ok(())
+}
+
+#[command]
+pub async fn apply_noise_gate(_channel: String, _enabled: bool, _threshold: f32, _auto_detect: bool) -> Result<(), String> { Ok(()) }
+#[command]
+pub async fn apply_compressor(_channel: String, _enabled: bool, _level: f32) -> Result<(), String> { Ok(()) }
+#[command]
+pub async fn apply_noise_reduction(_channel: String, _enabled: bool, _intensity: f32) -> Result<(), String> { Ok(()) }
+
+/// Spawn a transient overlay notification window.
+/// `mode` controls which backend: "auto"|"x11-overlay"|"gsr-notify"|"system"|"disabled".
+/// `position` is one of: "top-right"|"top-left"|"bottom-right"|"bottom-left".
+/// `duration_secs` controls how long the window stays visible (1–30s, clamped).
+/// `enabled` is passed from the frontend (reflects the `enableClipNotifications` setting).
+#[command]
+pub fn show_clip_notification(
+    app: AppHandle,
+    game: String,
+    filename: String,
+    filesize_mb: f64,
+    success: bool,
+    enabled: bool,
+    mode: Option<String>,
+    position: Option<String>,
+    duration_secs: Option<u64>,
+) -> Result<(), String> {
+    if !enabled { return Ok(()); }
+    let mode = mode.as_deref().unwrap_or("auto");
+    if mode == "disabled" { return Ok(()); }
+
+    // For "system" mode, fall back to notify-send and skip spawning an overlay window.
+    if mode == "system" {
+        let summary = if success { "Clip Saved" } else { "Clip Save Failed" };
+        let body = format!("{game} — {filename}");
+        let _ = std::process::Command::new("notify-send")
+            .args(["--app-name=OpenGG", "--urgency=normal", "--expire-time=4000", summary, &body])
+            .spawn();
+        return Ok(());
+    }
+
+    // Clamp duration to [1, 30] seconds; default 4s.
+    let duration_ms = duration_secs.unwrap_or(4).clamp(1, 30) * 1000;
+
+    // Build the overlay URL served from the same Vite dev/prod server on localhost:1420
+    // Use a stable unique label so multiple notifications can stack
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let label = format!("notif-{ts}");
+
+    // URL-encode params manually to avoid adding a new crate dependency
+    fn enc(s: &str) -> String {
+        s.chars().flat_map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => vec![c],
+            c => c.encode_utf8(&mut [0u8; 4]).bytes()
+                  .flat_map(|b| [b'%', hex_nibble(b >> 4), hex_nibble(b & 0xf)])
+                  .map(|b| b as char)
+                  .collect(),
+        }).collect()
+    }
+    fn hex_nibble(n: u8) -> u8 { if n < 10 { b'0' + n } else { b'A' + n - 10 } }
+
+    // Query string shared between dev and prod builds
+    let query = format!(
+        "?overlay=1&game={}&filename={}&filesize={}&success={}",
+        enc(&game), enc(&filename),
+        enc(&format!("{:.1}", filesize_mb)),
+        if success { "1" } else { "0" },
+    );
+
+    // Dev: Vite serves at http://localhost:1420 (External URL required)
+    // Prod: Tauri serves the bundled app at tauri://localhost (App URL required)
+    // Using the wrong scheme causes a blank white window.
+    #[cfg(debug_assertions)]
+    let webview_url = tauri::WebviewUrl::External(
+        format!("http://localhost:1420/{query}")
+            .parse()
+            .map_err(|e| format!("Bad overlay URL: {e}"))?,
+    );
+    #[cfg(not(debug_assertions))]
+    let webview_url = tauri::WebviewUrl::App(std::path::PathBuf::from(&query));
+
+    // ── Position: corner of the primary monitor based on `position` setting ──
+    let notif_w = 380.0_f64;
+    let notif_h = 120.0_f64;
+    let margin  = 20.0_f64;
+    let pos_str = position.as_deref().unwrap_or("top-right");
+    let (x, y) = app
+        .get_webview_window("main")
+        .and_then(|w| w.primary_monitor().ok().flatten())
+        .map(|m| {
+            let scale = m.scale_factor();
+            let sz    = m.size();
+            let pos   = m.position();
+            let lw = sz.width  as f64 / scale;
+            let lh = sz.height as f64 / scale;
+            let ox = pos.x as f64 / scale;
+            let oy = pos.y as f64 / scale;
+            match pos_str {
+                "top-left"     => (ox + margin,                   oy + margin),
+                "bottom-right" => (ox + lw - notif_w - margin,    oy + lh - notif_h - margin),
+                "bottom-left"  => (ox + margin,                   oy + lh - notif_h - margin),
+                _              => (ox + lw - notif_w - margin,    oy + margin), // top-right (default)
+            }
+        })
+        .unwrap_or_else(|| match pos_str {
+            "top-left"     => (margin, margin),
+            "bottom-right" => (1920.0 - notif_w - margin, 1080.0 - notif_h - margin),
+            "bottom-left"  => (margin, 1080.0 - notif_h - margin),
+            _              => (1920.0 - notif_w - margin, margin),
+        });
+
+    let win = tauri::WebviewWindowBuilder::new(&app, label, webview_url)
+    .always_on_top(true)
+    .focused(false)
+    .decorations(false)
+    .skip_taskbar(true)
+    .transparent(true)
+    .resizable(false)
+    .inner_size(notif_w, notif_h)
+    .position(x, y)
+    .build()
+    .map_err(|e| format!("Overlay window failed: {e}"))?;
+
+    // Pass all mouse events through — user can keep playing without interruption.
+    let _ = win.set_ignore_cursor_events(true);
+
+    // Auto-close after duration_ms.
+    let win_for_thread = win.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(duration_ms));
+        let _ = win_for_thread.close();
+    });
+
+    drop(win); // thread holds the only remaining clone
+    Ok(())
+}
+
 // rng() removed — VU meters now use real PipeWire peak data
 async fn call_dbus<R:serde::de::DeserializeOwned+zbus::zvariant::Type>(m:&str,p:&str,i:&str,a:impl serde::Serialize+zbus::zvariant::Type)->Result<R,String>{let c=zbus::Connection::session().await.map_err(|e|format!("{e}"))?;let r:R=c.call_method(Some("org.opengg.Daemon"),p,Some(i),m,&a).await.map_err(|e|format!("{m}:{e}"))?.body().deserialize().map_err(|e|format!("{m}:{e}"))?;Ok(r)}
-async fn call_dbus_void(m:&str,p:&str,i:&str,a:impl serde::Serialize+zbus::zvariant::Type)->Result<(),String>{let c=zbus::Connection::session().await.map_err(|e|format!("{e}"))?;c.call_method(Some("org.opengg.Daemon"),p,Some(i),m,&a).await.map_err(|e|format!("{m}:{e}"))?;Ok(())}
+async fn call_dbus_void(m: &str, p: &str, i: &str, a: impl serde::Serialize + zbus::zvariant::Type) -> Result<(), String> {
+    let conn = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("call_dbus: session connection failed — {e}");
+            return Err(format!("D-Bus session connect: {e}"));
+        }
+    };
+    match conn.call_method(Some("org.opengg.Daemon"), p, Some(i), m, &a).await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("call_dbus: method '{m}' on {p}.{i} failed — {e}");
+            Err(format!("D-Bus method {m}: {e}"))
+        }
+    }
+}
 fn run_cmd(c:&str,a:&[&str])->Result<String,String>{let o=Command::new(c).args(a).output().map_err(|e|format!("{c}:{e}"))?;if o.status.success(){Ok(String::from_utf8_lossy(&o.stdout).trim().into())}else{Err(String::from_utf8_lossy(&o.stderr).trim().into())}}
