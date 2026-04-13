@@ -134,7 +134,10 @@
       "clipSettings": "إعدادات المقاطع",
       "storage": "التخزين",
       "extensions": "الإضافات",
-      "trackManagement": "مسارات الخط الزمني"
+      "store": "المتجر",
+      "trackManagement": "مسارات الخط الزمني",
+      "about": "حول",
+      "notifications": "الإشعارات"
     },
     "groups": {
       "general": "عام",
@@ -244,22 +247,28 @@
     },
     "extensions": {
       "title": "الإضافات",
-      "hint": "فعّل أو عطّل ميزات المحرر الاختيارية. تختفي الإضافات المعطّلة في كل مكان، مما يبقي الواجهة نظيفة.",
-      "overlays": "نظام التراكبات",
-      "overlaysDesc": "أضف نصوصاً وصوراً وملفات GIF إلى مقاطعك عند التصدير.",
-      "tiktokExport": "تصدير TikTok العمودي",
-      "tiktokExportDesc": "اقتصاص وتصدير المقاطع بنسبة 9:16 لـ TikTok/Reels.",
+      "sectionTitle": "الإضافات",
+      "hint": "فعّل أو عطّل الإضافات. تختفي الإضافات المعطّلة في كل مكان، مما يبقي الواجهة نظيفة.",
+      "openFolder": "فتح مجلد الإضافات",
+      "refresh": "تحديث",
+      "noExtensions": "لم يتم العثور على إضافات. ضع مجلد الإضافة مع manifest.json في مجلد الإضافات.",
+      "scanning": "جارٍ الفحص…",
       "restartHint": "تُطبَّق التغييرات فوراً — لا حاجة لإعادة التشغيل."
+    },
+    "store": {
+      "title": "متجر الإضافات",
+      "comingSoon": "قريباً",
+      "comingSoonDesc": "تصفّح وثبّت إضافات المجتمع مباشرةً من OpenGG. هذه الميزة قيد التطوير."
     },
     "clipPreferences": {
       "title": "تفضيلات المقاطع"
     },
     "daemon": {
       "title": "الخيط الخلفي والبدء التلقائي",
-      "runAtStartup": "تشغيل OpenGG عند بدء الكمبيوتر",
-      "runAtStartupDesc": "إطلاق OpenGG تلقائياً عند تسجيل الدخول عبر XDG autostart",
-      "keepInBackground": "مواصلة التشغيل في الخلفية عند الإغلاق",
-      "keepInBackgroundDesc": "إغلاق النافذة يخفيها في درج النظام بدلاً من الإغلاق"
+      "runAtStartup": "البدء عند التشغيل",
+      "runAtStartupTooltip": "إطلاق OpenGG وخدماته الخلفية تلقائياً عند تسجيل الدخول.",
+      "keepInBackground": "التصغير إلى الشريط",
+      "keepInBackgroundTooltip": "إغلاق النافذة الرئيسية يخفيها في درج النظام بدلاً من إنهاء التطبيق."
     },
     "diagnostics": {
       "title": "التشخيص",
@@ -287,6 +296,44 @@
       "title": "GPU Screen Recorder",
       "hint": "يستخدم gpu-screen-recorder للتخزين المؤقت للإعادة منخفض الكمون المشفر بالأجهزة (NVENC/VAAPI). يجب تثبيته بشكل منفصل.",
       "extensionsHint": "فعّل GPU Screen Recorder في الإضافات لتكوينه هنا."
+    },
+    "notificationsPage": {
+      "title": "الإشعارات",
+      "description": "اضبط كيفية إخطار OpenGG لك عند حفظ المقاطع أو حدوث أحداث التسجيل.",
+      "masterToggle": "تفعيل الإشعارات",
+      "masterToggleDesc": "عرض إشعارات عند حفظ المقاطع.",
+      "style": "نمط الإشعار",
+      "styleDesc": "اختر طريقة عرض الإشعارات.",
+      "styleAuto": "تلقائي",
+      "styleGsrNotify": "GSR-Notify",
+      "styleX11Overlay": "نافذة X11 المتراكبة",
+      "styleSystem": "إشعار النظام",
+      "styleDisabled": "معطّل",
+      "position": "الموضع",
+      "positionDesc": "مكان ظهور الإشعار على الشاشة.",
+      "positionTopRight": "أعلى اليمين",
+      "positionTopLeft": "أعلى اليسار",
+      "positionBottomRight": "أسفل اليمين",
+      "positionBottomLeft": "أسفل اليسار",
+      "duration": "المدة",
+      "durationDesc": "المدة التي يبقى فيها الإشعار مرئياً (بالثواني)."
+    },
+    "aboutPage": {
+      "tagline": "رفيقك المفتوح المصدر لألعاب Linux.",
+      "description": "OpenGG مركز معياري مصمم لإتاحة أدوات الألعاب الاحترافية لمنظومة Linux.",
+      "projectGoals": "أهداف المشروع",
+      "goal_1": "توفير بديل خفيف الوزن وخالٍ من التبعيات لـ SteelSeries GG على Linux",
+      "goal_2": "تقديم توجيه صوتي احترافي مع PipeWire والتحكم في مستوى الصوت لكل تطبيق",
+      "goal_3": "تمكين تسجيل المقاطع بسلاسة مع تكامل gpu-screen-recorder والإعادة الفورية",
+      "connectWithUs": "تواصل معنا",
+      "github": "GitHub",
+      "discord": "Discord",
+      "website": "الموقع الإلكتروني",
+      "contributors": "يُصان OpenGG من قِبل المجتمع. المساهمات مرحب بها!"
+    },
+    "storagePage": {
+      "addScreenshotDir": "إضافة مجلد",
+      "removeScreenshotDir": "إزالة"
     }
   },
   "notification": {

@@ -70,7 +70,7 @@ function startDragApp(e: DragEvent, app: { id: number; name: string; binary: str
 </template>
 
 <style scoped>
-.dropzone { width: 100%; min-height: 40px; max-height: 140px; overflow-y: auto; border: 1px dashed var(--border); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; transition: all .15s; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.dropzone { width: 100%; height: 70px; overflow-y: auto; border: 1px dashed var(--border); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; transition: all .15s; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 .show-target { border-color: color-mix(in srgb, var(--dz) 40%, var(--border)); background: color-mix(in srgb, var(--dz) 3%, transparent); }
 .hovering { border-color: var(--dz) !important; background: color-mix(in srgb, var(--dz) 10%, transparent) !important; border-style: solid !important; box-shadow: 0 0 12px color-mix(in srgb, var(--dz) 20%, transparent); }
 .dz-apps { display: flex; flex-direction: column; gap: 2px; }
@@ -79,6 +79,6 @@ function startDragApp(e: DragEvent, app: { id: number; name: string; binary: str
 .dz-chip:active { cursor: grabbing; opacity: .6; }
 .dz-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
 .dz-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dz-empty { text-align: center; font-size: 9px; color: var(--text-muted); padding: 8px 0; opacity: .6; }
+.dz-empty { display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--text-muted); opacity: .6; flex: 1; }
 .dz-empty.active { color: var(--dz); opacity: 1; font-weight: 600; }
 </style>

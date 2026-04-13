@@ -101,6 +101,42 @@ opengg/
 - **systemd hardening**: `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`
 - **D-Bus auto-activation**: daemon starts on demand, no manual launch needed
 
+## Extensions & Plugins
+
+OpenGG supports optional feature extensions and third-party plugins.
+
+### Built-in Extensions
+
+| Extension | Toggle in | Description |
+|-----------|-----------|-------------|
+| **Overlays System** | Settings → Extensions | Burn text, images, and GIFs into clips at export time |
+| **TikTok Vertical Export** | Settings → Extensions | Crop and export clips in 9:16 portrait mode for TikTok / Reels |
+
+### Third-party Plugins
+
+Drop a plugin folder into `~/.local/share/opengg/plugins/`. Each plugin must contain a `manifest.json`:
+
+```json
+{
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "version": "1.0.0",
+  "description": "What this plugin does"
+}
+```
+
+OpenGG scans this directory on startup and whenever Settings → Extensions is opened. No restart is required.
+
+### Virtual Microphone Sink (PipeWire)
+
+OpenGG creates a virtual PipeWire sink named `opengg_mic` for the Mic channel so that noise-reduction and EQ filters remain persistent even when the physical hardware source changes. PipeWire and WirePlumber are required:
+
+```bash
+sudo pacman -S pipewire wireplumber
+```
+
+The virtual sink is created automatically on first launch and appears in the Mixer as **OpenGG Microphone**.
+
 ## License
 
 MIT

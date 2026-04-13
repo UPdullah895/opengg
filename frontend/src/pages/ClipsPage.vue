@@ -958,16 +958,37 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         @click.stop
       >
         <template v-if="contextMenuClip">
-          <button class="ctx-item" @click="ctxAction('preview')">▶ Preview</button>
-          <button class="ctx-item" @click="ctxAction('editor')">✂ Edit</button>
+          <button class="ctx-item" @click="ctxAction('preview')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Preview
+          </button>
+          <button class="ctx-item" @click="ctxAction('editor')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20h-2a2 2 0 01-2-2v-2m0-4V8m0-4V4a2 2 0 012-2h2m4 0h4m4 0h2a2 2 0 012 2v2m0 4v4m0 4v2a2 2 0 01-2 2h-2m-4 0h-4"/><path d="M9 11l2 2 4-4"/></svg>
+            Edit
+          </button>
           <div class="ctx-sep"></div>
-          <button class="ctx-item" @click="ctxAction('select')">☑ Select</button>
-          <button class="ctx-item" @click="ctxAction('favorite')">{{ contextMenuClip.favorite ? '💔 Unfavorite' : '❤ Favorite' }}</button>
+          <button class="ctx-item" @click="ctxAction('select')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="9 11 12 14 20 6"/></svg>
+            Select
+          </button>
+          <button class="ctx-item" @click="ctxAction('favorite')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+            {{ contextMenuClip.favorite ? 'Unfavorite' : 'Favorite' }}
+          </button>
           <div class="ctx-sep"></div>
-          <button class="ctx-item" @click="ctxAction('rename')">✏ Rename</button>
-          <button class="ctx-item" @click="ctxAction('location')">📂 Show in Folder</button>
+          <button class="ctx-item" @click="ctxAction('rename')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            Rename
+          </button>
+          <button class="ctx-item" @click="ctxAction('location')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+            Show in Folder
+          </button>
           <div class="ctx-sep"></div>
-          <button class="ctx-item ctx-item-d" @click="ctxAction('delete')">🗑 Delete</button>
+          <button class="ctx-item ctx-item-d" @click="ctxAction('delete')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+            Delete
+          </button>
         </template>
       </div>
     </Teleport>
@@ -1307,10 +1328,11 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   box-shadow:0 8px 24px rgba(0,0,0,.5);
 }
 .ctx-item {
-  display:block; width:100%; padding:8px 12px; background:none; border:none;
+  display:flex; align-items:center; gap:10px; width:100%; padding:8px 14px; background:none; border:none;
   border-radius:5px; color:var(--text-sec); font-size:13px; text-align:left;
   cursor:pointer; white-space:nowrap;
 }
+.ctx-item svg { width:15px; height:15px; flex-shrink:0; opacity:.8; }
 .ctx-item:hover { background:var(--bg-hover); color:var(--text); }
 .ctx-item-d { color:var(--danger); }
 .ctx-item-d:hover { background:rgba(220,38,38,.1); }

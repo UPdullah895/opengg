@@ -310,9 +310,11 @@ fn main() {
             }
 
             // ★ Power User: Live file-system watcher — emits `clip_added` / `clip_removed`
+            // Also watches `~/.local/share/opengg/extensions/` and emits `plugins-changed`
+            // when a manifest.json is created, modified, or removed.
             {
                 use notify::{Config, RecursiveMode, Watcher};
-                use notify::event::{CreateKind, RemoveKind, EventKind};
+                use notify::event::{CreateKind, RemoveKind, ModifyKind, EventKind};
 
                 let watch_handle = app.handle().clone();
                 let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
@@ -331,15 +333,56 @@ fn main() {
                                 log::info!("Watcher: watching {:?}", dir);
                             }
                         }
+
+                        // Also watch the extensions directory (recursive — detects manifest.json
+                        // inside any extension subdirectory).
+                        let extensions_dir = commands::extensions_dir_pub();
+                        let _ = std::fs::create_dir_all(&extensions_dir);
+                        if let Err(e) = watcher.watch(&extensions_dir, RecursiveMode::Recursive) {
+                            log::warn!("Watcher: cannot watch extensions dir {:?}: {e}", extensions_dir);
+                        } else {
+                            log::info!("Watcher: watching extensions {:?}", extensions_dir);
+                        }
+
                         // Keep watcher alive for the app lifetime.
                         app.manage(WatcherHandle(Mutex::new(Some(watcher))));
                         app.manage(WatchedDirs(Mutex::new(dirs.clone())));
 
                         // Drain events in a background thread.
+                        // plugins-changed is debounced: we track the last emit time and
+                        // suppress duplicate events within a 500ms window.
+                        // Note: event name kept as `plugins-changed` for frontend compatibility.
                         std::thread::spawn(move || {
+                            let mut last_plugin_emit = std::time::Instant::now()
+                                .checked_sub(std::time::Duration::from_secs(10))
+                                .unwrap_or(std::time::Instant::now());
                             for res in rx {
                                 let event = match res { Ok(e) => e, Err(_) => continue };
                                 for path in &event.paths {
+                                    let filename = path.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("");
+
+                                    // Extension manifest events — debounced 500ms
+                                    if filename == "manifest.json" {
+                                        let is_manifest_event = matches!(&event.kind,
+                                            EventKind::Create(_) |
+                                            EventKind::Remove(_) |
+                                            EventKind::Modify(ModifyKind::Data(_)) |
+                                            EventKind::Modify(ModifyKind::Name(_)) |
+                                            EventKind::Modify(_)
+                                        );
+                                        if is_manifest_event
+                                            && last_plugin_emit.elapsed() > std::time::Duration::from_millis(500)
+                                        {
+                                            log::info!("Watcher: extensions-changed (manifest: {:?})", path);
+                                            let _ = watch_handle.emit("plugins-changed", ());
+                                            last_plugin_emit = std::time::Instant::now();
+                                        }
+                                        continue;
+                                    }
+
+                                    // Clip file events
                                     let ext = path.extension()
                                         .and_then(|e| e.to_str())
                                         .unwrap_or("")
@@ -405,7 +448,7 @@ fn main() {
                     .app_handle()
                     .try_state::<RunInBackground>()
                     .map(|s| s.0.load(Ordering::Relaxed))
-                    .unwrap_or(true);
+                    .unwrap_or(false);
 
                 if run_bg {
                     api.prevent_close();

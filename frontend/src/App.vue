@@ -112,6 +112,27 @@ onMounted(async () => {
   installAudioUnlocker()
   loadUserLocales()
   await registerGlobalShortcuts()
+
+  // ── Extension API — expose a restricted invoke bridge and Vue helpers ──
+  // Extensions evaluate as IIFEs and can use window.opengg.invoke() to call
+  // a whitelist of read-only Tauri commands.  window.Vue gives them access to
+  // Vue 3 composition helpers without bundling Vue themselves.
+  const _extAllowed = new Set(['get_clip_list', 'get_audio_devices', 'get_recorder_status', 'scan_extensions', 'list_user_locales'])
+  ;(window as unknown as Record<string, unknown>).opengg = {
+    invoke: (cmd: string, args?: Record<string, unknown>) => {
+      if (!_extAllowed.has(cmd)) return Promise.reject(new Error(`opengg: '${cmd}' is not allowed for extensions`))
+      return invoke(cmd, args)
+    },
+    get mediaPort() { return mediaPort.value },
+  }
+  // Expose Vue composition API on window.Vue so extension IIFEs can use it
+  import('vue').then(Vue => { (window as unknown as Record<string, unknown>).Vue = Vue })
+
+  // ── Load all enabled extensions (non-blocking, errors logged per-ext) ──
+  if (mediaPort.value) {
+    const { useExtensionStore } = await import('./stores/extensions')
+    useExtensionStore().loadAllEnabled(mediaPort.value)
+  }
   // Listen for global shortcut events fired from Rust
   listen('global-shortcut-save_replay', async () => {
     // If GSR replay buffer is active, save via GSR (handles restart-on-save internally)
@@ -132,7 +153,7 @@ onMounted(async () => {
     } catch (e) { console.warn('toggle_recording:', e) }
   })
   listen('global-shortcut-screenshot', async () => {
-    try { await invoke('take_screenshot', { outputDir: persist.state.settings.screenshotDir || '' }) } catch (e) { console.warn('screenshot:', e) }
+    try { await invoke('take_screenshot', { outputDir: persist.state.settings.screenshotDirs?.[0] || '' }) } catch (e) { console.warn('screenshot:', e) }
   })
 
   // ── GSR state sync: keep replay store in sync with backend process state ──
@@ -144,14 +165,18 @@ onMounted(async () => {
 
   // ── Clip saved overlay notification ──
   listen<{ game: string; filename: string; filesize_mb: number; success: boolean }>('clip-saved', async (event) => {
-    if (!persist.state.settings.enableClipNotifications) return
+    const style = persist.state.settings.notificationStyle ?? 'auto'
+    if (!persist.state.settings.enableClipNotifications || style === 'disabled') return
     try {
       await invoke('show_clip_notification', {
-        game:       event.payload.game,
-        filename:   event.payload.filename,
-        filesizeMb: event.payload.filesize_mb,
-        success:    event.payload.success,
-        enabled:    true,
+        game:         event.payload.game,
+        filename:     event.payload.filename,
+        filesizeMb:   event.payload.filesize_mb,
+        success:      event.payload.success,
+        enabled:      true,
+        mode:         style,
+        position:     persist.state.settings.notificationPosition ?? 'top-right',
+        durationSecs: persist.state.settings.notificationDuration ?? 4,
       })
     } catch (e) { console.warn('show_clip_notification:', e) }
   })
@@ -335,23 +360,38 @@ html.light {
   color-scheme: light;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-/* Prevent accidental highlight of non-text UI chrome during click-drag */
-img, svg { user-select: none; -webkit-user-drag: none; }
-button, .card, .sidebar-btn, .thumb, .thumb-img { user-select: none; }
+/* Text is selectable by default — informational content should be copyable.
+   Only interactive chrome is locked down to preserve native-app feel. */
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--bg-surface);
   color: var(--text);
   overflow: hidden;
-  -webkit-user-select: none;
-  user-select: none;
+  -webkit-user-select: text;
+  user-select: text;
 }
+/* Prevent drag-highlighting on non-text UI chrome */
+img, svg { user-select: none; -webkit-user-drag: none; }
+/* Interactive elements: no text selection (native app feel) */
+button,
+input,
+textarea,
+select,
+.sidebar-btn,
+.nav-item,
+.tab-btn,
+.thumb,
+.thumb-img,
+[data-tauri-drag-region],
+.card-head,
+.tb-btn { user-select: none; -webkit-user-select: none; }
 .app-layout { display: flex; flex-direction: column; height: 100vh; }
 .app-body { display: flex; flex: 1; overflow: hidden; }
 .content { flex: 1; padding: 20px 28px; overflow-y: auto; }
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* Fullscreen video fix */
 video:fullscreen, video:-webkit-full-screen { z-index: 2147483647 !important; position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100vh !important; object-fit: contain !important; background: #000 !important; }

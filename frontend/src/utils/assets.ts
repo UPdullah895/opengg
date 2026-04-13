@@ -15,12 +15,20 @@ let _port: number | null = null
 
 export async function getMediaPort(): Promise<number> {
   if (_port !== null) return _port
-  try {
-    _port = await invoke<number>('get_media_server_port')
-  } catch (e) {
-    console.error('media port:', e)
-    _port = 0
+  const MAX_ATTEMPTS = 5
+  const DELAY_MS = 500
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      _port = await invoke<number>('get_media_server_port')
+      return _port
+    } catch {
+      if (attempt < MAX_ATTEMPTS - 1) {
+        await new Promise<void>(r => setTimeout(r, DELAY_MS))
+      }
+    }
   }
+  console.error('media port: could not connect after 5 attempts')
+  _port = 0
   return _port
 }
 

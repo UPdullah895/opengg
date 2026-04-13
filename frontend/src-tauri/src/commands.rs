@@ -1985,19 +1985,30 @@ pub async fn open_locales_folder() -> Result<String, String> {
 //  ★ EPIC 3: Modular Plugin / Extensions System
 // ══════════════════════════════════════════════════════════════
 
-/// Developer guide written to the plugins folder on first open.
+/// Developer guide written to the extensions folder on first open.
 const EXTENSIONS_GUIDE: &str = r#"# How to Create an OpenGG Extension
+
+Extensions are self-contained directories placed here.
+Each one is an IIFE JavaScript bundle that registers a Vue 3 component on `window.__ext_<id>`.
+
+---
 
 ## Directory Structure
 
-Place your extension in its own subdirectory inside this `plugins/` folder:
-
 ```
-plugins/
+~/.local/share/opengg/extensions/
   my-extension/
-    manifest.json      ← required
-    README.md          ← optional
+    manifest.json        ← required — metadata + capability declarations
+    index.iife.js        ← IIFE bundle built with Vite/Rollup
+    icon.svg             ← optional — shown in Settings → Extensions
+    locales/
+      en.json            ← optional — i18n strings for this extension
+      ar.json
 ```
+
+The folder name is treated as the extension's `id`.
+
+---
 
 ## manifest.json Schema
 
@@ -2008,38 +2019,122 @@ plugins/
   "description": "A one-line description shown in Settings → Extensions.",
   "version":     "1.0.0",
   "author":      "Your Name",
-  "hooks": {
-    "sidebar_tab": false,
-    "export_filter": false,
-    "settings_section": false
-  }
+  "icon":        "icon.svg",
+  "main":        "index.iife.js",
+  "hasSettings": true
 }
 ```
 
-### Fields
+| Field          | Required | Description |
+|----------------|----------|-------------|
+| `id`           | ✓        | Unique kebab-case identifier. |
+| `name`         | ✓        | Display name. |
+| `description`  | ✗        | Short description (≤ 120 chars). |
+| `version`      | ✗        | SemVer string e.g. `"1.0.0"`. |
+| `author`       | ✗        | Author name or handle. |
+| `icon`         | ✗        | Icon filename relative to the extension root (SVG/PNG). |
+| `main`         | ✗        | IIFE bundle filename. Omit for metadata-only extensions. |
+| `hasSettings`  | ✗        | Set `true` to show a gear button that opens your settings panel. |
 
-| Field         | Required | Description |
-|---------------|----------|-------------|
-| `id`          | ✓        | Unique kebab-case identifier (a-z, 0-9, hyphen). |
-| `name`        | ✓        | Human-readable display name. |
-| `description` | ✗        | Short description (≤ 120 chars). |
-| `version`     | ✗        | SemVer string e.g. `"1.0.0"`. |
-| `hooks`       | ✗        | Future hook declarations (currently informational). |
+---
 
-## Future Hook Points (Roadmap)
+## IIFE Bundle Pattern
 
-- **sidebar_tab** — Inject a custom Vue component tab into the Advanced Editor sidebar.
-- **export_filter** — Register an FFmpeg filter that runs after the main video pipeline.
-- **settings_section** — Add a custom card to the Settings page.
+Your bundle must set `window.__ext_<id>` (dashes → underscores in the key):
 
-Once the hook API is stable this guide will be updated with working examples.
+```js
+// index.iife.js
+(function () {
+  const { defineComponent, ref, h } = window.Vue;
+
+  const SettingsPanel = defineComponent({
+    name: 'MyExtSettings',
+    setup() {
+      const count = ref(0);
+      return () => h('div', { style: 'padding:16px' }, [
+        h('p', `Count: ${count.value}`),
+        h('button', { onClick: () => count.value++ }, 'Increment'),
+      ]);
+    },
+  });
+
+  // Extension id "my-extension" → global key "__ext_my_extension"
+  window.__ext_my_extension = {
+    settingsComponent: SettingsPanel,
+  };
+})();
+```
+
+`window.Vue` is populated by OpenGG before any extension loads and exposes the
+full Vue 3 composition API (`ref`, `computed`, `defineComponent`, `h`, …).
+
+---
+
+## Extension API — window.opengg
+
+OpenGG exposes a restricted bridge for read-only Tauri commands:
+
+```js
+const clips = await window.opengg.invoke('get_clip_list');
+const port  = window.opengg.mediaPort;  // local media-server port
+```
+
+Only a whitelist of non-destructive commands are allowed. Calling a command
+not on the whitelist returns a rejected promise with an explanatory error.
+
+---
+
+## Locales
+
+Place `locales/<lang>.json` files alongside `manifest.json`.
+OpenGG merges them into the running vue-i18n instance under the namespace
+`ext.<your-extension-id>.*` so strings don't collide with core translations.
+
+```json
+// locales/en.json
+{
+  "settingsTitle": "My Extension Settings",
+  "countLabel":    "Count"
+}
+```
+
+Inside your component access them via the injected i18n instance or
+`window.Vue.inject('$i18n')`.
+
+---
+
+## Build Setup (Vite)
+
+```js
+// vite.config.js
+export default {
+  build: {
+    lib: {
+      entry: 'src/index.ts',
+      name:  'MyExt',
+      formats: ['iife'],
+      fileName: () => 'index.iife.js',
+    },
+    rollupOptions: {
+      // Exclude Vue from the bundle — OpenGG provides it via window.Vue
+      external: ['vue'],
+      output: { globals: { vue: 'Vue' } },
+    },
+  },
+};
+```
+
+See `extension-template/` in the OpenGG repository for a complete starter.
 "#;
 
-fn plugins_dir() -> PathBuf {
+fn extensions_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("opengg/plugins")
+        .join("opengg/extensions")
 }
+
+/// Public re-export so `main.rs` can add the extensions directory to the watcher.
+pub fn extensions_dir_pub() -> PathBuf { extensions_dir() }
 
 #[derive(Serialize)]
 pub struct ExtensionInfo {
@@ -2048,13 +2143,21 @@ pub struct ExtensionInfo {
     pub description: String,
     pub version: String,
     pub path: String,
+    #[serde(default)]
+    pub has_settings: bool,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub main: Option<String>,
+    #[serde(default)]
+    pub ui: Option<String>,
 }
 
-/// Creates `~/.local/share/opengg/plugins/` if needed, writes the developer
+/// Creates `~/.local/share/opengg/extensions/` if needed, writes the developer
 /// guide on the first visit, then opens the folder in the file manager.
 #[command]
 pub async fn open_extensions_folder() -> Result<String, String> {
-    let dir = plugins_dir();
+    let dir = extensions_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
 
     let guide = dir.join("HOW_TO_CREATE_EXTENSIONS.md");
@@ -2068,11 +2171,11 @@ pub async fn open_extensions_folder() -> Result<String, String> {
     Ok(path_str)
 }
 
-/// Scans `~/.local/share/opengg/plugins/` for subdirectories containing a
+/// Scans `~/.local/share/opengg/extensions/` for subdirectories containing a
 /// `manifest.json`. Returns the parsed metadata for each valid extension.
 #[command]
 pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
-    let dir = plugins_dir();
+    let dir = extensions_dir();
     if !dir.exists() { return Ok(vec![]); }
 
     let mut exts = Vec::new();
@@ -2101,9 +2204,13 @@ pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
         exts.push(ExtensionInfo {
             id,
             name,
-            description: v["description"].as_str().unwrap_or("").to_string(),
-            version:     v["version"].as_str().unwrap_or("0.0.0").to_string(),
-            path:        path.to_string_lossy().to_string(),
+            description:  v["description"].as_str().unwrap_or("").to_string(),
+            version:      v["version"].as_str().unwrap_or("0.0.0").to_string(),
+            path:         path.to_string_lossy().to_string(),
+            has_settings: v["hasSettings"].as_bool().unwrap_or(false),
+            icon:         v["icon"].as_str().map(|s| s.to_string()),
+            main:         v["main"].as_str().map(|s| s.to_string()),
+            ui:           v["ui"].as_str().map(|s| s.to_string()),
         });
     }
 
@@ -3428,9 +3535,10 @@ pub async fn apply_compressor(_channel: String, _enabled: bool, _level: f32) -> 
 #[command]
 pub async fn apply_noise_reduction(_channel: String, _enabled: bool, _intensity: f32) -> Result<(), String> { Ok(()) }
 
-/// Spawn a transient overlay notification window at the bottom-right of the primary monitor.
-/// The window is frameless, transparent, always-on-top, and non-focusable.
-/// It renders the same Vite app at `/?overlay=1` with URL-encoded clip metadata.
+/// Spawn a transient overlay notification window.
+/// `mode` controls which backend: "auto"|"x11-overlay"|"gsr-notify"|"system"|"disabled".
+/// `position` is one of: "top-right"|"top-left"|"bottom-right"|"bottom-left".
+/// `duration_secs` controls how long the window stays visible (1–30s, clamped).
 /// `enabled` is passed from the frontend (reflects the `enableClipNotifications` setting).
 #[command]
 pub fn show_clip_notification(
@@ -3440,10 +3548,26 @@ pub fn show_clip_notification(
     filesize_mb: f64,
     success: bool,
     enabled: bool,
+    mode: Option<String>,
+    position: Option<String>,
+    duration_secs: Option<u64>,
 ) -> Result<(), String> {
     if !enabled { return Ok(()); }
+    let mode = mode.as_deref().unwrap_or("auto");
+    if mode == "disabled" { return Ok(()); }
 
-    // (media server port intentionally unused here — overlay uses the fixed Vite port 1420)
+    // For "system" mode, fall back to notify-send and skip spawning an overlay window.
+    if mode == "system" {
+        let summary = if success { "Clip Saved" } else { "Clip Save Failed" };
+        let body = format!("{game} — {filename}");
+        let _ = std::process::Command::new("notify-send")
+            .args(["--app-name=OpenGG", "--urgency=normal", "--expire-time=4000", summary, &body])
+            .spawn();
+        return Ok(());
+    }
+
+    // Clamp duration to [1, 30] seconds; default 4s.
+    let duration_ms = duration_secs.unwrap_or(4).clamp(1, 30) * 1000;
 
     // Build the overlay URL served from the same Vite dev/prod server on localhost:1420
     // Use a stable unique label so multiple notifications can stack
@@ -3485,12 +3609,11 @@ pub fn show_clip_notification(
     #[cfg(not(debug_assertions))]
     let webview_url = tauri::WebviewUrl::App(std::path::PathBuf::from(&query));
 
-    // ── Position: top-right corner of the primary monitor ──
-    // Use Tauri's built-in monitor API (physical px → logical px via scale factor).
-    // .position() on WebviewWindowBuilder takes logical pixels on all platforms.
+    // ── Position: corner of the primary monitor based on `position` setting ──
     let notif_w = 380.0_f64;
     let notif_h = 120.0_f64;
     let margin  = 20.0_f64;
+    let pos_str = position.as_deref().unwrap_or("top-right");
     let (x, y) = app
         .get_webview_window("main")
         .and_then(|w| w.primary_monitor().ok().flatten())
@@ -3498,14 +3621,23 @@ pub fn show_clip_notification(
             let scale = m.scale_factor();
             let sz    = m.size();
             let pos   = m.position();
-            // logical width/height of this monitor
             let lw = sz.width  as f64 / scale;
-            // logical origin of this monitor (multi-monitor offset)
+            let lh = sz.height as f64 / scale;
             let ox = pos.x as f64 / scale;
             let oy = pos.y as f64 / scale;
-            (ox + lw - notif_w - margin, oy + margin)
+            match pos_str {
+                "top-left"     => (ox + margin,                   oy + margin),
+                "bottom-right" => (ox + lw - notif_w - margin,    oy + lh - notif_h - margin),
+                "bottom-left"  => (ox + margin,                   oy + lh - notif_h - margin),
+                _              => (ox + lw - notif_w - margin,    oy + margin), // top-right (default)
+            }
         })
-        .unwrap_or((1920.0 - notif_w - margin, margin));
+        .unwrap_or_else(|| match pos_str {
+            "top-left"     => (margin, margin),
+            "bottom-right" => (1920.0 - notif_w - margin, 1080.0 - notif_h - margin),
+            "bottom-left"  => (margin, 1080.0 - notif_h - margin),
+            _              => (1920.0 - notif_w - margin, margin),
+        });
 
     let win = tauri::WebviewWindowBuilder::new(&app, label, webview_url)
     .always_on_top(true)
@@ -3522,10 +3654,10 @@ pub fn show_clip_notification(
     // Pass all mouse events through — user can keep playing without interruption.
     let _ = win.set_ignore_cursor_events(true);
 
-    // Auto-close after 4 000 ms.
+    // Auto-close after duration_ms.
     let win_for_thread = win.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(4000));
+        std::thread::sleep(std::time::Duration::from_millis(duration_ms));
         let _ = win_for_thread.close();
     });
 

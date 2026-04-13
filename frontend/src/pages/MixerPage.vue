@@ -56,10 +56,21 @@ const COLORS: Record<string, string> = {
 
 function onChatMix(g: number, c: number) { audio.setVolume('Game', g); audio.setVolume('Chat', c) }
 
-function devDesc(ch: string, t: 'sink' | 'source') {
+function devDesc(ch: string, type: 'sink' | 'source') {
   const n = audio.channelDevices[ch]
-  if (n) { const d = audio.devices.find(d => d.name === n); return d?.description || n }
-  return audio.devices.find(d => d.device_type === t && d.is_default)?.description || 'Default'
+  if (n) {
+    const d = audio.devices.find(d => d.name === n)
+    const desc = d?.description || n
+    if (ch === 'Mic' && (n.toLowerCase().includes('opengg') || desc.toLowerCase().includes('opengg'))) {
+      return 'mic OpenGG (Virtual)'
+    }
+    return desc
+  }
+  const defDev = audio.devices.find(d => d.device_type === type && d.is_default)
+  if (ch === 'Mic' && defDev && (defDev.name.toLowerCase().includes('opengg') || (defDev.description || '').toLowerCase().includes('opengg'))) {
+    return 'mic OpenGG (Virtual)'
+  }
+  return defDev?.description || 'Default'
 }
 
 onMounted(async () => {
@@ -169,7 +180,7 @@ onUnmounted(() => audio.stopPolling())
       <!-- INPUT: Mic -->
       <div class="col">
         <ChannelStrip
-          :channel="audio.micChannel"
+          :channel="{ ...audio.micChannel, name: 'Mic' }"
           :color="COLORS.Mic" type="input" :vuLevel="audio.vuLevels['Mic'] ?? 0"
           :overdrive="overdriveEnabled"
           :devices="audio.inputDevices" :selectedDevice="devDesc('Mic','source')"
@@ -244,7 +255,7 @@ onUnmounted(() => audio.stopPolling())
 }
 /* ★ Epic 1: Strict flex rules — strip grows to fill, dropzone is fixed-height scrollable */
 .col :deep(.strip)    { width: 100% !important; flex: 1 1 0% !important; min-height: 0 !important; height: auto !important; }
-.col :deep(.dropzone) { width: 100% !important; flex: 0 0 auto !important; max-height: 6rem !important; overflow-y: auto !important; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.col :deep(.dropzone) { width: 100% !important; flex: 0 0 70px !important; height: 70px !important; overflow-y: auto !important; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
 
 .divider { display: flex; align-items: center; padding: 0 4px; align-self: stretch; flex-shrink: 0; }

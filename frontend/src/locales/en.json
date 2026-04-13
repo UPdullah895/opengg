@@ -134,7 +134,10 @@
       "clipSettings": "Clip Settings",
       "storage": "Storage",
       "extensions": "Extensions",
-      "trackManagement": "Timeline Tracks"
+      "store": "Store",
+      "trackManagement": "Timeline Tracks",
+      "about": "About",
+      "notifications": "Notifications"
     },
     "groups": {
       "general": "GENERAL",
@@ -237,6 +240,13 @@
     },
     "storage": {
       "title": "Storage",
+      "mediaDirsHint": "Clip Directories are watched for new recordings. Screenshot Directories are where editor screenshots are saved.",
+      "clipDirectories": "Clip Directories",
+      "addClipPath": "Add Clip Path",
+      "defaultClipPath": "~/Videos/OpenGG (default)",
+      "screenshotDirectories": "Screenshot Directories",
+      "addScreenshotPath": "Add Directory",
+      "removeDir": "Remove",
       "clipsFolder": "Clips Folder",
       "change": "Change Location",
       "clips": "clips",
@@ -248,22 +258,28 @@
     },
     "extensions": {
       "title": "Extensions",
-      "hint": "Toggle optional editor features. Disabled extensions are hidden everywhere — keeping the interface clean for what you actually use.",
-      "overlays": "Overlays System",
-      "overlaysDesc": "Burn text, images, and GIFs into your clips at export time.",
-      "tiktokExport": "TikTok Vertical Export",
-      "tiktokExportDesc": "Crop and export clips in 9:16 portrait mode for TikTok / Reels.",
+      "sectionTitle": "Extensions",
+      "hint": "Enable or disable extensions. Disabled extensions are hidden everywhere — keeping the interface clean for what you actually use.",
+      "openFolder": "Open Extensions Folder",
+      "refresh": "Refresh",
+      "noExtensions": "No extensions found. Drop an extension folder with a manifest.json into the extensions directory.",
+      "scanning": "Scanning…",
       "restartHint": "Changes apply immediately — no restart required."
+    },
+    "store": {
+      "title": "Extension Store",
+      "comingSoon": "Coming Soon",
+      "comingSoonDesc": "Browse and install community extensions directly from OpenGG. This feature is under development."
     },
     "clipPreferences": {
       "title": "Clip Preferences"
     },
     "daemon": {
       "title": "Daemon & Startup",
-      "runAtStartup": "Run OpenGG when my computer starts",
-      "runAtStartupDesc": "Automatically launch OpenGG on login via XDG autostart",
-      "keepInBackground": "Keep running in background when closed",
-      "keepInBackgroundDesc": "Closing the window hides it to the system tray instead of quitting"
+      "runAtStartup": "Start on Boot",
+      "runAtStartupTooltip": "Automatically launch OpenGG and its background services when you log in.",
+      "keepInBackground": "Minimize to Tray",
+      "keepInBackgroundTooltip": "Closing the main window will hide it to the system tray instead of quitting the application."
     },
     "diagnostics": {
       "title": "Diagnostics",
@@ -279,18 +295,55 @@
     },
     "timelineTracks": {
       "title": "Timeline Tracks",
-      "trackIcons": "Track Icons",
-      "showIconsDesc": "Display a small icon next to each track label in the editor timeline",
       "trackList": "Track List",
       "trackListHint": "Customize the name, color, and icon for each editor timeline track. Changes apply live — open the editor to see them instantly.",
       "livePreview": "Live Preview",
       "livePreviewHint": "Exactly how the editor timeline headers will look. Updates as you type.",
-      "addAudioTrack": "+ Add Audio Track"
+      "addAudioTrack": "+ Add Audio Track",
+      "visibilityTooltip": "Toggle track visibility in Live Preview"
     },
     "captureGsr": {
       "title": "GPU Screen Recorder",
       "hint": "Uses gpu-screen-recorder for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately.",
       "extensionsHint": "Enable GPU Screen Recorder in Extensions to configure it here."
+    },
+    "notificationsPage": {
+      "title": "Notifications",
+      "description": "Configure how OpenGG notifies you when clips are saved or recording events occur.",
+      "masterToggle": "Enable Notifications",
+      "masterToggleDesc": "Show overlay notifications for clip save events.",
+      "style": "Notification Style",
+      "styleDesc": "Choose how notifications are displayed.",
+      "styleAuto": "Automatic",
+      "styleGsrNotify": "GSR-Notify",
+      "styleX11Overlay": "X11 Overlay Window",
+      "styleSystem": "System Notification",
+      "styleDisabled": "Disabled",
+      "position": "Position",
+      "positionDesc": "Where on screen the notification appears.",
+      "positionTopRight": "Top Right",
+      "positionTopLeft": "Top Left",
+      "positionBottomRight": "Bottom Right",
+      "positionBottomLeft": "Bottom Left",
+      "duration": "Duration",
+      "durationDesc": "How long the notification stays visible (in seconds)."
+    },
+    "aboutPage": {
+      "tagline": "Your ultimate open-source Linux gaming companion.",
+      "description": "OpenGG is a modular hub designed to bring professional-grade gaming tools to the Linux ecosystem.",
+      "projectGoals": "Project Goals",
+      "goal_1": "Provide a lightweight, dependency-free alternative to SteelSeries GG on Linux",
+      "goal_2": "Deliver professional-grade audio routing with PipeWire and per-app volume control",
+      "goal_3": "Enable seamless clip capture with gpu-screen-recorder integration and instant replay",
+      "connectWithUs": "Connect With Us",
+      "github": "GitHub",
+      "discord": "Discord",
+      "website": "Website",
+      "contributors": "OpenGG is maintained by the community. Contributions are welcome!"
+    },
+    "storagePage": {
+      "addScreenshotDir": "Add Directory",
+      "removeScreenshotDir": "Remove"
     }
   },
   "notification": {
