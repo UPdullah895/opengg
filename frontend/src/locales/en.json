@@ -152,6 +152,8 @@
       "reloadTheme": "↻ Reload theme.json",
       "themeFile": "Theme File",
       "themeHint": "Customize UI appearance. Stored at ~/.config/opengg/theme.json",
+      "dateFormat": "Search Date Format",
+      "dateFormatHint": "Format used when searching clips by date (e.g. YYYY-MM-DD).",
       "modules": "Modules",
       "audioHub": "Audio Hub",
       "audioHubDesc": "PipeWire mixer, EQ, noise cancellation",
@@ -169,7 +171,8 @@
       "selectLanguage": "Select Language",
       "hint": "Changes take effect immediately. RTL languages are fully supported.",
       "addLanguage": "Add New Language",
-      "openFolderHint": "Drop a new xx.json file into the locales folder to add a custom language."
+      "openFolderHint": "Drop a new xx.json file into the locales folder to add a custom language.",
+      "reloadLanguages": "Reload languages from disk"
     },
     "shortcuts": {
       "title": "Shortcuts",
@@ -199,7 +202,8 @@
     },
     "mixerRouting": {
       "title": "Mixer Routing",
-      "hint": "Configure how audio streams are routed through virtual PipeWire sinks."
+      "hint": "Configure how audio streams are routed through virtual PipeWire sinks.",
+      "comingSoon": "Mixer routing config — coming soon"
     },
     "eqAutoFlatten": {
       "title": "EQ Auto-Flatten",
@@ -305,7 +309,24 @@
     "captureGsr": {
       "title": "GPU Screen Recorder",
       "hint": "Uses gpu-screen-recorder for low-latency hardware-encoded replay buffer (NVENC/VAAPI). Must be installed separately.",
-      "extensionsHint": "Enable GPU Screen Recorder in Extensions to configure it here."
+      "extensionsHint": "Enable GPU Screen Recorder in Extensions to configure it here.",
+      "quality": "Quality",
+      "qualityCbr": "Constant bitrate (Recommended)",
+      "qualityMedium": "Medium",
+      "qualityHigh": "High",
+      "qualityVeryHigh": "Very high",
+      "qualityUltra": "Ultra",
+      "fps": "FPS",
+      "replayBuffer": "Replay Buffer",
+      "replayCustom": "Custom…",
+      "monitorTarget": "Monitor Target",
+      "autoStart": "Auto-start on launch",
+      "autoStartTooltip": "Automatically start the replay buffer when OpenGG opens.",
+      "waylandHint": "Wayland session detected. \"Fullscreen Application\" capture requires X11.",
+      "installToggleHide": "▼ Hide install guide",
+      "installToggleShow": "▶ How to install?",
+      "removeVirtualAudio": "Remove Virtual Audio & Restore OS Defaults",
+      "removeVirtualAudioRemoving": "Removing…"
     },
     "notificationsPage": {
       "title": "Notifications",
@@ -344,6 +365,34 @@
     "storagePage": {
       "addScreenshotDir": "Add Directory",
       "removeScreenshotDir": "Remove"
+    }
+  },
+  "clips": {
+    "contextMenu": {
+      "preview":      "Preview",
+      "edit":         "Edit",
+      "select":       "Select",
+      "favorite":     "Favorite",
+      "unfavorite":   "Unfavorite",
+      "rename":       "Rename",
+      "showInFolder": "Show in Folder",
+      "delete":       "Delete"
+    },
+    "sortOptions": {
+      "newest":   "Newest",
+      "oldest":   "Oldest",
+      "longest":  "Longest",
+      "shortest": "Shortest"
+    },
+    "bulkActions": {
+      "favoriteAll":   "Favorite All",
+      "unfavoriteAll": "Unfavorite All",
+      "clear":         "Clear",
+      "delete":        "Delete"
+    },
+    "renameDialog": {
+      "title": "Rename Clip",
+      "save":  "Save"
     }
   },
   "notification": {

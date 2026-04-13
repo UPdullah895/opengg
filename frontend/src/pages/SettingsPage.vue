@@ -205,22 +205,22 @@ const shortcutActions = computed<Array<{ key: string; label: string; hint: strin
 ])
 
 // ─── GPU Screen Recorder ───
-const gsrQualityOptions = [
-  { value: 'cbr',       label: 'Constant bitrate (Recommended)' },
-  { value: 'medium',    label: 'Medium'     },
-  { value: 'high',      label: 'High'       },
-  { value: 'very_high', label: 'Very high'  },
-  { value: 'ultra',     label: 'Ultra'      },
-]
-const gsrFpsOptions = [30, 60, 120].map(v => ({ value: v, label: `${v} FPS` }))
-const gsrReplayPresets = [
-  { value: '15',     label: '15s'       },
-  { value: '30',     label: '30s'       },
-  { value: '60',     label: '60s'       },
-  { value: '90',     label: '90s'       },
-  { value: '120',    label: '120s'      },
-  { value: 'custom', label: 'Custom...' },
-]
+const gsrQualityOptions = computed(() => [
+  { value: 'cbr',       label: t('settings.captureGsr.qualityCbr')      },
+  { value: 'medium',    label: t('settings.captureGsr.qualityMedium')   },
+  { value: 'high',      label: t('settings.captureGsr.qualityHigh')     },
+  { value: 'very_high', label: t('settings.captureGsr.qualityVeryHigh') },
+  { value: 'ultra',     label: t('settings.captureGsr.qualityUltra')    },
+])
+const gsrFpsOptions = computed(() => [30, 60, 120].map(v => ({ value: v, label: t(`dashboard.gsrFps.${v}`) })))
+const gsrReplayPresets = computed(() => [
+  { value: '15',     label: t('dashboard.gsrReplay.15')       },
+  { value: '30',     label: t('dashboard.gsrReplay.30')       },
+  { value: '60',     label: t('dashboard.gsrReplay.60')       },
+  { value: '90',     label: t('dashboard.gsrReplay.90')       },
+  { value: '120',    label: t('dashboard.gsrReplay.120')      },
+  { value: 'custom', label: t('settings.captureGsr.replayCustom') },
+])
 
 function onReplayPresetChange(preset: string | number) {
   settings.value.gsrReplayPreset = String(preset) as any
@@ -585,7 +585,7 @@ onMounted(async () => {
               <SelectField v-model="settings.defaultClickAction" :options="clickOptions" />
             </div>
             <div class="field">
-              <label>Search date format<InfoIcon title="How the clip search parses typed dates. YYYY/MM/DD uses month-day order; YYYY/DD/MM uses day-month order. Month names (january, feb, …) work in both." /></label>
+              <label>{{ t('settings.general.dateFormat') }}<InfoIcon :title="t('settings.general.dateFormatHint')" /></label>
               <SelectField v-model="settings.dateFormat" :options="dateFormatOptions" />
             </div>
           </div>
@@ -646,7 +646,7 @@ onMounted(async () => {
               </button>
               <button class="theme-icon-btn" :disabled="localesReloading" @click="loadUserLocales" aria-label="Reload languages">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="{ spinning: localesReloading }"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
-                <span class="info-tooltip-wrap"><span class="btn-tooltip">Reload languages</span></span>
+                <span class="info-tooltip-wrap"><span class="btn-tooltip">{{ t('settings.language.reloadLanguages') }}</span></span>
               </button>
             </div>
           </div>
@@ -705,7 +705,7 @@ onMounted(async () => {
         <div class="card">
           <div class="placeholder-box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/></svg>
-            <span>Mixer routing config — coming soon</span>
+            <span>{{ t('settings.mixerRouting.comingSoon') }}</span>
           </div>
         </div>
 
@@ -718,12 +718,12 @@ onMounted(async () => {
           <p class="hint" style="color:color-mix(in srgb,var(--danger) 80%,var(--text-sec))">{{ t('settings.dangerZone.subtitle') }}</p>
           <div class="danger-action-row">
             <div class="danger-info">
-              <span class="danger-label">Remove Virtual Audio &amp; Restore OS Defaults</span>
-              <span class="danger-desc">Unloads all OpenGG virtual sinks and restarts PipeWire + WirePlumber. Your physical hardware routes will be restored. The onboarding wizard will guide re-setup on next launch.</span>
+              <span class="danger-label">{{ t('settings.dangerZone.removeVirtualAudio') }}</span>
+              <span class="danger-desc">{{ t('settings.dangerZone.removeVirtualAudioDesc') }}</span>
             </div>
             <button class="btn-danger" :disabled="dangerLoading" @click="removeVirtualAudio">
               <svg v-if="!dangerLoading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
-              <span>{{ dangerLoading ? 'Removing…' : 'Remove Virtual Audio & Restore OS Defaults' }}</span>
+              <span>{{ dangerLoading ? t('settings.captureGsr.removeVirtualAudioRemoving') : t('settings.dangerZone.removeVirtualAudio') }}</span>
             </button>
           </div>
           <div v-if="dangerMsg" class="danger-msg" :class="{ 'danger-ok': dangerMsg.startsWith('✓') }">{{ dangerMsg }}</div>
@@ -746,7 +746,7 @@ onMounted(async () => {
           </div>
           <div v-if="settings.gsrEnabled" class="form-grid gsr-grid">
             <div class="field">
-              <label>Quality</label>
+              <label>{{ t('settings.captureGsr.quality') }}</label>
               <SelectField v-model="settings.gsrQuality" :options="gsrQualityOptions" @update:modelValue="restartGsr" />
               <input
                 v-if="settings.gsrQuality === 'cbr'"
@@ -762,11 +762,11 @@ onMounted(async () => {
               />
             </div>
             <div class="field">
-              <label>FPS</label>
+              <label>{{ t('settings.captureGsr.fps') }}</label>
               <SelectField v-model="settings.gsrFps" :options="gsrFpsOptions" @update:modelValue="restartGsr" />
             </div>
             <div class="field">
-              <label>Replay Buffer</label>
+              <label>{{ t('settings.captureGsr.replayBuffer') }}</label>
               <SelectField
                 :modelValue="settings.gsrReplayPreset"
                 :options="gsrReplayPresets"
@@ -784,20 +784,20 @@ onMounted(async () => {
               />
             </div>
             <div class="field">
-              <label>Monitor Target</label>
+              <label>{{ t('settings.captureGsr.monitorTarget') }}</label>
               <SelectField
                 v-model="settings.gsrMonitorTarget"
                 :options="monitorOptions"
                 @update:modelValue="restartGsr"
               />
               <span v-if="isWayland" class="hint" style="color:var(--warn,#f59e0b);margin-top:4px;font-size:11px">
-                Wayland session detected. "Fullscreen Application" capture requires X11.
+                {{ t('settings.captureGsr.waylandHint') }}
               </span>
             </div>
           </div>
           <div v-if="settings.gsrEnabled" class="gsr-toggle-row">
-            <span class="gsr-label">Auto-start on launch
-              <InfoIcon title="Automatically start the replay buffer when OpenGG opens." />
+            <span class="gsr-label">{{ t('settings.captureGsr.autoStart') }}
+              <InfoIcon :title="t('settings.captureGsr.autoStartTooltip')" />
             </span>
             <button class="toggle-btn" :class="{ on: settings.gsrAutoStart }"
                     @click="settings.gsrAutoStart = !settings.gsrAutoStart">
@@ -1006,7 +1006,7 @@ onMounted(async () => {
             <span class="badge-beta">Beta</span>
             <InfoIcon :title="t('settings.captureGsr.hint')" />
           </div>
-          <button class="gsr-install-toggle" @click="gsrInstallOpen = !gsrInstallOpen">{{ gsrInstallOpen ? '▼ Hide install guide' : '▶ How to install?' }}</button>
+          <button class="gsr-install-toggle" @click="gsrInstallOpen = !gsrInstallOpen">{{ gsrInstallOpen ? t('settings.captureGsr.installToggleHide') : t('settings.captureGsr.installToggleShow') }}</button>
           <div v-if="gsrInstallOpen" class="gsr-install-guide">
             <div class="install-section">
               <span class="install-distro">Ubuntu / Debian</span>
@@ -1265,7 +1265,7 @@ onMounted(async () => {
 }
 /* ★ Epic 5: Beta badge */
 .nav-badge {
-  margin-left: auto;
+  margin-inline-start: auto;
   background: var(--accent); color: #fff;
   font-size: 9px; font-weight: 700; letter-spacing: .4px;
   padding: 1px 5px; border-radius: 4px; line-height: 1.5;
@@ -1329,7 +1329,7 @@ onMounted(async () => {
 }
 .gsr-custom-secs:focus { border-color: var(--accent); }
 .gsr-head { display: flex; align-items: center; gap: 8px; }
-.gsr-est { margin-left: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.gsr-est { margin-inline-start: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .gsr-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; }
 .gsr-label { font-size: 13px; color: var(--text-sec); }
 .gsr-install-toggle { display: block; margin: 6px 0; padding: 0; border: none; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; text-align: left; font-weight: 600; }
@@ -1726,7 +1726,7 @@ onMounted(async () => {
 .danger-ok  { color: var(--success); background: color-mix(in srgb, var(--success) 8%, transparent); border-color: color-mix(in srgb, var(--success) 25%, transparent); }
 
 /* ── Theme icon buttons ── */
-.theme-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.theme-actions { display: flex; align-items: center; gap: 4px; margin-inline-start: auto; }
 .theme-icon-btn {
   width: 28px; height: 28px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--bg-deep);

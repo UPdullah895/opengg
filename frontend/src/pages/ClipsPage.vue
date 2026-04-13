@@ -1,6 +1,7 @@
 <script setup lang="ts">
 defineOptions({ name: 'ClipsPage' })
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, inject, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { refDebounced } from '@vueuse/core'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -19,6 +20,7 @@ import { fmtDur, fmtSize, fmtRes, fmtDate } from '../utils/format'
 import { viewMode } from '../composables/useViewMode'
 import type { Ref } from 'vue'
 
+const { t } = useI18n()
 const replay = useReplayStore()
 const persist = usePersistenceStore()
 const _mediaPortRef = inject<Ref<number>>('mediaPort', ref(0))
@@ -250,12 +252,12 @@ const sliderLabel = computed(() => SLIDER_LABELS[gridSlider.value] ?? '')
 const isDragging = ref(false)
 
 // ── Filter options ──
-const sortOptions = [
-  { value: 'newest',   label: 'Newest'   },
-  { value: 'oldest',   label: 'Oldest'   },
-  { value: 'longest',  label: 'Longest'  },
-  { value: 'shortest', label: 'Shortest' },
-]
+const sortOptions = computed(() => [
+  { value: 'newest',   label: t('clips.sortOptions.newest')   },
+  { value: 'oldest',   label: t('clips.sortOptions.oldest')   },
+  { value: 'longest',  label: t('clips.sortOptions.longest')  },
+  { value: 'shortest', label: t('clips.sortOptions.shortest') },
+])
 // ★ Epic 3: game list and per-game counts for the multiselect dropdown
 const gameNames = computed(() => replay.games.filter((g: string) => g !== 'all'))
 const gameCounts = computed(() => {
@@ -723,8 +725,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                   </span>
                 </div>
                 <div class="list-actions">
-                  <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
-                  <button class="list-act" @click.stop="openAdvanced(clip)">Edit</button>
+                  <button class="list-act" @click.stop="openPreview(clip)">{{ t('clips.contextMenu.preview') }}</button>
+                  <button class="list-act" @click.stop="openAdvanced(clip)">{{ t('clips.contextMenu.edit') }}</button>
                   <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
                   <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
                     <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
@@ -888,7 +890,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 
         <!-- Bug 1: Smart toggle — Unfavorite All when all selected are already favorited -->
         <button class="sel-btn" :class="{ 'sel-btn-fav': !allSelectedFavorited, 'sel-btn-unfav': allSelectedFavorited }" @click="bulkFavorite()">
-          {{ allSelectedFavorited ? '💔 Unfavorite All' : '❤ Favorite All' }}
+          {{ allSelectedFavorited ? t('clips.bulkActions.unfavoriteAll') : t('clips.bulkActions.favoriteAll') }}
         </button>
 
         <!-- Bug 2: Change Game drop-up with search filter -->
@@ -926,8 +928,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
           </Transition>
         </div>
 
-        <button class="sel-btn" @click="replay.clearSelection()">Clear</button>
-        <button class="sel-btn sel-btn-d" @click="deleteSelected()">🗑 Delete</button>
+        <button class="sel-btn" @click="replay.clearSelection()">{{ t('clips.bulkActions.clear') }}</button>
+        <button class="sel-btn sel-btn-d" @click="deleteSelected()">🗑 {{ t('clips.bulkActions.delete') }}</button>
       </div>
     </Transition>
 
@@ -935,11 +937,11 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
     <Teleport to="body">
       <div v-if="renameTarget" class="dlg-ov" @click.self="renameTarget=null">
         <div class="dlg">
-          <h3>Rename Clip</h3>
+          <h3>{{ t('clips.renameDialog.title') }}</h3>
           <input v-model="renameValue" class="dlg-in" @keydown.enter="confirmRename" autofocus />
           <div class="dlg-btns">
             <button class="dlg-btn" @click="renameTarget=null">Cancel</button>
-            <button class="dlg-btn dlg-pri" @click="confirmRename">Save</button>
+            <button class="dlg-btn dlg-pri" @click="confirmRename">{{ t('clips.renameDialog.save') }}</button>
           </div>
         </div>
       </div>
@@ -960,34 +962,34 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         <template v-if="contextMenuClip">
           <button class="ctx-item" @click="ctxAction('preview')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            Preview
+            {{ t('clips.contextMenu.preview') }}
           </button>
           <button class="ctx-item" @click="ctxAction('editor')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20h-2a2 2 0 01-2-2v-2m0-4V8m0-4V4a2 2 0 012-2h2m4 0h4m4 0h2a2 2 0 012 2v2m0 4v4m0 4v2a2 2 0 01-2 2h-2m-4 0h-4"/><path d="M9 11l2 2 4-4"/></svg>
-            Edit
+            {{ t('clips.contextMenu.edit') }}
           </button>
           <div class="ctx-sep"></div>
           <button class="ctx-item" @click="ctxAction('select')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="9 11 12 14 20 6"/></svg>
-            Select
+            {{ t('clips.contextMenu.select') }}
           </button>
           <button class="ctx-item" @click="ctxAction('favorite')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-            {{ contextMenuClip.favorite ? 'Unfavorite' : 'Favorite' }}
+            {{ contextMenuClip.favorite ? t('clips.contextMenu.unfavorite') : t('clips.contextMenu.favorite') }}
           </button>
           <div class="ctx-sep"></div>
           <button class="ctx-item" @click="ctxAction('rename')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-            Rename
+            {{ t('clips.contextMenu.rename') }}
           </button>
           <button class="ctx-item" @click="ctxAction('location')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-            Show in Folder
+            {{ t('clips.contextMenu.showInFolder') }}
           </button>
           <div class="ctx-sep"></div>
           <button class="ctx-item ctx-item-d" @click="ctxAction('delete')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
-            Delete
+            {{ t('clips.contextMenu.delete') }}
           </button>
         </template>
       </div>

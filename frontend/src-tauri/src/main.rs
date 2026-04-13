@@ -327,7 +327,7 @@ fn main() {
                         let dirs = get_watch_dirs();
                         for dir in &dirs {
                             let _ = std::fs::create_dir_all(dir);
-                            if let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive) {
+                            if let Err(e) = watcher.watch(dir, RecursiveMode::Recursive) {
                                 log::warn!("Watcher: cannot watch {:?}: {e}", dir);
                             } else {
                                 log::info!("Watcher: watching {:?}", dir);

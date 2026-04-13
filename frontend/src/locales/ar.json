@@ -152,6 +152,8 @@
       "reloadTheme": "↺ إعادة تحميل theme.json",
       "themeFile": "ملف السمة",
       "themeHint": "تخصيص مظهر الواجهة. يُخزَّن في ~/.config/opengg/theme.json",
+      "dateFormat": "تنسيق تاريخ البحث",
+      "dateFormatHint": "التنسيق المستخدم عند البحث في المقاطع بالتاريخ (مثال: YYYY-MM-DD).",
       "modules": "الوحدات",
       "audioHub": "مركز الصوت",
       "audioHubDesc": "خلاط PipeWire والمعادل وإلغاء الضوضاء",
@@ -169,7 +171,8 @@
       "selectLanguage": "اختر اللغة",
       "hint": "تسري التغييرات فوراً. اللغات من اليمين إلى اليسار مدعومة بالكامل.",
       "addLanguage": "إضافة لغة جديدة",
-      "openFolderHint": "ضع ملف xx.json جديداً في مجلد اللغات لإضافة لغة مخصصة."
+      "openFolderHint": "ضع ملف xx.json جديداً في مجلد اللغات لإضافة لغة مخصصة.",
+      "reloadLanguages": "إعادة تحميل اللغات من القرص"
     },
     "shortcuts": {
       "title": "الاختصارات",
@@ -181,7 +184,9 @@
         "screenshot": "لقطة الشاشة",
         "splitClip": "تقسيم المقطع",
         "exportClip": "تصدير المقطع",
-        "toggleMic": "تشغيل/إيقاف الميكروفون"
+        "toggleMic": "تشغيل/إيقاف الميكروفون",
+        "undo": "تراجع",
+        "redo": "إعادة"
       },
       "hints": {
         "saveReplay": "يحفظ ذاكرة الإعادة الحالية كملف مقطع جديد",
@@ -189,13 +194,16 @@
         "screenshot": "يلتقط لقطة شاشة للشاشة النشطة في مجلد الصور",
         "splitClip": "يقسّم المقطع عند موضع رأس التشغيل في المحرر",
         "exportClip": "يفتح نافذة التصدير لحفظ المقطع المقتصّ كملف فيديو",
-        "toggleMic": "يكتم أو يرفع كتم الميكروفون عبر جميع مسارات التسجيل"
+        "toggleMic": "يكتم أو يرفع كتم الميكروفون عبر جميع مسارات التسجيل",
+        "undo": "التراجع عن آخر تعديل على القص في المحرر",
+        "redo": "إعادة آخر تعديل تم التراجع عنه"
       },
       "resetToDefaults": "إعادة تعيين للافتراضيات"
     },
     "mixerRouting": {
       "title": "توجيه الخلاط",
-      "hint": "تكوين كيفية توجيه تدفقات الصوت عبر أحواض PipeWire الافتراضية."
+      "hint": "تكوين كيفية توجيه تدفقات الصوت عبر أحواض PipeWire الافتراضية.",
+      "comingSoon": "إعداد توجيه الخلاط — قريباً"
     },
     "eqAutoFlatten": {
       "title": "تسوية المعادل التلقائية",
@@ -236,6 +244,13 @@
     },
     "storage": {
       "title": "التخزين",
+      "mediaDirsHint": "مجلدات المقاطع تُراقب للتسجيلات الجديدة. مجلدات لقطات الشاشة هي المكان الذي تُحفظ فيه لقطات المحرر.",
+      "clipDirectories": "مجلدات المقاطع",
+      "addClipPath": "إضافة مسار مقطع",
+      "defaultClipPath": "~/Videos/OpenGG (افتراضي)",
+      "screenshotDirectories": "مجلدات لقطات الشاشة",
+      "addScreenshotPath": "إضافة مجلد",
+      "removeDir": "إزالة",
       "clipsFolder": "مجلد المقاطع",
       "change": "تغيير الموقع",
       "clips": "مقاطع",
@@ -290,12 +305,30 @@
       "trackListHint": "تخصيص الاسم واللون والرمز لكل مسار في الخط الزمني للمحرر. تنطبق التغييرات مباشرة — افتح المحرر لترى التأثير على الفور.",
       "livePreview": "معاينة مباشرة",
       "livePreviewHint": "بالضبط كيف ستبدو رؤوس مسارات الخط الزمني للمحرر. التحديث أثناء الكتابة.",
-      "addAudioTrack": "+ إضافة مسار صوتي"
+      "addAudioTrack": "+ إضافة مسار صوتي",
+      "visibilityTooltip": "تبديل ظهور المسار في المعاينة المباشرة"
     },
     "captureGsr": {
       "title": "GPU Screen Recorder",
       "hint": "يستخدم gpu-screen-recorder للتخزين المؤقت للإعادة منخفض الكمون المشفر بالأجهزة (NVENC/VAAPI). يجب تثبيته بشكل منفصل.",
-      "extensionsHint": "فعّل GPU Screen Recorder في الإضافات لتكوينه هنا."
+      "extensionsHint": "فعّل GPU Screen Recorder في الإضافات لتكوينه هنا.",
+      "quality": "الجودة",
+      "qualityCbr": "معدل بت ثابت (موصى به)",
+      "qualityMedium": "متوسط",
+      "qualityHigh": "عالي",
+      "qualityVeryHigh": "عالي جداً",
+      "qualityUltra": "فائق",
+      "fps": "الإطارات في الثانية",
+      "replayBuffer": "ذاكرة الإعادة",
+      "replayCustom": "مخصص…",
+      "monitorTarget": "هدف الشاشة",
+      "autoStart": "بدء تلقائي عند الإطلاق",
+      "autoStartTooltip": "بدء ذاكرة الإعادة تلقائياً عند فتح OpenGG.",
+      "waylandHint": "تم اكتشاف جلسة Wayland. التقاط \"تطبيق ملء الشاشة\" يتطلب X11.",
+      "installToggleHide": "▼ إخفاء دليل التثبيت",
+      "installToggleShow": "▶ كيفية التثبيت؟",
+      "removeVirtualAudio": "إزالة الصوت الافتراضي واستعادة إعدادات نظام التشغيل",
+      "removeVirtualAudioRemoving": "جارٍ الإزالة…"
     },
     "notificationsPage": {
       "title": "الإشعارات",
@@ -334,6 +367,34 @@
     "storagePage": {
       "addScreenshotDir": "إضافة مجلد",
       "removeScreenshotDir": "إزالة"
+    }
+  },
+  "clips": {
+    "contextMenu": {
+      "preview":      "معاينة",
+      "edit":         "تعديل",
+      "select":       "تحديد",
+      "favorite":     "تفضيل",
+      "unfavorite":   "إلغاء التفضيل",
+      "rename":       "إعادة تسمية",
+      "showInFolder": "إظهار في المجلد",
+      "delete":       "حذف"
+    },
+    "sortOptions": {
+      "newest":   "الأحدث",
+      "oldest":   "الأقدم",
+      "longest":  "الأطول",
+      "shortest": "الأقصر"
+    },
+    "bulkActions": {
+      "favoriteAll":   "تفضيل الكل",
+      "unfavoriteAll": "إلغاء تفضيل الكل",
+      "clear":         "مسح",
+      "delete":        "حذف"
+    },
+    "renameDialog": {
+      "title": "إعادة تسمية المقطع",
+      "save":  "حفظ"
     }
   },
   "notification": {

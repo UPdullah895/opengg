@@ -128,11 +128,12 @@ pub async fn set_app_volume(app_index: u32, volume: u32) -> Result<(), String> {
 #[command]
 pub async fn route_app(app_id: u32, channel: String) -> Result<(), String> {
     // Try D-Bus daemon first
-    if call_dbus_void("RouteApp", AU_PATH, AU_IFACE, (app_id, channel.as_str())).await.is_ok() {
-        return Ok(());
+    match call_dbus_void("RouteApp", AU_PATH, AU_IFACE, (app_id, channel.as_str())).await {
+        Ok(()) => return Ok(()),
+        Err(e) => eprintln!("route_app: D-Bus route failed ({e}), falling back to pactl"),
     }
 
-    eprintln!("route_app: D-Bus unavailable, using pactl (index={app_id} → {channel})");
+    log_routing_context(app_id, &channel);
 
     // Get target sink's INTEGER INDEX (not name)
     let sink_idx = if channel == "default" || channel == "Master" {
@@ -143,32 +144,69 @@ pub async fn route_app(app_id: u32, channel: String) -> Result<(), String> {
         get_sink_index_by_name(&name)?
     };
 
-    // Attempt 1: app_id IS the correct pactl sink-input index
-    let r = Command::new("pactl")
-        .args(["move-sink-input", &app_id.to_string(), &sink_idx.to_string()])
-        .output().map_err(|e| format!("pactl: {e}"))?;
+    let cmd_str = format!("pactl move-sink-input {} {}", app_id, sink_idx);
 
-    if r.status.success() {
-        eprintln!("route_app: ✓ sink-input {app_id} → sink #{sink_idx} ({channel})");
-        return Ok(());
+    // Attempt 1: app_id IS the correct pactl sink-input index — with 3 retries
+    for attempt in 0..=2 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+
+        if !validate_sink_input_exists(app_id) {
+            if attempt == 0 {
+                eprintln!("route_app: sink-input {app_id} not found in pactl list, skipping to PW-ID scan...");
+            }
+            break;
+        }
+
+        eprintln!("route_app: [attempt {}/3] executing: {cmd_str}", attempt + 1);
+        let r = Command::new("pactl")
+            .args(["move-sink-input", &app_id.to_string(), &sink_idx.to_string()])
+            .output()
+            .map_err(|e| format!("{cmd_str} — exec error: {e}"))?;
+
+        if r.status.success() {
+            eprintln!("route_app: ✓ attempt {}/3: sink-input {app_id} → sink #{sink_idx} ({channel})", attempt + 1);
+            return Ok(());
+        }
+
+        let err = String::from_utf8_lossy(&r.stderr);
+        eprintln!("route_app: attempt {}/3 failed ({err})", attempt + 1);
+
+        if attempt == 2 {
+            eprintln!("route_app: all 3 attempts exhausted for direct index, scanning for correct sink-input...");
+        }
     }
-
-    let err = String::from_utf8_lossy(&r.stderr);
-    eprintln!("route_app: attempt 1 failed ({err}), scanning for correct index...");
 
     // Attempt 2: app_id might be a PipeWire node ID — find the correct pactl index
     if let Ok(si_idx) = find_pactl_si_for_pw_id(app_id) {
+        let cmd2 = format!("pactl move-sink-input {} {}", si_idx, sink_idx);
+        eprintln!("route_app: found PW#{app_id} → pactl si#{si_idx}, executing: {cmd2}");
         let r2 = Command::new("pactl")
             .args(["move-sink-input", &si_idx.to_string(), &sink_idx.to_string()])
-            .output().map_err(|e| format!("pactl: {e}"))?;
+            .output()
+            .map_err(|e| format!("{cmd2} — exec error: {e}"))?;
         if r2.status.success() {
-            eprintln!("route_app: ✓ corrected: PW#{app_id} → pactl si#{si_idx} → sink #{sink_idx}");
+            eprintln!("route_app: ✓ PW#{app_id} → pactl si#{si_idx} → sink #{sink_idx} ({channel})");
             return Ok(());
         }
-        return Err(format!("pactl: {}", String::from_utf8_lossy(&r2.stderr)));
+        let err2 = String::from_utf8_lossy(&r2.stderr);
+        eprintln!("route_app: corrected index also failed ({err2})");
+    } else {
+        eprintln!("route_app: no pactl sink-input found for PW#{app_id}");
     }
 
-    Err(format!("route_app: no matching sink-input for id {app_id}"))
+    // Attempt 3: pw-link (PipeWire native) — last resort
+    if let Err(e) = route_via_pwlink(app_id, &channel) {
+        eprintln!("route_app: pw-link fallback failed: {e}");
+        return Err(format!(
+            "route_app: all routing methods failed for id {app_id} → {channel}. \
+             See logs above for pactl/pw-link diagnostics."
+        ));
+    }
+
+    eprintln!("route_app: ✓ pw-link route succeeded for {app_id} → {channel}");
+    Ok(())
 }
 
 /// Get default sink's pactl integer index
@@ -189,40 +227,207 @@ fn get_sink_index_by_name(sink_name: &str) -> Result<u32, String> {
     Err(format!("sink '{sink_name}' not found"))
 }
 
-/// Cross-reference PipeWire node ID → pactl sink-input index
-fn find_pactl_si_for_pw_id(pw_id: u32) -> Result<u32, String> {
+/// Extended sink-input info for cross-referencing PipeWire IDs
+#[derive(Debug)]
+struct SiInfo {
+    idx: u32,
+    app_name: String,
+    binary: String,
+    pw_ids: Vec<u32>,
+}
+
+/// Build a comprehensive map of all sink-inputs with their PW node IDs and app metadata.
+fn build_si_map() -> Result<HashMap<u32, SiInfo>, String> {
     let j = run_cmd("pactl", &["-f", "json", "list", "sink-inputs"])?;
-    let sis: Vec<serde_json::Value> = serde_json::from_str(&j).map_err(|e| format!("{e}"))?;
-    let pw_str = pw_id.to_string();
-    for si in &sis {
+    let sis: Vec<serde_json::Value> = serde_json::from_str(&j).map_err(|e| format!("parse sink-inputs: {e}"))?;
+    let mut map = HashMap::new();
+    for si in sis {
         let idx = si["index"].as_u64().unwrap_or(0) as u32;
         let p = &si["properties"];
-        // PipeWire exposes its ID via multiple property keys
-        if p["object.serial"].as_str() == Some(&pw_str)
-            || p["object.id"].as_str() == Some(&pw_str)
-            || p["node.id"].as_str() == Some(&pw_str)
-        {
-            return Ok(idx);
+        let app_name = p["application.name"].as_str()
+            .or(p["media.name"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let binary = p["application.process.binary"].as_str().unwrap_or("").to_string();
+
+        let mut pw_ids = Vec::new();
+        for key in ["object.serial", "object.id", "node.id",
+                    "pipewire.access.portal.app_id", "pipewire.client.access"] {
+            if let Some(s) = p[key].as_str() {
+                if let Ok(id) = s.parse::<u32>() {
+                    pw_ids.push(id);
+                }
+            }
+        }
+        // Some clients expose the node ID embedded in media.name or application.name
+        if let Some(s) = p["media.name"].as_str() {
+            if let Ok(id) = s.parse::<u32>() { pw_ids.push(id); }
+        }
+
+        map.insert(idx, SiInfo { idx, app_name, binary, pw_ids });
+    }
+    Ok(map)
+}
+
+/// Check whether a sink-input index currently exists in the system.
+fn validate_sink_input_exists(si_idx: u32) -> bool {
+    if let Ok(j) = run_cmd("pactl", &["-f", "json", "list", "sink-inputs"]) {
+        if let Ok(sis) = serde_json::from_str::<Vec<serde_json::Value>>(&j) {
+            return sis.iter().any(|si| si["index"].as_u64() == Some(si_idx as u64));
+        }
+    }
+    false
+}
+
+/// Cross-reference PipeWire node ID → pactl sink-input index using the full SI map.
+fn find_pactl_si_for_pw_id(pw_id: u32) -> Result<u32, String> {
+    let map = build_si_map()?;
+    for (idx, info) in &map {
+        if info.pw_ids.contains(&pw_id) {
+            return Ok(*idx);
         }
     }
     Err(format!("no pactl si for PW#{pw_id}"))
 }
 
-/// Ensure virtual sink exists (non-blocking)
+/// Route a stream via PipeWire's native pw-link API as a fallback when pactl fails.
+/// Finds the app's PW node output ports and links them to the target sink's input ports.
+fn route_via_pwlink(app_id: u32, channel: &str) -> Result<(), String> {
+    let sink_name = format!("OpenGG_{channel}");
+
+    // pw-link -o lists all output ports in the format: "<src_port> -> <dst_port>"
+    // We need to find the app's monitor/source ports and link them to the target sink.
+    let all_links = run_cmd("pw-link", &["-o"])?;
+    let sink_input_port = format!("{sink_name}:playback_FL");
+
+    // Try pw-link direct linking: use node ID as the link endpoint.
+    // pw-link can link by node name directly.
+    let node_name = app_id.to_string();
+
+    // pw-link --links (without -o) sets up links. We attempt to link the app's
+    // node directly to the sink using the PipeWire node naming scheme.
+    // PipeWire nodes are referenced as "app_id:<node_id>" or just the port name.
+    let node_out = format!("{node_name}:monitor_Fl");
+
+    eprintln!("route_via_pwlink: attempting to link {node_out} → {sink_input_port}");
+
+    let out = Command::new("pw-link")
+        .args(["--links", &node_out, &sink_input_port])
+        .output()
+        .map_err(|e| format!("pw-link exec error: {e}"))?;
+
+    if out.status.success() {
+        eprintln!("route_via_pwlink: linked {node_out} → {sink_input_port} via pw-link");
+        return Ok(());
+    }
+
+    let err = String::from_utf8_lossy(&out.stderr);
+    eprintln!("route_via_pwlink: direct node link failed ({err}), trying port scan...");
+
+    // Fallback: scan pw-link -o output to find the app's actual port names
+    let mut app_port: Option<String> = None;
+    for line in all_links.lines() {
+        let trimmed = line.trim();
+        if let Some((src, _dst)) = trimmed.split_once(" -> ") {
+            let src = src.trim();
+            // Look for port names containing the app_id as a node reference
+            if src.contains(&format!(":{app_id}"))
+                || src.contains(&format!("app_id:{}", app_id))
+                || src.contains(&format!("node:{}", app_id))
+            {
+                app_port = Some(src.to_string());
+                break;
+            }
+        }
+    }
+
+    if let Some(port) = app_port {
+        eprintln!("route_via_pwlink: found app port '{port}', linking to {sink_input_port}");
+        let cmd2 = Command::new("pw-link")
+            .args(["--links", &port, &sink_input_port])
+            .output()
+            .map_err(|e| format!("pw-link exec error: {e}"))?;
+        if cmd2.status.success() {
+            eprintln!("route_via_pwlink: linked {port} → {sink_input_port}");
+            return Ok(());
+        }
+        let err2 = String::from_utf8_lossy(&cmd2.stderr);
+        return Err(format!("pw-link port link failed: {}", err2.trim()));
+    }
+
+    Err(format!(
+        "route_via_pwlink: could not find or link app#{app_id} to sink '{sink_name}'. \
+         pw-link -o output:\n{}", &all_links[..all_links.len().min(500)]
+    ))
+}
+
+/// Log full environment context and current PA state before routing attempts.
+fn log_routing_context(app_id: u32, channel: &str) {
+    eprintln!("=== route_app[{} → {channel}] environment context ===", app_id);
+    eprintln!("  PULSE_SERVER:  {:?}", std::env::var("PULSE_SERVER").ok());
+    eprintln!("  PIPEWIRE_DEBUG: {:?}", std::env::var("PIPEWIRE_DEBUG").ok());
+    eprintln!("  XDG_SESSION_TYPE: {:?}", std::env::var("XDG_SESSION_TYPE").ok());
+    eprintln!("  WAYLAND_DISPLAY:  {:?}", std::env::var("WAYLAND_DISPLAY").ok());
+    eprintln!("  DISPLAY:         {:?}", std::env::var("DISPLAY").ok());
+    eprintln!("  XDG_CURRENT_DESKTOP: {:?}", std::env::var("XDG_CURRENT_DESKTOP").ok());
+
+    if let Ok(j) = run_cmd("pactl", &["-f", "json", "list", "sink-inputs"]) {
+        eprintln!("  Current sink-inputs ({}): {}", app_id,
+            if j.len() > 400 { format!("{} [...truncated]", &j[..400]) } else { j.clone() });
+    } else {
+        eprintln!("  Current sink-inputs: <unavailable>");
+    }
+
+    if let Ok(j) = run_cmd("pactl", &["-f", "json", "list", "sinks"]) {
+        eprintln!("  Current sinks: {} sinks visible", serde_json::from_str::<Vec<serde_json::Value>>(&j).map(|v| v.len()).unwrap_or(0));
+    } else {
+        eprintln!("  Current sinks: <unavailable>");
+    }
+
+    // pw-link diagnostics
+    if let Ok(links) = run_cmd("pw-link", &["--links"]) {
+        let app_links: Vec<_> = links.lines()
+            .filter(|l| l.contains(&app_id.to_string()))
+            .collect();
+        if !app_links.is_empty() {
+            eprintln!("  pw-link for app#{app_id}: {}", app_links.join("; "));
+        }
+    }
+
+    eprintln!("====================================================");
+}
+
+/// Ensure virtual sink exists (non-blocking, with extended settling time)
 async fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
     if let Ok(o) = Command::new("pactl").args(["list", "sinks", "short"]).output() {
         if String::from_utf8_lossy(&o.stdout).contains(name) { return Ok(()); }
     }
+    eprintln!("ensure_sink_exists: creating virtual sink '{name}' for channel '{ch}'");
     let c = Command::new("pactl").args(["load-module", "module-null-sink",
         &format!("sink_name={name}"),
         &format!("sink_properties=node.description=\"OpenGG - {ch}\" node.nick=\"OpenGG - {ch}\" device.description=\"OpenGG - {ch}\""),
         "channels=2", "channel_map=front-left,front-right"
     ]).output().map_err(|e| format!("{e}"))?;
-    if !c.status.success() { return Err(format!("{}", String::from_utf8_lossy(&c.stderr))); }
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    if let Ok(def) = run_cmd("pactl", &["get-default-sink"]) {
-        for p in ["FL","FR"] { let _ = Command::new("pw-link").args([&format!("{name}:monitor_{p}"), &format!("{def}:playback_{p}")]).output(); }
+    if !c.status.success() {
+        let err = String::from_utf8_lossy(&c.stderr);
+        eprintln!("ensure_sink_exists: pactl load-module FAILED: {err}");
+        return Err(err.to_string());
     }
+    // Increase settling time: 600ms to allow PipeWire to fully enumerate the new sink
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+    // Set up loopback links to default sink
+    if let Ok(def) = run_cmd("pactl", &["get-default-sink"]) {
+        for p in ["FL", "FR"] {
+            let result = Command::new("pw-link")
+                .args([&format!("{name}:monitor_{p}"), &format!("{def}:playback_{p}")])
+                .output();
+            if let Err(e) = result {
+                eprintln!("ensure_sink_exists: pw-link {name}:monitor_{p} → {def}:playback_{p}: {e}");
+            }
+        }
+    }
+    eprintln!("ensure_sink_exists: sink '{name}' ready");
     Ok(())
 }
 
@@ -1179,9 +1384,8 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
     let mut seen = std::collections::HashSet::new();
     for dir in &dirs {
         if !dir.exists() { continue; }
-        let rd = match std::fs::read_dir(dir) { Ok(r) => r, Err(_) => continue };
-        for e in rd.flatten() {
-            let p = e.path(); if !p.is_file() { continue; }
+        for e in walkdir::WalkDir::new(dir).min_depth(1).into_iter().flatten() {
+            let p = e.path().to_path_buf(); if !p.is_file() { continue; }
             let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
             if !VIDEO_EXTS.contains(&ext.as_str()) { continue; }
             let fp = p.to_string_lossy().to_string();
@@ -3667,5 +3871,20 @@ pub fn show_clip_notification(
 
 // rng() removed — VU meters now use real PipeWire peak data
 async fn call_dbus<R:serde::de::DeserializeOwned+zbus::zvariant::Type>(m:&str,p:&str,i:&str,a:impl serde::Serialize+zbus::zvariant::Type)->Result<R,String>{let c=zbus::Connection::session().await.map_err(|e|format!("{e}"))?;let r:R=c.call_method(Some("org.opengg.Daemon"),p,Some(i),m,&a).await.map_err(|e|format!("{m}:{e}"))?.body().deserialize().map_err(|e|format!("{m}:{e}"))?;Ok(r)}
-async fn call_dbus_void(m:&str,p:&str,i:&str,a:impl serde::Serialize+zbus::zvariant::Type)->Result<(),String>{let c=zbus::Connection::session().await.map_err(|e|format!("{e}"))?;c.call_method(Some("org.opengg.Daemon"),p,Some(i),m,&a).await.map_err(|e|format!("{m}:{e}"))?;Ok(())}
+async fn call_dbus_void(m: &str, p: &str, i: &str, a: impl serde::Serialize + zbus::zvariant::Type) -> Result<(), String> {
+    let conn = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("call_dbus: session connection failed — {e}");
+            return Err(format!("D-Bus session connect: {e}"));
+        }
+    };
+    match conn.call_method(Some("org.opengg.Daemon"), p, Some(i), m, &a).await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("call_dbus: method '{m}' on {p}.{i} failed — {e}");
+            Err(format!("D-Bus method {m}: {e}"))
+        }
+    }
+}
 fn run_cmd(c:&str,a:&[&str])->Result<String,String>{let o=Command::new(c).args(a).output().map_err(|e|format!("{c}:{e}"))?;if o.status.success(){Ok(String::from_utf8_lossy(&o.stdout).trim().into())}else{Err(String::from_utf8_lossy(&o.stderr).trim().into())}}
