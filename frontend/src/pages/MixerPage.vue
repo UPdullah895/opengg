@@ -14,6 +14,7 @@
 
 import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { useAudioStore } from '../stores/audio'
 import { usePersistenceStore } from '../stores/persistence'
 import ChannelStrip from '../components/ChannelStrip.vue'
@@ -73,14 +74,23 @@ function devDesc(ch: string, type: 'sink' | 'source') {
   return defDev?.description || 'Default'
 }
 
+let unlistenRefresh: (() => void) | null = null
+
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
   try { audioReady.value = await invoke<boolean>('check_virtual_audio_status') } catch { audioReady.value = false }
   checkingAudio.value = false
   // ★ FIX 4: Poll every 2s (down from 3s) for tighter PipeWire sync
   if (audioReady.value) audio.startPolling(2000)
+
+  // Push-based refresh: backend emits 'audio-mixer-refresh' after every successful
+  // route_app call so the UI updates immediately instead of waiting for the next poll.
+  unlistenRefresh = await listen('audio-mixer-refresh', () => { audio.fetchApps() })
 })
-onUnmounted(() => audio.stopPolling())
+onUnmounted(() => {
+  audio.stopPolling()
+  unlistenRefresh?.()
+})
 </script>
 
 <template>

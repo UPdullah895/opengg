@@ -126,23 +126,29 @@ pub async fn set_app_volume(app_index: u32, volume: u32) -> Result<(), String> {
 // ══════════════════════════════════════════════════════════════════════
 
 #[command]
-pub async fn route_app(app_id: u32, channel: String) -> Result<(), String> {
+pub async fn route_app(app: tauri::AppHandle, app_id: u32, channel: String) -> Result<(), String> {
     // Try D-Bus daemon first
     match call_dbus_void("RouteApp", AU_PATH, AU_IFACE, (app_id, channel.as_str())).await {
-        Ok(()) => return Ok(()),
+        Ok(()) => {
+            let _ = app.emit("audio-mixer-refresh", ());
+            return Ok(());
+        }
         Err(e) => eprintln!("route_app: D-Bus route failed ({e}), falling back to pactl"),
     }
 
     log_routing_context(app_id, &channel);
 
-    // Get target sink's INTEGER INDEX (not name)
-    let sink_idx = if channel == "default" || channel == "Master" {
-        get_default_sink_index()?
+    // Resolve the target sink name once — used by both pactl and pw-metadata paths
+    let sink_name = if channel == "default" || channel == "Master" {
+        run_cmd("pactl", &["get-default-sink"])?
     } else {
         let name = format!("OpenGG_{channel}");
         ensure_sink_exists(&name, &channel).await?;
-        get_sink_index_by_name(&name)?
+        name
     };
+
+    // Get target sink's INTEGER INDEX (needed by pactl move-sink-input)
+    let sink_idx = get_sink_index_by_name(&sink_name)?;
 
     let cmd_str = format!("pactl move-sink-input {} {}", app_id, sink_idx);
 
@@ -167,6 +173,7 @@ pub async fn route_app(app_id: u32, channel: String) -> Result<(), String> {
 
         if r.status.success() {
             eprintln!("route_app: ✓ attempt {}/3: sink-input {app_id} → sink #{sink_idx} ({channel})", attempt + 1);
+            let _ = app.emit("audio-mixer-refresh", ());
             return Ok(());
         }
 
@@ -178,7 +185,7 @@ pub async fn route_app(app_id: u32, channel: String) -> Result<(), String> {
         }
     }
 
-    // Attempt 2: app_id might be a PipeWire node ID — find the correct pactl index
+    // Attempt 2: app_id might be a PipeWire node ID — find the correct pactl sink-input index
     if let Ok(si_idx) = find_pactl_si_for_pw_id(app_id) {
         let cmd2 = format!("pactl move-sink-input {} {}", si_idx, sink_idx);
         eprintln!("route_app: found PW#{app_id} → pactl si#{si_idx}, executing: {cmd2}");
@@ -188,25 +195,43 @@ pub async fn route_app(app_id: u32, channel: String) -> Result<(), String> {
             .map_err(|e| format!("{cmd2} — exec error: {e}"))?;
         if r2.status.success() {
             eprintln!("route_app: ✓ PW#{app_id} → pactl si#{si_idx} → sink #{sink_idx} ({channel})");
+            let _ = app.emit("audio-mixer-refresh", ());
             return Ok(());
         }
         let err2 = String::from_utf8_lossy(&r2.stderr);
-        eprintln!("route_app: corrected index also failed ({err2})");
+        eprintln!("route_app: corrected pactl index also failed ({err2}), trying pw-metadata...");
     } else {
-        eprintln!("route_app: no pactl sink-input found for PW#{app_id}");
+        eprintln!("route_app: no pactl sink-input found for PW#{app_id}, trying pw-metadata...");
     }
 
-    // Attempt 3: pw-link (PipeWire native) — last resort
-    if let Err(e) = route_via_pwlink(app_id, &channel) {
-        eprintln!("route_app: pw-link fallback failed: {e}");
-        return Err(format!(
-            "route_app: all routing methods failed for id {app_id} → {channel}. \
-             See logs above for pactl/pw-link diagnostics."
-        ));
+    // Attempt 3: pw-metadata target.node — WirePlumber-native stream move.
+    // Resolves the sink's PipeWire node.id (different from the pactl integer index)
+    // and writes it into the WirePlumber settings metadata so WirePlumber moves the stream.
+    match get_pw_node_id_for_sink(&sink_name) {
+        Ok(sink_pw_id) => {
+            eprintln!(
+                "route_app: [pw-metadata] node#{app_id} → target.node={sink_pw_id} (sink '{}', channel '{channel}')",
+                sink_name
+            );
+            if let Err(e) = route_via_pw_metadata(app_id, sink_pw_id) {
+                eprintln!("route_app: pw-metadata failed: {e}");
+                return Err(format!(
+                    "route_app: all routing methods failed for id {app_id} → {channel}. \
+                     See logs above for diagnostics."
+                ));
+            }
+            eprintln!("route_app: ✓ pw-metadata succeeded for {app_id} → {channel}");
+            let _ = app.emit("audio-mixer-refresh", ());
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("route_app: cannot resolve sink '{}' PW node.id: {e}", sink_name);
+            Err(format!(
+                "route_app: all routing methods failed for id {app_id} → {channel}. \
+                 Sink PW node.id unavailable: {e}"
+            ))
+        }
     }
-
-    eprintln!("route_app: ✓ pw-link route succeeded for {app_id} → {channel}");
-    Ok(())
 }
 
 /// Get default sink's pactl integer index
@@ -290,108 +315,101 @@ fn find_pactl_si_for_pw_id(pw_id: u32) -> Result<u32, String> {
     Err(format!("no pactl si for PW#{pw_id}"))
 }
 
-/// Route a stream via PipeWire's native pw-link API as a fallback when pactl fails.
-/// Finds the app's PW node output ports and links them to the target sink's input ports.
-fn route_via_pwlink(app_id: u32, channel: &str) -> Result<(), String> {
-    let sink_name = format!("OpenGG_{channel}");
-
-    // pw-link -o lists all output ports in the format: "<src_port> -> <dst_port>"
-    // We need to find the app's monitor/source ports and link them to the target sink.
-    let all_links = run_cmd("pw-link", &["-o"])?;
-    let sink_input_port = format!("{sink_name}:playback_FL");
-
-    // Try pw-link direct linking: use node ID as the link endpoint.
-    // pw-link can link by node name directly.
-    let node_name = app_id.to_string();
-
-    // pw-link --links (without -o) sets up links. We attempt to link the app's
-    // node directly to the sink using the PipeWire node naming scheme.
-    // PipeWire nodes are referenced as "app_id:<node_id>" or just the port name.
-    let node_out = format!("{node_name}:monitor_Fl");
-
-    eprintln!("route_via_pwlink: attempting to link {node_out} → {sink_input_port}");
-
-    let out = Command::new("pw-link")
-        .args(["--links", &node_out, &sink_input_port])
-        .output()
-        .map_err(|e| format!("pw-link exec error: {e}"))?;
-
-    if out.status.success() {
-        eprintln!("route_via_pwlink: linked {node_out} → {sink_input_port} via pw-link");
-        return Ok(());
-    }
-
-    let err = String::from_utf8_lossy(&out.stderr);
-    eprintln!("route_via_pwlink: direct node link failed ({err}), trying port scan...");
-
-    // Fallback: scan pw-link -o output to find the app's actual port names
-    let mut app_port: Option<String> = None;
-    for line in all_links.lines() {
-        let trimmed = line.trim();
-        if let Some((src, _dst)) = trimmed.split_once(" -> ") {
-            let src = src.trim();
-            // Look for port names containing the app_id as a node reference
-            if src.contains(&format!(":{app_id}"))
-                || src.contains(&format!("app_id:{}", app_id))
-                || src.contains(&format!("node:{}", app_id))
+/// Resolve a PipeWire sink's node.id (PW namespace) from its pactl name.
+/// The PW node.id is stored in the sink's properties["node.id"] in pactl JSON output
+/// and is the correct identifier for pw-metadata target.node writes.
+fn get_pw_node_id_for_sink(sink_name: &str) -> Result<u32, String> {
+    let j = run_cmd("pactl", &["-f", "json", "list", "sinks"])?;
+    let sinks: Vec<serde_json::Value> = serde_json::from_str(&j)
+        .map_err(|e| format!("parse sinks: {e}"))?;
+    for s in &sinks {
+        if s["name"].as_str() == Some(sink_name) {
+            // WirePlumber surfaces the PW node.id as a string property
+            if let Some(nid) = s["properties"]["node.id"].as_str()
+                .and_then(|v| v.parse::<u32>().ok())
             {
-                app_port = Some(src.to_string());
-                break;
+                return Ok(nid);
+            }
+            // Fallback: object.id is the same value on older PipeWire builds
+            if let Some(nid) = s["properties"]["object.id"].as_str()
+                .and_then(|v| v.parse::<u32>().ok())
+            {
+                return Ok(nid);
             }
         }
     }
-
-    if let Some(port) = app_port {
-        eprintln!("route_via_pwlink: found app port '{port}', linking to {sink_input_port}");
-        let cmd2 = Command::new("pw-link")
-            .args(["--links", &port, &sink_input_port])
-            .output()
-            .map_err(|e| format!("pw-link exec error: {e}"))?;
-        if cmd2.status.success() {
-            eprintln!("route_via_pwlink: linked {port} → {sink_input_port}");
-            return Ok(());
-        }
-        let err2 = String::from_utf8_lossy(&cmd2.stderr);
-        return Err(format!("pw-link port link failed: {}", err2.trim()));
-    }
-
-    Err(format!(
-        "route_via_pwlink: could not find or link app#{app_id} to sink '{sink_name}'. \
-         pw-link -o output:\n{}", &all_links[..all_links.len().min(500)]
-    ))
+    Err(format!("no PW node.id found for sink '{sink_name}'"))
 }
 
-/// Log full environment context and current PA state before routing attempts.
+/// Route a stream via WirePlumber metadata — the correct PipeWire-native move.
+///
+/// `pw-metadata -n settings <stream_node_id> target.node <sink_node_id>`
+///
+/// WirePlumber watches the "settings" metadata namespace and moves the stream
+/// when it sees a `target.node` entry for a managed stream node. This is
+/// the same mechanism used internally by pavucontrol and the GNOME audio panel.
+fn route_via_pw_metadata(stream_pw_id: u32, sink_pw_id: u32) -> Result<(), String> {
+    eprintln!(
+        "route_via_pw_metadata: pw-metadata -n settings {} target.node {}",
+        stream_pw_id, sink_pw_id
+    );
+    let r = Command::new("pw-metadata")
+        .args([
+            "-n", "settings",
+            &stream_pw_id.to_string(),
+            "target.node",
+            &sink_pw_id.to_string(),
+        ])
+        .output()
+        .map_err(|e| format!("pw-metadata exec error: {e}"))?;
+    if r.status.success() { return Ok(()); }
+    Err(format!("pw-metadata: {}", String::from_utf8_lossy(&r.stderr).trim()))
+}
+
+/// Log full environment context and PipeWire state before routing attempts.
 fn log_routing_context(app_id: u32, channel: &str) {
     eprintln!("=== route_app[{} → {channel}] environment context ===", app_id);
-    eprintln!("  PULSE_SERVER:  {:?}", std::env::var("PULSE_SERVER").ok());
-    eprintln!("  PIPEWIRE_DEBUG: {:?}", std::env::var("PIPEWIRE_DEBUG").ok());
-    eprintln!("  XDG_SESSION_TYPE: {:?}", std::env::var("XDG_SESSION_TYPE").ok());
-    eprintln!("  WAYLAND_DISPLAY:  {:?}", std::env::var("WAYLAND_DISPLAY").ok());
-    eprintln!("  DISPLAY:         {:?}", std::env::var("DISPLAY").ok());
+    eprintln!("  PULSE_SERVER:        {:?}", std::env::var("PULSE_SERVER").ok());
+    eprintln!("  PIPEWIRE_DEBUG:      {:?}", std::env::var("PIPEWIRE_DEBUG").ok());
+    eprintln!("  XDG_SESSION_TYPE:    {:?}", std::env::var("XDG_SESSION_TYPE").ok());
+    eprintln!("  WAYLAND_DISPLAY:     {:?}", std::env::var("WAYLAND_DISPLAY").ok());
+    eprintln!("  DISPLAY:             {:?}", std::env::var("DISPLAY").ok());
     eprintln!("  XDG_CURRENT_DESKTOP: {:?}", std::env::var("XDG_CURRENT_DESKTOP").ok());
 
-    if let Ok(j) = run_cmd("pactl", &["-f", "json", "list", "sink-inputs"]) {
-        eprintln!("  Current sink-inputs ({}): {}", app_id,
-            if j.len() > 400 { format!("{} [...truncated]", &j[..400]) } else { j.clone() });
+    // Resolve stream identity: find node.name and binary for app_id in the SI map
+    match build_si_map() {
+        Ok(map) => {
+            let matched: Vec<_> = map.values()
+                .filter(|info| info.pw_ids.contains(&app_id) || info.idx == app_id)
+                .collect();
+            if matched.is_empty() {
+                eprintln!("  stream id={app_id}: not found in current pactl sink-inputs (may be a PW node ID)");
+            } else {
+                for info in &matched {
+                    eprintln!(
+                        "  stream id={app_id}: pactl-idx={} name='{}' binary='{}'",
+                        info.idx, info.app_name, info.binary
+                    );
+                }
+            }
+        }
+        Err(e) => eprintln!("  stream id={app_id}: SI map unavailable ({e})"),
+    }
+
+    // Resolve target sink PW node.id (what pw-metadata will use)
+    let sink_name = if channel == "default" || channel == "Master" {
+        run_cmd("pactl", &["get-default-sink"]).unwrap_or_default()
     } else {
-        eprintln!("  Current sink-inputs: <unavailable>");
+        format!("OpenGG_{channel}")
+    };
+    match get_pw_node_id_for_sink(&sink_name) {
+        Ok(nid) => eprintln!("  target sink '{}' → PW node.id={}", sink_name, nid),
+        Err(e)  => eprintln!("  target sink '{}' → PW node.id unavailable: {}", sink_name, e),
     }
 
     if let Ok(j) = run_cmd("pactl", &["-f", "json", "list", "sinks"]) {
-        eprintln!("  Current sinks: {} sinks visible", serde_json::from_str::<Vec<serde_json::Value>>(&j).map(|v| v.len()).unwrap_or(0));
-    } else {
-        eprintln!("  Current sinks: <unavailable>");
-    }
-
-    // pw-link diagnostics
-    if let Ok(links) = run_cmd("pw-link", &["--links"]) {
-        let app_links: Vec<_> = links.lines()
-            .filter(|l| l.contains(&app_id.to_string()))
-            .collect();
-        if !app_links.is_empty() {
-            eprintln!("  pw-link for app#{app_id}: {}", app_links.join("; "));
-        }
+        let count = serde_json::from_str::<Vec<serde_json::Value>>(&j).map(|v| v.len()).unwrap_or(0);
+        eprintln!("  pactl sinks visible: {count}");
     }
 
     eprintln!("====================================================");
