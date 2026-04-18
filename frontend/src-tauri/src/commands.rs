@@ -1237,7 +1237,23 @@ fn get_meta_map() -> HashMap<String,(String,bool,String)> {
 
 // ═══ Clips ═══
 #[derive(Debug,Serialize,Clone)]
-pub struct ClipInfo { pub id:String, pub filename:String, pub filepath:String, pub filesize:u64, pub created:String, pub duration:f64, pub width:u32, pub height:u32, pub game:String, pub custom_name:String, pub favorite:bool, pub thumbnail:String }
+pub struct ClipInfo {
+    pub id:String,
+    pub filename:String,
+    pub filepath:String,
+    pub filesize:u64,
+    pub created:String,
+    #[serde(rename = "createdTs")]
+    pub created_ts:u64,
+    pub duration:f64,
+    pub width:u32,
+    pub height:u32,
+    pub game:String,
+    pub custom_name:String,
+    pub favorite:bool,
+    pub thumbnail:String,
+    pub probing:bool,
+}
 const VIDEO_EXTS: &[&str] = &["mp4","mkv","webm","avi","mov","ts","flv"];
 
 // Phase 3a: ffprobe cache helpers
@@ -1375,10 +1391,12 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
     let mut clips: Vec<ClipInfo> = entries.into_iter().enumerate().map(|(i, e)| {
         let (dur, w, h) = probe_map.get(&i).copied().unwrap_or((0.0, 0, 0));
         let game = if e.game_tag.is_empty() { e.game_raw } else { e.game_tag };
-        ClipInfo { id: e.id, filename: e.fname, filepath: e.fp, filesize: e.filesize, created: e.created, duration: dur, width: w, height: h, game, custom_name: e.cn, favorite: e.fav, thumbnail: e.thumbnail }
+        ClipInfo { id: e.id, filename: e.fname, filepath: e.fp, filesize: e.filesize, created: e.created, created_ts: e.mtime, duration: dur, width: w, height: h, game, custom_name: e.cn, favorite: e.fav, thumbnail: e.thumbnail, probing: false }
     }).collect();
 
-    clips.sort_by(|a,b| b.created.cmp(&a.created));
+    clips.sort_by(|a,b| b.created.cmp(&a.created)
+        .then_with(|| b.created_ts.cmp(&a.created_ts))
+        .then_with(|| b.filename.cmp(&a.filename)));
     #[cfg(debug_assertions)] {
         let t_total_ms = t_total.elapsed().as_millis();
         eprintln!("[perf] get_clips: scan={}ms cache={}ms ffprobe={}ms ({} uncached) assemble={}ms total={}ms clips={}",
@@ -1436,10 +1454,12 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
             .and_then(|db| probe_cache_get(db, &e.fp, e.mtime))
             .unwrap_or((0.0, 0, 0));
         let game = if e.game_tag.is_empty() { e.game_raw } else { e.game_tag };
-        ClipInfo { id: e.id, filename: e.fname, filepath: e.fp, filesize: e.filesize, created: e.created, duration: dur, width: w, height: h, game, custom_name: e.cn, favorite: e.fav, thumbnail: e.thumbnail }
+        ClipInfo { id: e.id, filename: e.fname, filepath: e.fp, filesize: e.filesize, created: e.created, created_ts: e.mtime, duration: dur, width: w, height: h, game, custom_name: e.cn, favorite: e.fav, thumbnail: e.thumbnail, probing: false }
     }).collect();
 
-    clips.sort_by(|a,b| b.created.cmp(&a.created));
+    clips.sort_by(|a,b| b.created.cmp(&a.created)
+        .then_with(|| b.created_ts.cmp(&a.created_ts))
+        .then_with(|| b.filename.cmp(&a.filename)));
     #[cfg(debug_assertions)] eprintln!("[perf] get_clips_fast: total={}ms clips={}", t_total.elapsed().as_millis(), clips.len());
     Ok(clips)
 }
@@ -1501,11 +1521,16 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
     let game = if game_tag.is_empty() { game_from_filename } else { game_tag };
     let thumb = td.join(format!("{id}.jpg"));
     let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
-    Ok(Some(ClipInfo{id,filename:fname,filepath:fp,filesize:m.len(),created,duration:dur,width:w,height:h,game,custom_name:cn,favorite:fav,thumbnail}))
+    Ok(Some(ClipInfo{id,filename:fname,filepath:fp,filesize:m.len(),created,created_ts:mtime,duration:dur,width:w,height:h,game,custom_name:cn,favorite:fav,thumbnail,probing:false}))
 }
 #[command] pub async fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Result<String, String> {
     let id = format!("{:x}",hash_str(&filepath)); let d = thumb_dir(); let _ = std::fs::create_dir_all(&d);
-    let out = d.join(format!("{id}.jpg")); if out.exists() { return Ok(out.to_string_lossy().to_string()); }
+    let out = d.join(format!("{id}.jpg"));
+    if out.exists() {
+        log::info!("Thumbnail cache hit: {} -> {}", filepath, out.display());
+        return Ok(out.to_string_lossy().to_string());
+    }
+    log::info!("Thumbnail generation started: {}", filepath);
     #[cfg(debug_assertions)] let t_start = std::time::Instant::now();
     // Use caller-provided duration to skip redundant probe_duration ffprobe subprocess
     let dur = duration.filter(|&d| d > 0.0).unwrap_or_else(|| probe_duration(&filepath));
@@ -1522,8 +1547,15 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
         eprintln!("[perf] generate_thumbnail: probe={}ms ffmpeg={}ms total={}ms file={}",
             t_probe_ms, t_start.elapsed().as_millis() - t_probe_ms, t_start.elapsed().as_millis(), fname);
     }
-    if r.status.success() && out.exists() { Ok(out.to_string_lossy().to_string()) }
-    else { Err(format!("ffmpeg: {}", String::from_utf8_lossy(&r.stderr))) }
+    if r.status.success() && out.exists() {
+        log::info!("Thumbnail generation completed: {} -> {}", filepath, out.display());
+        Ok(out.to_string_lossy().to_string())
+    }
+    else {
+        let err = format!("ffmpeg: {}", String::from_utf8_lossy(&r.stderr));
+        log::warn!("Thumbnail generation failed: {} ({err})", filepath);
+        Err(err)
+    }
 }
 /// Phase 3d: Batch thumbnail generation — generates up to 3 concurrently.
 /// `durations`: optional per-filepath duration hints. When provided and non-zero,
@@ -3906,3 +3938,171 @@ async fn call_dbus_void(m: &str, p: &str, i: &str, a: impl serde::Serialize + zb
     }
 }
 fn run_cmd(c:&str,a:&[&str])->Result<String,String>{let o=Command::new(c).args(a).output().map_err(|e|format!("{c}:{e}"))?;if o.status.success(){Ok(String::from_utf8_lossy(&o.stdout).trim().into())}else{Err(String::from_utf8_lossy(&o.stderr).trim().into())}}
+
+// ═══ Job #3: Optimization & Features ═══
+
+/// Recursively scans a folder for video files, emitting progress and items via AppHandle.
+/// This allows the UI to show a progress bar and add clips incrementally.
+#[command]
+pub async fn scan_folder_recursive(app: AppHandle, folder: String) -> Result<(), String> {
+    let dir = PathBuf::from(&folder);
+    if !dir.is_dir() { return Err("Not a directory".into()); }
+    log::info!("Import scan started: {}", dir.display());
+
+    // Count first for progress bar
+    let total = walkdir::WalkDir::new(&dir)
+        .min_depth(1)
+        .into_iter()
+        .flatten()
+        .filter(|e| {
+            let p = e.path();
+            p.is_file() && {
+                let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+                VIDEO_EXTS.contains(&ext.as_str())
+            }
+        })
+        .count();
+
+    if total == 0 {
+        log::info!("Import scan found no clips: {}", dir.display());
+        return Ok(());
+    }
+    log::info!("Import scan queued {total} candidate clips from {}", dir.display());
+    let _ = app.emit("import-progress", serde_json::json!({
+        "current": 0,
+        "total": total,
+    }));
+
+    let meta = get_meta_map();
+    let td = thumb_dir();
+    let db = open_db().ok();
+
+    let mut count = 0;
+    for e in walkdir::WalkDir::new(&dir).min_depth(1).into_iter().flatten() {
+        let p = e.path();
+        if !p.is_file() { continue; }
+        let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+        if !VIDEO_EXTS.contains(&ext.as_str()) { continue; }
+
+        let fp = p.to_string_lossy().to_string();
+        let m = match e.metadata() { Ok(m) => m, Err(_) => continue };
+        let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let id = format!("{:x}", hash_str(&fp));
+        let mtime = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+        let created = date_from_stem(p.file_stem().unwrap_or_default().to_str().unwrap_or_default())
+            .unwrap_or_else(|| fmt_ts_local(mtime as i64));
+
+        let (dur, w, h) = db.as_ref().and_then(|db| probe_cache_get(db, &fp, mtime)).unwrap_or((0.0, 0, 0));
+        let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
+        let stem = p.file_stem().unwrap_or_default().to_string_lossy();
+        let game_from_filename = stem.split('_').next().unwrap_or("Unknown").replace('-', " ");
+        let game = if game_tag.is_empty() { game_from_filename } else { game_tag };
+        let thumb = td.join(format!("{id}.jpg"));
+        let thumbnail = if thumb.exists() { thumb.to_string_lossy().to_string() } else { String::new() };
+
+        let clip = ClipInfo {
+            id, filename: fname, filepath: fp, filesize: m.len(), created, created_ts: mtime,
+            duration: dur, width: w, height: h, game, custom_name: cn, favorite: fav,
+            thumbnail, probing: dur == 0.0
+        };
+
+        log::info!(
+            "Import emitted clip {}/{}: {} (thumbnail_cached={}, probing={})",
+            count + 1,
+            total,
+            clip.filepath,
+            !clip.thumbnail.is_empty(),
+            clip.probing
+        );
+        let _ = app.emit("import-item", clip);
+        count += 1;
+        let _ = app.emit("import-progress", serde_json::json!({
+            "current": count,
+            "total": total,
+        }));
+    }
+
+    log::info!("Import scan completed: {} clips emitted from {}", count, dir.display());
+    Ok(())
+}
+
+/// Scans local Steam libraries for installed games to populate the tagging list.
+#[command]
+pub async fn get_steam_games() -> Result<Vec<String>, String> {
+    let mut game_names = std::collections::HashSet::new();
+    let mut seen_appids = std::collections::HashSet::new();
+    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+    let home_p = PathBuf::from(&home);
+
+    let mut roots = vec![
+        home_p.join(".steam/root"),
+        home_p.join(".steam/steam"),
+        home_p.join(".local/share/Steam"),
+        home_p.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"),
+    ];
+    // Add possible symlink targets or common custom locations if they exist
+    roots.dedup();
+
+    let mut library_folders = Vec::new();
+
+    for steam_root in roots {
+        if !steam_root.exists() { continue; }
+        let base_apps = steam_root.join("steamapps");
+        if base_apps.exists() && !library_folders.contains(&base_apps) {
+            library_folders.push(base_apps);
+        }
+
+        // Read libraryfolders.vdf to find additional library paths
+        let lf_vdf = steam_root.join("steamapps/libraryfolders.vdf");
+        if let Ok(content) = std::fs::read_to_string(lf_vdf) {
+            for line in content.lines() {
+                let t = line.trim();
+                if t.to_lowercase().starts_with("\"path\"") {
+                    let parts: Vec<&str> = t.split('\"').collect();
+                    if parts.len() >= 4 {
+                        let p = PathBuf::from(parts[3]).join("steamapps");
+                        if p.exists() && !library_folders.contains(&p) {
+                            library_folders.push(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Scan each discovered library for appmanifest_*.acf
+    for lib in library_folders {
+        if let Ok(entries) = std::fs::read_dir(lib) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if fname.starts_with("appmanifest_") && fname.ends_with(".acf") {
+                    // Extract appid from filename (appmanifest_<appid>.acf)
+                    let appid = fname.strip_prefix("appmanifest_")
+                        .and_then(|s| s.strip_suffix(".acf"))
+                        .unwrap_or("");
+                    
+                    if seen_appids.contains(appid) { continue; }
+                    seen_appids.insert(appid.to_string());
+
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        for line in content.lines() {
+                            let t = line.trim();
+                            if t.to_lowercase().starts_with("\"name\"") {
+                                let parts: Vec<&str> = t.split('\"').collect();
+                                if parts.len() >= 4 {
+                                    game_names.insert(parts[3].to_string());
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut list: Vec<String> = game_names.into_iter().collect();
+    list.sort();
+    Ok(list)
+}

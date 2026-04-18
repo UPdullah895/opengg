@@ -10,7 +10,7 @@ import { fmtDur, fmtSize, fmtRes, fmtDate } from '../utils/format'
 import type { Ref } from 'vue'
 
 const props = defineProps<{ clip: Clip; selected?: boolean }>()
-const emit = defineEmits<{ 'preview': [Clip]; 'editor': [Clip]; 'rename': [Clip]; 'delete': [Clip]; 'contextmenu': [{ clip: Clip; x: number; y: number }] }>()
+const emit = defineEmits<{ 'preview': [Clip]; 'editor': [Clip]; 'rename': [Clip]; 'delete': [Clip]; 'contextmenu': [Clip, MouseEvent] }>()
 
 const replay = useReplayStore()
 const cardRef = ref<HTMLElement | null>(null)
@@ -35,13 +35,7 @@ let resolvedThumbPath = ''
 
 // Context menu — emit event to parent (ClipsPage) instead of managing own menu
 function openMenu(e: MouseEvent) {
-  e.preventDefault(); e.stopPropagation()
-  const menuW = 200, menuH = 270
-  const x = e.clientX + menuW > window.innerWidth  ? e.clientX - menuW : e.clientX
-  const y = e.clientY + menuH > window.innerHeight ? e.clientY - menuH : e.clientY
-  replay.activeMenuClipId = props.clip.id
-  replay.activeMenuPos = { x, y }
-  emit('contextmenu', { clip: props.clip, x, y })
+  emit('contextmenu', props.clip, e)
 }
 
 // ★ Lazy thumbnail — uses shared IntersectionObserver + concurrency-limited queue
@@ -151,13 +145,6 @@ async function toggleFav(e: Event) {
   try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: props.clip.custom_name, favorite: v } }) } catch {}
 }
 
-function onDrag(e: DragEvent) {
-  if (!e.dataTransfer) return
-  e.dataTransfer.setData('text/uri-list', `file://${props.clip.filepath}`)
-  e.dataTransfer.setData('text/plain', props.clip.filepath)
-  e.dataTransfer.effectAllowed = 'copy'
-}
-
 
 // Inline rename
 const isEditing = ref(false)
@@ -183,7 +170,7 @@ function cancelEdit() { isEditing.value = false }
 </script>
 
 <template>
-  <div ref="cardRef" class="card" :class="{ selected }" @contextmenu.prevent="openMenu" draggable="true" @dragstart="onDrag">
+  <div ref="cardRef" class="card" :class="{ selected }" @contextmenu.prevent="openMenu">
     <div class="thumb">
       <img v-if="thumbUrl" :src="thumbUrl" class="thumb-img" :class="{ loaded: thumbLoaded }" alt="" decoding="async" loading="lazy" @load="thumbLoaded = true" />
       <div v-else class="thumb-ph">🎬</div>
@@ -192,6 +179,12 @@ function cancelEdit() { isEditing.value = false }
       <div class="sel-ov" :class="{ vis: selected || replay.selectMode }" @click.stop="replay.toggleSelect(clip.id)">
         <div class="sel-box" :class="{ checked: selected }">✓</div>
       </div>
+      <Transition name="fade">
+        <div v-if="clip.probing" class="probing-ov">
+          <div class="probing-spinner"></div>
+          <span>Fetching video data…</span>
+        </div>
+      </Transition>
     </div>
     <div class="info">
       <div class="clip-name-row">
@@ -223,7 +216,7 @@ function cancelEdit() { isEditing.value = false }
 </template>
 
 <style scoped>
-.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; contain:layout style paint; content-visibility:auto; contain-intrinsic-size:auto 260px; contain-intrinsic-block-size:auto 280px; user-select:none; }
+.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; contain:layout style paint; height: 100%; user-select:none; }
 .card:hover { border-color:var(--accent); transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.25); }
 .card.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent); }
 .thumb { width:100%; aspect-ratio:16/9; background:var(--bg-deep); position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden; }
@@ -239,9 +232,9 @@ function cancelEdit() { isEditing.value = false }
 .info { padding:10px 12px 12px; }
 .clip-name-row { display:flex; align-items:center; gap:4px; margin-bottom:6px; }
 .clip-name { font-size:var(--name-size, 13px); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; line-height:1.3; }
-.clip-meta { display:flex; align-items:center; gap:6px; font-size:var(--meta-size, 11px); color:var(--text-muted); flex-wrap:wrap; }
-.pill { background:var(--bg-deep); padding:2px 6px; border-radius:3px; }
-.date-pill { opacity:.75; }
+.clip-meta { display:flex; align-items:center; gap:6px; font-size:var(--meta-size, 11px); color:var(--text-muted); white-space:nowrap; overflow:hidden; }
+.pill { background:var(--bg-deep); padding:2px 6px; border-radius:3px; flex-shrink:0; max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+.date-pill { opacity:.75; max-width: 100px; }
 .game {
   margin-left:auto; font-weight:700; font-size:10px;
   color:var(--accent);
@@ -262,6 +255,23 @@ function cancelEdit() { isEditing.value = false }
   width:100%; padding:2px 4px; margin:-2px -4px;
   background:var(--bg-input); border:1px solid var(--accent); border-radius:4px;
   color:var(--text); font-size:13px; font-weight:600; outline:none; line-height:1.3;
-}
+  }
 
-</style>
+  .probing-ov {
+  position:absolute; inset:0;
+  background:rgba(0,0,0,.7);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
+  color:var(--text); font-size:11px; font-weight:600;
+  z-index:5;
+  }
+  .probing-spinner {
+  width:20px; height:20px;
+  border:2px solid rgba(255,255,255,.2); border-top-color:#fff;
+  border-radius:50%; animation:spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  .fade-enter-active, .fade-leave-active { transition:opacity .2s; }
+  .fade-enter-from, .fade-leave-to { opacity:0; }
+  </style>
+

@@ -211,6 +211,9 @@ fn main() {
             commands::create_virtual_audio,
             commands::remove_virtual_audio,
             commands::hydrate_audio_routing,
+            // ★ Job #3: Optimization & Features
+            commands::scan_folder_recursive,
+            commands::get_steam_games,
             // ★ Epic 1C: Global OS shortcuts
             commands::register_global_shortcuts,
             // ★ GPU Screen Recorder

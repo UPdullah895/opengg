@@ -42,10 +42,14 @@ function dragHandle(h: 'start' | 'end', e: MouseEvent) {
 }
 function togglePlay() { playerComp.value?.togglePlay() }
 
-const GAMES = ['Counter-Strike 2','League of Legends','Valorant','Overwatch 2','Apex Legends','Fortnite','Minecraft','Dota 2','Rocket League','Elden Ring',"Baldur's Gate 3",'Cyberpunk 2077','Honkai: Star Rail','Genshin Impact','Helldivers 2','Path of Exile 2']
+const GAMES_STATIC = ['Counter-Strike 2','League of Legends','Valorant','Overwatch 2','Apex Legends','Fortnite','Minecraft','Dota 2','Rocket League','Elden Ring',"Baldur's Gate 3",'Cyberpunk 2077','Honkai: Star Rail','Genshin Impact','Helldivers 2','Path of Exile 2']
+const GAMES = computed(() => {
+  const s = new Set([...GAMES_STATIC, ...replay.steamGames])
+  return Array.from(s).sort()
+})
 const gameTag = ref('')
 const gameOpen = ref(false)
-const gameFiltered = computed(() => { const q = gameTag.value.toLowerCase(); return q ? GAMES.filter(g => g.toLowerCase().includes(q)) : GAMES })
+const gameFiltered = computed(() => { const q = gameTag.value.toLowerCase(); return q ? GAMES.value.filter(g => g.toLowerCase().includes(q)) : GAMES.value })
 
 async function saveTrimState() { try { await invoke('save_trim_state', { filepath: props.clip.filepath, trimStart: trimStart.value, trimEnd: trimEnd.value }) } catch {} }
 onMounted(async () => {

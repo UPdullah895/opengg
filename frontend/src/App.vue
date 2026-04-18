@@ -10,6 +10,7 @@ import SettingsPage from './pages/SettingsPage.vue'
 import SelectField from './components/SelectField.vue'
 import ClipNotification from './components/ClipNotification.vue'
 import { usePersistenceStore } from './stores/persistence'
+import { useReplayStore } from './stores/replay'
 import { loadTheme } from './utils/theme'
 import { getMediaPort } from './utils/assets'
 import { installAudioUnlocker } from './utils/audio'
@@ -43,6 +44,12 @@ const mediaPort = ref(0)
 provide('mediaPort', mediaPort)
 
 function navigate(page: string) { currentPage.value = page }
+
+// RAM optimization: notify stores when the Clips page is active/inactive
+watch(currentPage, (v) => {
+  const replay = useReplayStore()
+  replay.pageActive = (v === 'clips')
+}, { immediate: true })
 
 // ═══ Epic 2: Virtual Audio Onboarding ═══
 const showOnboarding = ref(false)
@@ -367,8 +374,8 @@ body {
   background: var(--bg-surface);
   color: var(--text);
   overflow: hidden;
-  -webkit-user-select: text;
-  user-select: text;
+  -webkit-user-select: none;
+  user-select: none;
 }
 /* Prevent drag-highlighting on non-text UI chrome */
 img, svg { user-select: none; -webkit-user-drag: none; }
