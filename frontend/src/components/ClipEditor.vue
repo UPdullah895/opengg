@@ -6,6 +6,7 @@ import type { Clip } from '../stores/replay'
 import { useReplayStore } from '../stores/replay'
 import type { Ref } from 'vue'
 import CustomVideoPlayer from './CustomVideoPlayer.vue'
+import { clipDisplayTitle } from '../utils/format'
 
 const props = defineProps<{ clip: Clip; mode: 'preview' | 'trim' }>()
 const emit = defineEmits<{ 'close': []; 'saved': [string]; 'toast': [string] }>()
@@ -19,7 +20,7 @@ const videoSrc = computed(() => mediaUrl(props.clip.filepath, mediaPort.value))
 const duration = ref(props.clip.duration || 0)
 const currentTime = ref(0)
 const playing = ref(false)
-const editTitle = ref(props.clip.custom_name || (props.clip.game !== 'Unknown' ? props.clip.game : props.clip.filename.replace(/\.[^.]+$/, '')))
+const editTitle = ref(clipDisplayTitle(props.clip.custom_name || '', props.clip.game || '', props.clip.filename))
 const titleDirty = ref(false)
 const trimStart = ref(0)
 const trimEnd = ref(props.clip.duration || 0)
@@ -51,7 +52,12 @@ const gameTag = ref('')
 const gameOpen = ref(false)
 const gameFiltered = computed(() => { const q = gameTag.value.toLowerCase(); return q ? GAMES.value.filter(g => g.toLowerCase().includes(q)) : GAMES.value })
 
-async function saveTrimState() { try { await invoke('save_trim_state', { filepath: props.clip.filepath, trimStart: trimStart.value, trimEnd: trimEnd.value }) } catch {} }
+async function saveTrimState() {
+  try {
+    await invoke('save_trim_state', { filepath: props.clip.filepath, trimStart: trimStart.value, trimEnd: trimEnd.value })
+    window.dispatchEvent(new CustomEvent('clip-trim-updated', { detail: { filepath: props.clip.filepath, trimStart: trimStart.value, trimEnd: trimEnd.value } }))
+  } catch {}
+}
 onMounted(async () => {
   try { const s = await invoke<{ trim_start: number; trim_end: number } | null>('get_trim_state', { filepath: props.clip.filepath }); if (s && s.trim_end > 0) { trimStart.value = s.trim_start; trimEnd.value = s.trim_end } } catch {}
   try { const m = await invoke<string>('get_clip_meta', { filepath: props.clip.filepath }); if (m && m !== 'null') { const d = JSON.parse(m); if (d.game_tag) gameTag.value = d.game_tag } } catch {}
@@ -59,15 +65,19 @@ onMounted(async () => {
 
 async function saveTitle() {
   const name = editTitle.value.trim()
-  replay.updateClipMeta(props.clip.filepath, { custom_name: name, game: gameTag.value })
-  try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: name, favorite: props.clip.favorite, game_tag: gameTag.value } }) } catch {}
+  const fallbackTitle = clipDisplayTitle('', gameTag.value || props.clip.game || '', props.clip.filename)
+  const customName = name && name !== fallbackTitle ? name : ''
+  replay.updateClipMeta(props.clip.filepath, { custom_name: customName, game: gameTag.value })
+  try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: customName, favorite: props.clip.favorite, game_tag: gameTag.value } }) } catch {}
   titleDirty.value = false
 }
 
 async function toggleFavorite() {
   const newFav = !props.clip.favorite
   replay.updateClipMeta(props.clip.filepath, { favorite: newFav })
-  try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: editTitle.value.trim() || props.clip.filename, favorite: newFav, game_tag: gameTag.value } }) } catch {}
+  const fallbackTitle = clipDisplayTitle('', gameTag.value || props.clip.game || '', props.clip.filename)
+  const customName = editTitle.value.trim() && editTitle.value.trim() !== fallbackTitle ? editTitle.value.trim() : ''
+  try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: customName, favorite: newFav, game_tag: gameTag.value } }) } catch {}
 }
 
 async function deleteClip() {

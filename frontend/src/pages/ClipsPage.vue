@@ -215,11 +215,25 @@ const scanCount = computed(() => replay.scanCount)
 
 // ★ Epic 3: List view scales with the same slider — each size maps to thumb/font/padding values
 const listStyles = computed(() => {
-  const map: Record<number, { thumbW: string; thumbH: string; fontSize: string; padding: string }> = {
-    1: { thumbW: '320px', thumbH: '180px', fontSize: '18px', padding: '16px' },
-    2: { thumbW: '240px', thumbH: '135px', fontSize: '15px', padding: '12px' },
-    3: { thumbW: '160px', thumbH: '90px',  fontSize: '13px', padding: '8px'  },
-    4: { thumbW: '96px',  thumbH: '54px',  fontSize: '11px', padding: '6px'  },
+  const map: Record<number, {
+    thumbW: string
+    thumbH: string
+    fontSize: string
+    metaFontSize: string
+    pillPadY: string
+    pillPadX: string
+    chipFontSize: string
+    chipPadY: string
+    chipPadX: string
+    actionFontSize: string
+    actionPadY: string
+    actionPadX: string
+    padding: string
+  }> = {
+    1: { thumbW: '400px', thumbH: '225px', fontSize: '18px', metaFontSize: '14px', pillPadY: '3px', pillPadX: '8px', chipFontSize: '12px', chipPadY: '3px', chipPadX: '10px', actionFontSize: '13px', actionPadY: '6px', actionPadX: '12px', padding: '16px' },
+    2: { thumbW: '320px', thumbH: '180px', fontSize: '15px', metaFontSize: '12px', pillPadY: '2px', pillPadX: '7px', chipFontSize: '11px', chipPadY: '2px', chipPadX: '9px', actionFontSize: '12px', actionPadY: '5px', actionPadX: '11px', padding: '12px' },
+    3: { thumbW: '240px', thumbH: '135px', fontSize: '13px', metaFontSize: '11px', pillPadY: '2px', pillPadX: '6px', chipFontSize: '10px', chipPadY: '2px', chipPadX: '8px', actionFontSize: '12px', actionPadY: '4px', actionPadX: '10px', padding: '8px'  },
+    4: { thumbW: '160px', thumbH: '90px',  fontSize: '11px', metaFontSize: '10px', pillPadY: '1px', pillPadX: '5px', chipFontSize: '9px', chipPadY: '1px', chipPadX: '7px', actionFontSize: '11px', actionPadY: '3px', actionPadX: '8px', padding: '6px'  },
   }
   return map[gridSlider.value] ?? map[3]
 })
@@ -1073,6 +1087,15 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                     :clip="clip"
                     :selected="replay.isSelected(clip.id)"
                     :font-size="listStyles.fontSize"
+                    :meta-font-size="listStyles.metaFontSize"
+                    :pill-pad-y="listStyles.pillPadY"
+                    :pill-pad-x="listStyles.pillPadX"
+                    :chip-font-size="listStyles.chipFontSize"
+                    :chip-pad-y="listStyles.chipPadY"
+                    :chip-pad-x="listStyles.chipPadX"
+                    :action-font-size="listStyles.actionFontSize"
+                    :action-pad-y="listStyles.actionPadY"
+                    :action-pad-x="listStyles.actionPadX"
                     :padding="listStyles.padding"
                     :thumb-w="listStyles.thumbW"
                     :thumb-h="listStyles.thumbH"
@@ -1170,6 +1193,15 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
               :clip="clip"
               :selected="replay.isSelected(clip.id)"
               :font-size="listStyles.fontSize"
+              :meta-font-size="listStyles.metaFontSize"
+              :pill-pad-y="listStyles.pillPadY"
+              :pill-pad-x="listStyles.pillPadX"
+              :chip-font-size="listStyles.chipFontSize"
+              :chip-pad-y="listStyles.chipPadY"
+              :chip-pad-x="listStyles.chipPadX"
+              :action-font-size="listStyles.actionFontSize"
+              :action-pad-y="listStyles.actionPadY"
+              :action-pad-x="listStyles.actionPadX"
               :padding="listStyles.padding"
               :thumb-w="listStyles.thumbW"
               :thumb-h="listStyles.thumbH"

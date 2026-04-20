@@ -80,6 +80,8 @@ async function doCreateVirtualAudio() {
   try {
     await invoke('create_virtual_audio')
     await invoke('hydrate_audio_routing')
+    const { useAudioStore } = await import('./stores/audio')
+    useAudioStore().setVirtualAudioReady(true)
     await fetchOnboardDevices()
     onboardStep.value = 2
   } catch (e) { onboardMsg.value = `Setup failed: ${e}` }

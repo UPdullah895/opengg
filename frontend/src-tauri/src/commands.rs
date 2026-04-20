@@ -418,12 +418,25 @@ fn log_routing_context(app_id: u32, channel: &str) {
 /// Ensure virtual sink exists (non-blocking, with extended settling time)
 async fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
     if let Ok(o) = Command::new("pactl").args(["list", "sinks", "short"]).output() {
-        if String::from_utf8_lossy(&o.stdout).contains(name) { return Ok(()); }
+        if String::from_utf8_lossy(&o.stdout).contains(name) {
+            if matches!(ch, "Game" | "Chat" | "Media" | "Aux") {
+                unload_null_sink_module(name)?;
+            } else {
+                return Ok(());
+            }
+        }
     }
+    let display_name = live_display_name(ch);
     eprintln!("ensure_sink_exists: creating virtual sink '{name}' for channel '{ch}'");
     let c = Command::new("pactl").args(["load-module", "module-null-sink",
         &format!("sink_name={name}"),
-        &format!("sink_properties=node.description=\"OpenGG - {ch}\" node.nick=\"OpenGG - {ch}\" device.description=\"OpenGG - {ch}\""),
+        &format!(
+            "sink_properties=node.description={} node.nick={} device.description={} media.name={}",
+            sink_prop_value(&display_name),
+            sink_prop_value(&display_name),
+            sink_prop_value(&display_name),
+            sink_prop_value(&display_name),
+        ),
         "channels=2", "channel_map=front-left,front-right"
     ]).output().map_err(|e| format!("{e}"))?;
     if !c.status.success() {
@@ -449,6 +462,48 @@ async fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn live_display_name(channel: &str) -> String {
+    if matches!(channel, "Game" | "Chat" | "Media" | "Aux") {
+        channel.to_string()
+    } else {
+        format!("OpenGG - {channel}")
+    }
+}
+
+fn sink_prop_value(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\\\""))
+}
+
+fn unload_null_sink_module(sink_name: &str) -> Result<(), String> {
+    let modules = run_cmd("pactl", &["list", "short", "modules"])?;
+    for line in modules.lines() {
+        let mut parts = line.split('\t');
+        let Some(idx) = parts.next() else { continue };
+        let Some(name) = parts.next() else { continue };
+        let args = parts.next().unwrap_or("");
+        if name != "module-null-sink" || !args.contains(&format!("sink_name={sink_name}")) {
+            continue;
+        }
+        run_cmd("pactl", &["unload-module", idx])?;
+    }
+    for _ in 0..20 {
+        let modules = run_cmd("pactl", &["list", "short", "modules"])?;
+        let modules_cleared = modules.lines().all(|line| {
+            let mut parts = line.split('\t');
+            let _idx = parts.next();
+            let name = parts.next().unwrap_or("");
+            let args = parts.next().unwrap_or("");
+            name != "module-null-sink" || !args.contains(&format!("sink_name={sink_name}"))
+        });
+        let sinks = run_cmd("pactl", &["list", "sinks", "short"])?;
+        if modules_cleared && !sinks.contains(sink_name) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(())
+}
+
 /// Scan sink-inputs — mirrors pulsectl.sink_input_list()
 /// ★ FIX 2: Filters out streams going to OpenGG virtual sinks' monitors
 fn scan_sink_inputs() -> Result<String, String> {
@@ -458,18 +513,19 @@ fn scan_sink_inputs() -> Result<String, String> {
     for si in &sis {
         let idx = si["index"].as_u64().unwrap_or(0) as u32;
         let p = &si["properties"];
-        let name = p["application.name"].as_str()
-            .or(p["media.name"].as_str())
-            .or(p["application.process.binary"].as_str())
-            .unwrap_or("Unknown");
-        let binary = p["application.process.binary"].as_str().unwrap_or("");
-
-        // ★ FIX 2: Skip internal PipeWire/WirePlumber streams
-        let name_lower = name.to_lowercase();
-        if name_lower.contains("opengg") || name_lower == "wireplumber"
-            || name_lower == "pipewire" || name_lower.contains("peak detect") {
+        if is_internal_stream(
+            p["application.name"].as_str(),
+            p["media.name"].as_str(),
+            p["application.process.binary"].as_str(),
+        ) {
             continue;
         }
+        let binary = p["application.process.binary"].as_str().unwrap_or("");
+        let name = normalized_stream_name(
+            p["application.name"].as_str(),
+            p["media.name"].as_str(),
+            Some(binary),
+        );
 
         let sink_idx = si["sink"].as_u64().unwrap_or(0) as u32;
         let channel = lookup_sink_channel(sink_idx);
@@ -495,16 +551,19 @@ fn scan_sink_inputs() -> Result<String, String> {
         if let Ok(sos) = serde_json::from_str::<Vec<serde_json::Value>>(&sj) {
             for (idx, so) in sos.iter().enumerate() {
                 let p = &so["properties"];
-                let name = p["application.name"].as_str()
-                    .or(p["media.name"].as_str())
-                    .or(p["application.process.binary"].as_str())
-                    .unwrap_or("Unknown");
-                let binary = p["application.process.binary"].as_str().unwrap_or("");
-                let name_lower = name.to_lowercase();
-                if name_lower.contains("opengg") || name_lower == "wireplumber"
-                    || name_lower == "pipewire" || name_lower.contains("peak detect") {
+                if is_internal_stream(
+                    p["application.name"].as_str(),
+                    p["media.name"].as_str(),
+                    p["application.process.binary"].as_str(),
+                ) {
                     continue;
                 }
+                let binary = p["application.process.binary"].as_str().unwrap_or("");
+                let name = normalized_stream_name(
+                    p["application.name"].as_str(),
+                    p["media.name"].as_str(),
+                    Some(binary),
+                );
                 let fake_id = 90000u32 + idx as u32;
                 apps.push(serde_json::json!({
                     "id": fake_id, "name": name, "binary": binary,
@@ -515,6 +574,33 @@ fn scan_sink_inputs() -> Result<String, String> {
     }
 
     Ok(serde_json::to_string(&apps).unwrap_or("[]".into()))
+}
+
+fn normalized_stream_name(app_name: Option<&str>, media_name: Option<&str>, binary_name: Option<&str>) -> String {
+    let app = app_name.map(str::trim).filter(|v| !v.is_empty());
+    let media = media_name.map(str::trim).filter(|v| !v.is_empty());
+    let binary = binary_name.map(str::trim).filter(|v| !v.is_empty());
+
+    match app {
+        Some(name) if !name.eq_ignore_ascii_case("opengg") => name.to_string(),
+        _ => media.or(binary).unwrap_or("Unknown").to_string(),
+    }
+}
+
+fn is_internal_stream(app_name: Option<&str>, media_name: Option<&str>, binary_name: Option<&str>) -> bool {
+    let matches_internal = |value: Option<&str>| {
+        value
+            .map(str::to_lowercase)
+            .map(|raw| {
+                raw.contains("opengg")
+                    || raw.contains("wireplumber")
+                    || raw.contains("pipewire")
+                    || raw.contains("peak detect")
+                    || raw.contains("monitor")
+            })
+            .unwrap_or(false)
+    };
+    matches_internal(app_name) || matches_internal(media_name) || matches_internal(binary_name)
 }
 
 /// Suggest an OpenGG channel for an app based on PipeWire stream properties.
@@ -2929,11 +3015,24 @@ pub async fn create_virtual_audio() -> Result<(), String> {
     let existing = run_cmd("pactl", &["list", "sinks", "short"]).unwrap_or_default();
     for ch in VIRTUAL_CHANNELS {
         let sink_name = format!("OpenGG_{ch}");
-        if existing.contains(&sink_name) { continue; }
+        if existing.contains(&sink_name) {
+            if matches!(*ch, "Game" | "Chat" | "Media" | "Aux") {
+                unload_null_sink_module(&sink_name)?;
+            } else {
+                continue;
+            }
+        }
+        let display_name = live_display_name(ch);
         run_cmd("pactl", &[
             "load-module", "module-null-sink",
             &format!("sink_name={sink_name}"),
-            &format!("sink_properties=node.description=\"OpenGG - {ch}\" node.nick=\"OpenGG - {ch}\" device.description=\"OpenGG - {ch}\""),
+            &format!(
+                "sink_properties=node.description={} node.nick={} device.description={} media.name={}",
+                sink_prop_value(&display_name),
+                sink_prop_value(&display_name),
+                sink_prop_value(&display_name),
+                sink_prop_value(&display_name),
+            ),
             "channels=2", "channel_map=front-left,front-right",
         ])?;
     }
@@ -3004,6 +3103,8 @@ pub fn hydrate_audio_routing() {
             // Setting default sink is intentionally skipped — it changes the
             // system-wide default and surprises the user.  The frontend will
             // call set_channel_device if the user actively changes it.
+        } else if !VIRTUAL_CHANNELS.contains(&channel.as_str()) {
+            continue;
         } else {
             // Virtual sink (Game/Chat/Media/Aux): disconnect old links then
             // reconnect to the saved physical device.

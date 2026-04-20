@@ -32,6 +32,33 @@ fn build_sink_map() -> HashMap<u32, String> {
     }).collect()
 }
 
+fn normalized_stream_name(app_name: Option<&str>, media_name: Option<&str>, binary_name: Option<&str>) -> String {
+    let app = app_name.map(str::trim).filter(|v| !v.is_empty());
+    let media = media_name.map(str::trim).filter(|v| !v.is_empty());
+    let binary = binary_name.map(str::trim).filter(|v| !v.is_empty());
+
+    match app {
+        Some(name) if !name.eq_ignore_ascii_case("opengg") => name.to_string(),
+        _ => media.or(binary).unwrap_or("Unknown").to_string(),
+    }
+}
+
+fn is_internal_stream(app_name: Option<&str>, media_name: Option<&str>, binary_name: Option<&str>) -> bool {
+    let matches_internal = |value: Option<&str>| {
+        value
+            .map(str::to_lowercase)
+            .map(|raw| {
+                raw.contains("opengg")
+                    || raw.contains("wireplumber")
+                    || raw.contains("pipewire")
+                    || raw.contains("peak detect")
+                    || raw.contains("monitor")
+            })
+            .unwrap_or(false)
+    };
+    matches_internal(app_name) || matches_internal(media_name) || matches_internal(binary_name)
+}
+
 pub fn list_streams() -> Result<Vec<StreamInfo>> {
     let output = Command::new("pactl")
         .args(["-f", "json", "list", "sink-inputs"])
@@ -56,17 +83,24 @@ pub fn list_streams() -> Result<Vec<StreamInfo>> {
     for input in inputs {
         let props = &input["properties"];
         let index = input["index"].as_u64().unwrap_or(0) as u32;
+        if is_internal_stream(
+            props["application.name"].as_str(),
+            props["media.name"].as_str(),
+            props["application.process.binary"].as_str(),
+        ) {
+            continue;
+        }
 
         // ★ FIX: was input["sink"].as_str() — always None since it's a u32
         let sink_idx = input["sink"].as_u64().unwrap_or(u64::MAX) as u32;
         let sink_name = sink_map.get(&sink_idx).cloned().unwrap_or_default();
 
-        let app_name = props["application.name"]
-            .as_str()
-            .or_else(|| props["media.name"].as_str())
-            .unwrap_or("Unknown")
-            .to_string();
         let binary = props["application.process.binary"].as_str().unwrap_or("").to_string();
+        let app_name = normalized_stream_name(
+            props["application.name"].as_str(),
+            props["media.name"].as_str(),
+            Some(binary.as_str()),
+        );
         let icon = props["application.icon_name"].as_str().unwrap_or("").to_string();
 
         let channel = super::sinks::CHANNEL_NAMES
@@ -108,6 +142,8 @@ fn list_streams_text() -> Result<Vec<StreamInfo>> {
         }
     }
     if let Some(s) = current { streams.push(s); }
+
+    streams.retain(|s| !is_internal_stream(Some(s.app_name.as_str()), None, Some(s.binary.as_str())));
 
     for s in &mut streams {
         s.channel = super::sinks::CHANNEL_NAMES

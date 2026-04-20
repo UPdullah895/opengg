@@ -8,6 +8,7 @@ import { ask, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { usePersistenceStore, DEFAULTS } from '../stores/persistence'
 import { useReplayStore } from '../stores/replay'
+import { useAudioStore } from '../stores/audio'
 import { loadTheme, saveTheme, getCurrentTheme, applyThemeMode, getThemeMode } from '../utils/theme'
 import { LANGUAGES, registerLocale } from '../i18n'
 import SelectField from '../components/SelectField.vue'
@@ -19,6 +20,7 @@ const { t, locale } = useI18n()
 const persist = usePersistenceStore()
 const appVersion = ref('')
 const replay = useReplayStore()
+const audio = useAudioStore()
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
   if (!persist.loaded) await persist.load()
@@ -363,10 +365,8 @@ async function removeVirtualAudio() {
   dangerLoading.value = true; dangerMsg.value = ''
   try {
     await invoke('remove_virtual_audio')
-    dangerMsg.value = '✓ Virtual audio removed. Select your devices below.'
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 2 } }))
-    }, 600)
+    audio.setVirtualAudioReady(false)
+    dangerMsg.value = '✓ Virtual audio removed.'
   } catch (e) { dangerMsg.value = `Error: ${e}` }
   finally { dangerLoading.value = false }
 }
