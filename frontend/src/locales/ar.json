@@ -294,8 +294,9 @@
       "title": "منطقة خطرة",
       "subtitle": "هذه الإجراءات تدميرية. استخدمها فقط إذا كان توجيه الصوت معطلاً ويحتاج إعادة تعيين كاملة.",
       "removeVirtualAudio": "إزالة الصوت الافتراضي واستعادة إعدادات نظام التشغيل",
-      "removeVirtualAudioDesc": "يزيل جميع وحدات الصوت الافتراضية في OpenGG ويعيد تشغيل PipeWire + WirePlumber. ستتم استعادة مسارات الأجهزة الفيزيائية. سيرشدك معالج الإعداد الأولي عند الفتح التالي.",
-      "confirmMsg": "سيزيل هذا جميع وحدات الصوت الافتراضية في OpenGG ويعيد تشغيل PipeWire. ستتم إعادة تعيين توجيه الصوت. هل تريد المتابعة؟"
+      "removeVirtualAudioDesc": "يزيل جميع وحدات الصوت الافتراضية في OpenGG دون إعادة تشغيل PipeWire أو WirePlumber. ستتم استعادة مسارات الأجهزة الفيزيائية. سيرشدك معالج الإعداد الأولي عند الفتح التالي.",
+      "confirmMsg": "سيزيل هذا جميع وحدات الصوت الافتراضية في OpenGG. سيستمر تشغيل الأصوات الأخرى (المتصفح والألعاب). هل تريد المتابعة؟",
+      "removeVirtualAudioRemoving": "جارٍ الإزالة…"
     },
     "timelineTracks": {
       "title": "مسارات الخط الزمني",
@@ -307,28 +308,6 @@
       "livePreviewHint": "بالضبط كيف ستبدو رؤوس مسارات الخط الزمني للمحرر. التحديث أثناء الكتابة.",
       "addAudioTrack": "+ إضافة مسار صوتي",
       "visibilityTooltip": "تبديل ظهور المسار في المعاينة المباشرة"
-    },
-    "captureGsr": {
-      "title": "GPU Screen Recorder",
-      "hint": "يستخدم gpu-screen-recorder للتخزين المؤقت للإعادة منخفض الكمون المشفر بالأجهزة (NVENC/VAAPI). يجب تثبيته بشكل منفصل.",
-      "extensionsHint": "فعّل GPU Screen Recorder في الإضافات لتكوينه هنا.",
-      "quality": "الجودة",
-      "qualityCbr": "معدل بت ثابت (موصى به)",
-      "qualityMedium": "متوسط",
-      "qualityHigh": "عالي",
-      "qualityVeryHigh": "عالي جداً",
-      "qualityUltra": "فائق",
-      "fps": "الإطارات في الثانية",
-      "replayBuffer": "ذاكرة الإعادة",
-      "replayCustom": "مخصص…",
-      "monitorTarget": "هدف الشاشة",
-      "autoStart": "بدء تلقائي عند الإطلاق",
-      "autoStartTooltip": "بدء ذاكرة الإعادة تلقائياً عند فتح OpenGG.",
-      "waylandHint": "تم اكتشاف جلسة Wayland. التقاط \"تطبيق ملء الشاشة\" يتطلب X11.",
-      "installToggleHide": "▼ إخفاء دليل التثبيت",
-      "installToggleShow": "▶ كيفية التثبيت؟",
-      "removeVirtualAudio": "إزالة الصوت الافتراضي واستعادة إعدادات نظام التشغيل",
-      "removeVirtualAudioRemoving": "جارٍ الإزالة…"
     },
     "notificationsPage": {
       "title": "الإشعارات",
@@ -369,6 +348,39 @@
       "removeScreenshotDir": "إزالة"
     }
   },
+  "onboarding": {
+    "steps": {
+      "createVirtualAudio": "إنشاء صوت افتراضي",
+      "linkDevices": "ربط الأجهزة"
+    },
+    "step1": {
+      "title": "المحرك الصوتي الافتراضي مطلوب",
+      "description": "يستخدم OpenGG أحواض صوتية افتراضية لتوجيه قنوات الألعاب والدردشة والوسائط والمساعد بشكل مستقل. تستغرق هذه الإعداد لمرة واحدة حوالي ثانيتين.",
+      "create": "إنشاء محرك الصوت الافتراضي"
+    },
+    "step2": {
+      "title": "اربط أجهزتك",
+      "description": "حدد الأجهزة المادية التي يجب أن يستخدمها الخلاط افتراضياً. يمكنك تغيير هذه في أي وقت في الخلاط.",
+      "headphonesLabel": "سماعات / مخرج",
+      "selectOutput": "اختر جهاز المخرج…",
+      "micLabel": "ميكروفون / مدخل",
+      "selectInput": "اختر جهاز المدخل…",
+      "finish": "إنهاء الإعداد"
+    },
+    "skip": "تخطي حالياً",
+    "skipShort": "تخطي",
+    "creating": "جارٍ الإنشاء…",
+    "saving": "جارٍ الحفظ…",
+    "errorCreate": "فشل الإعداد: {error}",
+    "errorComplete": "تعذر إكمال الإعداد: {error}"
+  },
+  "clips2": {
+    "scanning": "جارٍ فحص المقاطع الجديدة…",
+    "foundCount": "{n} وجدت",
+    "newClipDetected": "تم اكتشاف مقطع جديد…",
+    "apply": "تطبيق",
+    "cancel": "إلغاء"
+  },
   "clips": {
     "contextMenu": {
       "preview":      "معاينة",
@@ -395,7 +407,9 @@
     "renameDialog": {
       "title": "إعادة تسمية المقطع",
       "save":  "حفظ"
-    }
+    },
+    "loadError": "فشل تحميل المقاطع",
+    "retry": "إعادة المحاولة"
   },
   "notification": {
     "clipSaved": "تم حفظ المقطع",
@@ -405,5 +419,55 @@
     "filesize": "حجم الملف",
     "enableClipNotifications": "إشعارات حفظ المقاطع",
     "enableClipNotificationsDesc": "عرض إشعار عائم عند حفظ المقطع بنجاح أو الفشل"
+  },
+  "devices": {
+    "title": "الأجهزة",
+    "noDevices": "لم يتم اكتشاف أجهزة",
+    "noDevicesDesc": "قم بتوصيل فأرة أو سماعة مدعومة ثم انقر على تحديث",
+    "refresh": "تحديث",
+    "back": "رجوع",
+    "battery": "البطارية",
+    "charging": "جارٍ الشحن",
+    "sidetone": "الصدى الجانبي",
+    "chatmix": "خلط الدردشة",
+    "game": "لعبة",
+    "chat": "دردشة",
+    "dpi": "الحساسية",
+    "pollingRate": "معدل الاستطلاع",
+    "headset": "سماعة",
+    "mouse": "فأرة",
+    "settings": "الإعدادات",
+    "eqPreset": "ضبط مسبق للمعادل",
+    "eqFlat": "مسطح",
+    "eqBass": "باس",
+    "eqFocus": "تركيز",
+    "eqSmiley": "مبتسم",
+    "autoOff": "إيقاف تلقائي",
+    "autoOffNever": "أبداً",
+    "autoOffMinutes": "{n} دقيقة",
+    "micVolume": "مستوى الميكروفون",
+    "micMuteLed": "مؤشر الكتم",
+    "micMuteLedOff": "إيقاف",
+    "micMuteLedLow": "منخفض",
+    "micMuteLedMed": "متوسط",
+    "micMuteLedHigh": "مرتفع",
+    "volumeLimiter": "محدد مستوى الصوت",
+    "btPoweredOn": "البلوتوث عند التشغيل",
+    "btCallVolume": "مستوى صوت مكالمة BT",
+    "viewGrid": "عرض شبكي",
+    "viewList": "عرض قائمة",
+    "defaultDevice": "افتراضي",
+    "macros": "وحدات الماكرو",
+    "macroButton": "الزر",
+    "macroName": "اسم الماكرو",
+    "macroActions": "الإجراءات",
+    "macroPlayback": "وضع التشغيل",
+    "playbackRunOnce": "تشغيل مرة واحدة",
+    "playbackHoldRepeat": "اضغط مع التكرار",
+    "playbackToggle": "تبديل",
+    "macroRecord": "تسجيل مفتاح",
+    "macroSave": "حفظ",
+    "macroClear": "مسح",
+    "macroNoButton": "اختر زراً من مخطط الفأرة"
   }
 }

@@ -110,6 +110,18 @@ export const useAudioStore = defineStore('audio', () => {
         return normalized
       })
 
+      // Re-apply saved routing rules to streams whose actual PipeWire channel doesn't
+      // match the saved rule — happens after reboot, wake-from-sleep, or daemon restart.
+      // Uses `fetched` (raw backend state) not `allApps.value` (already rule-overridden).
+      for (const fetchedApp of fetched) {
+        const key = fetchedApp.binary || fetchedApp.name
+        const rule = key ? rules[key] : undefined
+        if (!rule || rule === 'default' || rule === 'Master') continue
+        if ((fetchedApp.channel || '') !== rule) {
+          routeApp(Number(fetchedApp.id), rule).catch(() => {})
+        }
+      }
+
       // Smart auto-routing: for apps with no saved rule and no current channel,
       // use the backend's classification suggestion. Only fires on first appearance
       // (once routed, the rule is saved and this branch is never reached again).

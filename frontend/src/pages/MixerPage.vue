@@ -12,7 +12,7 @@
  * That's a Phase 2 optimization — polling at 2s is sufficient for now.
  */
 
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useAudioStore } from '../stores/audio'
@@ -28,6 +28,15 @@ const persist = usePersistenceStore()
 
 // ★ Epic 2: Overdrive toggle — expands all faders from 100% max to 150%
 const overdriveEnabled = ref(false)
+watch(overdriveEnabled, (enabled) => {
+  if (!enabled) {
+    for (const ch of ['Master', 'Game', 'Chat', 'Media', 'Aux', 'Mic']) {
+      if ((audio.channelVolumes[ch] ?? 0) > 100) {
+        audio.setVolume(ch, 100)
+      }
+    }
+  }
+})
 
 type Tab = 'mixer' | 'game' | 'chat' | 'media' | 'aux' | 'mic'
 const activeTab = ref<Tab>('mixer')
@@ -157,7 +166,7 @@ onUnmounted(() => {
       <div v-else class="strips-row">
       <!-- MASTER -->
       <div class="col">
-        <ChannelStrip :channel="audio.masterChannel" :color="COLORS.Master" type="master" :vuLevel="audio.vuLevels['Master'] ?? 0"
+        <ChannelStrip :channel="audio.masterChannel" :color="COLORS.Master" type="master" :vuLevel="audio.vuLevels['Master'] ?? -60"
           :overdrive="overdriveEnabled"
           :devices="audio.outputDevices" :selectedDevice="devDesc('Master','sink')"
           @update:volume="v=>audio.setVolume('Master',v)" @update:mute="m=>audio.setMute('Master',m)" @update:device="d=>audio.setChannelDevice('Master',d)">
@@ -165,13 +174,12 @@ onUnmounted(() => {
         </ChannelStrip>
         <DropZone channel="Master" :color="COLORS.Master" :apps="audio.masterChannel.apps" />
       </div>
-      <div class="divider"><div class="dv"></div></div>
 
       <!-- OUTPUTS -->
       <div class="col" v-for="ch in ['Game','Chat','Media','Aux']" :key="ch">
         <ChannelStrip
           :channel="audio.channelMap[ch] || { name: ch, volume: 100, muted: false, node_id: 0, apps: [] }"
-          :color="COLORS[ch]" type="output" :vuLevel="audio.vuLevels[ch] ?? 0"
+          :color="COLORS[ch]" type="output" :vuLevel="audio.vuLevels[ch] ?? -60"
           :overdrive="overdriveEnabled"
           :devices="audio.outputDevices" :selectedDevice="devDesc(ch,'sink')"
           @update:volume="v=>audio.setVolume(ch,v)" @update:mute="m=>audio.setMute(ch,m)"
@@ -185,13 +193,12 @@ onUnmounted(() => {
         </ChannelStrip>
         <DropZone :channel="ch" :color="COLORS[ch]" :apps="(audio.channelMap[ch]?.apps || [])" />
       </div>
-      <div class="divider"><div class="dv"></div></div>
 
       <!-- INPUT: Mic -->
       <div class="col">
         <ChannelStrip
           :channel="{ ...audio.micChannel, name: 'Mic' }"
-          :color="COLORS.Mic" type="input" :vuLevel="audio.vuLevels['Mic'] ?? 0"
+          :color="COLORS.Mic" type="input" :vuLevel="audio.vuLevels['Mic'] ?? -60"
           :overdrive="overdriveEnabled"
           :devices="audio.inputDevices" :selectedDevice="devDesc('Mic','source')"
           @update:volume="v=>audio.setVolume('Mic',v)" @update:mute="m=>audio.setMute('Mic',m)"
@@ -247,7 +254,7 @@ onUnmounted(() => {
 /* ★ FIX 3: strips-row fills vertical space, min 55vh for tall faders */
 .strips-row {
   display: flex;
-  gap: 0;
+  gap: 10px;
   align-items: stretch;   /* ← all cols same height */
   flex: 1;
   min-height: 55vh;       /* ← guarantees tall faders */
@@ -266,10 +273,6 @@ onUnmounted(() => {
 /* ★ Epic 1: Strict flex rules — strip grows to fill, dropzone is fixed-height scrollable */
 .col :deep(.strip)    { width: 100% !important; flex: 1 1 0% !important; min-height: 0 !important; height: auto !important; }
 .col :deep(.dropzone) { width: 100% !important; flex: 0 0 70px !important; height: 70px !important; overflow-y: auto !important; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
-
-
-.divider { display: flex; align-items: center; padding: 0 4px; align-self: stretch; flex-shrink: 0; }
-.dv { width: 1px; height: 100%; background: linear-gradient(180deg, transparent, var(--border) 15%, var(--text-muted) 50%, var(--border) 85%, transparent); opacity: .4; }
 
 /* ★ Empty state */
 .empty-state {

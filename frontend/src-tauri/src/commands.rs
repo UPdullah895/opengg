@@ -17,6 +17,8 @@ const AU_PATH: &str = "/org/opengg/Daemon/Audio";
 const AU_IFACE: &str = "org.opengg.Daemon.Audio";
 const RP_PATH: &str = "/org/opengg/Daemon/Replay";
 const RP_IFACE: &str = "org.opengg.Daemon.Replay";
+const DV_PATH: &str = "/org/opengg/Daemon/Device";
+const DV_IFACE: &str = "org.opengg.Daemon.Device";
 
 // ═══ Audio ═══
 #[command] pub async fn get_channels() -> Result<String, String> { call_dbus("GetChannels", AU_PATH, AU_IFACE, ()).await }
@@ -423,7 +425,7 @@ async fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
     eprintln!("ensure_sink_exists: creating virtual sink '{name}' for channel '{ch}'");
     let c = Command::new("pactl").args(["load-module", "module-null-sink",
         &format!("sink_name={name}"),
-        &format!("sink_properties=node.description=\"OpenGG - {ch}\" node.nick=\"OpenGG - {ch}\" device.description=\"OpenGG - {ch}\""),
+        &format!("sink_properties=node.description=\"OpenGG - {ch}\" node.nick=\"OpenGG - {ch}\" device.description=\"OpenGG - {ch}\" media.name=\"OpenGG - {ch}\" node.name=\"opengg_{}\"", ch.to_lowercase()),
         "channels=2", "channel_map=front-left,front-right"
     ]).output().map_err(|e| format!("{e}"))?;
     if !c.status.success() {
@@ -2147,7 +2149,8 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
                 let smoothed = if rms > prev { rms * 0.9 + prev * 0.1 }
                                          else { rms * 0.3 + prev * 0.7 };
                 prev = smoothed;
-                levels_clone.lock().unwrap().insert(name.to_string(), smoothed);
+                let db = (20.0_f32 * smoothed.max(1e-9_f32).log10()).max(-60.0_f32);
+                levels_clone.lock().unwrap().insert(name.to_string(), db);
             }
             // `pa` is dropped here → pa_simple_free() called automatically (RAII).
         });
@@ -2901,7 +2904,7 @@ pub async fn create_virtual_audio() -> Result<(), String> {
         run_cmd("pactl", &[
             "load-module", "module-null-sink",
             &format!("sink_name={sink_name}"),
-            &format!("sink_properties=node.description=\"OpenGG - {ch}\" node.nick=\"OpenGG - {ch}\" device.description=\"OpenGG - {ch}\""),
+            &format!("sink_properties=node.description=\"OpenGG - {ch}\" node.nick=\"OpenGG - {ch}\" device.description=\"OpenGG - {ch}\" media.name=\"OpenGG - {ch}\" node.name=\"opengg_{}\"", ch.to_lowercase()),
             "channels=2", "channel_map=front-left,front-right",
         ])?;
     }
@@ -2909,7 +2912,7 @@ pub async fn create_virtual_audio() -> Result<(), String> {
     Ok(())
 }
 
-/// Unload all OpenGG virtual sinks and restart PipeWire + WirePlumber.
+/// Unload only the OpenGG virtual sinks without restarting PipeWire/WirePlumber.
 #[command]
 pub async fn remove_virtual_audio() -> Result<(), String> {
     let modules_json = run_cmd("pactl", &["-f", "json", "list", "modules"]).unwrap_or_default();
@@ -2923,9 +2926,7 @@ pub async fn remove_virtual_audio() -> Result<(), String> {
             }
         }
     }
-    let _ = run_cmd("systemctl", &["--user", "restart", "pipewire"]);
-    let _ = run_cmd("systemctl", &["--user", "restart", "wireplumber"]);
-    log::info!("Virtual audio removed and PipeWire restarted");
+    log::info!("Virtual audio removed (PipeWire/WirePlumber left running)");
     Ok(())
 }
 
@@ -3778,18 +3779,62 @@ pub fn show_clip_notification(
     let mode = mode.as_deref().unwrap_or("auto");
     if mode == "disabled" { return Ok(()); }
 
-    // For "system" mode, fall back to notify-send and skip spawning an overlay window.
-    if mode == "system" {
+    // Clamp duration to [1, 30] seconds; default 4s.
+    let duration_ms = duration_secs.unwrap_or(4).clamp(1, 30) * 1000;
+
+    // ── Lightweight notification helpers ───────────────────────────────
+    // Nested fns (not closures) to avoid borrow conflicts with `app`.
+    fn notify_system(success: bool, game: &str, filename: &str, duration_ms: u64) {
         let summary = if success { "Clip Saved" } else { "Clip Save Failed" };
         let body = format!("{game} — {filename}");
         let _ = std::process::Command::new("notify-send")
-            .args(["--app-name=OpenGG", "--urgency=normal", "--expire-time=4000", summary, &body])
+            .args([
+                "--app-name=OpenGG",
+                "--urgency=normal",
+                &format!("--expire-time={duration_ms}"),
+                summary,
+                &body,
+            ])
             .spawn();
-        return Ok(());
+    }
+    /// Returns true if the gsr-notify binary was found and launched.
+    fn try_gsr_notify(success: bool, game: &str, filename: &str, filesize_mb: f64, duration_ms: u64) -> bool {
+        let summary = if success { "Clip Saved" } else { "Clip Save Failed" };
+        let body = format!("{game} — {filename} ({filesize_mb:.1} MB)");
+        std::process::Command::new("gsr-notify")
+            .args([
+                "--app-name=OpenGG",
+                &format!("--expire-time={duration_ms}"),
+                summary,
+                &body,
+            ])
+            .spawn()
+            .is_ok()
     }
 
-    // Clamp duration to [1, 30] seconds; default 4s.
-    let duration_ms = duration_secs.unwrap_or(4).clamp(1, 30) * 1000;
+    let on_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+
+    match mode {
+        "system" => {
+            notify_system(success, &game, &filename, duration_ms);
+            return Ok(());
+        }
+        "gsr-notify" => {
+            if !try_gsr_notify(success, &game, &filename, filesize_mb, duration_ms) {
+                notify_system(success, &game, &filename, duration_ms);
+            }
+            return Ok(());
+        }
+        _ if on_wayland => {
+            // "auto" or "x11-overlay" on Wayland: cannot spawn an X11 overlay window.
+            // Try gsr-notify (works on XWayland), then fall back to notify-send.
+            if !try_gsr_notify(success, &game, &filename, filesize_mb, duration_ms) {
+                notify_system(success, &game, &filename, duration_ms);
+            }
+            return Ok(());
+        }
+        _ => {} // "x11-overlay" / "auto" on X11 → fall through to WebviewWindow
+    }
 
     // Build the overlay URL served from the same Vite dev/prod server on localhost:1420
     // Use a stable unique label so multiple notifications can stack
@@ -3906,3 +3951,18 @@ async fn call_dbus_void(m: &str, p: &str, i: &str, a: impl serde::Serialize + zb
     }
 }
 fn run_cmd(c:&str,a:&[&str])->Result<String,String>{let o=Command::new(c).args(a).output().map_err(|e|format!("{c}:{e}"))?;if o.status.success(){Ok(String::from_utf8_lossy(&o.stdout).trim().into())}else{Err(String::from_utf8_lossy(&o.stderr).trim().into())}}
+
+// ═══ Devices ═══
+#[command] pub async fn get_devices() -> Result<String, String> { call_dbus("GetDevices", DV_PATH, DV_IFACE, ()).await }
+#[command] pub async fn set_mouse_dpi(device_id: String, dpi: u32) -> Result<(), String> { call_dbus_void("SetDpi", DV_PATH, DV_IFACE, (device_id.as_str(), dpi)).await }
+#[command] pub async fn set_mouse_polling_rate(device_id: String, rate: u32) -> Result<(), String> { call_dbus_void("SetPollingRate", DV_PATH, DV_IFACE, (device_id.as_str(), rate)).await }
+#[command] pub async fn set_headset_sidetone(device_id: String, level: u32) -> Result<(), String> { call_dbus_void("SetSidetone", DV_PATH, DV_IFACE, (device_id.as_str(), level)).await }
+#[command] pub async fn set_headset_chatmix(device_id: String, level: u32) -> Result<(), String> { call_dbus_void("SetChatmix", DV_PATH, DV_IFACE, (device_id.as_str(), level)).await }
+#[command] pub async fn set_headset_inactive_time(device_id: String, minutes: u32) -> Result<(), String> { call_dbus_void("SetInactiveTime", DV_PATH, DV_IFACE, (device_id.as_str(), minutes)).await }
+#[command] pub async fn set_headset_mic_volume(device_id: String, level: u32) -> Result<(), String> { call_dbus_void("SetMicrophoneVolume", DV_PATH, DV_IFACE, (device_id.as_str(), level)).await }
+#[command] pub async fn set_headset_mic_mute_led(device_id: String, brightness: u32) -> Result<(), String> { call_dbus_void("SetMicMuteLedBrightness", DV_PATH, DV_IFACE, (device_id.as_str(), brightness)).await }
+#[command] pub async fn set_headset_volume_limiter(device_id: String, enabled: bool) -> Result<(), String> { call_dbus_void("SetVolumeLimiter", DV_PATH, DV_IFACE, (device_id.as_str(), enabled)).await }
+#[command] pub async fn set_headset_bt_powered_on(device_id: String, enabled: bool) -> Result<(), String> { call_dbus_void("SetBtWhenPoweredOn", DV_PATH, DV_IFACE, (device_id.as_str(), enabled)).await }
+#[command] pub async fn set_headset_bt_call_volume(device_id: String, level: u32) -> Result<(), String> { call_dbus_void("SetBtCallVolume", DV_PATH, DV_IFACE, (device_id.as_str(), level)).await }
+#[command] pub async fn set_headset_eq_preset(device_id: String, preset_idx: u32) -> Result<(), String> { call_dbus_void("SetEqPreset", DV_PATH, DV_IFACE, (device_id.as_str(), preset_idx)).await }
+#[command] pub async fn set_headset_eq_curve(device_id: String, bands_json: String) -> Result<(), String> { call_dbus_void("SetEqCurve", DV_PATH, DV_IFACE, (device_id.as_str(), bands_json.as_str())).await }

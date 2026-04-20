@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Channel, AudioDevice } from '../stores/audio'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   channel: Channel; color: string; type: 'output' | 'input' | 'master'
@@ -24,7 +27,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside))
 
 // VU — rAF lerp for butter-smooth attack + peak hold
 const peakLevel     = ref(0)
-const vu            = computed(() => (props.vuLevel ?? 0) * 100)
+const vu            = computed(() => {
+  const db = props.vuLevel ?? -60
+  return ((Math.max(-60, Math.min(0, db)) + 60) / 60) * 100
+})
 const currentVuHeight = ref(0)   // lerped display value (drives DOM)
 
 // Peak ballistics still driven by the raw vu value
@@ -46,7 +52,14 @@ onMounted(() => {
 })
 onBeforeUnmount(() => cancelAnimationFrame(vuRaf))
 
-const vuColor = computed(() => currentVuHeight.value > 85 ? '#ef4444' : currentVuHeight.value > 65 ? '#f59e0b' : props.color)
+const vuColor = computed(() => {
+  const db = props.vuLevel ?? -60
+  return db > -3 ? '#ef4444' : db > -12 ? '#f59e0b' : props.color
+})
+const vuDbText = computed(() => {
+  const db = props.vuLevel ?? -60
+  return db <= -59.9 ? '-∞' : db.toFixed(1)
+})
 
 // ★ Epic 2 — Overdrive: max volume cap
 const maxVol = computed(() => props.overdrive ? 150 : 100)
@@ -98,7 +111,7 @@ function onFaderDown(e: MouseEvent) {
           <div class="vu-fill" :style="{ height:currentVuHeight+'%', background:`linear-gradient(to top,${color}50,${vuColor})` }"></div>
           <div class="vu-peak" :style="{ bottom:peakLevel+'%' }" v-show="peakLevel > 2"></div>
         </div>
-        <div class="vu-ticks"><span>0</span><span>-12</span><span>-24</span><span>-48</span></div>
+        <div class="vu-ticks"><span>0</span><span>-20</span><span>-40</span><span>-60</span></div>
       </div>
 
       <!-- Custom fader -->
@@ -125,6 +138,7 @@ function onFaderDown(e: MouseEvent) {
     <div class="vol" :style="{ color: channel.muted ? 'var(--text-muted)' : color }">
       {{ channel.volume }}<span class="vol-u">%</span>
     </div>
+    <div class="vol-db">{{ vuDbText }}<span class="voldb-u"> dB</span></div>
 
     <!-- Mute + Device row — mute always visible, dropdown only when devices present -->
     <div class="dev-wrap" ref="dropdownRef">
@@ -136,7 +150,7 @@ function onFaderDown(e: MouseEvent) {
         <button v-if="devices && devices.length > 0" class="dev-btn" @click="toggleDropdown">
           <svg v-if="type!=='input'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="dev-ic"><path d="M3 18v-6a9 9 0 0118 0v6"/><path d="M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/></svg>
           <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="dev-ic"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/></svg>
-          <span class="dev-name">{{ selectedDevice || 'Default' }}</span>
+          <span class="dev-name">{{ selectedDevice || t('devices.defaultDevice') }}</span>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="dev-chev"><path d="M6 9l6 6 6-6"/></svg>
         </button>
       </div>
@@ -158,8 +172,7 @@ function onFaderDown(e: MouseEvent) {
 }
 .strip:hover { border-color: color-mix(in srgb, var(--ch) 40%, transparent); }
 .strip.muted { opacity: .45; }
-.strip--input  { border-style: dashed; background: linear-gradient(180deg, color-mix(in srgb, var(--ch) 4%, var(--bg-card)), var(--bg-card)); }
-.strip--master { border-color: color-mix(in srgb, var(--ch) 25%, var(--border)); }
+.strip--input  { border-style: solid; }
 .accent-bar { width: calc(100% + 2px); height: 3px; border-radius: 10px 10px 0 0; margin: -1px -1px 4px; opacity: .8; }
 .hdr { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
 .icon-box { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
@@ -228,6 +241,8 @@ function onFaderDown(e: MouseEvent) {
 /* Volume label */
 .vol { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: center; line-height: 1; transition: color .2s; flex-shrink: 0; }
 .vol-u { font-size: 10px; font-weight: 600; opacity: .5; margin-left: 1px; }
+.vol-db { font-size: 9px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-muted); opacity: .55; text-align: center; flex-shrink: 0; margin-top: -3px; }
+.voldb-u { font-size: 7px; opacity: .7; }
 
 /* Buttons */
 .cb { height: 26px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg-deep); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; font-size: 9px; font-weight: 700; letter-spacing: .5px; }

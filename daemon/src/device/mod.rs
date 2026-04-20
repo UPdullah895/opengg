@@ -1,4 +1,6 @@
 pub mod ratbag;
+pub mod types;
+pub mod headset;
 mod openrgb;
 pub mod profiles;
 mod process_watch;

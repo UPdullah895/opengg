@@ -269,6 +269,11 @@ export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/s
 # Add our bin/ to PATH so opengg can locate the openggd sidecar.
 export PATH="${HERE}/usr/bin:${PATH}"
 
+# Ensure data dirs exist — SQLite DB / thumbnail creation silently fails without these,
+# causing a blank Clips page on first launch inside the AppImage container.
+mkdir -p "${HOME}/.local/share/opengg/thumbnails"
+mkdir -p "${HOME}/.config/opengg"
+
 exec "${HERE}/usr/bin/opengg" "$@"
 APPRUN_EOF
 chmod +x "$APPDIR/AppRun"

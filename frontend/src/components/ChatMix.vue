@@ -130,7 +130,7 @@ function resetBalance() {
   height: 8px;
   -webkit-appearance: none;
   appearance: none;
-  background: linear-gradient(to right, #E94560 0%, #E9456040 35%, var(--bg-deep) 45%, var(--bg-deep) 55%, #3B82F640 65%, #3B82F6 100%);
+  background: linear-gradient(to right, #E94560 0%, #E9456080 30%, #A855F7 45%, #A855F7 55%, #3B82F680 70%, #3B82F6 100%);
   border-radius: 4px;
   outline: none;
   cursor: pointer;

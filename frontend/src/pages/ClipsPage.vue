@@ -15,9 +15,11 @@ import AdvancedEditor from '../components/AdvancedEditor.vue'
 import SelectField from '../components/SelectField.vue'
 import GameFilterDropdown from '../components/GameFilterDropdown.vue'
 import RecordingDropdown from '../components/RecordingDropdown.vue'
+import PageHeader from '../components/PageHeader.vue'
 import { mediaUrl } from '../utils/assets'
 import { fmtDur, fmtSize, fmtRes, fmtDate } from '../utils/format'
 import { viewMode } from '../composables/useViewMode'
+import { ICON_DELETE } from '../assets/deviceAssets'
 import type { Ref } from 'vue'
 
 const { t } = useI18n()
@@ -425,6 +427,10 @@ watch([searchDebounced, () => replay.sortMode, () => replay.filterFav, () => rep
 // prefetchThumbnails has its own re-entry guard against the triggerRef storm inside itself.
 watch(() => replay.clipsLoadedAt, () => { prefetchThumbnails() }, { flush: 'sync' })
 
+async function retryFetch() {
+  await replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '', true)
+}
+
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
   replay.fetchStatus()
@@ -591,9 +597,9 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 <template>
   <div class="page">
     <!-- Header -->
-    <div class="header">
-      <h1 class="title">Clips <span class="title-count">{{ totalClipCount }}</span></h1>
-    </div>
+    <PageHeader title="Clips">
+      <span v-if="totalClipCount > 0" class="title-count">{{ totalClipCount }}</span>
+    </PageHeader>
 
     <!-- Controls — left group + right group so toggle is always far right -->
     <div class="ctrl-bar">
@@ -751,8 +757,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
           <!-- Scan banner -->
           <div v-if="scanActive" class="scan-banner">
             <div class="scan-spinner"></div>
-            <span>Scanning for new clips…</span>
-            <span v-if="scanCount > 0" class="scan-count">+{{ scanCount }} found</span>
+            <span>{{ t('clips2.scanning') }}</span>
+            <span v-if="scanCount > 0" class="scan-count">+{{ t('clips2.foundCount', { n: scanCount }) }}</span>
           </div>
           <!-- Skeleton cards from file watcher -->
           <div v-if="sortedSkeletons.length" class="clip-grid skeletons-row" :style="{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }">
@@ -762,7 +768,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 <div class="skeleton-line w70 animate-pulse"></div>
                 <div class="skeleton-line w40 animate-pulse"></div>
               </div>
-              <div class="watcher-label">New clip detected…</div>
+              <div class="watcher-label">{{ t('clips2.newClipDetected') }}</div>
             </div>
           </div>
           <!-- Virtual CSS grid — only visible rows + buffer rendered -->
@@ -880,6 +886,17 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         <p>No clips found</p>
         <p class="empty-sub">Try again or adjust your filters</p>
       </div>
+
+      <!-- Error state: fetchClips failed (e.g. missing data dir, permission error in AppImage) -->
+      <div
+        v-if="!replay.loading && replay.fetchError"
+        class="empty-state"
+      >
+        <div class="empty-ic">⚠</div>
+        <p>{{ t('clips.loadError') }}</p>
+        <p class="empty-sub error-detail">{{ replay.fetchError }}</p>
+        <button class="empty-import-btn" @click="retryFetch">{{ t('clips.retry') }}</button>
+      </div>
     </div>
 
     <!-- ★ Epic 1: Multi-select bulk action bar -->
@@ -922,14 +939,14 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 <div v-if="filteredBulkGames.length === 0" class="bulk-game-empty">No matches</div>
               </div>
               <div class="bulk-game-footer">
-                <button class="sel-btn sel-btn-p" @click="bulkChangeGame()">Apply</button>
+                <button class="sel-btn sel-btn-p" @click="bulkChangeGame()">{{ t('clips2.apply') }}</button>
               </div>
             </div>
           </Transition>
         </div>
 
         <button class="sel-btn" @click="replay.clearSelection()">{{ t('clips.bulkActions.clear') }}</button>
-        <button class="sel-btn sel-btn-d" @click="deleteSelected()">🗑 {{ t('clips.bulkActions.delete') }}</button>
+        <button class="sel-btn sel-btn-d" @click="deleteSelected()"><span v-html="ICON_DELETE" class="del-icon" />{{ t('clips.bulkActions.delete') }}</button>
       </div>
     </Transition>
 
@@ -940,7 +957,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
           <h3>{{ t('clips.renameDialog.title') }}</h3>
           <input v-model="renameValue" class="dlg-in" @keydown.enter="confirmRename" autofocus />
           <div class="dlg-btns">
-            <button class="dlg-btn" @click="renameTarget=null">Cancel</button>
+            <button class="dlg-btn" @click="renameTarget=null">{{ t('clips2.cancel') }}</button>
             <button class="dlg-btn dlg-pri" @click="confirmRename">{{ t('clips.renameDialog.save') }}</button>
           </div>
         </div>
@@ -999,9 +1016,6 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 
 <style scoped>
 .page { display:flex; flex-direction:column; gap:14px; height:100%; }
-.header { display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
-.title { font-size:22px; font-weight:700; }
-.header-r { display:flex; align-items:center; gap:8px; }
 .ib { width:30px; height:30px; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); color:var(--text-sec); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px; }
 .ib:hover { background:var(--bg-hover); } .ib:disabled { opacity:.4; }
 
@@ -1265,6 +1279,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .sel-btn-p:hover { filter:brightness(1.1); }
 .sel-btn-fav { color:#f87171; }
 .sel-btn-unfav { color:var(--text-sec); }
+.del-icon { width:13px; height:13px; display:inline-flex; align-items:center; margin-right:4px; }
+.del-icon :deep(svg) { width:13px; height:13px; }
 .slide-up-enter-active,.slide-up-leave-active { transition:transform .2s,opacity .2s; }
 .slide-up-enter-from,.slide-up-leave-to { transform:translateY(100%); opacity:0; }
 

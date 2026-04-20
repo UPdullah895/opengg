@@ -294,11 +294,13 @@
       "title": "Danger Zone",
       "subtitle": "These actions are destructive. Use only if your audio routing is broken and needs a full reset.",
       "removeVirtualAudio": "Remove Virtual Audio & Restore OS Defaults",
-      "removeVirtualAudioDesc": "Unloads all OpenGG virtual sinks and restarts PipeWire + WirePlumber. Your physical hardware routes will be restored. The onboarding wizard will guide re-setup on next launch.",
-      "confirmMsg": "This will unload all OpenGG virtual audio sinks and restart PipeWire. Your audio routing will be reset. Continue?"
+      "removeVirtualAudioDesc": "Unloads all OpenGG virtual sinks/sources without restarting PipeWire or WirePlumber. Your physical hardware routes will be restored. The onboarding wizard will guide re-setup on next launch.",
+      "confirmMsg": "This will unload all OpenGG virtual audio sinks. Other audio (browser, games) will keep playing. Continue?"
     },
     "timelineTracks": {
       "title": "Timeline Tracks",
+      "trackIcons": "Track Icons",
+      "showIconsDesc": "Show a small icon next to each track label in the editor timeline",
       "trackList": "Track List",
       "trackListHint": "Customize the name, color, and icon for each editor timeline track. Changes apply live — open the editor to see them instantly.",
       "livePreview": "Live Preview",
@@ -393,7 +395,9 @@
     "renameDialog": {
       "title": "Rename Clip",
       "save":  "Save"
-    }
+    },
+    "loadError": "Failed to load clips",
+    "retry": "Retry"
   },
   "notification": {
     "clipSaved": "Clip Saved",
@@ -403,5 +407,88 @@
     "filesize": "File Size",
     "enableClipNotifications": "Clip Save Notifications",
     "enableClipNotificationsDesc": "Show an overlay toast when a clip is saved successfully or fails"
+  },
+  "devices": {
+    "title": "Devices",
+    "noDevices": "No devices detected",
+    "noDevicesDesc": "Connect a supported mouse or headset and click Refresh",
+    "refresh": "Refresh",
+    "back": "Back",
+    "battery": "Battery",
+    "charging": "Charging",
+    "sidetone": "Sidetone",
+    "chatmix": "ChatMix",
+    "game": "Game",
+    "chat": "Chat",
+    "dpi": "DPI",
+    "pollingRate": "Polling Rate",
+    "headset": "Headset",
+    "mouse": "Mouse",
+    "settings": "Settings",
+    "eqPreset": "Equalizer Preset",
+    "eqFlat": "Flat",
+    "eqBass": "Bass",
+    "eqFocus": "Focus",
+    "eqSmiley": "Smiley",
+    "autoOff": "Auto-Off",
+    "autoOffNever": "Never",
+    "autoOffMinutes": "{n} min",
+    "micVolume": "Mic Volume",
+    "micMuteLed": "Mute LED",
+    "micMuteLedOff": "Off",
+    "micMuteLedLow": "Low",
+    "micMuteLedMed": "Med",
+    "micMuteLedHigh": "High",
+    "volumeLimiter": "Volume Limiter",
+    "btPoweredOn": "BT When Powered On",
+    "btCallVolume": "BT Call Volume",
+    "viewGrid": "Grid view",
+    "viewList": "List view",
+    "defaultDevice": "Default",
+    "macros": "Macros",
+    "macroButton": "Button",
+    "macroName": "Macro Name",
+    "macroActions": "Actions",
+    "macroPlayback": "Playback",
+    "playbackRunOnce": "Run Once",
+    "playbackHoldRepeat": "Hold to Repeat",
+    "playbackToggle": "Toggle",
+    "macroRecord": "Record Key",
+    "macroSave": "Save",
+    "macroClear": "Clear",
+    "macroNoButton": "Select a button on the mouse diagram"
+  },
+  "onboarding": {
+    "steps": {
+      "createVirtualAudio": "Create Virtual Audio",
+      "linkDevices": "Link Devices"
+    },
+    "step1": {
+      "title": "Virtual Audio Engine Required",
+      "description": "OpenGG uses virtual audio sinks to route Game, Chat, Media, and Aux channels independently. This one-time setup takes about 2 seconds.",
+      "create": "Create Virtual Audio Engine"
+    },
+    "step2": {
+      "title": "Link Your Devices",
+      "description": "Select which physical devices the mixer should use by default. You can change these anytime in the Mixer.",
+      "headphonesLabel": "Headphones / Output",
+      "selectOutput": "Select output device…",
+      "micLabel": "Microphone / Input",
+      "selectInput": "Select input device…",
+      "finish": "Finish Setup"
+    },
+    "skip": "Skip for now",
+    "skipShort": "Skip",
+    "creating": "Creating…",
+    "saving": "Saving…",
+    "errorCreate": "Setup failed: {error}",
+    "errorComplete": "Could not complete setup: {error}"
+  },
+  "clips2": {
+    "scanning": "Scanning for new clips…",
+    "foundCount": "{n} found",
+    "newClipDetected": "New clip detected…",
+    "apply": "Apply",
+    "cancel": "Cancel"
   }
 }

@@ -2,6 +2,21 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
+export type PlaybackMode = 'run_once' | 'hold_repeat' | 'toggle'
+
+export interface MacroAction {
+  type: 'key_down' | 'key_up' | 'delay'
+  key?: string
+  delayMs?: number
+}
+
+export interface MouseMacro {
+  button: string
+  name: string
+  actions: MacroAction[]
+  playback: PlaybackMode
+}
+
 export interface TrackDef {
   id: string    // 'V1', 'A1', 'A2', … 'O1'
   name: string  // user-editable display name
@@ -53,6 +68,8 @@ export interface PersistedState {
   modules: { audio: boolean; device: boolean; replay: boolean }
   /** Keyed by extension id (e.g. 'overlays-system'). true = enabled. */
   extensions: Record<string, boolean>
+  /** Mouse macros keyed by device ID. */
+  macros: Record<string, MouseMacro[]>
 }
 
 export const DEFAULTS: PersistedState = {
@@ -101,6 +118,7 @@ export const DEFAULTS: PersistedState = {
   },
   modules: { audio: true, device: true, replay: true },
   extensions: { 'overlays-system': true, 'tiktok-export': true },
+  macros: {},
 }
 
 export const usePersistenceStore = defineStore('persistence', () => {

@@ -39,18 +39,16 @@ fn get_watch_dirs() -> Vec<std::path::PathBuf> {
 //  ★ EPIC 2: File-based crash / info logger
 // ══════════════════════════════════════════════════════
 
-/// Resolves to `<repo-root>/Logs` at compile time. CARGO_MANIFEST_DIR points at
-/// `frontend/src-tauri`, so `../../Logs` lands at the repo root.
-const LOGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Logs");
-
 /// How many log files to retain before pruning the oldest.
 const MAX_LOG_FILES: usize = 10;
 
-/// Returns the absolute log directory (compile-time path above, canonicalized).
+/// Returns the runtime log directory (`$XDG_DATA_HOME/opengg/logs`, fallback `/tmp/opengg/logs`).
 pub fn logs_dir() -> std::path::PathBuf {
-    let p = std::path::PathBuf::from(LOGS_DIR);
+    let p = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("opengg/logs");
     let _ = std::fs::create_dir_all(&p);
-    p.canonicalize().unwrap_or(p)
+    p
 }
 
 /// Delete all but the `MAX_LOG_FILES` most recent `opengg_*.log` files in the
@@ -163,6 +161,13 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             // Audio
             commands::get_channels, commands::set_volume, commands::set_mute,
@@ -229,6 +234,14 @@ fn main() {
             commands::start_eq_engine, commands::stop_eq_engine,
             // ★ Live watcher directory sync
             commands::update_watch_dirs,
+            // ★ Epic 5: Devices
+            commands::get_devices,
+            commands::set_mouse_dpi, commands::set_mouse_polling_rate,
+            commands::set_headset_sidetone, commands::set_headset_chatmix,
+            commands::set_headset_inactive_time, commands::set_headset_mic_volume,
+            commands::set_headset_mic_mute_led, commands::set_headset_volume_limiter,
+            commands::set_headset_bt_powered_on, commands::set_headset_bt_call_volume,
+            commands::set_headset_eq_preset, commands::set_headset_eq_curve,
         ])
         .setup(|app| {
             // ── Managed states ──
@@ -411,6 +424,35 @@ fn main() {
                         app.manage(WatchedDirs(Mutex::new(vec![])));
                     }
                 }
+            }
+
+            // Device-changed watcher: polls D-Bus every 5 s, emits only on change
+            {
+                use std::time::Duration;
+                let dv_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut last: String = String::new();
+                    let mut interval = tokio::time::interval(Duration::from_millis(500));
+                    loop {
+                        interval.tick().await;
+                        if let Ok(conn) = zbus::Connection::session().await {
+                            if let Ok(reply) = conn.call_method(
+                                Some("org.opengg.Daemon"),
+                                "/org/opengg/Daemon/Device",
+                                Some("org.opengg.Daemon.Device"),
+                                "GetDevices",
+                                &(),
+                            ).await {
+                                if let Ok(json) = reply.body().deserialize::<String>() {
+                                    if json != last {
+                                        last = json.clone();
+                                        let _ = dv_handle.emit("device-changed", json);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
             }
 
             // ★ Epic 4: System Tray — "Show OpenGG" + "Quit"

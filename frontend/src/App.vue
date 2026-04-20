@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, provide, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Sidebar from './components/Sidebar.vue'
 import Titlebar from './components/Titlebar.vue'
 import HomePage from './pages/HomePage.vue'
@@ -10,6 +11,8 @@ import SettingsPage from './pages/SettingsPage.vue'
 import SelectField from './components/SelectField.vue'
 import ClipNotification from './components/ClipNotification.vue'
 import { usePersistenceStore } from './stores/persistence'
+import { useDeviceStore } from './stores/devices'
+import type { DeviceInfo } from './stores/devices'
 import { loadTheme } from './utils/theme'
 import { getMediaPort } from './utils/assets'
 import { installAudioUnlocker } from './utils/audio'
@@ -19,6 +22,8 @@ import { listen } from '@tauri-apps/api/event'
 import type { AudioDevice } from './stores/audio'
 import ToastContainer from './components/ToastContainer.vue'
 import { useToast } from './composables/useToast'
+
+const { t } = useI18n()
 
 // Overlay mode: this window was opened by show_clip_notification (Rust) with ?overlay=1
 const isOverlay = typeof window !== 'undefined' &&
@@ -75,7 +80,7 @@ async function doCreateVirtualAudio() {
     await invoke('hydrate_audio_routing')
     await fetchOnboardDevices()
     onboardStep.value = 2
-  } catch (e) { onboardMsg.value = `Setup failed: ${e}` }
+  } catch (e) { onboardMsg.value = t('onboarding.errorCreate', { error: String(e) }) }
   finally { onboardLoading.value = false }
 }
 
@@ -90,7 +95,7 @@ async function completeOnboarding() {
     await invoke('hydrate_audio_routing')
     showOnboarding.value = false
     onboardStep.value = 1
-  } catch (e) { onboardMsg.value = `Could not complete setup: ${e}` }
+  } catch (e) { onboardMsg.value = t('onboarding.errorComplete', { error: String(e) }) }
   finally { onboardLoading.value = false }
 }
 
@@ -193,6 +198,29 @@ onMounted(async () => {
     }
   })
 
+  // ── Global device-changed: keep device store in sync + chatmix → Audio Mixer ──
+  const devicesStore = useDeviceStore()
+  const prevChatmix = new Map<string, number>()
+  listen<string>('device-changed', async (ev) => {
+    let updated: DeviceInfo[]
+    try { updated = JSON.parse(ev.payload) } catch { return }
+    devicesStore.devices = updated
+    for (const d of updated) {
+      if (d.chatmix === undefined) continue
+      const prev = prevChatmix.get(d.id)
+      if (prev === undefined) { prevChatmix.set(d.id, d.chatmix); continue }
+      if (prev === d.chatmix) continue
+      prevChatmix.set(d.id, d.chatmix)
+      const n = (d.chatmix - 64) / 64
+      const gameVol = n > 0 ? Math.round((1 - n) * 100) : 100
+      const chatVol = n < 0 ? Math.round((1 + n) * 100) : 100
+      const { useAudioStore } = await import('./stores/audio')
+      const audio = useAudioStore()
+      audio.setVolume('Game', gameVol)
+      audio.setVolume('Chat', chatVol)
+    }
+  })
+
   // ★ Epic 4: Listen for audio reset flow from SettingsPage danger zone
   window.addEventListener('openOnboarding', (e: Event) => {
     const detail = (e as CustomEvent<{ step?: number }>).detail
@@ -251,12 +279,12 @@ async function loadUserLocales() {
           <div class="onboard-steps">
             <div class="onboard-step" :class="{ active: onboardStep === 1, done: onboardStep > 1 }">
               <div class="step-dot">{{ onboardStep > 1 ? '✓' : '1' }}</div>
-              <span>Create Virtual Audio</span>
+              <span>{{ t('onboarding.steps.createVirtualAudio') }}</span>
             </div>
             <div class="step-connector"></div>
             <div class="onboard-step" :class="{ active: onboardStep === 2 }">
               <div class="step-dot">2</div>
-              <span>Link Devices</span>
+              <span>{{ t('onboarding.steps.linkDevices') }}</span>
             </div>
           </div>
 
@@ -267,20 +295,20 @@ async function loadUserLocales() {
                 <path d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/>
               </svg>
             </div>
-            <h2 class="onboard-title">Virtual Audio Engine Required</h2>
-            <p class="onboard-desc">OpenGG uses virtual audio sinks to route Game, Chat, Media, and Aux channels independently. This one-time setup takes about 2 seconds.</p>
+            <h2 class="onboard-title">{{ t('onboarding.step1.title') }}</h2>
+            <p class="onboard-desc">{{ t('onboarding.step1.description') }}</p>
             <div class="onboard-channels">
               <div class="ch-pill" v-for="(color, ch) in { Game: '#E94560', Chat: '#3B82F6', Media: '#10B981', Aux: '#A855F7' }" :key="ch">
                 <div class="ch-dot" :style="{ background: color }"></div>
-                {{ ch }}
+                {{ t(`settings.captureSound.sources.${ch}`) }}
               </div>
             </div>
             <p v-if="onboardMsg" class="onboard-err">{{ onboardMsg }}</p>
             <div class="onboard-actions">
-              <button class="onboard-skip" @click="showOnboarding = false">Skip for now</button>
+              <button class="onboard-skip" @click="showOnboarding = false">{{ t('onboarding.skip') }}</button>
               <button class="onboard-primary" :disabled="onboardLoading" @click="doCreateVirtualAudio">
                 <svg v-if="!onboardLoading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
-                {{ onboardLoading ? 'Creating…' : 'Create Virtual Audio Engine' }}
+                {{ onboardLoading ? t('onboarding.creating') : t('onboarding.step1.create') }}
               </button>
             </div>
           </template>
@@ -290,29 +318,29 @@ async function loadUserLocales() {
             <div class="onboard-icon onboard-icon--ok">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
             </div>
-            <h2 class="onboard-title">Link Your Devices</h2>
-            <p class="onboard-desc">Select which physical devices the mixer should use by default. You can change these anytime in the Mixer.</p>
+            <h2 class="onboard-title">{{ t('onboarding.step2.title') }}</h2>
+            <p class="onboard-desc">{{ t('onboarding.step2.description') }}</p>
             <div class="onboard-device-rows">
               <div class="device-field">
                 <label>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0118 0v6"/><path d="M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/></svg>
-                  Headphones / Output
+                  {{ t('onboarding.step2.headphonesLabel') }}
                 </label>
-                <SelectField v-model="selectedHeadphones" :options="headphoneOptions" placeholder="Select output device…" />
+                <SelectField v-model="selectedHeadphones" :options="headphoneOptions" :placeholder="t('onboarding.step2.selectOutput')" />
               </div>
               <div class="device-field">
                 <label>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                  Microphone / Input
+                  {{ t('onboarding.step2.micLabel') }}
                 </label>
-                <SelectField v-model="selectedMic" :options="micOptions" placeholder="Select input device…" />
+                <SelectField v-model="selectedMic" :options="micOptions" :placeholder="t('onboarding.step2.selectInput')" />
               </div>
             </div>
             <p v-if="onboardMsg" class="onboard-err">{{ onboardMsg }}</p>
             <div class="onboard-actions">
-              <button class="onboard-skip" @click="showOnboarding = false">Skip</button>
+              <button class="onboard-skip" @click="showOnboarding = false">{{ t('onboarding.skipShort') }}</button>
               <button class="onboard-primary" :disabled="onboardLoading" @click="completeOnboarding">
-                {{ onboardLoading ? 'Saving…' : 'Finish Setup' }}
+                {{ onboardLoading ? t('onboarding.saving') : t('onboarding.step2.finish') }}
               </button>
             </div>
           </template>

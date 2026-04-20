@@ -145,6 +145,7 @@ export const useReplayStore = defineStore('replay', () => {
   // ── Scan state (for scan banner in grid view) ──
   const scanActive = ref(false)
   const scanCount = ref(0)
+  const fetchError = ref<string | null>(null)
 
   // ── Computed ──
   const games = computed(() => {
@@ -229,6 +230,7 @@ export const useReplayStore = defineStore('replay', () => {
   async function fetchClips(folder='', force=false) {
     if (loaded.value && !force && folder === lastFolder.value) return
     loading.value = true
+    fetchError.value = null
     clipsProbed.value = false
     _fcRunCount = 0 // reset counter for fresh load
     try {
@@ -257,7 +259,7 @@ export const useReplayStore = defineStore('replay', () => {
       loading.value = false // show clips NOW — probe+thumbnail handled per-clip in prefetchThumbnails
       clipsLoadedAt.value++ // signal to ClipsPage that a fresh batch is ready for prefetch
     }
-    catch (e) { console.error('fetchClips:', e); clips.value = [] }
+    catch (e) { console.error('fetchClips:', e); clips.value = []; fetchError.value = String(e) }
     finally { loading.value = false; clipsProbed.value = true }
   }
 
@@ -402,6 +404,6 @@ export const useReplayStore = defineStore('replay', () => {
     toggleSelect, clearSelection, isSelected,
     activeMenuClipId, activeMenuPos,
     previewTargetClipId,
-    scanActive, scanCount,
+    scanActive, scanCount, fetchError,
   }
 })
