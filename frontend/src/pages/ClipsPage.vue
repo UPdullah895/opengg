@@ -273,7 +273,7 @@ const gameCounts = computed(() => {
 // Uses gameCounts (single-pass O(clips)) instead of re-filtering per game O(clips × games)
 const gameOptions = computed(() =>
   replay.games.map((g: string) => {
-    if (g === 'all') return { value: g, label: 'All Games' }
+    if (g === 'all') return { value: g, label: t('clips.allGames') }
     return { value: g, label: `${g} (${gameCounts.value[g] || 0})` }
   })
 )
@@ -597,7 +597,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 <template>
   <div class="page">
     <!-- Header -->
-    <PageHeader title="Clips">
+    <PageHeader :title="t('nav.clips')">
       <span v-if="totalClipCount > 0" class="title-count">{{ totalClipCount }}</span>
     </PageHeader>
 
@@ -608,7 +608,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         <div class="search-wrap">
           <svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <!-- Phase 4b: bound to searchRaw; debounced 150ms before hitting store -->
-          <input v-model="searchRaw" placeholder="Search clips…" class="search" />
+          <input v-model="searchRaw" :placeholder="t('clips.search')" class="search" />
         </div>
         <SelectField class="ctrl-sort" v-model="replay.sortMode" :options="sortOptions" />
         <!-- ★ Epic 3: Multiselect game filter dropdown -->
@@ -641,14 +641,14 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
             </Transition>
           </div>
         </div>
-        <button class="vt-btn" :class="{ active: dateGrouped }" @click="dateGrouped = !dateGrouped" title="Group by date" style="border-radius:var(--radius); border:1px solid var(--border); margin-right:4px;">
+        <button class="vt-btn" :class="{ active: dateGrouped }" @click="dateGrouped = !dateGrouped" :title="t('clips.groupByDate')" style="border-radius:var(--radius); border:1px solid var(--border); margin-right:4px;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         </button>
         <div class="view-toggle">
-          <button class="vt-btn" :class="{ active: viewMode==='grid' }" @click="viewMode='grid'" title="Grid view">
+          <button class="vt-btn" :class="{ active: viewMode==='grid' }" @click="viewMode='grid'" :title="t('clips.viewGrid')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
           </button>
-          <button class="vt-btn" :class="{ active: viewMode==='list' }" @click="viewMode='list'" title="List view">
+          <button class="vt-btn" :class="{ active: viewMode==='list' }" @click="viewMode='list'" :title="t('clips.viewList')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
           </button>
         </div>
@@ -743,8 +743,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
           </div>
           <div v-if="groupedClips.length === 0" class="empty-state">
             <div class="empty-ic">🔍</div>
-            <p>No clips found</p>
-            <p class="empty-sub">Try again or adjust your filters</p>
+            <p>{{ t('clips.noClipsFound') }}</p>
+            <p class="empty-sub">{{ t('clips.noClipsHint') }}</p>
           </div>
           </div><!-- /date-groups -->
         </div>
@@ -872,9 +872,9 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         class="empty-state"
       >
         <div class="empty-ic">📁</div>
-        <p>No clips found</p>
-        <p class="empty-sub">Start recording some or import them if you have any</p>
-        <button class="empty-import-btn" @click="importFolder">Import Folder</button>
+        <p>{{ t('clips.noClipsFound') }}</p>
+        <p class="empty-sub">{{ t('clips.noClipsEmptyHint') }}</p>
+        <button class="empty-import-btn" @click="importFolder">{{ t('clips.importFolder') }}</button>
       </div>
 
       <!-- Empty state B: clips exist but filtered/searched to zero -->
@@ -883,8 +883,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         class="empty-state"
       >
         <div class="empty-ic">🔍</div>
-        <p>No clips found</p>
-        <p class="empty-sub">Try again or adjust your filters</p>
+        <p>{{ t('clips.noClipsFound') }}</p>
+        <p class="empty-sub">{{ t('clips.noClipsHint') }}</p>
       </div>
 
       <!-- Error state: fetchClips failed (e.g. missing data dir, permission error in AppImage) -->
@@ -936,7 +936,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 >
                   {{ opt.label }}
                 </button>
-                <div v-if="filteredBulkGames.length === 0" class="bulk-game-empty">No matches</div>
+                <div v-if="filteredBulkGames.length === 0" class="bulk-game-empty">{{ t('clips.noMatches') }}</div>
               </div>
               <div class="bulk-game-footer">
                 <button class="sel-btn sel-btn-p" @click="bulkChangeGame()">{{ t('clips2.apply') }}</button>
@@ -1081,8 +1081,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .view-toggle { display:flex; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
 .vt-btn { width:32px; height:32px; background:var(--bg-input); border:none; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background .15s,color .15s; }
 .vt-btn svg { width:14px; height:14px; }
-.vt-btn:hover { background:var(--bg-hover); color:var(--text); }
-.vt-btn.active { background:var(--accent); color:#fff; }
+.vt-btn:hover { background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); }
+.vt-btn.active { background:color-mix(in srgb, var(--accent) 22%, transparent); color:var(--accent); }
 
 /* Scroll container */
 .scroll-area { flex:1; min-height:0; overflow:hidden; display:flex; flex-direction:column; position:relative; user-select:none; }

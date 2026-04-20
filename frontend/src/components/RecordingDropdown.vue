@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { useReplayStore } from '../stores/replay'
 import { usePersistenceStore } from '../stores/persistence'
 import { useToast } from '../composables/useToast'
 import SelectField from './SelectField.vue'
 
+const { t } = useI18n()
 const replay  = useReplayStore()
 const persist = usePersistenceStore()
 const settings = computed(() => persist.state.settings)
@@ -40,21 +42,21 @@ const isRunning  = computed(() => replay.status !== 'idle')
 const isRecording = computed(() => replay.status === 'recording')
 
 const statusLabel = computed(() => {
-  if (!isRunning.value) return 'Idle'
-  if (isGsr.value) return `Replay Buffer · ${fmtElapsed(elapsed.value)}`
-  if (isRecording.value) return `Recording · ${fmtElapsed(elapsed.value)}`
-  return `Replay · ${replay.replayDuration}s`
+  if (!isRunning.value) return t('dashboard.idle')
+  if (isGsr.value) return `${t('recording.replayBuffer')} · ${fmtElapsed(elapsed.value)}`
+  if (isRecording.value) return `${t('dashboard.recording')} · ${fmtElapsed(elapsed.value)}`
+  return `${t('recording.replay')} · ${replay.replayDuration}s`
 })
 
 // ── Quick-settings options ──
 const gsrQualityOptions = [
-  { value: 'cbr',       label: 'Constant bitrate' },
-  { value: 'medium',    label: 'Medium'    },
-  { value: 'high',      label: 'High'      },
-  { value: 'very_high', label: 'Very high' },
-  { value: 'ultra',     label: 'Ultra'     },
+  { value: 'cbr',       label: t('settings.captureGsr.qualityCbr') },
+  { value: 'medium',    label: t('settings.captureGsr.qualityMedium') },
+  { value: 'high',      label: t('settings.captureGsr.qualityHigh') },
+  { value: 'very_high', label: t('settings.captureGsr.qualityVeryHigh') },
+  { value: 'ultra',     label: t('settings.captureGsr.qualityUltra') },
 ]
-const gsrFpsOptions = [30, 60, 120].map(v => ({ value: v, label: `${v} FPS` }))
+const gsrFpsOptions = [30, 60, 120].map(v => ({ value: v, label: `${v} ${t('dashboard.fps')}` }))
 const gsrReplayOptions = [
   { value: 15,  label: '15s'  },
   { value: 30,  label: '30s'  },
@@ -63,7 +65,8 @@ const gsrReplayOptions = [
   { value: 120, label: '120s' },
 ]
 const targetOptions = ref<Array<{ value: string; label: string }>>([
-  { value: 'screen', label: 'Primary Monitor' },
+  { value: 'screen',  label: t('dashboard.gsrTarget.screen') },
+  { value: 'focused', label: t('dashboard.gsrTarget.focused') },
 ])
 
 // ── GSR invoke helper ──
@@ -101,7 +104,7 @@ async function toggleRecording() {
       }
     }
   } catch (e) {
-    toast.error(`Recording failed: ${e}`)
+    toast.error(t('notification.recordingFailed', { error: String(e) }))
   }
 }
 
@@ -159,29 +162,29 @@ onBeforeUnmount(() => {
       <!-- Status row -->
       <div class="rec-status-row">
         <span class="rec-status-dot" :class="{ on: isRunning, recording: isRecording }"></span>
-        <span class="rec-status-label">{{ isRunning ? (isGsr ? 'GSR Replay Buffer Running' : (isRecording ? 'Recording' : 'Replay Buffer')) : 'Stopped' }}</span>
+        <span class="rec-status-label">{{ isRunning ? (isGsr ? t('recording.gsrRunning') : (isRecording ? t('dashboard.recording') : t('recording.replayBuffer'))) : t('recording.stopped') }}</span>
       </div>
 
       <!-- Action buttons -->
       <div class="rec-actions">
         <button class="rec-btn" :class="{ danger: isRunning }" @click="toggleRecording">
-          {{ isRunning ? 'Stop' : (isGsr ? 'Start Replay Buffer' : 'Start Replay') }}
+          {{ isRunning ? t('dashboard.stop') : (isGsr ? t('dashboard.startReplayBuffer') : t('dashboard.startReplay')) }}
         </button>
         <button
           class="rec-btn rec-btn-save"
           :disabled="!isRunning"
           @click="saveClip"
-          title="Save current replay buffer as a clip"
+          :title="t('recording.saveClip')"
         >
-          Save Clip
+          {{ t('recording.saveClip') }}
         </button>
       </div>
 
       <!-- Quick settings (only relevant for GSR) -->
       <div v-if="isGsr" class="rec-qs">
-        <div class="rec-qs-title">Quick Settings</div>
+        <div class="rec-qs-title">{{ t('recording.quickSettings') }}</div>
         <div class="rec-qs-row">
-          <label>Quality</label>
+          <label>{{ t('dashboard.quality') }}</label>
           <SelectField
             v-model="settings.gsrQuality"
             :options="gsrQualityOptions"
@@ -189,7 +192,7 @@ onBeforeUnmount(() => {
           />
         </div>
         <div class="rec-qs-row">
-          <label>FPS</label>
+          <label>{{ t('dashboard.fps') }}</label>
           <SelectField
             v-model="settings.gsrFps"
             :options="gsrFpsOptions"
@@ -197,7 +200,7 @@ onBeforeUnmount(() => {
           />
         </div>
         <div class="rec-qs-row">
-          <label>Buffer</label>
+          <label>{{ t('dashboard.buffer') }}</label>
           <SelectField
             v-model="settings.gsrReplaySecs"
             :options="gsrReplayOptions"
@@ -205,7 +208,7 @@ onBeforeUnmount(() => {
           />
         </div>
         <div class="rec-qs-row">
-          <label>Target</label>
+          <label>{{ t('dashboard.target') }}</label>
           <SelectField
             v-model="settings.gsrMonitorTarget"
             :options="targetOptions"

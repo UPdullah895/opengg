@@ -22,6 +22,7 @@
     "scan": "Scan",
     "quickMixer": "Quick Mixer",
     "openMixer": "Open Mixer",
+    "subtitleVirtualAudioRouter": "OpenGG Virtual Audio Router",
     "captureSettings": "Capture Settings",
     "recordingSettings": "Recording Settings",
     "quality": "Quality",
@@ -172,7 +173,12 @@
       "hint": "Changes take effect immediately. RTL languages are fully supported.",
       "addLanguage": "Add New Language",
       "openFolderHint": "Drop a new xx.json file into the locales folder to add a custom language.",
-      "reloadLanguages": "Reload languages from disk"
+      "reloadLanguages": "Reload languages from disk",
+      "rtlMode": "RTL Layout",
+      "rtlModeHint": "Switches the entire interface to right-to-left layout, including the sidebar position.",
+      "rtlModeLabel": "Interface direction",
+      "rtlEnable": "Enable RTL",
+      "rtlReset": "Reset to LTR"
     },
     "shortcuts": {
       "title": "Shortcuts",
@@ -397,7 +403,18 @@
       "save":  "Save"
     },
     "loadError": "Failed to load clips",
-    "retry": "Retry"
+    "retry": "Retry",
+    "search": "Search clips…",
+    "allGames": "All Games",
+    "noMatches": "No matches",
+    "games": "Games",
+    "noClipsFound": "No clips found",
+    "noClipsHint": "Try again or adjust your filters",
+    "noClipsEmptyHint": "Start recording some or import them if you have any",
+    "importFolder": "Import Folder",
+    "groupByDate": "Group by date",
+    "viewGrid": "Grid view",
+    "viewList": "List view"
   },
   "notification": {
     "clipSaved": "Clip Saved",
@@ -406,12 +423,24 @@
     "filename": "Filename",
     "filesize": "File Size",
     "enableClipNotifications": "Clip Save Notifications",
-    "enableClipNotificationsDesc": "Show an overlay toast when a clip is saved successfully or fails"
+    "enableClipNotificationsDesc": "Show an overlay toast when a clip is saved successfully or fails",
+    "recordingStarted": "Recording started",
+    "recordingFailed": "Recording failed: {error}"
+  },
+  "recording": {
+    "stopped": "Stopped",
+    "replayBuffer": "Replay Buffer",
+    "replay": "Replay",
+    "gsrRunning": "GSR Replay Buffer Running",
+    "quickSettings": "Quick Settings",
+    "saveClip": "Save Clip"
   },
   "devices": {
     "title": "Devices",
     "noDevices": "No devices detected",
     "noDevicesDesc": "Connect a supported mouse or headset and click Refresh",
+    "noApps": "No apps",
+    "dropHere": "Drop here",
     "refresh": "Refresh",
     "back": "Back",
     "battery": "Battery",

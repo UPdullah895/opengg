@@ -105,7 +105,7 @@ onUnmounted(() => {
 <template>
   <div class="mixer">
     <div class="mixer-hdr">
-      <div><h1 class="t">Audio Mixer</h1><span class="sub">OpenGG Virtual Audio Router</span></div>
+        <div><h1 class="t">Audio Mixer</h1></div>
       <div class="hdr-actions">
         <!-- Tab bar -->
         <nav class="tab-bar">

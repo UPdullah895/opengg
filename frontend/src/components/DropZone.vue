@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAudioStore } from '../stores/audio'
 
+const { t } = useI18n()
 const props = defineProps<{
   channel: string
   color: string
@@ -63,8 +65,8 @@ function startDragApp(e: DragEvent, app: { id: number; name: string; binary: str
       </div>
     </div>
     <div v-else class="dz-empty" :class="{ active: isDragging }">
-      <span v-if="isDragging">Drop here</span>
-      <span v-else>No apps</span>
+      <span v-if="isDragging">{{ t('devices.dropHere') }}</span>
+      <span v-else>{{ t('devices.noApps') }}</span>
     </div>
   </div>
 </template>

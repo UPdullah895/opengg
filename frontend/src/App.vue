@@ -23,7 +23,7 @@ import type { AudioDevice } from './stores/audio'
 import ToastContainer from './components/ToastContainer.vue'
 import { useToast } from './composables/useToast'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 // Overlay mode: this window was opened by show_clip_notification (Rust) with ?overlay=1
 const isOverlay = typeof window !== 'undefined' &&
@@ -112,6 +112,8 @@ async function registerGlobalShortcuts() {
 
 onMounted(async () => {
   await persist.load()
+  locale.value = persist.state.settings.language || 'en'
+  document.documentElement.dir = persist.state.settings.rtlMode ? 'rtl' : 'ltr'
   await loadTheme()
   mediaPort.value = await getMediaPort()
   installAudioUnlocker()

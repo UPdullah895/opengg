@@ -64,6 +64,7 @@ export interface PersistedState {
     notificationStyle: 'auto' | 'gsr-notify' | 'x11-overlay' | 'system' | 'disabled'
     notificationPosition: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
     notificationDuration: number  // 1-10 seconds
+    rtlMode: boolean
   }
   modules: { audio: boolean; device: boolean; replay: boolean }
   /** Keyed by extension id (e.g. 'overlays-system'). true = enabled. */
@@ -115,6 +116,7 @@ export const DEFAULTS: PersistedState = {
     notificationStyle: 'auto' as 'auto' | 'gsr-notify' | 'x11-overlay' | 'system' | 'disabled',
     notificationPosition: 'top-right' as 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left',
     notificationDuration: 4,
+    rtlMode:               false,
   },
   modules: { audio: true, device: true, replay: true },
   extensions: { 'overlays-system': true, 'tiktok-export': true },

@@ -22,6 +22,7 @@
     "scan": "فحص",
     "quickMixer": "خلاط سريع",
     "openMixer": "فتح الخلاط",
+    "subtitleVirtualAudioRouter": "موجه الصوت الافتراضي OpenGG",
     "captureSettings": "إعدادات التقاط",
     "recordingSettings": "إعدادات التسجيل",
     "quality": "الجودة",
@@ -172,7 +173,12 @@
       "hint": "تسري التغييرات فوراً. اللغات من اليمين إلى اليسار مدعومة بالكامل.",
       "addLanguage": "إضافة لغة جديدة",
       "openFolderHint": "ضع ملف xx.json جديداً في مجلد اللغات لإضافة لغة مخصصة.",
-      "reloadLanguages": "إعادة تحميل اللغات من القرص"
+      "reloadLanguages": "إعادة تحميل اللغات من القرص",
+      "rtlMode": "تخطيط RTL",
+      "rtlModeHint": "يقلب واجهة البرنامج بالكامل لتناسب اللغة العربية، بما في ذلك موضع الشريط الجانبي.",
+      "rtlModeLabel": "اتجاه الواجهة",
+      "rtlEnable": "تفعيل RTL",
+      "rtlReset": "إعادة إلى LTR"
     },
     "shortcuts": {
       "title": "الاختصارات",
@@ -409,7 +415,18 @@
       "save":  "حفظ"
     },
     "loadError": "فشل تحميل المقاطع",
-    "retry": "إعادة المحاولة"
+    "retry": "إعادة المحاولة",
+    "search": "البحث في المقاطع…",
+    "allGames": "كل الألعاب",
+    "noMatches": "لا نتائج",
+    "games": "الألعاب",
+    "noClipsFound": "لم يتم العثور على مقاطع",
+    "noClipsHint": "جرّب مرة أخرى أو عدّل الفلاتر",
+    "noClipsEmptyHint": "ابدأ تسجيل بعض أو استوردها إن وجدت",
+    "importFolder": "استيراد مجلد",
+    "groupByDate": "تجميع بالتاريخ",
+    "viewGrid": "عرض شبكي",
+    "viewList": "عرض قائمة"
   },
   "notification": {
     "clipSaved": "تم حفظ المقطع",
@@ -418,12 +435,24 @@
     "filename": "اسم الملف",
     "filesize": "حجم الملف",
     "enableClipNotifications": "إشعارات حفظ المقاطع",
-    "enableClipNotificationsDesc": "عرض إشعار عائم عند حفظ المقطع بنجاح أو الفشل"
+    "enableClipNotificationsDesc": "عرض إشعار عائم عند حفظ المقطع بنجاح أو الفشل",
+    "recordingStarted": "بدء التسجيل",
+    "recordingFailed": "فشل التسجيل: {error}"
+  },
+  "recording": {
+    "stopped": "متوقف",
+    "replayBuffer": "ذاكرة الإعادة",
+    "replay": "إعادة",
+    "gsrRunning": "ذاكرة الإعادة GSR قيد التشغيل",
+    "quickSettings": "إعدادات سريعة",
+    "saveClip": "حفظ المقطع"
   },
   "devices": {
     "title": "الأجهزة",
     "noDevices": "لم يتم اكتشاف أجهزة",
     "noDevicesDesc": "قم بتوصيل فأرة أو سماعة مدعومة ثم انقر على تحديث",
+    "noApps": "لا توجد تطبيقات",
+    "dropHere": "أسقط هنا",
     "refresh": "تحديث",
     "back": "رجوع",
     "battery": "البطارية",

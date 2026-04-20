@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 const props = defineProps<{
   modelValue: string[]
   games: string[]
@@ -38,7 +40,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onOutside))
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="gfd-ic">
         <path d="M6 11h4m-2-2v4m7-1h.01M18 11h.01M2 6a2 2 0 012-2h16a2 2 0 012 2v10a4 4 0 01-4 4H6a4 4 0 01-4-4V6z"/>
       </svg>
-      Games
+      {{ t('clips.games') }}
       <span v-if="activeCount > 0" class="gfd-badge">{{ activeCount }}</span>
       <span style="flex:1"></span>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="gfd-chev" :class="{ flipped: open }"><path d="M6 9l6 6 6-6"/></svg>

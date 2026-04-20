@@ -109,18 +109,18 @@ async function toggleRecording() {
       } else {
         await invoke('start_gsr_replay', gsrParams())
         replay.status = 'replay'
-        toast.success('Recording started')
+        toast.success(t('notification.recordingStarted'))
       }
     } else {
       if (isRunning.value) {
         await replay.stopRecorder()
       } else {
         await replay.startReplay(settings.value.gsrReplaySecs)
-        toast.success('Recording started')
+        toast.success(t('notification.recordingStarted'))
       }
     }
   } catch (e) {
-    toast.error(`Recording failed: ${e}`)
+    toast.error(t('notification.recordingFailed', { error: String(e) }))
   }
 }
 
