@@ -258,7 +258,15 @@
       "free": "حر",
       "total": "الإجمالي",
       "diskUsage": "استخدام القرص",
-      "loading": "جارٍ التحميل..."
+      "loading": "جارٍ التحميل...",
+      "readError": "تعذر قراءة معلومات التخزين.",
+      "steamSection": "مكتبة Steam",
+      "steamTitle": "استيراد مكتبة Steam",
+      "steamBody": "أضف مكتبة Steam إلى قوائم اختيار الألعاب في OpenGG وأبقِها ظاهرة هنا داخل التخزين. بعد السماح، يقرأ OpenGG بيانات Steam المحلية وقد يطلب بيانات وصفية من متجر Steam للأسماء والصور.",
+      "steamDeniedTitle": "تم إيقاف الوصول إلى مكتبة Steam",
+      "steamDeniedBody": "اسمح بالوصول لقراءة بيانات Steam المحلية وطلب بيانات وصفية من متجر Steam حتى يتمكن OpenGG من عرض مكتبتك هنا مع الأسماء والصور.",
+      "steamReadyTitle": "{count} لعبة Steam في المكتبة",
+      "steamReadyBody": "مكتبة Steam متاحة الآن في قوائم اختيار الألعاب ومُدرجة هنا مع الصور عند توفرها. يستخدم OpenGG بيانات Steam المحلية مع بيانات وصفية من متجر Steam للأسماء والصور."
     },
     "extensions": {
       "title": "الإضافات",
@@ -395,6 +403,31 @@
     "renameDialog": {
       "title": "إعادة تسمية المقطع",
       "save":  "حفظ"
+    },
+    "gamesFilter": {
+      "label": "الألعاب",
+      "allGames": "كل الألعاب",
+      "empty": "لم يتم العثور على ألعاب",
+      "clear": "مسح كل الفلاتر",
+      "searchPlaceholder": "تصفية الألعاب…",
+      "noMatches": "لا توجد نتائج",
+      "gamePlaceholder": "لعبة..."
+    },
+    "steamImport": {
+      "title": "استيراد مكتبة Steam",
+      "body": "أضف مكتبة Steam إلى فلاتر الألعاب وقوائم الوسوم الحالية. بعد موافقتك، يقرأ OpenGG بيانات Steam المحلية وقد يطلب بيانات وصفية من متجر Steam لأسماء الألعاب وصورها.",
+      "deniedTitle": "تم إيقاف الوصول إلى مكتبة Steam",
+      "deniedBody": "لم يستورد OpenGG مكتبة Steam بعد. اسمح بالوصول لقراءة بيانات Steam المحلية وطلب بيانات وصفية من متجر Steam لأسماء الألعاب وأيقوناتها.",
+      "readyTitle": "{count} لعبة Steam متاحة",
+      "readyBody": "مكتبة Steam متاحة الآن داخل فلاتر الألعاب وقوائم اختيار اللعبة، مع الصور حيثما توفرت. يستخدم OpenGG بيانات Steam المحلية مع بيانات وصفية من متجر Steam للأسماء والصور.",
+      "consentTitle": "الوصول إلى مكتبة Steam",
+      "consentMessage": "هل تسمح لـ OpenGG بقراءة بيانات Steam المحلية وطلب بيانات وصفية من متجر Steam لملء مكتبة Steam وأسماء الألعاب والصور؟",
+      "allowAndImport": "اسمح واستورد",
+      "import": "استيراد ألعاب Steam",
+      "refresh": "تحديث مكتبة Steam",
+      "loading": "جارٍ الاستيراد…",
+      "imported": "تم استيراد {count} لعبة من Steam",
+      "failed": "فشل استيراد مكتبة Steam"
     }
   },
   "notification": {

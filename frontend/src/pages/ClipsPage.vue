@@ -4,9 +4,9 @@ import { ref, computed, onMounted, onBeforeUnmount, inject, watch, onActivated, 
 import { useI18n } from 'vue-i18n'
 import { refDebounced } from '@vueuse/core'
 import { invoke } from '@tauri-apps/api/core'
-import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { ask, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { useReplayStore, type Clip } from '../stores/replay'
+import { useReplayStore, type Clip, normalizeGameTitle } from '../stores/replay'
 import { usePersistenceStore } from '../stores/persistence'
 import ClipCard from '../components/ClipCard.vue'
 import ClipListRow from '../components/ClipListRow.vue'
@@ -108,6 +108,7 @@ const advancedClip = ref<Clip | null>(null)
 const renameTarget = ref<Clip | null>(null)
 const renameValue  = ref('')
 const toast        = ref('')
+const steamImportBusy = ref(false)
 
 function showToast(msg: string) { toast.value = msg; setTimeout(() => toast.value = '', 3500) }
 function refreshClips() { replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '', true) }
@@ -527,20 +528,110 @@ const sortOptions = computed(() => [
   { value: 'shortest', label: t('clips.sortOptions.shortest') },
 ])
 // ★ Epic 3: game list and per-game counts for the multiselect dropdown
-const gameNames = computed(() => replay.games.filter((g: string) => g !== 'all'))
-const gameCounts = computed(() => {
-  const counts: Record<string, number> = {}
+const steamAccess = computed(() => persist.state.settings.steamLibraryAccess)
+const steamGamesLoaded = computed(() => replay.steamGames.length > 0)
+function resolveSteamIcon(path: string | null | undefined) {
+  if (!path) return ''
+  return path.startsWith('/') ? mediaUrl(path, mediaPortNum.value) : path
+}
+function gameTitlePenalty(title: string) {
+  const marks = (title.match(/[©®™]/g) || []).length
+  const punct = (title.match(/[()[\]{}:;,.!'"_-]/g) || []).length
+  return (marks * 10) + (punct * 2) + (title.length / 1000)
+}
+function preferredGameTitle(current: string | null, candidate: string) {
+  if (!current) return candidate
+  const currentPenalty = gameTitlePenalty(current)
+  const candidatePenalty = gameTitlePenalty(candidate)
+  if (candidatePenalty !== currentPenalty) return candidatePenalty < currentPenalty ? candidate : current
+  return candidate.localeCompare(current) < 0 ? candidate : current
+}
+type CanonicalGameGroup = {
+  display: string
+  count: number
+  icon: string
+}
+const steamIconByNormalized = computed<Record<string, string>>(() =>
+  Object.fromEntries(
+    replay.steamGames
+      .filter(game => !!game.icon_url)
+      .map(game => [
+        normalizeGameTitle(game.name) || game.name.toLowerCase(),
+        resolveSteamIcon(game.icon_url),
+      ])
+  )
+)
+const clipGameGroups = computed(() => {
+  const groups = new Map<string, CanonicalGameGroup>()
   for (const c of replay.clips) {
-    if (!c.isSkeleton && c.game) counts[c.game] = (counts[c.game] || 0) + 1
+    if (c.isSkeleton || !c.game) continue
+    const normalized = normalizeGameTitle(c.game) || c.game.toLowerCase()
+    const existing = groups.get(normalized)
+    groups.set(normalized, {
+      display: preferredGameTitle(existing?.display ?? null, c.game),
+      count: (existing?.count ?? 0) + 1,
+      icon: existing?.icon ?? '',
+    })
   }
-  return counts
+  for (const game of replay.steamGames) {
+    const normalized = normalizeGameTitle(game.name) || game.name.toLowerCase()
+    const existing = groups.get(normalized)
+    if (!existing) continue
+    groups.set(normalized, {
+      ...existing,
+      display: preferredGameTitle(existing.display, game.name),
+      icon: existing.icon || steamIconByNormalized.value[normalized] || '',
+    })
+  }
+  return groups
+})
+const steamIcons = computed<Record<string, string>>(() =>
+  {
+    const icons: Record<string, string> = {}
+    for (const group of clipGameGroups.value.values()) {
+      if (group.icon) icons[group.display.toLowerCase()] = group.icon
+    }
+    for (const game of bulkGameNames.value) {
+      const normalized = normalizeGameTitle(game) || game.toLowerCase()
+      const icon = steamIconByNormalized.value[normalized]
+      if (icon) icons[game.toLowerCase()] = icon
+    }
+    return icons
+  }
+)
+const gameCounts = computed(() =>
+  Object.fromEntries(
+    Array.from(clipGameGroups.value.values()).map(group => [group.display, group.count])
+  ) as Record<string, number>
+)
+const filterGameNames = computed(() =>
+  Array.from(clipGameGroups.value.values())
+    .filter(group => group.count > 0)
+    .map(group => group.display)
+    .sort((a, b) => a.localeCompare(b))
+)
+const bulkGameNames = computed(() => {
+  const names = new Map<string, string>()
+  for (const group of clipGameGroups.value.values()) {
+    names.set(normalizeGameTitle(group.display), group.display)
+  }
+  for (const game of replay.games) {
+    if (game === 'all') continue
+    const normalized = normalizeGameTitle(game) || game.toLowerCase()
+    names.set(normalized, preferredGameTitle(names.get(normalized) ?? null, game))
+  }
+  for (const game of replay.steamGames) {
+    const normalized = normalizeGameTitle(game.name) || game.name.toLowerCase()
+    names.set(normalized, preferredGameTitle(names.get(normalized) ?? null, game.name))
+  }
+  return Array.from(names.values()).sort((a, b) => a.localeCompare(b))
 })
 // kept for legacy SelectField usage (sort) — game SelectField is replaced by GameFilterDropdown
 // Uses gameCounts (single-pass O(clips)) instead of re-filtering per game O(clips × games)
-const gameOptions = computed(() =>
-  replay.games.map((g: string) => {
-    if (g === 'all') return { value: g, label: 'All Games' }
-    return { value: g, label: `${g} (${gameCounts.value[g] || 0})` }
+const bulkGameOptions = computed(() =>
+  ['all', ...bulkGameNames.value].map((g: string) => {
+    if (g === 'all') return { value: g, label: t('clips.gamesFilter.allGames') }
+    return { value: g, label: `${g} (${gameCounts.value[g] || 0})`, icon: steamIcons.value[g.toLowerCase()] || '' }
   })
 )
 // Total real (non-skeleton) clip count for display
@@ -555,6 +646,49 @@ function onCardClick(clip: Clip) {
 }
 function openPreview(clip: Clip) { editorClip.value = clip; editorMode.value = 'preview' }
 function openAdvanced(clip: Clip) { advancedClip.value = clip }
+
+async function importSteamLibrary(forcePrompt = false) {
+  if (steamImportBusy.value) return
+
+  const access = persist.state.settings.steamLibraryAccess
+  if (access !== 'granted' || forcePrompt) {
+    const confirmed = await ask(t('clips.steamImport.consentMessage'), {
+      title: t('clips.steamImport.consentTitle'),
+      kind: 'info',
+    })
+    persist.state.settings.steamLibraryAccess = confirmed ? 'granted' : 'denied'
+    if (!confirmed) return
+  }
+
+  steamImportBusy.value = true
+  const ok = await replay.fetchSteamGames()
+  steamImportBusy.value = false
+
+  if (ok) {
+    showToast(t('clips.steamImport.imported', { count: replay.steamGames.length }))
+  } else {
+    showToast(t('clips.steamImport.failed'))
+  }
+}
+
+const steamBannerTitle = computed(() => {
+  if (steamGamesLoaded.value) return t('clips.steamImport.readyTitle', { count: replay.steamGames.length })
+  if (steamAccess.value === 'denied') return t('clips.steamImport.deniedTitle')
+  return t('clips.steamImport.title')
+})
+
+const steamBannerBody = computed(() => {
+  if (steamGamesLoaded.value) return t('clips.steamImport.readyBody')
+  if (steamAccess.value === 'denied') return t('clips.steamImport.deniedBody')
+  return t('clips.steamImport.body')
+})
+
+const steamButtonLabel = computed(() => {
+  if (steamImportBusy.value) return t('clips.steamImport.loading')
+  if (steamGamesLoaded.value) return t('clips.steamImport.refresh')
+  if (steamAccess.value === 'granted') return t('clips.steamImport.import')
+  return t('clips.steamImport.allowAndImport')
+})
 
 function startRename(clip: Clip) { renameTarget.value = clip; renameValue.value = clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename.replace(/\.[^.]+$/, '')) }
 async function confirmRename() {
@@ -813,7 +947,6 @@ onMounted(async () => {
     prefetchThumbnails()
   })
 
-  replay.fetchSteamGames()
 })
 
 onBeforeUnmount(() => {
@@ -847,7 +980,7 @@ const bulkGameSearch = ref('')
 const bulkGameValue = ref('Unknown')
 const filteredBulkGames = computed(() => {
   const q = bulkGameSearch.value.toLowerCase()
-  return gameOptions.value.filter(o => o.label.toLowerCase().includes(q))
+  return bulkGameOptions.value.filter(o => o.label.toLowerCase().includes(q))
 })
 async function bulkChangeGame() {
   const ids = Array.from(replay.selectedIds)
@@ -871,7 +1004,7 @@ function ctxAction(act: string) {
   else if (act === 'favorite') toggleListFav(clip)
   else if (act === 'rename') startRename(clip)
 
-  else if (act === 'location') invoke('show_in_folder', { filepath: clip.filepath })
+  else if (act === 'location') invoke('open_file_location', { filepath: clip.filepath })
   else if (act === 'delete') deleteClip(clip)
   closeContextMenu()
 }
@@ -920,10 +1053,11 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         </div>
         <SelectField class="ctrl-sort" v-model="replay.sortMode" :options="sortOptions" />
         <!-- ★ Epic 3: Multiselect game filter dropdown -->
-        <GameFilterDropdown
+          <GameFilterDropdown
           v-model="replay.selectedGames"
-          :games="gameNames"
+          :games="filterGameNames"
           :clipCounts="gameCounts"
+          :steam-icons="steamIcons"
         />
         <button class="fav-btn" :class="{ active: replay.filterFav }" @click="replay.filterFav=!replay.filterFav">❤ {{ replay.favCount }}</button>
       </div>
@@ -961,6 +1095,16 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
           </button>
         </div>
       </div>
+    </div>
+
+    <div v-if="steamAccess !== 'granted'" class="steam-banner" :class="{ ready: steamGamesLoaded }">
+      <div class="steam-banner-copy">
+        <div class="steam-banner-title">{{ steamBannerTitle }}</div>
+        <div class="steam-banner-body">{{ steamBannerBody }}</div>
+      </div>
+      <button class="steam-banner-btn" :disabled="steamImportBusy" @click="importSteamLibrary(steamAccess === 'denied')">
+        {{ steamButtonLabel }}
+      </button>
     </div>
 
     <div class="scroll-area">
@@ -1244,7 +1388,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 <input
                   v-model="bulkGameSearch"
                   class="bulk-game-search"
-                  placeholder="Filter games…"
+                  :placeholder="t('clips.gamesFilter.searchPlaceholder')"
                   autofocus
                   @keydown.escape="bulkGameOpen = false"
                 />
@@ -1257,9 +1401,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                   :class="{ active: bulkGameValue === opt.value }"
                   @click="bulkGameValue = opt.value"
                 >
-                  {{ opt.label }}
+                  <img v-if="opt.icon" :src="opt.icon" alt="" class="bulk-game-icon" loading="lazy" />
+                  <span>{{ opt.label }}</span>
                 </button>
-                <div v-if="filteredBulkGames.length === 0" class="bulk-game-empty">No matches</div>
+                <div v-if="filteredBulkGames.length === 0" class="bulk-game-empty">{{ t('clips.gamesFilter.noMatches') }}</div>
               </div>
               <div class="bulk-game-footer">
                 <button class="sel-btn sel-btn-p" @click="bulkChangeGame()">Apply</button>
@@ -1405,6 +1550,37 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .fav-btn:hover { background:var(--bg-hover); }
 .fav-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
 
+.steam-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--bg-card)), var(--bg-card));
+}
+.steam-banner.ready {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.steam-banner-copy { min-width: 0; }
+.steam-banner-title { font-size: 13px; font-weight: 700; color: var(--text); }
+.steam-banner-body { margin-top: 3px; font-size: 12px; color: var(--text-sec); }
+.steam-banner-btn {
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-surface));
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.steam-banner-btn:hover:not(:disabled) { filter: brightness(1.06); }
+.steam-banner-btn:disabled { opacity: .6; cursor: default; }
+
 .view-toggle { display:flex; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
 .vt-btn { width:32px; height:32px; background:var(--bg-input); border:none; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background .15s,color .15s; }
 .vt-btn svg { width:14px; height:14px; }
@@ -1523,9 +1699,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .bulk-game-search { width:100%; padding:6px 10px; background:var(--bg-input); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:12px; outline:none; }
 .bulk-game-search:focus { border-color:var(--accent); }
 .bulk-game-list { max-height:180px; overflow-y:auto; padding:4px; }
-.bulk-game-opt { width:100%; padding:7px 10px; background:transparent; border:none; border-radius:5px; color:var(--text-sec); font-size:12px; text-align:left; cursor:pointer; }
+.bulk-game-opt { width:100%; padding:7px 10px; background:transparent; border:none; border-radius:5px; color:var(--text-sec); font-size:12px; text-align:left; cursor:pointer; display:flex; align-items:center; gap:8px; }
 .bulk-game-opt:hover { background:var(--bg-hover); color:var(--text); }
 .bulk-game-opt.active { color:var(--accent); font-weight:600; background:color-mix(in srgb, var(--accent) 10%, transparent); }
+.bulk-game-icon { width:18px; height:18px; border-radius:4px; object-fit:cover; flex-shrink:0; }
 .bulk-game-empty { padding:10px; text-align:center; font-size:11px; color:var(--text-muted); }
 .bulk-game-footer { padding:8px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; }
 .dropup-enter-active { transition:opacity .12s, transform .12s; }

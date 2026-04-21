@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, inject } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { mediaUrl } from '../utils/assets'
-import type { Clip } from '../stores/replay'
+import type { Clip, SteamGame } from '../stores/replay'
 import { useReplayStore } from '../stores/replay'
 import type { Ref } from 'vue'
 import CustomVideoPlayer from './CustomVideoPlayer.vue'
@@ -45,12 +45,19 @@ function togglePlay() { playerComp.value?.togglePlay() }
 
 const GAMES_STATIC = ['Counter-Strike 2','League of Legends','Valorant','Overwatch 2','Apex Legends','Fortnite','Minecraft','Dota 2','Rocket League','Elden Ring',"Baldur's Gate 3",'Cyberpunk 2077','Honkai: Star Rail','Genshin Impact','Helldivers 2','Path of Exile 2']
 const GAMES = computed(() => {
-  const s = new Set([...GAMES_STATIC, ...replay.steamGames])
+  const s = new Set([...GAMES_STATIC, ...replay.steamGames.map(game => game.name)])
   return Array.from(s).sort()
 })
+const steamGameLookup = computed<Record<string, SteamGame>>(() => replay.steamGameMap)
 const gameTag = ref('')
 const gameOpen = ref(false)
 const gameFiltered = computed(() => { const q = gameTag.value.toLowerCase(); return q ? GAMES.value.filter(g => g.toLowerCase().includes(q)) : GAMES.value })
+function steamIcon(game: string) { return steamGameLookup.value[game.toLowerCase()]?.icon_url || '' }
+function steamIconUrl(game: string) {
+  const icon = steamIcon(game)
+  if (!icon) return ''
+  return icon.startsWith('/') ? mediaUrl(icon, mediaPort.value) : icon
+}
 
 async function saveTrimState() {
   try {
@@ -109,9 +116,12 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
         <input v-model="editTitle" class="title-input" @input="titleDirty = true" @blur="saveTitle" @keydown.enter="($event.target as HTMLInputElement).blur()" spellcheck="false" />
         <!-- ★ E2-P6: Game tag in Quick Preview -->
         <div class="game-wrap">
-          <input v-model="gameTag" class="game-in" placeholder="Game..." @focus="gameOpen = true" @blur="closeGameDropDelayed()" />
+          <input v-model="gameTag" class="game-in" :placeholder="$t('clips.gamesFilter.gamePlaceholder')" @focus="gameOpen = true" @blur="closeGameDropDelayed()" />
           <div v-if="gameOpen && gameFiltered.length" class="game-drop">
-            <button v-for="g in gameFiltered.slice(0, 8)" :key="g" @mousedown.prevent="selectGame(g)">{{ g }}</button>
+            <button v-for="g in gameFiltered.slice(0, 8)" :key="g" @mousedown.prevent="selectGame(g)">
+              <img v-if="steamIconUrl(g)" :src="steamIconUrl(g)" alt="" class="game-opt-icon" loading="lazy" />
+              <span>{{ g }}</span>
+            </button>
           </div>
         </div>
         <button class="fav-btn" :class="{ on: clip.favorite }" @click="toggleFavorite" title="Toggle favorite">
@@ -128,6 +138,8 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
         ref="playerComp"
         :src="videoSrc"
         :capture-keyboard="true"
+        :native-controls="mode === 'preview'"
+        :show-controls="mode !== 'preview'"
         @loadedmetadata="onMeta"
         @timeupdate="onTimeUpdate"
         @play="playing = true"
@@ -185,7 +197,8 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
 .game-wrap { position:relative; }
 .game-in { width:120px; padding:5px 8px; background:var(--bg-input); border:1px solid var(--border); border-radius:6px; color:var(--text-sec); font-size:11px; outline:none; } .game-in:focus { border-color:var(--accent); }
 .game-drop { position:absolute; top:100%; left:0; right:0; margin-top:2px; background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:2px; z-index:30; max-height:160px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,.3); }
-.game-drop button { width:100%; padding:4px 8px; border:none; background:transparent; color:var(--text-sec); font-size:11px; text-align:left; cursor:pointer; border-radius:4px; } .game-drop button:hover { background:var(--bg-hover); color:var(--text); }
+.game-drop button { width:100%; padding:4px 8px; border:none; background:transparent; color:var(--text-sec); font-size:11px; text-align:left; cursor:pointer; border-radius:4px; display:flex; align-items:center; gap:8px; } .game-drop button:hover { background:var(--bg-hover); color:var(--text); }
+.game-opt-icon { width:16px; height:16px; border-radius:4px; object-fit:cover; flex-shrink:0; }
 .title-static { font-size:15px; font-weight:700; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .fav-btn, .del-btn { width:32px; height:32px; border:none; background:transparent; color:var(--text-sec); cursor:pointer; border-radius:6px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .fav-btn svg, .del-btn svg { width:16px; height:16px; }
@@ -203,12 +216,6 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
   height: auto;
   max-height: 100%;
   overflow: hidden;
-}
-
-/* In Quick Preview (non-trim modal), always show the built-in controls */
-.modal:not(.wide) :deep(.cvp-ctrl) {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .trim-panel { padding:16px 20px; flex-shrink:0; }

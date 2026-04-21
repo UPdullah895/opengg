@@ -120,6 +120,9 @@ onMounted(async () => {
   mediaPort.value = await getMediaPort()
   installAudioUnlocker()
   loadUserLocales()
+  if (persist.state.settings.steamLibraryAccess === 'granted') {
+    void useReplayStore().fetchSteamGames()
+  }
   await registerGlobalShortcuts()
 
   // ── Extension API — expose a restricted invoke bridge and Vue helpers ──
@@ -210,6 +213,12 @@ onMounted(async () => {
     onboardMsg.value = ''
     showOnboarding.value = true
   })
+})
+
+watch(() => persist.state.settings.steamLibraryAccess, (access) => {
+  if (access === 'granted' && useReplayStore().steamGames.length === 0) {
+    void useReplayStore().fetchSteamGames()
+  }
 })
 
 // Re-register global OS shortcuts whenever the user changes them in Settings

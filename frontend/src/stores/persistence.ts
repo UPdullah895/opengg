@@ -45,6 +45,7 @@ export interface PersistedState {
     gsrRestartOnSave: boolean
     gsrMonitorTarget: string     // 'screen' | 'DP-1' | 'HDMI-1' | ...
     gsrAutoStart: boolean        // start replay buffer automatically on app launch
+    steamLibraryAccess: 'unknown' | 'granted' | 'denied'
     enableClipNotifications: boolean  // show overlay toast when a clip is saved
     notificationStyle: 'auto' | 'gsr-notify' | 'x11-overlay' | 'system' | 'disabled'
     notificationPosition: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
@@ -94,6 +95,7 @@ export const DEFAULTS: PersistedState = {
     gsrRestartOnSave:  false,
     gsrMonitorTarget:  'screen',
     gsrAutoStart:      true,
+    steamLibraryAccess: 'unknown',
     enableClipNotifications: true,
     notificationStyle: 'auto' as 'auto' | 'gsr-notify' | 'x11-overlay' | 'system' | 'disabled',
     notificationPosition: 'top-right' as 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left',

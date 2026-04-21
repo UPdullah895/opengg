@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   modelValue: string[]
   games: string[]
   clipCounts: Record<string, number>
+  steamIcons?: Record<string, string>
 }>()
 const emit = defineEmits<{ 'update:modelValue': [string[]] }>()
+const { t } = useI18n()
 
 const open = ref(false)
 const triggerRef = ref<HTMLElement | null>(null)
@@ -38,7 +41,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onOutside))
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="gfd-ic">
         <path d="M6 11h4m-2-2v4m7-1h.01M18 11h.01M2 6a2 2 0 012-2h16a2 2 0 012 2v10a4 4 0 01-4 4H6a4 4 0 01-4-4V6z"/>
       </svg>
-      Games
+      {{ t('clips.gamesFilter.label') }}
       <span v-if="activeCount > 0" class="gfd-badge">{{ activeCount }}</span>
       <span style="flex:1"></span>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="gfd-chev" :class="{ flipped: open }"><path d="M6 9l6 6 6-6"/></svg>
@@ -56,12 +59,13 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onOutside))
           >
             <span class="gfd-count">{{ clipCounts[game] ?? 0 }}</span>
             <input type="checkbox" :checked="modelValue.includes(game)" @change="toggle(game)" class="gfd-cb" />
+            <img v-if="steamIcons?.[game.toLowerCase()]" :src="steamIcons[game.toLowerCase()]" alt="" class="gfd-icon" loading="lazy" />
             <span class="gfd-name">{{ game }}</span>
           </label>
-          <div v-if="games.length === 0" class="gfd-empty">No games found</div>
+          <div v-if="games.length === 0" class="gfd-empty">{{ t('clips.gamesFilter.empty') }}</div>
         </div>
         <div class="gfd-footer">
-          <button class="gfd-clear" @click="clearAll" :disabled="activeCount === 0">Clear all filters</button>
+          <button class="gfd-clear" @click="clearAll" :disabled="activeCount === 0">{{ t('clips.gamesFilter.clear') }}</button>
         </div>
       </div>
     </Teleport>
@@ -146,6 +150,14 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onOutside))
   border: solid #fff;
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
+}
+
+.gfd-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .gfd-name {

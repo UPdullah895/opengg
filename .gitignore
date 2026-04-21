@@ -21,6 +21,7 @@ Thumbs.db
 
 # AI / Claude Code (never push these)
 CLAUDE.md
+GEMINI.md
 .claude/
 .gemini/
 

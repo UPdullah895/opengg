@@ -14,8 +14,25 @@ export interface Clip {
   probing?: boolean    // ★ Job #3: "Fetching video data..." state
 }
 
+export interface SteamGame {
+  appid: string
+  name: string
+  icon_url: string | null
+}
+
 export type SortMode = 'newest' | 'oldest' | 'longest' | 'shortest'
 export type DateFormat = 'YMD' | 'YDM' // YYYY/MM/DD or YYYY/DD/MM
+
+export function normalizeGameTitle(title: string): string {
+  return (title || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[©®™]/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+}
 
 // ── Month lookup: full names + 3-letter abbreviations → 2-digit month ──
 const MONTH_MAP: Record<string, string> = {
@@ -113,7 +130,10 @@ export const useReplayStore = defineStore('replay', () => {
 
   // ★ Job #3: Optimization & Features
   const importProgress = ref({ current: 0, total: 0, active: false })
-  const steamGames = ref<string[]>([])
+  const steamGames = ref<SteamGame[]>([])
+  const steamGameMap = computed<Record<string, SteamGame>>(() =>
+    Object.fromEntries(steamGames.value.map(game => [game.name.toLowerCase(), game]))
+  )
 
   const search = ref('')
   const sortMode = ref<SortMode>('newest')
@@ -157,8 +177,13 @@ export const useReplayStore = defineStore('replay', () => {
       })
     }
     if (filterFav.value) r = r.filter(c => c.favorite)
-    if (selectedGames.value.length > 0) r = r.filter(c => selectedGames.value.includes(c.game))
-    else if (filterGame.value !== 'all') r = r.filter(c => c.game === filterGame.value)
+    if (selectedGames.value.length > 0) {
+      const selectedNormalized = new Set(selectedGames.value.map(normalizeGameTitle))
+      r = r.filter(c => selectedNormalized.has(normalizeGameTitle(c.game)))
+    } else if (filterGame.value !== 'all') {
+      const selectedNormalized = normalizeGameTitle(filterGame.value)
+      r = r.filter(c => normalizeGameTitle(c.game) === selectedNormalized)
+    }
     
     const sorted = [...r]
     switch (sortMode.value) {
@@ -300,10 +325,12 @@ export const useReplayStore = defineStore('replay', () => {
 
   async function fetchSteamGames() {
     try {
-      const res = await invoke<string[]>('get_steam_games')
+      const res = await invoke<SteamGame[]>('get_steam_games')
       steamGames.value = res
+      return true
     } catch (e) {
       console.error('fetchSteamGames:', e)
+      return false
     }
   }
 
@@ -368,6 +395,6 @@ export const useReplayStore = defineStore('replay', () => {
     previewTargetClipId,
     scanActive, scanCount,
     importProgress, scanFolderRecursive,
-    steamGames, fetchSteamGames,
+    steamGames, steamGameMap, fetchSteamGames,
   }
 })

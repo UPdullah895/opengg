@@ -15,12 +15,14 @@ import SelectField from '../components/SelectField.vue'
 import IconPicker from '../components/IconPicker.vue'
 import InfoIcon from '../components/InfoIcon.vue'
 import { settingsTargetTab } from '../composables/useNavSignal'
+import { mediaUrl } from '../utils/assets'
 
 const { t, locale } = useI18n()
 const persist = usePersistenceStore()
 const appVersion = ref('')
 const replay = useReplayStore()
 const audio = useAudioStore()
+const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
   if (!persist.loaded) await persist.load()
@@ -421,6 +423,18 @@ async function clearCache() {
 interface StorageInfo { clip_count: number; used_bytes: number; total_bytes: number; free_bytes: number }
 const storageInfo = ref<StorageInfo | null>(null)
 const storageLoading = ref(false)
+const steamImportBusy = ref(false)
+const steamAccess = computed(() => persist.state.settings.steamLibraryAccess)
+const steamGamesLoaded = computed(() => replay.steamGames.length > 0)
+function steamIconUrl(path: string | null | undefined) {
+  if (!path) return ''
+  return path.startsWith('/') ? mediaUrl(path, mediaPort.value) : path
+}
+watch(steamAccess, (access) => {
+  if (access === 'granted' && replay.steamGames.length === 0) {
+    void replay.fetchSteamGames()
+  }
+}, { immediate: true })
 async function loadStorage() {
   storageLoading.value = true
   try { storageInfo.value = await invoke<StorageInfo>('get_storage_info', { clipDirectories: settings.value.clip_directories ?? ['~/Videos/OpenGG'] }) }
@@ -429,6 +443,44 @@ async function loadStorage() {
 }
 watch(active, v => { if (v === 'storage') loadStorage() })
 onMounted(() => { if (active.value === 'storage') loadStorage() })
+
+async function importSteamLibrary(forcePrompt = false) {
+  if (steamImportBusy.value) return
+
+  const access = persist.state.settings.steamLibraryAccess
+  if (access !== 'granted' || forcePrompt) {
+    const confirmed = await ask(t('clips.steamImport.consentMessage'), {
+      title: t('clips.steamImport.consentTitle'),
+      kind: 'info',
+    })
+    persist.state.settings.steamLibraryAccess = confirmed ? 'granted' : 'denied'
+    if (!confirmed) return
+  }
+
+  steamImportBusy.value = true
+  const ok = await replay.fetchSteamGames()
+  steamImportBusy.value = false
+  if (!ok) return
+}
+
+const steamStorageTitle = computed(() => {
+  if (steamGamesLoaded.value) return t('settings.storage.steamReadyTitle', { count: replay.steamGames.length })
+  if (steamAccess.value === 'denied') return t('settings.storage.steamDeniedTitle')
+  return t('settings.storage.steamTitle')
+})
+
+const steamStorageBody = computed(() => {
+  if (steamGamesLoaded.value) return t('settings.storage.steamReadyBody')
+  if (steamAccess.value === 'denied') return t('settings.storage.steamDeniedBody')
+  return t('settings.storage.steamBody')
+})
+
+const steamStorageButtonLabel = computed(() => {
+  if (steamImportBusy.value) return t('clips.steamImport.loading')
+  if (steamGamesLoaded.value) return t('clips.steamImport.refresh')
+  if (steamAccess.value === 'granted') return t('clips.steamImport.import')
+  return t('clips.steamImport.allowAndImport')
+})
 
 function fmtBytes(b: number) {
   if (b >= 1e9) return (b / 1e9).toFixed(1) + ' GB'
@@ -472,7 +524,6 @@ interface ExtensionInfo {
   _color?: string
 }
 
-const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 const scannedExtensions = ref<ExtensionInfo[]>([])
 const extensionScanLoading = ref(false)
 
@@ -979,7 +1030,27 @@ onMounted(async () => {
                 </div>
               </div>
             </template>
-            <div v-else class="hint">Could not read storage info.</div>
+            <div v-else class="hint">{{ t('settings.storage.readError') }}</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">{{ t('settings.storage.steamSection') }}</div>
+          <div class="steam-storage-head">
+            <div class="steam-storage-copy">
+              <div class="steam-storage-title">{{ steamStorageTitle }}</div>
+              <div class="steam-storage-body">{{ steamStorageBody }}</div>
+            </div>
+            <button class="btn btn-sm steam-storage-btn" :disabled="steamImportBusy" @click="importSteamLibrary(steamAccess === 'denied')">
+              {{ steamStorageButtonLabel }}
+            </button>
+          </div>
+          <div v-if="steamGamesLoaded" class="steam-storage-list">
+            <div v-for="game in replay.steamGames" :key="game.appid" class="steam-storage-row">
+              <img v-if="steamIconUrl(game.icon_url)" :src="steamIconUrl(game.icon_url)" alt="" class="steam-storage-icon" loading="lazy" />
+              <div v-else class="steam-storage-icon steam-storage-icon--fallback">S</div>
+              <span class="steam-storage-name">{{ game.name }}</span>
+            </div>
           </div>
         </div>
       </section>
@@ -1740,6 +1811,16 @@ onMounted(async () => {
 
 /* ── Storage side-by-side grid ── */
 .storage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.steam-storage-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.steam-storage-copy { min-width:0; }
+.steam-storage-title { font-size:13px; font-weight:700; color:var(--text); }
+.steam-storage-body { margin-top:4px; font-size:12px; color:var(--text-sec); line-height:1.45; }
+.steam-storage-btn { flex-shrink:0; }
+.steam-storage-list { display:flex; flex-direction:column; gap:8px; max-height:280px; overflow:auto; padding-right:4px; }
+.steam-storage-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-deep); }
+.steam-storage-icon { width:24px; height:24px; border-radius:6px; object-fit:cover; flex-shrink:0; }
+.steam-storage-icon--fallback { display:flex; align-items:center; justify-content:center; background:color-mix(in srgb, var(--accent) 18%, var(--bg-card)); color:var(--accent); font-size:11px; font-weight:800; }
+.steam-storage-name { font-size:12px; color:var(--text); }
 
 /* ── Disabled track delete button ── */
 .btn-icon:disabled { opacity: .35; cursor: not-allowed; }
