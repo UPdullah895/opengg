@@ -8,7 +8,7 @@
  *   E5: Audio playback fix — don't mute on init
  *   E6: Dynamic track colors via CSS variables
  */
-import { ref, computed, onMounted, onBeforeUnmount, watch, inject } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, inject, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { mediaUrl } from '../utils/assets'
@@ -18,6 +18,7 @@ import type { Ref } from 'vue'
 import { usePersistenceStore } from '../stores/persistence'
 import { resumeAudioContext } from '../utils/audio'
 import CustomVideoPlayer from './CustomVideoPlayer.vue'
+import { clipDisplayTitle } from '../utils/format'
 
 // ── Types ──
 interface MInfo { duration: number; width: number; height: number; fps: number; video_codec: string; streams: { index: number; codec_type: string; title: string }[]; audio_streams: number }
@@ -49,7 +50,7 @@ const info = ref<MInfo | null>(null)
 const trimS = ref(0)
 const trimE = ref(dur.value)
 const trimDur = computed(() => Math.max(0, trimE.value - trimS.value))
-const editName = ref(props.clip.custom_name || props.clip.filename.replace(/\.[^.]+$/, ''))
+const editName = ref(clipDisplayTitle(props.clip.custom_name || '', props.clip.game || '', props.clip.filename))
 const gameTag = ref('')
 const gameOpen = ref(false)
 const gameRef = ref<HTMLElement | null>(null)
@@ -155,6 +156,7 @@ let progressUnsub: UnlistenFn | null = null
 const toast = ref('')
 const toastFile = ref('')
 function showToast(m: string, f = '') { toast.value = m; toastFile.value = f; setTimeout(() => { toast.value = ''; toastFile.value = '' }, 5000) }
+function unmuteMediaStreams() { invoke('unmute_media_streams').catch(() => {}) }
 
 // ── Video ──
 function onMeta() { if (videoRef.value) { dur.value = videoRef.value.duration; if (trimE.value <= 0 || trimE.value > dur.value) trimE.value = dur.value } }
@@ -165,6 +167,7 @@ async function togglePlay() {
   await resumeAudioContext()
   if (playing.value) { videoRef.value.pause() }
   else {
+    unmuteMediaStreams()
     if (videoRef.value.currentTime < trimS.value || videoRef.value.currentTime >= trimE.value) {
       const seekTo = trimS.value > 0 ? trimS.value : 0.01
       videoRef.value.currentTime = seekTo
@@ -223,6 +226,18 @@ function initAudioElements() {
   }
 }
 
+async function syncPlayerVideoRef() {
+  await nextTick()
+  videoRef.value = playerComp.value?.videoRef ?? null
+}
+
+async function refreshAudioRouting() {
+  await syncPlayerVideoRef()
+  if (!videoRef.value) return
+  initAudioElements()
+  applyAudioVolumes()
+}
+
 // Sync audio elements to video currentTime
 let syncRaf = 0
 function syncAudioToVideo() {
@@ -230,6 +245,7 @@ function syncAudioToVideo() {
     if (videoRef.value) {
       const vt = videoRef.value.currentTime
       const vPlaying = !videoRef.value.paused
+      if (vPlaying) unmuteMediaStreams()
       for (const [_id, el] of Object.entries(audioEls.value)) {
         if (Math.abs(el.currentTime - vt) > 0.15) el.currentTime = vt
         if (vPlaying && el.paused) el.play().catch(() => {})
@@ -263,6 +279,10 @@ function applyAudioVolumes() {
 }
 watch(tracks, applyAudioVolumes, { deep: true })
 watch(localVol, applyAudioVolumes)
+watch(
+  () => tracks.value.filter(t => t.type === 'audio').map(t => `${t.id}:${t.streamIndex}`).join('|'),
+  () => { refreshAudioRouting().catch(() => {}) },
+)
 
 // ── Timeline ──
 const tlRef = ref<HTMLElement | null>(null)
@@ -354,15 +374,29 @@ watch(() => persist.state.settings.captureTracks, () => {
 // Re-init tracks when the overlays extension is toggled (adds/removes O1 row)
 watch(extOverlays, () => { initTracks() })
 async function loadWaveforms() { for (const t of tracks.value) { if (t.type !== 'audio') continue; try { t.peaks = await invoke<number[]>('generate_waveform', { filepath: props.clip.filepath, streamIndex: t.streamIndex, numPeaks: 200 }) } catch { t.peaks = Array(200).fill(0.3) } } }
-onMounted(async () => { try { info.value = await invoke<MInfo>('analyze_media', { filepath: props.clip.filepath }); if (info.value.duration > 0) dur.value = info.value.duration } catch {} initTracks(); await loadMeta(); await loadWaveforms(); initAudioElements() })
+onMounted(async () => {
+  try {
+    info.value = await invoke<MInfo>('analyze_media', { filepath: props.clip.filepath })
+    if (info.value.duration > 0) dur.value = info.value.duration
+  } catch {}
+  initTracks()
+  await loadMeta()
+  await loadWaveforms()
+  await refreshAudioRouting()
+})
 
 // Persistence
 // ★ E2-P4: Persistence with game_tag
 async function saveMeta() {
-  try { await invoke('save_trim_state', { filepath: props.clip.filepath, trimStart: trimS.value, trimEnd: trimE.value }) } catch {}
   try {
-    await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: editName.value, favorite: props.clip.favorite, game_tag: gameTag.value } })
-    replay.updateClipMeta(props.clip.filepath, { custom_name: editName.value, game: gameTag.value, favorite: props.clip.favorite })
+    await invoke('save_trim_state', { filepath: props.clip.filepath, trimStart: trimS.value, trimEnd: trimE.value })
+    window.dispatchEvent(new CustomEvent('clip-trim-updated', { detail: { filepath: props.clip.filepath, trimStart: trimS.value, trimEnd: trimE.value } }))
+  } catch {}
+  try {
+    const fallbackTitle = clipDisplayTitle('', gameTag.value || props.clip.game || '', props.clip.filename)
+    const customName = editName.value.trim() && editName.value.trim() !== fallbackTitle ? editName.value.trim() : ''
+    await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: customName, favorite: props.clip.favorite, game_tag: gameTag.value } })
+    replay.updateClipMeta(props.clip.filepath, { custom_name: customName, game: gameTag.value, favorite: props.clip.favorite })
   } catch {}
   // ★ Epic 5: Persist overlays as JSON in the notes column
   if (overlays.value.length) {
@@ -521,9 +555,9 @@ function onKey(e: KeyboardEvent) {
 const onFsChange = () => { isFullscreen.value = !!document.fullscreenElement }
 function togglePreviewFullscreen() { playerComp.value?.toggleFullscreen() }
 onMounted(() => {
-  videoRef.value = playerComp.value?.videoRef ?? null
   document.addEventListener('keydown', onKey)
   document.addEventListener('fullscreenchange', onFsChange)
+  refreshAudioRouting().catch(() => {})
 })
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKey)
@@ -537,7 +571,7 @@ function onPreviewProgressClick(e: MouseEvent) {
   const t = ((e.clientX - r.left) / r.width) * dur.value
   if (videoRef.value) { videoRef.value.currentTime = t; ct.value = t }
 }
-function setPreviewVol(v: number) { localVol.value = v; if (videoRef.value) videoRef.value.volume = v }
+function setPreviewVol(v: number) { localVol.value = v; applyAudioVolumes() }
 function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !t.peaks.length) return; const ctx = canvas.getContext('2d'); if (!ctx) return; const w = canvas.clientWidth; const h = canvas.clientHeight; canvas.width = w; canvas.height = h; ctx.clearRect(0, 0, w, h); const bw = w / t.peaks.length; const color = t.muted ? '#555' : t.color; const grad = ctx.createLinearGradient(0, 0, 0, h); grad.addColorStop(0, color + '80'); grad.addColorStop(0.5, color + 'DD'); grad.addColorStop(1, color + '80'); ctx.fillStyle = grad; for (let i = 0; i < t.peaks.length; i++) { const bh = Math.max(2, t.peaks[i] * h * 1.6); ctx.fillRect(i * bw, (h - bh) / 2, Math.max(1, bw - 0.5), bh) } }
 
 </script>

@@ -20,6 +20,19 @@ pub const CHANNEL_NAMES: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
 /// The Mic sink is fed by a loopback from the hardware source — its monitor
 /// port becomes the capturable "OpenGG_Mic" node for GSR and DSP chains.
 const SINK_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
+const RELABEL_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
+
+fn live_display_name(channel: &str) -> String {
+    if RELABEL_CHANNELS.contains(&channel) {
+        channel.to_string()
+    } else {
+        format!("OpenGG - {channel}")
+    }
+}
+
+fn sink_prop_value(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\\\""))
+}
 
 #[derive(Debug, Clone)]
 pub struct ChannelInfo {
@@ -53,11 +66,16 @@ impl SinkManager {
 
         for &ch in SINK_CHANNELS {
             let sink_name = format!("OpenGG_{ch}");
+            // Reference-guided fix: for live sink-facing names, replace stale
+            // non-mic sink objects instead of depending on in-place relabel.
+            if RELABEL_CHANNELS.contains(&ch) && sink_exists(&sink_name) {
+                if let Err(e) = unload_null_sink_module(&sink_name) {
+                    tracing::warn!("Failed to unload existing {sink_name}: {e}");
+                }
+            }
 
             // Step 1: Check if this sink already exists (idempotent)
-            if sink_exists(&sink_name) {
-                tracing::info!("Sink {sink_name} already exists — skipping creation");
-            } else {
+            if !sink_exists(&sink_name) {
                 // Step 2: Create via pactl load-module (non-destructive)
                 match create_null_sink(&sink_name, ch) {
                     Ok(module_id) => {
@@ -70,6 +88,8 @@ impl SinkManager {
                         tracing::info!("Trying WirePlumber config fallback for {sink_name}");
                     }
                 }
+            } else {
+                tracing::info!("Sink {sink_name} already exists — skipping creation");
             }
         }
 
@@ -151,6 +171,57 @@ fn sink_exists(name: &str) -> bool {
     false
 }
 
+fn unload_null_sink_module(sink_name: &str) -> Result<()> {
+    let output = Command::new("pactl")
+        .args(["list", "short", "modules"])
+        .output()
+        .context("pactl list modules failed")?;
+    let modules = String::from_utf8_lossy(&output.stdout);
+
+    for line in modules.lines() {
+        let mut parts = line.split('\t');
+        let Some(idx) = parts.next() else { continue };
+        let Some(name) = parts.next() else { continue };
+        let args = parts.next().unwrap_or("");
+        if name != "module-null-sink" || !args.contains(&format!("sink_name={sink_name}")) {
+            continue;
+        }
+
+        let unload = Command::new("pactl")
+            .args(["unload-module", idx])
+            .output()
+            .context("pactl unload-module failed")?;
+        if !unload.status.success() {
+            let err = String::from_utf8_lossy(&unload.stderr);
+            anyhow::bail!("pactl unload-module failed: {err}");
+        }
+    }
+
+    for _ in 0..20 {
+        let modules_cleared = Command::new("pactl")
+            .args(["list", "short", "modules"])
+            .output()
+            .ok()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout).lines().all(|line| {
+                    let mut parts = line.split('\t');
+                    let _idx = parts.next();
+                    let name = parts.next().unwrap_or("");
+                    let args = parts.next().unwrap_or("");
+                    name != "module-null-sink" || !args.contains(&format!("sink_name={sink_name}"))
+                })
+            })
+            .unwrap_or(false);
+        let sink_cleared = !sink_exists(sink_name);
+        if modules_cleared && sink_cleared {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    Ok(())
+}
+
 /// Create a null-sink via `pactl load-module` — returns the module ID.
 ///
 /// This is the KEY difference from the old approach:
@@ -159,11 +230,14 @@ fn sink_exists(name: &str) -> bool {
 fn create_null_sink(sink_name: &str, description: &str) -> Result<u32> {
     // All three property keys are set so the sink shows correctly in every
     // sound panel (GNOME Settings, pavucontrol, KDE, etc.)
-    let display_name = format!("OpenGG - {description}");
+    let display_name = live_display_name(description);
     let sink_props = format!(
-        "sink_properties=device.description=\"{display_name}\" \
-         node.description=\"{display_name}\" \
-         media.name=\"{display_name}\""
+        "sink_properties=device.description={} \
+         node.description={} \
+         media.name={}",
+        sink_prop_value(&display_name),
+        sink_prop_value(&display_name),
+        sink_prop_value(&display_name)
     );
     let output = Command::new("pactl")
         .args([

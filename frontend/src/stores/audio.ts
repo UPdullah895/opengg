@@ -13,6 +13,8 @@ const CHANNEL_NAMES = ['Game', 'Chat', 'Media', 'Aux']
 export const useAudioStore = defineStore('audio', () => {
   const allApps = ref<AppInfo[]>([])
   const devices = ref<AudioDevice[]>([])
+  const virtualAudioReady = ref(false)
+  const checkingVirtualAudio = ref(true)
   const vuLevels = ref<Record<string, number>>({})
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -139,6 +141,23 @@ export const useAudioStore = defineStore('audio', () => {
     try { devices.value = await invoke<AudioDevice[]>('get_audio_devices') } catch {}
   }
 
+  async function refreshVirtualAudioStatus() {
+    checkingVirtualAudio.value = true
+    try {
+      virtualAudioReady.value = await invoke<boolean>('check_virtual_audio_status')
+    } catch {
+      virtualAudioReady.value = false
+    } finally {
+      checkingVirtualAudio.value = false
+    }
+  }
+
+  function setVirtualAudioReady(ready: boolean) {
+    virtualAudioReady.value = ready
+    checkingVirtualAudio.value = false
+    if (!ready) stopPolling()
+  }
+
   // ★ P7: setVolume marks the channel as recently changed
   async function setVolume(ch: string, vol: number) {
     channelVolumes[ch] = vol
@@ -222,9 +241,11 @@ export const useAudioStore = defineStore('audio', () => {
 
   return {
     allApps, devices, vuLevels, channelDevices, channelVolumes, channelMutes,
+    virtualAudioReady, checkingVirtualAudio,
     unassignedApps, channelMap, masterChannel, micChannel, outputDevices, inputDevices,
     loading, error, draggedApp, routingInProgress,
     fetchChannels, fetchApps, fetchDevices,
+    refreshVirtualAudioStatus, setVirtualAudioReady,
     setVolume, setMute, setAppVolume, routeApp, unrouteApp,
     setChannelDevice, restoreFromPersistence,
     startDrag, endDrag, dropOnChannel, dropOnChannelById,

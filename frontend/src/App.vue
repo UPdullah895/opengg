@@ -13,6 +13,7 @@ import ClipNotification from './components/ClipNotification.vue'
 import { usePersistenceStore } from './stores/persistence'
 import { useDeviceStore } from './stores/devices'
 import type { DeviceInfo } from './stores/devices'
+import { useReplayStore } from './stores/replay'
 import { loadTheme } from './utils/theme'
 import { getMediaPort } from './utils/assets'
 import { installAudioUnlocker } from './utils/audio'
@@ -49,6 +50,12 @@ provide('mediaPort', mediaPort)
 
 function navigate(page: string) { currentPage.value = page }
 
+// RAM optimization: notify stores when the Clips page is active/inactive
+watch(currentPage, (v) => {
+  const replay = useReplayStore()
+  replay.pageActive = (v === 'clips')
+}, { immediate: true })
+
 // ═══ Epic 2: Virtual Audio Onboarding ═══
 const showOnboarding = ref(false)
 const onboardStep = ref<1 | 2>(1)
@@ -78,6 +85,8 @@ async function doCreateVirtualAudio() {
   try {
     await invoke('create_virtual_audio')
     await invoke('hydrate_audio_routing')
+    const { useAudioStore } = await import('./stores/audio')
+    useAudioStore().setVirtualAudioReady(true)
     await fetchOnboardDevices()
     onboardStep.value = 2
   } catch (e) { onboardMsg.value = t('onboarding.errorCreate', { error: String(e) }) }
@@ -118,6 +127,9 @@ onMounted(async () => {
   mediaPort.value = await getMediaPort()
   installAudioUnlocker()
   loadUserLocales()
+  if (persist.state.settings.steamLibraryAccess === 'granted') {
+    void useReplayStore().fetchSteamGames()
+  }
   await registerGlobalShortcuts()
 
   // ── Extension API — expose a restricted invoke bridge and Vue helpers ──
@@ -239,6 +251,12 @@ onMounted(async () => {
     onboardMsg.value = ''
     showOnboarding.value = true
   })
+})
+
+watch(() => persist.state.settings.steamLibraryAccess, (access) => {
+  if (access === 'granted' && useReplayStore().steamGames.length === 0) {
+    void useReplayStore().fetchSteamGames()
+  }
 })
 
 // Re-register global OS shortcuts whenever the user changes them in Settings
@@ -408,8 +426,8 @@ body {
   background: var(--bg-surface);
   color: var(--text);
   overflow: hidden;
-  -webkit-user-select: text;
-  user-select: text;
+  -webkit-user-select: none;
+  user-select: none;
 }
 /* Prevent drag-highlighting on non-text UI chrome */
 img, svg { user-select: none; -webkit-user-drag: none; }

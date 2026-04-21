@@ -13,7 +13,6 @@
  */
 
 import { ref, watch, onMounted, onUnmounted } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useAudioStore } from '../stores/audio'
 import { usePersistenceStore } from '../stores/persistence'
@@ -28,14 +27,9 @@ const persist = usePersistenceStore()
 
 // ★ Epic 2: Overdrive toggle — expands all faders from 100% max to 150%
 const overdriveEnabled = ref(false)
+const MIXER_CHANNELS = ['Master', 'Game', 'Chat', 'Media', 'Aux', 'Mic'] as const
 watch(overdriveEnabled, (enabled) => {
-  if (!enabled) {
-    for (const ch of ['Master', 'Game', 'Chat', 'Media', 'Aux', 'Mic']) {
-      if ((audio.channelVolumes[ch] ?? 0) > 100) {
-        audio.setVolume(ch, 100)
-      }
-    }
-  }
+  if (!enabled) void clampChannelsTo100()
 })
 
 type Tab = 'mixer' | 'game' | 'chat' | 'media' | 'aux' | 'mic'
@@ -49,9 +43,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'mic',   label: 'Mic'   },
 ]
 
-// ★ Virtual Audio Engine state
-const audioReady    = ref(false)
-const checkingAudio = ref(true)
 const setupLoading  = ref(false)
 
 
@@ -65,6 +56,15 @@ const COLORS: Record<string, string> = {
 }
 
 function onChatMix(g: number, c: number) { audio.setVolume('Game', g); audio.setVolume('Chat', c) }
+
+async function clampChannelsTo100() {
+  await Promise.all(
+    MIXER_CHANNELS.map(async ch => {
+      const current = audio.channelVolumes[ch] ?? 100
+      if (current > 100) await audio.setVolume(ch, 100)
+    }),
+  )
+}
 
 function devDesc(ch: string, type: 'sink' | 'source') {
   const n = audio.channelDevices[ch]
@@ -87,10 +87,8 @@ let unlistenRefresh: (() => void) | null = null
 
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
-  try { audioReady.value = await invoke<boolean>('check_virtual_audio_status') } catch { audioReady.value = false }
-  checkingAudio.value = false
-  // ★ FIX 4: Poll every 2s (down from 3s) for tighter PipeWire sync
-  if (audioReady.value) audio.startPolling(2000)
+  await audio.refreshVirtualAudioStatus()
+  if (audio.virtualAudioReady) audio.startPolling(2000)
 
   // Push-based refresh: backend emits 'audio-mixer-refresh' after every successful
   // route_app call so the UI updates immediately instead of waiting for the next poll.
@@ -99,6 +97,15 @@ onMounted(async () => {
 onUnmounted(() => {
   audio.stopPolling()
   unlistenRefresh?.()
+})
+
+watch(() => audio.virtualAudioReady, ready => {
+  if (ready) audio.startPolling(2000)
+  else audio.stopPolling()
+})
+
+watch(overdriveEnabled, enabled => {
+  if (!enabled) clampChannelsTo100().catch(e => console.error('[opengg] overdrive clamp failed:', e))
 })
 </script>
 
@@ -132,11 +139,11 @@ onUnmounted(() => {
     </div>
 
     <!-- ★ Virtual Audio empty state -->
-    <div v-if="checkingAudio" class="empty-state">
+    <div v-if="audio.checkingVirtualAudio" class="empty-state">
       <span class="empty-spin">⟳</span>
       <p>Checking audio engine…</p>
     </div>
-    <div v-else-if="!audioReady" class="empty-state">
+    <div v-else-if="!audio.virtualAudioReady" class="empty-state">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
       <p class="empty-title">Virtual Audio Engine not running</p>
       <p class="empty-desc">OpenGG virtual sinks are not loaded. Create them to start routing audio.</p>
@@ -210,7 +217,7 @@ onUnmounted(() => {
       </div><!-- end strips-row -->
     </template><!-- end v-else audioReady -->
 
-    <ChatMix v-if="audioReady" :gameVolume="audio.channelMap['Game']?.volume ?? 100"
+    <ChatMix v-if="audio.virtualAudioReady" :gameVolume="audio.channelMap['Game']?.volume ?? 100"
       :chatVolume="audio.channelMap['Chat']?.volume ?? 100" @update:balance="onChatMix" />
   </div>
 </template>

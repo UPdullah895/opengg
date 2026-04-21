@@ -2,10 +2,11 @@
 import { ref, computed, onMounted, inject } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { mediaUrl } from '../utils/assets'
-import type { Clip } from '../stores/replay'
+import type { Clip, SteamGame } from '../stores/replay'
 import { useReplayStore } from '../stores/replay'
 import type { Ref } from 'vue'
 import CustomVideoPlayer from './CustomVideoPlayer.vue'
+import { clipDisplayTitle } from '../utils/format'
 
 const props = defineProps<{ clip: Clip; mode: 'preview' | 'trim' }>()
 const emit = defineEmits<{ 'close': []; 'saved': [string]; 'toast': [string] }>()
@@ -19,7 +20,7 @@ const videoSrc = computed(() => mediaUrl(props.clip.filepath, mediaPort.value))
 const duration = ref(props.clip.duration || 0)
 const currentTime = ref(0)
 const playing = ref(false)
-const editTitle = ref(props.clip.custom_name || (props.clip.game !== 'Unknown' ? props.clip.game : props.clip.filename.replace(/\.[^.]+$/, '')))
+const editTitle = ref(clipDisplayTitle(props.clip.custom_name || '', props.clip.game || '', props.clip.filename))
 const titleDirty = ref(false)
 const trimStart = ref(0)
 const trimEnd = ref(props.clip.duration || 0)
@@ -42,12 +43,28 @@ function dragHandle(h: 'start' | 'end', e: MouseEvent) {
 }
 function togglePlay() { playerComp.value?.togglePlay() }
 
-const GAMES = ['Counter-Strike 2','League of Legends','Valorant','Overwatch 2','Apex Legends','Fortnite','Minecraft','Dota 2','Rocket League','Elden Ring',"Baldur's Gate 3",'Cyberpunk 2077','Honkai: Star Rail','Genshin Impact','Helldivers 2','Path of Exile 2']
+const GAMES_STATIC = ['Counter-Strike 2','League of Legends','Valorant','Overwatch 2','Apex Legends','Fortnite','Minecraft','Dota 2','Rocket League','Elden Ring',"Baldur's Gate 3",'Cyberpunk 2077','Honkai: Star Rail','Genshin Impact','Helldivers 2','Path of Exile 2']
+const GAMES = computed(() => {
+  const s = new Set([...GAMES_STATIC, ...replay.steamGames.map(game => game.name)])
+  return Array.from(s).sort()
+})
+const steamGameLookup = computed<Record<string, SteamGame>>(() => replay.steamGameMap)
 const gameTag = ref('')
 const gameOpen = ref(false)
-const gameFiltered = computed(() => { const q = gameTag.value.toLowerCase(); return q ? GAMES.filter(g => g.toLowerCase().includes(q)) : GAMES })
+const gameFiltered = computed(() => { const q = gameTag.value.toLowerCase(); return q ? GAMES.value.filter(g => g.toLowerCase().includes(q)) : GAMES.value })
+function steamIcon(game: string) { return steamGameLookup.value[game.toLowerCase()]?.icon_url || '' }
+function steamIconUrl(game: string) {
+  const icon = steamIcon(game)
+  if (!icon) return ''
+  return icon.startsWith('/') ? mediaUrl(icon, mediaPort.value) : icon
+}
 
-async function saveTrimState() { try { await invoke('save_trim_state', { filepath: props.clip.filepath, trimStart: trimStart.value, trimEnd: trimEnd.value }) } catch {} }
+async function saveTrimState() {
+  try {
+    await invoke('save_trim_state', { filepath: props.clip.filepath, trimStart: trimStart.value, trimEnd: trimEnd.value })
+    window.dispatchEvent(new CustomEvent('clip-trim-updated', { detail: { filepath: props.clip.filepath, trimStart: trimStart.value, trimEnd: trimEnd.value } }))
+  } catch {}
+}
 onMounted(async () => {
   try { const s = await invoke<{ trim_start: number; trim_end: number } | null>('get_trim_state', { filepath: props.clip.filepath }); if (s && s.trim_end > 0) { trimStart.value = s.trim_start; trimEnd.value = s.trim_end } } catch {}
   try { const m = await invoke<string>('get_clip_meta', { filepath: props.clip.filepath }); if (m && m !== 'null') { const d = JSON.parse(m); if (d.game_tag) gameTag.value = d.game_tag } } catch {}
@@ -55,15 +72,19 @@ onMounted(async () => {
 
 async function saveTitle() {
   const name = editTitle.value.trim()
-  replay.updateClipMeta(props.clip.filepath, { custom_name: name, game: gameTag.value })
-  try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: name, favorite: props.clip.favorite, game_tag: gameTag.value } }) } catch {}
+  const fallbackTitle = clipDisplayTitle('', gameTag.value || props.clip.game || '', props.clip.filename)
+  const customName = name && name !== fallbackTitle ? name : ''
+  replay.updateClipMeta(props.clip.filepath, { custom_name: customName, game: gameTag.value })
+  try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: customName, favorite: props.clip.favorite, game_tag: gameTag.value } }) } catch {}
   titleDirty.value = false
 }
 
 async function toggleFavorite() {
   const newFav = !props.clip.favorite
   replay.updateClipMeta(props.clip.filepath, { favorite: newFav })
-  try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: editTitle.value.trim() || props.clip.filename, favorite: newFav, game_tag: gameTag.value } }) } catch {}
+  const fallbackTitle = clipDisplayTitle('', gameTag.value || props.clip.game || '', props.clip.filename)
+  const customName = editTitle.value.trim() && editTitle.value.trim() !== fallbackTitle ? editTitle.value.trim() : ''
+  try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: customName, favorite: newFav, game_tag: gameTag.value } }) } catch {}
 }
 
 async function deleteClip() {
@@ -95,9 +116,12 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
         <input v-model="editTitle" class="title-input" @input="titleDirty = true" @blur="saveTitle" @keydown.enter="($event.target as HTMLInputElement).blur()" spellcheck="false" />
         <!-- ★ E2-P6: Game tag in Quick Preview -->
         <div class="game-wrap">
-          <input v-model="gameTag" class="game-in" placeholder="Game..." @focus="gameOpen = true" @blur="closeGameDropDelayed()" />
+          <input v-model="gameTag" class="game-in" :placeholder="$t('clips.gamesFilter.gamePlaceholder')" @focus="gameOpen = true" @blur="closeGameDropDelayed()" />
           <div v-if="gameOpen && gameFiltered.length" class="game-drop">
-            <button v-for="g in gameFiltered.slice(0, 8)" :key="g" @mousedown.prevent="selectGame(g)">{{ g }}</button>
+            <button v-for="g in gameFiltered.slice(0, 8)" :key="g" @mousedown.prevent="selectGame(g)">
+              <img v-if="steamIconUrl(g)" :src="steamIconUrl(g)" alt="" class="game-opt-icon" loading="lazy" />
+              <span>{{ g }}</span>
+            </button>
           </div>
         </div>
         <button class="fav-btn" :class="{ on: clip.favorite }" @click="toggleFavorite" title="Toggle favorite">
@@ -114,6 +138,8 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
         ref="playerComp"
         :src="videoSrc"
         :capture-keyboard="true"
+        :native-controls="mode === 'preview'"
+        :show-controls="mode !== 'preview'"
         @loadedmetadata="onMeta"
         @timeupdate="onTimeUpdate"
         @play="playing = true"
@@ -171,7 +197,8 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
 .game-wrap { position:relative; }
 .game-in { width:120px; padding:5px 8px; background:var(--bg-input); border:1px solid var(--border); border-radius:6px; color:var(--text-sec); font-size:11px; outline:none; } .game-in:focus { border-color:var(--accent); }
 .game-drop { position:absolute; top:100%; left:0; right:0; margin-top:2px; background:var(--bg-card); border:1px solid var(--border); border-radius:6px; padding:2px; z-index:30; max-height:160px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,.3); }
-.game-drop button { width:100%; padding:4px 8px; border:none; background:transparent; color:var(--text-sec); font-size:11px; text-align:left; cursor:pointer; border-radius:4px; } .game-drop button:hover { background:var(--bg-hover); color:var(--text); }
+.game-drop button { width:100%; padding:4px 8px; border:none; background:transparent; color:var(--text-sec); font-size:11px; text-align:left; cursor:pointer; border-radius:4px; display:flex; align-items:center; gap:8px; } .game-drop button:hover { background:var(--bg-hover); color:var(--text); }
+.game-opt-icon { width:16px; height:16px; border-radius:4px; object-fit:cover; flex-shrink:0; }
 .title-static { font-size:15px; font-weight:700; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .fav-btn, .del-btn { width:32px; height:32px; border:none; background:transparent; color:var(--text-sec); cursor:pointer; border-radius:6px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .fav-btn svg, .del-btn svg { width:16px; height:16px; }
@@ -189,12 +216,6 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
   height: auto;
   max-height: 100%;
   overflow: hidden;
-}
-
-/* In Quick Preview (non-trim modal), always show the built-in controls */
-.modal:not(.wide) :deep(.cvp-ctrl) {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .trim-panel { padding:16px 20px; flex-shrink:0; }

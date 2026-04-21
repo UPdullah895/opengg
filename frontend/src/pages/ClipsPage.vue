@@ -1,14 +1,15 @@
 <script setup lang="ts">
 defineOptions({ name: 'ClipsPage' })
-import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, inject, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, inject, watch, onActivated, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { refDebounced } from '@vueuse/core'
 import { invoke } from '@tauri-apps/api/core'
-import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { ask, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { useReplayStore, type Clip } from '../stores/replay'
+import { useReplayStore, type Clip, normalizeGameTitle } from '../stores/replay'
 import { usePersistenceStore } from '../stores/persistence'
 import ClipCard from '../components/ClipCard.vue'
+import ClipListRow from '../components/ClipListRow.vue'
 import OverlayScrollbar from '../components/OverlayScrollbar.vue'
 import ClipEditor from '../components/ClipEditor.vue'
 import AdvancedEditor from '../components/AdvancedEditor.vue'
@@ -17,7 +18,6 @@ import GameFilterDropdown from '../components/GameFilterDropdown.vue'
 import RecordingDropdown from '../components/RecordingDropdown.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { mediaUrl } from '../utils/assets'
-import { fmtDur, fmtSize, fmtRes, fmtDate } from '../utils/format'
 import { viewMode } from '../composables/useViewMode'
 import { ICON_DELETE } from '../assets/deviceAssets'
 import type { Ref } from 'vue'
@@ -27,6 +27,64 @@ const replay = useReplayStore()
 const persist = usePersistenceStore()
 const _mediaPortRef = inject<Ref<number>>('mediaPort', ref(0))
 const mediaPortNum  = computed(() => _mediaPortRef.value)
+
+function compareNewestFirst(a: Clip, b: Clip) {
+  return b.created.localeCompare(a.created)
+    || (b.createdTs - a.createdTs)
+    || b.filename.localeCompare(a.filename)
+}
+
+function clipNeedsThumbnailWork(clip: Clip) {
+  return !clip.isSkeleton && ((!clip.thumbnail && !replay.liveThumbs.get(clip.id)) || clip.duration === 0)
+}
+
+function clipNeedsGeneratedThumbnail(clip: Clip) {
+  return !clip.isSkeleton && !clip.thumbnail && !replay.liveThumbs.get(clip.id)
+}
+
+function refreshThumbnailProgressTotals(extraClips: Clip[] = []) {
+  if (prefetchPhase.value === 'idle') return
+  for (const clip of [...replay.clips, ...extraClips]) {
+    if (clipNeedsGeneratedThumbnail(clip) && !prefetchCompletedThumbIds.has(clip.id)) {
+      prefetchPlannedThumbIds.add(clip.id)
+    }
+  }
+  prefetchThumbTotal.value = prefetchPlannedThumbIds.size
+  prefetchThumbDone.value = prefetchCompletedThumbIds.size
+}
+
+// ── Prefetch progress state ──
+type PrefetchPhase = 'idle' | 'probing' | 'thumbnails' | 'done'
+const prefetchPhase    = ref<PrefetchPhase>('idle')
+const prefetchProbeTotal = ref(0)
+const prefetchProbeDone  = ref(0)
+const prefetchThumbTotal = ref(0)
+const prefetchThumbDone  = ref(0)
+let prefetchDoneTimer: ReturnType<typeof setTimeout> | null = null
+let prefetchPlannedThumbIds = new Set<string>()
+let prefetchCompletedThumbIds = new Set<string>()
+let prefetchNeedsRerun = false
+const thumbnailPhaseLabel = computed(() => {
+  if (prefetchPhase.value === 'probing') return 'Scanning clip metadata'
+  if (prefetchPhase.value === 'thumbnails') return replay.scrolling ? 'Generating thumbnails (paused while scrolling)' : 'Generating thumbnails'
+  if (prefetchPhase.value === 'done') return 'Thumbnail generation complete'
+  return ''
+})
+const thumbnailProgressText = computed(() => {
+  if (prefetchPhase.value === 'probing') return `${prefetchProbeDone.value} / ${prefetchProbeTotal.value}`
+  if (prefetchPhase.value === 'thumbnails') return `${prefetchThumbDone.value} / ${prefetchThumbTotal.value}`
+  if (prefetchPhase.value === 'done') return `${prefetchThumbTotal.value} / ${prefetchThumbTotal.value}`
+  return ''
+})
+const thumbnailProgressPercent = computed(() => {
+  if (prefetchPhase.value === 'probing') {
+    return prefetchProbeTotal.value > 0 ? (prefetchProbeDone.value / prefetchProbeTotal.value) * 100 : 0
+  }
+  if (prefetchPhase.value === 'thumbnails' || prefetchPhase.value === 'done') {
+    return prefetchThumbTotal.value > 0 ? (prefetchThumbDone.value / prefetchThumbTotal.value) * 100 : 0
+  }
+  return 0
+})
 
 // ── Phase 4b: Debounce the raw search input by 150ms ──
 const searchRaw = ref(replay.search)
@@ -38,7 +96,7 @@ watch(() => replay.search, (v) => { if (v !== searchRaw.value) searchRaw.value =
 
 // ── Phase 1d/4a: Use filteredClips directly — no more v-show isMatch() ──
 const sortedSkeletons = computed(() => replay.filteredClips.filter((c: Clip) => c.isSkeleton))
-const filteredRealClips = computed(() => replay.filteredClips.filter((c: Clip) => !c.isSkeleton))
+const filteredRealClips = computed(() => replay.filteredRealClips)
 // Phase 4a: cssVisibleCount derived from filteredClips (no legacy isMatch needed)
 const cssVisibleCount = computed(() => filteredRealClips.value.length)
 // Empty state helpers
@@ -52,6 +110,7 @@ const advancedClip = ref<Clip | null>(null)
 const renameTarget = ref<Clip | null>(null)
 const renameValue  = ref('')
 const toast        = ref('')
+const steamImportBusy = ref(false)
 
 function showToast(msg: string) { toast.value = msg; setTimeout(() => toast.value = '', 3500) }
 function refreshClips() { replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '', true) }
@@ -64,10 +123,8 @@ async function importFolder() {
       if (!persist.state!.settings!.clip_directories.includes(s)) {
         persist.state!.settings!.clip_directories.push(s)
       }
-      // Save immediately — fetchClips passes the path to Rust which reads the settings
-      // file on disk. The debounced watcher (500ms) is too slow; we need the file written first.
       await persist.save()
-      await replay.fetchClips(s, true)
+      await replay.scanFolderRecursive(s)
       try { await invoke('update_watch_dirs') } catch {}
     }
   } catch (e) { console.error('importFolder:', e) }
@@ -134,13 +191,18 @@ function saveGridSlider() {
   if (persist.state?.settings) persist.state.settings.clipsPerRow = (gridSlider.value + 1) as 2 | 3 | 4 | 5
   // Reset measured row height when column count changes — the estimate
   // will be used until the ResizeObserver fires with the new card dimensions.
-  measuredRowHeight.value = 0
+  measuredGridRowHeight.value = 0
+  setupRowMeasure()
 }
 
 // Native grid host scroll ref for OverlayScrollbar
 const gridScrollRef = ref<HTMLElement | null>(null)
 const listScrollRef = ref<HTMLElement | null>(null)
 const groupedScrollRef = ref<HTMLElement | null>(null)
+
+function getActiveGridHost(): HTMLElement | null {
+  return dateGrouped.value ? groupedScrollRef.value : gridScrollRef.value
+}
 
 // Font scaling based on column count
 const fontScale = computed(() => {
@@ -156,11 +218,25 @@ const scanCount = computed(() => replay.scanCount)
 
 // ★ Epic 3: List view scales with the same slider — each size maps to thumb/font/padding values
 const listStyles = computed(() => {
-  const map: Record<number, { thumbW: string; thumbH: string; fontSize: string; padding: string }> = {
-    1: { thumbW: '320px', thumbH: '180px', fontSize: '18px', padding: '16px' },
-    2: { thumbW: '240px', thumbH: '135px', fontSize: '15px', padding: '12px' },
-    3: { thumbW: '160px', thumbH: '90px',  fontSize: '13px', padding: '8px'  },
-    4: { thumbW: '96px',  thumbH: '54px',  fontSize: '11px', padding: '6px'  },
+  const map: Record<number, {
+    thumbW: string
+    thumbH: string
+    fontSize: string
+    metaFontSize: string
+    pillPadY: string
+    pillPadX: string
+    chipFontSize: string
+    chipPadY: string
+    chipPadX: string
+    actionFontSize: string
+    actionPadY: string
+    actionPadX: string
+    padding: string
+  }> = {
+    1: { thumbW: '400px', thumbH: '225px', fontSize: '18px', metaFontSize: '14px', pillPadY: '3px', pillPadX: '8px', chipFontSize: '12px', chipPadY: '3px', chipPadX: '10px', actionFontSize: '13px', actionPadY: '6px', actionPadX: '12px', padding: '16px' },
+    2: { thumbW: '320px', thumbH: '180px', fontSize: '15px', metaFontSize: '12px', pillPadY: '2px', pillPadX: '7px', chipFontSize: '11px', chipPadY: '2px', chipPadX: '9px', actionFontSize: '12px', actionPadY: '5px', actionPadX: '11px', padding: '12px' },
+    3: { thumbW: '240px', thumbH: '135px', fontSize: '13px', metaFontSize: '11px', pillPadY: '2px', pillPadX: '6px', chipFontSize: '10px', chipPadY: '2px', chipPadX: '8px', actionFontSize: '12px', actionPadY: '4px', actionPadX: '10px', padding: '8px'  },
+    4: { thumbW: '160px', thumbH: '90px',  fontSize: '11px', metaFontSize: '10px', pillPadY: '1px', pillPadX: '5px', chipFontSize: '9px', chipPadY: '1px', chipPadX: '7px', actionFontSize: '11px', actionPadY: '3px', actionPadX: '8px', padding: '6px'  },
   }
   return map[gridSlider.value] ?? map[3]
 })
@@ -172,10 +248,19 @@ const listStyles = computed(() => {
 const isScrolling = ref(false)
 let scrollTimer: ReturnType<typeof setTimeout> | null = null
 const gridScrollTop = ref(0)
+const pendingScrollSyncTop = ref<number | null>(null)
+let scrollTicking = false
 function onScroll() {
+  if (!scrollTicking) {
+    requestAnimationFrame(() => {
+      gridScrollTop.value = gridScrollRef.value?.scrollTop ?? listScrollRef.value?.scrollTop ?? groupedScrollRef.value?.scrollTop ?? 0
+      scrollTicking = false
+    })
+    scrollTicking = true
+  }
+
   isScrolling.value = true
   replay.scrolling = true
-  gridScrollTop.value = gridScrollRef.value?.scrollTop ?? 0
   if (scrollTimer) clearTimeout(scrollTimer)
   scrollTimer = setTimeout(() => {
     isScrolling.value = false
@@ -187,16 +272,56 @@ function onScroll() {
 // Fires when prefetchThumbnails resumes after a scroll pause
 let prefetchWake: (() => void) | null = null
 
+function getActiveScrollHost(): HTMLElement | null {
+  if (dateGrouped.value) return groupedScrollRef.value
+  return viewMode.value === 'list' ? listScrollRef.value : gridScrollRef.value
+}
+
+function clampScrollTop(el: HTMLElement, targetScrollTop: number) {
+  return Math.max(0, Math.min(targetScrollTop, Math.max(0, el.scrollHeight - el.clientHeight)))
+}
+
+function syncVirtualScrollHost(targetScrollTop = gridScrollTop.value) {
+  const el = getActiveScrollHost()
+  if (!el) return false
+  const nextScrollTop = clampScrollTop(el, targetScrollTop)
+  if (Math.abs(el.scrollTop - nextScrollTop) > 1) el.scrollTop = nextScrollTop
+  gridScrollTop.value = clampScrollTop(el, el.scrollTop)
+  pendingScrollSyncTop.value = null
+  return true
+}
+
+function scheduleVirtualScrollHostSync(targetScrollTop = gridScrollTop.value) {
+  pendingScrollSyncTop.value = targetScrollTop
+  let attempts = 0
+  const run = () => {
+    requestAnimationFrame(() => {
+      const desiredScrollTop = pendingScrollSyncTop.value ?? targetScrollTop
+      const synced = syncVirtualScrollHost(desiredScrollTop)
+      if (viewMode.value === 'grid') setupRowMeasure()
+      if (synced) {
+        replay.flushClipsNow()
+        return
+      }
+      if (attempts < 4) {
+        attempts += 1
+        run()
+      }
+    })
+  }
+  run()
+}
+
 // ── Virtual scroll: only render visible grid rows + buffer ──
 // Without this, 420 ClipCards create 420 decoded thumbnail bitmaps (~1.6MB each)
 // in WebKitGTK memory. Virtual scroll keeps only ~40-60 cards in the DOM.
 const GRID_GAP = 16
-const VIRTUAL_BUFFER_ROWS = 3
+const VIRTUAL_BUFFER_ROWS = 10 // Increased buffer to eliminate pop-in at the bottom
 
 // Estimate card row height from container width + column count.
 // Card = 16:9 thumbnail + ~80px info section + gap.
-const estimatedRowHeight = computed(() => {
-  const el = gridScrollRef.value
+const estimatedGridRowHeight = computed(() => {
+  const el = getActiveGridHost()
   if (!el) return 300
   const containerW = el.clientWidth - 32 // subtract horizontal padding
   const cols = gridCols.value
@@ -207,19 +332,131 @@ const estimatedRowHeight = computed(() => {
 })
 
 // Measured row height (set after first render via ResizeObserver)
-const measuredRowHeight = ref(0)
-const rowHeight = computed(() => measuredRowHeight.value || estimatedRowHeight.value)
+const measuredGridRowHeight = ref(0)
+
+const listRowHeight = computed(() => {
+  const s = listStyles.value
+  const thumbH = parseInt(s.thumbH)
+  const pad = parseInt(s.padding)
+  // Row height is determined by the thumbnail height or the info height.
+  // In list view, thumb is usually the tallest part.
+  return thumbH + (pad * 2) + 2 // +2 for border/gap
+})
+
+const rowHeight = computed(() => {
+  if (viewMode.value === 'list') return listRowHeight.value
+  return measuredGridRowHeight.value || estimatedGridRowHeight.value
+})
+
+// ── Virtualized Grouped View Logic ──
+const GROUP_HEADER_HEIGHT = 48
+const GROUP_GAP = 28
+const HEADER_GAP = 12
+
+interface VirtualGroupItem {
+  type: 'header' | 'row' | 'spacer'
+  group?: DateGroup
+  clips?: Clip[]
+  y: number
+  height: number
+  key: string
+}
+
+const flattenedItems = computed(() => {
+  if (!dateGrouped.value) return []
+  const items: VirtualGroupItem[] = []
+  const isList = viewMode.value === 'list'
+  const cols = isList ? 1 : gridCols.value
+  const rh = rowHeight.value
+  
+  let currentY = 0
+  for (const group of groupedClips.value) {
+    // Add header
+    items.push({ 
+      type: 'header', 
+      group, 
+      y: currentY, 
+      height: GROUP_HEADER_HEIGHT,
+      key: `h-${group.date}`
+    })
+    currentY += GROUP_HEADER_HEIGHT
+    
+    // Header gap spacer
+    items.push({
+      type: 'spacer',
+      y: currentY,
+      height: HEADER_GAP,
+      key: `sp-h-${group.date}`
+    })
+    currentY += HEADER_GAP
+    
+    // Add rows
+    const groupClips = group.clips
+    const totalRows = Math.ceil(groupClips.length / cols)
+    for (let r = 0; r < totalRows; r++) {
+      const rowClips = groupClips.slice(r * cols, (r + 1) * cols)
+      items.push({ 
+        type: 'row', 
+        clips: rowClips, 
+        y: currentY, 
+        height: rh,
+        key: `r-${group.date}-${r}-${rowClips[0]?.id}`
+      })
+      currentY += rh
+    }
+    
+    // Group gap spacer
+    items.push({
+      type: 'spacer',
+      y: currentY,
+      height: GROUP_GAP,
+      key: `sp-g-${group.date}`
+    })
+    currentY += GROUP_GAP
+  }
+  return items
+})
 
 const virtualRange = computed(() => {
   const total = filteredRealClips.value.length
-  const cols = gridCols.value
+  if (total === 0) return { start: 0, end: 0, padTop: 0, padBot: 0 }
+  
+  const isList = viewMode.value === 'list'
+  const el = isList ? listScrollRef.value : (dateGrouped.value ? groupedScrollRef.value : gridScrollRef.value)
   const rh = rowHeight.value
-  const el = gridScrollRef.value
-  if (!el || !rh || total === 0) return { start: 0, end: total, padTop: 0, padBot: 0 }
+  
+  if (!el || !rh) return { start: 0, end: total, padTop: 0, padBot: 0 }
+  
   const clientH = el.clientHeight
+  const scrollTop = gridScrollTop.value
+  
+  if (dateGrouped.value) {
+    const items = flattenedItems.value
+    if (items.length === 0) return { start: 0, end: 0, padTop: 0, padBot: 0 }
+    
+    const bufferHeight = VIRTUAL_BUFFER_ROWS * rh
+    const startIdx = Math.max(0, items.findIndex(item => item.y + item.height > scrollTop - bufferHeight))
+    
+    const endY = scrollTop + clientH + bufferHeight
+    let endIdx = items.findIndex((item, i) => i >= startIdx && item.y > endY)
+    if (endIdx === -1) endIdx = items.length
+    
+    const lastVisible = items[endIdx - 1]
+    const totalHeight = items[items.length - 1].y + items[items.length - 1].height
+    
+    return {
+      start: startIdx,
+      end: endIdx,
+      padTop: items[startIdx].y,
+      padBot: Math.max(0, totalHeight - (lastVisible.y + lastVisible.height)),
+    }
+  }
+  
+  const cols = isList ? 1 : gridCols.value
   const totalRows = Math.ceil(total / cols)
-  const startRow = Math.max(0, Math.floor(gridScrollTop.value / rh) - VIRTUAL_BUFFER_ROWS)
-  const endRow = Math.min(totalRows, Math.ceil((gridScrollTop.value + clientH) / rh) + VIRTUAL_BUFFER_ROWS)
+  const startRow = Math.max(0, Math.min(totalRows, Math.floor(scrollTop / rh) - VIRTUAL_BUFFER_ROWS))
+  const endRow = Math.max(0, Math.min(totalRows, Math.ceil((scrollTop + clientH) / rh) + VIRTUAL_BUFFER_ROWS))
+  
   return {
     start: startRow * cols,
     end: Math.min(endRow * cols, total),
@@ -229,8 +466,15 @@ const virtualRange = computed(() => {
 })
 
 const visibleClips = computed(() => {
+  if (dateGrouped.value) return [] // Handled by visibleItems
   const { start, end } = virtualRange.value
   return filteredRealClips.value.slice(start, end)
+})
+
+const visibleItems = computed(() => {
+  if (!dateGrouped.value) return []
+  const { start, end } = virtualRange.value
+  return flattenedItems.value.slice(start, end)
 })
 
 // Measure actual card height from first rendered card
@@ -238,15 +482,40 @@ let rowMeasureRO: ResizeObserver | null = null
 function setupRowMeasure() {
   rowMeasureRO?.disconnect()
   rowMeasureRO = new ResizeObserver(() => {
-    const grid = gridScrollRef.value?.querySelector('.native-grid')
-    if (!grid) return
-    const firstCard = grid.querySelector('.card') as HTMLElement
-    if (firstCard) {
-      measuredRowHeight.value = firstCard.offsetHeight + GRID_GAP
+    if (viewMode.value !== 'grid') return
+    const host = getActiveGridHost()
+    const firstCard = host?.querySelector('.card') as HTMLElement | null
+    if (firstCard && firstCard.offsetHeight > 0) {
+      const newHeight = firstCard.getBoundingClientRect().height + GRID_GAP
+      if (Math.abs(measuredGridRowHeight.value - newHeight) > 0.1) {
+        measuredGridRowHeight.value = newHeight
+      }
     }
   })
-  if (gridScrollRef.value) rowMeasureRO.observe(gridScrollRef.value)
+  const host = getActiveGridHost()
+  if (host) rowMeasureRO.observe(host)
 }
+
+// Ensure row measurement is re-triggered on layout changes
+watch([gridCols, viewMode], () => {
+  measuredGridRowHeight.value = 0
+  if (viewMode.value === 'grid') setupRowMeasure()
+})
+
+watch([viewMode, dateGrouped], async () => {
+  const previousScrollTop = gridScrollTop.value
+  await nextTick()
+  scheduleVirtualScrollHostSync(previousScrollTop)
+}, { flush: 'post' })
+
+watch(
+  () => getActiveScrollHost(),
+  (host) => {
+    if (!host || pendingScrollSyncTop.value == null) return
+    scheduleVirtualScrollHostSync(pendingScrollSyncTop.value)
+  },
+  { flush: 'post' },
+)
 
 // ★ Epic 2: Slider drag tooltip
 const SLIDER_LABELS: Record<number, string> = { 1: 'Extra Large', 2: 'Large', 3: 'Medium', 4: 'Small' }
@@ -261,20 +530,110 @@ const sortOptions = computed(() => [
   { value: 'shortest', label: t('clips.sortOptions.shortest') },
 ])
 // ★ Epic 3: game list and per-game counts for the multiselect dropdown
-const gameNames = computed(() => replay.games.filter((g: string) => g !== 'all'))
-const gameCounts = computed(() => {
-  const counts: Record<string, number> = {}
+const steamAccess = computed(() => persist.state.settings.steamLibraryAccess)
+const steamGamesLoaded = computed(() => replay.steamGames.length > 0)
+function resolveSteamIcon(path: string | null | undefined) {
+  if (!path) return ''
+  return path.startsWith('/') ? mediaUrl(path, mediaPortNum.value) : path
+}
+function gameTitlePenalty(title: string) {
+  const marks = (title.match(/[©®™]/g) || []).length
+  const punct = (title.match(/[()[\]{}:;,.!'"_-]/g) || []).length
+  return (marks * 10) + (punct * 2) + (title.length / 1000)
+}
+function preferredGameTitle(current: string | null, candidate: string) {
+  if (!current) return candidate
+  const currentPenalty = gameTitlePenalty(current)
+  const candidatePenalty = gameTitlePenalty(candidate)
+  if (candidatePenalty !== currentPenalty) return candidatePenalty < currentPenalty ? candidate : current
+  return candidate.localeCompare(current) < 0 ? candidate : current
+}
+type CanonicalGameGroup = {
+  display: string
+  count: number
+  icon: string
+}
+const steamIconByNormalized = computed<Record<string, string>>(() =>
+  Object.fromEntries(
+    replay.steamGames
+      .filter(game => !!game.icon_url)
+      .map(game => [
+        normalizeGameTitle(game.name) || game.name.toLowerCase(),
+        resolveSteamIcon(game.icon_url),
+      ])
+  )
+)
+const clipGameGroups = computed(() => {
+  const groups = new Map<string, CanonicalGameGroup>()
   for (const c of replay.clips) {
-    if (!c.isSkeleton && c.game) counts[c.game] = (counts[c.game] || 0) + 1
+    if (c.isSkeleton || !c.game) continue
+    const normalized = normalizeGameTitle(c.game) || c.game.toLowerCase()
+    const existing = groups.get(normalized)
+    groups.set(normalized, {
+      display: preferredGameTitle(existing?.display ?? null, c.game),
+      count: (existing?.count ?? 0) + 1,
+      icon: existing?.icon ?? '',
+    })
   }
-  return counts
+  for (const game of replay.steamGames) {
+    const normalized = normalizeGameTitle(game.name) || game.name.toLowerCase()
+    const existing = groups.get(normalized)
+    if (!existing) continue
+    groups.set(normalized, {
+      ...existing,
+      display: preferredGameTitle(existing.display, game.name),
+      icon: existing.icon || steamIconByNormalized.value[normalized] || '',
+    })
+  }
+  return groups
+})
+const steamIcons = computed<Record<string, string>>(() =>
+  {
+    const icons: Record<string, string> = {}
+    for (const group of clipGameGroups.value.values()) {
+      if (group.icon) icons[group.display.toLowerCase()] = group.icon
+    }
+    for (const game of bulkGameNames.value) {
+      const normalized = normalizeGameTitle(game) || game.toLowerCase()
+      const icon = steamIconByNormalized.value[normalized]
+      if (icon) icons[game.toLowerCase()] = icon
+    }
+    return icons
+  }
+)
+const gameCounts = computed(() =>
+  Object.fromEntries(
+    Array.from(clipGameGroups.value.values()).map(group => [group.display, group.count])
+  ) as Record<string, number>
+)
+const filterGameNames = computed(() =>
+  Array.from(clipGameGroups.value.values())
+    .filter(group => group.count > 0)
+    .map(group => group.display)
+    .sort((a, b) => a.localeCompare(b))
+)
+const bulkGameNames = computed(() => {
+  const names = new Map<string, string>()
+  for (const group of clipGameGroups.value.values()) {
+    names.set(normalizeGameTitle(group.display), group.display)
+  }
+  for (const game of replay.games) {
+    if (game === 'all') continue
+    const normalized = normalizeGameTitle(game) || game.toLowerCase()
+    names.set(normalized, preferredGameTitle(names.get(normalized) ?? null, game))
+  }
+  for (const game of replay.steamGames) {
+    const normalized = normalizeGameTitle(game.name) || game.name.toLowerCase()
+    names.set(normalized, preferredGameTitle(names.get(normalized) ?? null, game.name))
+  }
+  return Array.from(names.values()).sort((a, b) => a.localeCompare(b))
 })
 // kept for legacy SelectField usage (sort) — game SelectField is replaced by GameFilterDropdown
 // Uses gameCounts (single-pass O(clips)) instead of re-filtering per game O(clips × games)
-const gameOptions = computed(() =>
-  replay.games.map((g: string) => {
-    if (g === 'all') return { value: g, label: t('clips.allGames') }
-    return { value: g, label: `${g} (${gameCounts.value[g] || 0})` }
+const bulkGameOptions = computed(() =>
+  ['all', ...bulkGameNames.value].map((g: string) => {
+    if (g === 'all') return { value: g, label: t('clips.gamesFilter.allGames') }
+    return { value: g, label: `${g} (${gameCounts.value[g] || 0})`, icon: steamIcons.value[g.toLowerCase()] || '' }
   })
 )
 // Total real (non-skeleton) clip count for display
@@ -289,6 +648,49 @@ function onCardClick(clip: Clip) {
 }
 function openPreview(clip: Clip) { editorClip.value = clip; editorMode.value = 'preview' }
 function openAdvanced(clip: Clip) { advancedClip.value = clip }
+
+async function importSteamLibrary(forcePrompt = false) {
+  if (steamImportBusy.value) return
+
+  const access = persist.state.settings.steamLibraryAccess
+  if (access !== 'granted' || forcePrompt) {
+    const confirmed = await ask(t('clips.steamImport.consentMessage'), {
+      title: t('clips.steamImport.consentTitle'),
+      kind: 'info',
+    })
+    persist.state.settings.steamLibraryAccess = confirmed ? 'granted' : 'denied'
+    if (!confirmed) return
+  }
+
+  steamImportBusy.value = true
+  const ok = await replay.fetchSteamGames()
+  steamImportBusy.value = false
+
+  if (ok) {
+    showToast(t('clips.steamImport.imported', { count: replay.steamGames.length }))
+  } else {
+    showToast(t('clips.steamImport.failed'))
+  }
+}
+
+const steamBannerTitle = computed(() => {
+  if (steamGamesLoaded.value) return t('clips.steamImport.readyTitle', { count: replay.steamGames.length })
+  if (steamAccess.value === 'denied') return t('clips.steamImport.deniedTitle')
+  return t('clips.steamImport.title')
+})
+
+const steamBannerBody = computed(() => {
+  if (steamGamesLoaded.value) return t('clips.steamImport.readyBody')
+  if (steamAccess.value === 'denied') return t('clips.steamImport.deniedBody')
+  return t('clips.steamImport.body')
+})
+
+const steamButtonLabel = computed(() => {
+  if (steamImportBusy.value) return t('clips.steamImport.loading')
+  if (steamGamesLoaded.value) return t('clips.steamImport.refresh')
+  if (steamAccess.value === 'granted') return t('clips.steamImport.import')
+  return t('clips.steamImport.allowAndImport')
+})
 
 function startRename(clip: Clip) { renameTarget.value = clip; renameValue.value = clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename.replace(/\.[^.]+$/, '')) }
 async function confirmRename() {
@@ -312,12 +714,13 @@ function openListMenu(clip: Clip, e: MouseEvent) {
   replay.activeMenuClipId = clip.id
   replay.activeMenuPos = { x, y }
 }
-async function toggleListFav(e: Event, clip: Clip) {
-  e.stopPropagation()
+async function toggleListFav(clip: Clip, e?: Event) {
+  e?.stopPropagation()
   const v = !clip.favorite
   replay.updateClipMeta(clip.filepath, { favorite: v })
   try { await invoke('set_clip_meta', { update: { filepath: clip.filepath, custom_name: clip.custom_name, favorite: v } }) } catch {}
 }
+
 
 async function deleteSelected() {
   const ids = Array.from(replay.selectedIds)
@@ -333,21 +736,36 @@ async function deleteSelected() {
 // keeps rendering normally while the new file's metadata is fetched.
 let unlistenAdded:   UnlistenFn | null = null
 let unlistenRemoved: UnlistenFn | null = null
+let unlistenImportProgress: UnlistenFn | null = null
+let unlistenImportItem: UnlistenFn | null = null
 
 async function prefetchThumbnails() {
   // Re-entry guard. Also guards against the watch() below firing while we're already
   // running — since applyBulkProbe/applyProbeAndThumb mutate clips[], triggerRef can
   // cause the watch to re-fire on every flush.
-  if (replay.isPrefetching) return
+  if (replay.isPrefetching) {
+    prefetchNeedsRerun = true
+    refreshThumbnailProgressTotals()
+    return
+  }
   // Include clips missing thumbnail OR missing duration/resolution — both need processing
-  const needsWork = replay.filteredClips.filter((c: Clip) =>
-    !c.isSkeleton && ((!c.thumbnail && !replay.liveThumbs.get(c.id)) || c.duration === 0)
-  )
+  const needsWork = replay.clips
+    .filter((c: Clip) => !c.isSkeleton)
+    .sort(compareNewestFirst)
+    .filter((c: Clip) => clipNeedsThumbnailWork(c))
   if (!needsWork.length) return
   // Set the gate SYNCHRONOUSLY before the first await so ClipCard IO observers,
   // which also check replay.isPrefetching, can never race this function.
   replay.isPrefetching = true
   if (import.meta.env.DEV) console.debug(`[perf] prefetchThumbnails: ${needsWork.length} clips`)
+
+  // Reset progress tracking
+  if (prefetchDoneTimer) { clearTimeout(prefetchDoneTimer); prefetchDoneTimer = null }
+  prefetchProbeDone.value = 0
+  prefetchThumbDone.value = 0
+  prefetchNeedsRerun = false
+  prefetchPlannedThumbIds = new Set()
+  prefetchCompletedThumbIds = new Set()
 
   // ── Phase 1: BULK PROBE ──────────────────────────────────────────────
   // One probe_clips call for EVERY unprobed filepath. Rust's semaphore parallelizes
@@ -359,11 +777,15 @@ async function prefetchThumbnails() {
   const unprobedFps = needsWork.filter(c => c.duration === 0).map(c => c.filepath)
   const probeMap = new Map<string, { duration: number; width: number; height: number }>()
   if (unprobedFps.length) {
+    prefetchPhase.value = 'probing'
+    prefetchProbeTotal.value = unprobedFps.length
+    prefetchProbeDone.value = 0
     try {
       const probed = await invoke<[string, number, number, number][]>('probe_clips', { filepaths: unprobedFps })
       for (const [fp, duration, width, height] of probed) {
         probeMap.set(fp, { duration, width, height })
       }
+      prefetchProbeDone.value = unprobedFps.length
       // Single-shot bulk apply: one triggerRef for liveMeta + one rAF flush.
       // Duration badges + resolution pills appear on every probed card at once.
       replay.applyBulkProbe(probed)
@@ -372,18 +794,23 @@ async function prefetchThumbnails() {
     }
   }
 
+  // Count clips that need thumbnails generated
+  const needsThumb = needsWork.filter(clipNeedsGeneratedThumbnail)
+  prefetchPlannedThumbIds = new Set(needsThumb.map(c => c.id))
+  prefetchThumbTotal.value = prefetchPlannedThumbIds.size
+  prefetchThumbDone.value = 0
+  if (needsThumb.length) prefetchPhase.value = 'thumbnails'
+
   // ── Phase 2: SEQUENTIAL THUMBNAIL LOOP (newest→oldest) ───────────────
+  const results: Array<[string, number, number, number, string, string]> = []
   try {
     for (const clip of needsWork) {
-      // Yield to scroll: if user is actively scrolling, wait for scroll to stop
-      // before spawning the next ffmpeg. Keeps the frame budget clean.
       if (replay.scrolling) {
         if (import.meta.env.DEV) console.debug('[perf] prefetch paused (scrolling)')
         await new Promise<void>(resolve => { prefetchWake = resolve })
         if (import.meta.env.DEV) console.debug('[perf] prefetch resumed')
       }
       try {
-        // Prefer freshly-probed values from Phase 1 over the (stale) captured clip fields.
         const probed = probeMap.get(clip.filepath)
         const duration = probed?.duration ?? clip.duration
         const width = probed?.width ?? clip.width
@@ -391,19 +818,42 @@ async function prefetchThumbnails() {
 
         let thumbPath = clip.thumbnail || replay.liveThumbs.get(clip.id) || ''
         if (!thumbPath) {
-          // Pass duration so Rust skips the redundant ffprobe inside generate_thumbnail
           thumbPath = await invoke<string>('generate_thumbnail', {
             filepath: clip.filepath,
             duration: duration > 0 ? duration : undefined,
           })
+          prefetchCompletedThumbIds.add(clip.id)
+          prefetchThumbDone.value = prefetchCompletedThumbIds.size
         }
         if (thumbPath) {
-          replay.applyProbeAndThumb(clip.filepath, duration, width, height, clip.id, thumbPath)
+          // 1. Update Maps IMMEDIATELY so the visible cards show the thumb right away
+          replay.liveThumbs.set(clip.id, thumbPath)
+          if (duration > 0) replay.liveMeta.set(clip.id, { duration, width, height })
+
+          // 2. Queue for bulk update to the main clips array (O(N) sort/filter avoidance)
+          results.push([clip.filepath, duration, width, height, clip.id, thumbPath])
+          
+          // Apply in chunks of 10 so we don't wait forever but still get O(N) benefits
+          if (results.length >= 10) {
+            replay.applyBulkProbeAndThumb([...results])
+            results.length = 0
+          }
         }
       } catch {}
     }
   } finally {
+    if (results.length > 0) replay.applyBulkProbeAndThumb(results)
     replay.isPrefetching = false
+    refreshThumbnailProgressTotals()
+    const remainingThumbs = replay.clips.some(clipNeedsGeneratedThumbnail)
+    const remainingWork = replay.clips.some(clipNeedsThumbnailWork)
+    if (prefetchNeedsRerun || remainingWork) {
+      prefetchPhase.value = remainingThumbs ? 'thumbnails' : 'probing'
+      queueMicrotask(() => { prefetchThumbnails() })
+    } else {
+      prefetchPhase.value = 'done'
+      prefetchDoneTimer = setTimeout(() => { prefetchPhase.value = 'idle' }, 3000)
+    }
     // Final authoritative trigger so sort-by-duration / "longest" etc. reflect
     // the freshly-probed values on the next natural recompute.
     replay.flushClipsNow()
@@ -412,19 +862,19 @@ async function prefetchThumbnails() {
 
 // Reset scroll to top when filters/search change so virtual range recalculates correctly
 watch([searchDebounced, () => replay.sortMode, () => replay.filterFav, () => replay.selectedGames], () => {
-  if (gridScrollRef.value) {
-    gridScrollRef.value.scrollTop = 0
+  pendingScrollSyncTop.value = 0
+  const el = getActiveScrollHost()
+  if (el) {
+    el.scrollTop = 0
     gridScrollTop.value = 0
+    replay.flushClipsNow()
+    return
   }
+  scheduleVirtualScrollHostSync(0)
 })
 
 // Re-run prefetchThumbnails every time fetchClips successfully populates the store.
-// This handles the initial mount AND subsequent re-fetches (e.g., user imports clips in
-// Settings after launching with the reset sentinel path). Without this, the prefetch only
-// ran once at mount with 0 clips and all subsequent clips were handled by the IO fallback,
-// firing 200+ single-clip probe_clips calls and killing scroll perf.
 // flush: 'sync' ensures the gate is set before any ClipCard IO observers can fire.
-// prefetchThumbnails has its own re-entry guard against the triggerRef storm inside itself.
 watch(() => replay.clipsLoadedAt, () => { prefetchThumbnails() }, { flush: 'sync' })
 
 async function retryFetch() {
@@ -436,8 +886,6 @@ onMounted(async () => {
   replay.fetchStatus()
   setupRowMeasure()
   await replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '')
-  // The clipsLoadedAt watch above will have fired during fetchClips, kicking off prefetch.
-  // No need to call it manually here.
 
   // ── Cross-page preview: open modal for clip navigated from Dashboard ──
   if (replay.previewTargetClipId) {
@@ -474,121 +922,120 @@ onMounted(async () => {
     if (replay.clips.find(c => c.filepath === fp && !c.isSkeleton)) return
     const tempId = `skeleton_${fp}`
     replay.injectSkeleton(tempId, fp)  // grid stays visible with placeholder
-    // Retry polling: probe the file up to 5 times with exponential backoff.
-    // Handles both fast muxers (~500ms) and slow ones (large files, ~4s).
     let clip: Clip | null = null
-    let delay = 500
-    for (let attempt = 0; attempt < 5; attempt++) {
-      await new Promise<void>(r => setTimeout(r, delay))
+    for (let i = 0; i < 5; i++) {
       try {
-        clip = await invoke<Clip | null>('get_clip_by_path', { filepath: fp })
-        if (clip && clip.duration > 0) break
-      } catch { /* file not ready yet */ }
-      delay = Math.min(delay * 2, 4000)
+        const res = await invoke<Clip[]>('get_clips_fast', { folder: persist.state.settings.clip_directories[0] })
+        clip = res.find(c => c.filepath === fp) || null
+        if (clip && clip.filesize > 0) break
+      } catch {}
+      await new Promise(r => setTimeout(r, 500 * (i + 1)))
     }
-    if (clip) replay.replaceSkeleton(tempId, clip)
+    if (clip) {
+      replay.replaceSkeleton(tempId, clip)
+      prefetchThumbnails()
+    }
     else replay.removeClip(tempId)
   })
 
   unlistenRemoved = await listen<string>('clip_removed', (event) => {
     replay.removeClip(event.payload)
   })
+
+  // ★ Job #3: Import listeners
+  unlistenImportProgress = await listen<{current:number, total:number}>('import-progress', (e) => {
+    replay.importProgress.current = e.payload.current
+    replay.importProgress.total = e.payload.total
+  })
+  unlistenImportItem = await listen<Clip>('import-item', (e) => {
+    replay.addClip(e.payload)
+    refreshThumbnailProgressTotals([e.payload])
+    prefetchThumbnails()
+  })
+
 })
 
 onBeforeUnmount(() => {
   unlistenAdded?.()
   unlistenRemoved?.()
+  unlistenImportProgress?.()
+  unlistenImportItem?.()
   rowMeasureRO?.disconnect()
 })
 
-// ── RAM: Release decoded thumbnail bitmaps when navigating away from Clips ──
-// KeepAlive preserves the full component tree. Without this, 420 decoded images
-// (~170-670MB) stay in WebKitGTK memory while viewing Mixer/Settings/etc.
-// Setting pageActive=false causes ClipCard's IO to clear thumbUrl (removing <img>
-// from DOM). On reactivation, IO restores visible cards from resolvedThumbPath.
-onDeactivated(() => { replay.pageActive = false })
-onActivated(() => { replay.pageActive = true })
-
-// ── Epic 1 Bug 1: Smart bulk favorite (toggle) ──
 const allSelectedFavorited = computed(() => {
   const ids = Array.from(replay.selectedIds)
-  const sel = replay.clips.filter(c => ids.includes(c.id) && !c.isSkeleton)
-  return sel.length > 0 && sel.every(c => c.favorite)
+  if (ids.length === 0) return false
+  const clips = replay.clips.filter(c => ids.includes(c.id))
+  return clips.every(c => c.favorite)
 })
 
 async function bulkFavorite() {
   const ids = Array.from(replay.selectedIds)
-  const clips = replay.clips.filter(c => ids.includes(c.id) && !c.isSkeleton)
-  const newFav = !allSelectedFavorited.value
+  const clips = replay.clips.filter(c => ids.includes(c.id))
+  const targetState = !allSelectedFavorited.value
   for (const c of clips) {
-    replay.updateClipMeta(c.filepath, { favorite: newFav })
-    try { await invoke('set_clip_meta', { update: { filepath: c.filepath, custom_name: c.custom_name || '', favorite: newFav } }) } catch {}
+    replay.updateClipMeta(c.filepath, { favorite: targetState })
+    try { await invoke('set_clip_meta', { update: { filepath: c.filepath, custom_name: c.custom_name, favorite: targetState } }) } catch {}
   }
-  showToast(`${newFav ? '❤' : '💔'} ${clips.length} clip(s) ${newFav ? 'favorited' : 'unfavorited'}`)
-  replay.clearSelection()
 }
 
-// ── Epic 1 Bug 2: Bulk game change with search ──
-const bulkGameOpen   = ref(false)
-const bulkGameValue  = ref('all')
+// ── Bulk change game logic ──
+const bulkGameOpen = ref(false)
 const bulkGameSearch = ref('')
-
+const bulkGameValue = ref('Unknown')
 const filteredBulkGames = computed(() => {
-  if (!bulkGameSearch.value) return gameOptions.value
   const q = bulkGameSearch.value.toLowerCase()
-  return gameOptions.value.filter(o => o.label.toLowerCase().includes(q))
+  return bulkGameOptions.value.filter(o => o.label.toLowerCase().includes(q))
 })
-
 async function bulkChangeGame() {
   const ids = Array.from(replay.selectedIds)
-  const clips = replay.clips.filter(c => ids.includes(c.id) && !c.isSkeleton)
-  const game_tag = bulkGameValue.value === 'all' ? '' : bulkGameValue.value
+  const clips = replay.clips.filter(c => ids.includes(c.id))
   for (const c of clips) {
-    replay.updateClipMeta(c.filepath, { game: game_tag })
-    try { await invoke('set_clip_meta', { update: { filepath: c.filepath, custom_name: c.custom_name || '', favorite: c.favorite, game_tag } }) } catch {}
+    replay.updateClipMeta(c.filepath, { game: bulkGameValue.value })
+    try { await invoke('set_clip_meta', { update: { filepath: c.filepath, custom_name: c.custom_name, favorite: c.favorite, game: bulkGameValue.value } }) } catch {}
   }
-  bulkGameOpen.value = false; bulkGameSearch.value = ''
-  showToast(`🎮 Game updated for ${clips.length} clip(s)`)
+  bulkGameOpen.value = false
   replay.clearSelection()
 }
 
-// Close bulk-game drop when clicking outside
-function onBulkOutside(e: MouseEvent) {
-  if (!(e.target as HTMLElement).closest('.bulk-game-wrap')) bulkGameOpen.value = false
-}
-onMounted(() => document.addEventListener('mousedown', onBulkOutside))
-onBeforeUnmount(() => document.removeEventListener('mousedown', onBulkOutside))
-
-// Single page-level context menu + single global click listener
-const contextMenuClip = computed(() =>
-  replay.clips.find(c => c.id === replay.activeMenuClipId) ?? null
-)
-
-function ctxAction(action: string) {
+// ── Context menu logic ──
+const contextMenuClip = computed(() => replay.clips.find(c => c.id === replay.activeMenuClipId))
+function ctxAction(act: string) {
   const clip = contextMenuClip.value
-  replay.activeMenuClipId = ''
   if (!clip) return
-  switch (action) {
-    case 'preview': openPreview(clip); break
-    case 'editor': openAdvanced(clip); break
-    case 'select': replay.toggleSelect(clip.id); break
-    case 'favorite': {
-      const v = !clip.favorite
-      replay.updateClipMeta(clip.filepath, { favorite: v })
-      invoke('set_clip_meta', { update: { filepath: clip.filepath, custom_name: clip.custom_name, favorite: v } }).catch(() => {})
-      break
-    }
-    case 'location': invoke('open_file_location', { filepath: clip.filepath }).catch(() => {}); break
-    case 'rename': startRename(clip); break
-    case 'delete': deleteClip(clip); break
+  if (act === 'preview') openPreview(clip)
+  else if (act === 'editor') openAdvanced(clip)
+  else if (act === 'select') replay.toggleSelect(clip.id)
+  else if (act === 'favorite') toggleListFav(clip)
+  else if (act === 'rename') startRename(clip)
+
+  else if (act === 'location') invoke('open_file_location', { filepath: clip.filepath })
+  else if (act === 'delete') deleteClip(clip)
+  closeContextMenu()
+}
+function closeContextMenu(e?: MouseEvent) {
+  if (e) {
+    if (e.button !== 0) return
+    // Don't close if clicking inside the menu (let ctxAction handle it)
+    if ((e.target as HTMLElement).closest('.ctx-menu')) return
   }
+  replay.activeMenuClipId = ''
 }
 
-function closeContextMenu(e: MouseEvent) {
-  const t = e.target as HTMLElement
-  if (t.closest('.ctx-menu') || t.closest('.kebab')) return
-  replay.activeMenuClipId = ''
-}
+onActivated(() => {
+  // ★ Task 5: Re-sync scroll position on tab switch to prevent invisibility
+  syncVirtualScrollHost()
+})
+
+// ★ Task 6: Reset scroll to top when toggling grouping to prevent invisibility
+watch(dateGrouped, () => {
+  const el = gridScrollRef.value || listScrollRef.value || groupedScrollRef.value
+  if (el) {
+    el.scrollTop = 0
+    gridScrollTop.value = 0
+  }
+})
 
 onMounted(() => document.addEventListener('mousedown', closeContextMenu))
 onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu))
@@ -612,10 +1059,11 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         </div>
         <SelectField class="ctrl-sort" v-model="replay.sortMode" :options="sortOptions" />
         <!-- ★ Epic 3: Multiselect game filter dropdown -->
-        <GameFilterDropdown
+          <GameFilterDropdown
           v-model="replay.selectedGames"
-          :games="gameNames"
+          :games="filterGameNames"
           :clipCounts="gameCounts"
+          :steam-icons="steamIcons"
         />
         <button class="fav-btn" :class="{ active: replay.filterFav }" @click="replay.filterFav=!replay.filterFav">❤ {{ replay.favCount }}</button>
       </div>
@@ -655,7 +1103,42 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
       </div>
     </div>
 
+    <div v-if="steamAccess !== 'granted'" class="steam-banner" :class="{ ready: steamGamesLoaded }">
+      <div class="steam-banner-copy">
+        <div class="steam-banner-title">{{ steamBannerTitle }}</div>
+        <div class="steam-banner-body">{{ steamBannerBody }}</div>
+      </div>
+      <button class="steam-banner-btn" :disabled="steamImportBusy" @click="importSteamLibrary(steamAccess === 'denied')">
+        {{ steamButtonLabel }}
+      </button>
+    </div>
+
     <div class="scroll-area">
+      <!-- ★ Job #3: Import Progress Bar -->
+      <Transition name="fade">
+        <div v-if="replay.importProgress.active" class="import-bar-wrap">
+          <div class="import-bar-info">
+            <span>Importing clips…</span>
+            <span>{{ replay.importProgress.current }} / {{ replay.importProgress.total }}</span>
+          </div>
+          <div class="import-bar-bg">
+            <div class="import-bar-fill" :style="{ width: (replay.importProgress.current / replay.importProgress.total * 100) + '%' }"></div>
+          </div>
+        </div>
+      </Transition>
+
+      <Transition name="fade">
+        <div v-if="prefetchPhase !== 'idle'" class="import-bar-wrap thumb-progress-wrap" :class="{ done: prefetchPhase === 'done' }">
+          <div class="import-bar-info">
+            <span>{{ thumbnailPhaseLabel }}</span>
+            <span>{{ thumbnailProgressText }}</span>
+          </div>
+          <div class="import-bar-bg">
+            <div class="import-bar-fill thumb-progress-fill" :style="{ width: thumbnailProgressPercent + '%' }"></div>
+          </div>
+        </div>
+      </Transition>
+
       <!-- Initial loading skeleton -->
       <div v-if="replay.loading && !replay.loaded" class="clip-grid" :style="{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }">
         <div v-for="i in gridCols * 2" :key="'sk'+i" class="skeleton-card">
@@ -667,85 +1150,118 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         </div>
       </div>
 
-      <!-- View wrapper: fade when switching modes -->
+      <!-- View wrapper: fade when switching modes / showing empty states -->
       <Transition name="view-fade" mode="out-in">
 
+      <!-- Empty state A: no clips exist at all -->
+      <div
+        v-if="!replay.loading && replay.loaded && hasNoClipsAtAll"
+        key="empty-all"
+        class="empty-state"
+      >
+        <div class="empty-ic">📁</div>
+        <p>{{ t('clips.noClipsFound') }}</p>
+        <p class="empty-sub">{{ t('clips.noClipsEmptyHint') }}</p>
+        <button class="empty-import-btn" @click="importFolder">{{ t('clips.importFolder') }}</button>
+      </div>
+
+      <!-- Empty state B: clips exist but filtered/searched to zero -->
+      <div
+        v-else-if="!replay.loading && replay.loaded && isFilteredEmpty"
+        key="empty-filtered"
+        class="empty-state"
+      >
+        <div class="empty-ic">🔍</div>
+        <p>{{ t('clips.noClipsFound') }}</p>
+        <p class="empty-sub">{{ t('clips.noClipsHint') }}</p>
+      </div>
+
       <!-- ═══ Date-grouped view ═══ -->
-      <div v-if="dateGrouped" key="grouped" class="scroll-host">
+      <div v-else-if="dateGrouped" key="grouped" class="scroll-host">
         <div class="native-grid-host grouped-host" ref="groupedScrollRef" :class="{ scrolling: isScrolling }" @scroll.passive="onScroll">
-          <div class="date-groups">
-          <div v-for="group in groupedClips" :key="group.date" class="date-group">
-            <div class="date-header">
-              <div
-                class="group-sel-box"
-                :class="{ checked: groupCheckState(group) === 'all', indeterminate: groupCheckState(group) === 'some' }"
-                @click.stop="toggleGroupSelect(group)"
-              >
-                <span v-if="groupCheckState(group) === 'all'">✓</span>
-                <span v-else-if="groupCheckState(group) === 'some'">−</span>
+          <div 
+            class="date-groups"
+            :style="{
+              paddingTop: virtualRange.padTop + 'px',
+              paddingBottom: virtualRange.padBot + 'px',
+            }"
+          >
+            <template v-for="item in visibleItems" :key="item.key">
+              <div v-if="item.type === 'header'" class="date-header" :style="{ height: item.height + 'px' }">
+                <div
+                  class="group-sel-box"
+                  :class="{ checked: groupCheckState(item.group!) === 'all', indeterminate: groupCheckState(item.group!) === 'some' }"
+                  @click.stop="toggleGroupSelect(item.group!)"
+                >
+                  <span v-if="groupCheckState(item.group!) === 'all'">✓</span>
+                  <span v-else-if="groupCheckState(item.group!) === 'some'">−</span>
+                </div>
+                <span class="date-label">{{ item.group!.label }}</span>
+                <span class="date-count">{{ item.group!.clips.length }}</span>
               </div>
-              <span class="date-label">{{ group.label }}</span>
-              <span class="date-count">{{ group.clips.length }}</span>
-            </div>
-            <div v-if="viewMode === 'grid'" class="clip-grid" :style="{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }">
-              <ClipCard
-                v-for="clip in group.clips"
-                :key="clip.id"
-                :clip="clip"
-                :selected="replay.isSelected(clip.id)"
-                class="clip-stagger"
-                @click="onCardClick(clip)"
-                @preview="openPreview"
-                @editor="openAdvanced"
-                @rename="startRename"
-                @delete="deleteClip"
-              />
-            </div>
-            <div v-else class="clip-list" :style="{ '--list-thumb-w': listStyles.thumbW, '--list-thumb-h': listStyles.thumbH, '--list-font': listStyles.fontSize, '--list-pad': listStyles.padding }">
               <div
-                v-for="clip in group.clips"
-                :key="clip.id"
-                class="list-row"
-                :class="{ selected: replay.isSelected(clip.id) }"
-                @click="onCardClick(clip)"
-                @contextmenu.prevent="openListMenu(clip, $event)"
+                v-else-if="item.type === 'row'"
+                class="group-row"
+                :class="{ 'group-row-grid': viewMode === 'grid' }"
+                :style="viewMode === 'grid' ? { minHeight: item.height + 'px' } : { height: item.height + 'px' }"
               >
-                <div class="list-thumb-wrap">
-                  <img v-if="(replay.liveThumbs.get(clip.id) || clip.thumbnail) && mediaPortNum" class="list-thumb" :src="mediaUrl(replay.liveThumbs.get(clip.id) || clip.thumbnail, mediaPortNum)" loading="lazy" decoding="async" @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
-                  <div v-else class="list-thumb list-thumb-empty">▶</div>
-                  <span v-if="replay.liveMeta.get(clip.id)?.duration || clip.duration" class="list-badge">{{ fmtDur(replay.liveMeta.get(clip.id)?.duration || clip.duration) }}</span>
-                  <button class="lt-heart" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
-                    <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-                  </button>
-                  <div class="lt-sel-ov" :class="{ vis: replay.isSelected(clip.id) || replay.selectMode }" @click.stop="replay.toggleSelect(clip.id)">
-                    <div class="lt-sel-box" :class="{ checked: replay.isSelected(clip.id) }">✓</div>
-                  </div>
+                <div
+                  v-if="viewMode === 'grid'"
+                  class="clip-grid grouped-grid"
+                  :style="{
+                    gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
+                    '--name-size': fontScale.nameSize,
+                    '--meta-size': fontScale.metaSize,
+                  }"
+                >
+                  <ClipCard
+                    v-for="clip in item.clips"
+                    :key="clip.id"
+                    v-memo="[clip.id, replay.isSelected(clip.id), clip.duration, clip.thumbnail, clip.custom_name, clip.game, clip.favorite, gridCols]"
+                    :clip="clip"
+                    :selected="replay.isSelected(clip.id)"
+                    class="clip-stagger"
+                    @click="onCardClick(clip)"
+                    @contextmenu="openListMenu"
+                    @preview="openPreview"
+                    @editor="openAdvanced"
+                    @rename="startRename"
+                    @delete="deleteClip"
+                  />
                 </div>
-                <div class="list-info">
-                  <span class="list-name">{{ clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename.replace(/\.[^.]+$/, '')) }}</span>
-                  <span class="list-meta">
-                    <span v-if="clip.game && clip.game !== 'Unknown'" class="lm-game">{{ clip.game }}</span>
-                    <span v-if="clip.filesize" class="lm-pill">{{ fmtSize(clip.filesize) }}</span>
-                    <span v-if="replay.liveMeta.get(clip.id)?.width || clip.width" class="lm-pill">{{ fmtRes(replay.liveMeta.get(clip.id)?.width || clip.width, replay.liveMeta.get(clip.id)?.height || clip.height) }}</span>
-                    <span v-if="clip.created" class="lm-pill lm-date">{{ fmtDate(clip.created) }}</span>
-                  </span>
-                </div>
-                <div class="list-actions">
-                  <button class="list-act" @click.stop="openPreview(clip)">{{ t('clips.contextMenu.preview') }}</button>
-                  <button class="list-act" @click.stop="openAdvanced(clip)">{{ t('clips.contextMenu.edit') }}</button>
-                  <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
-                  <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
-                    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
-                  </button>
+                <div v-else class="clip-list">
+                  <ClipListRow
+                    v-for="clip in item.clips"
+                    :key="clip.id"
+                    v-memo="[clip.id, replay.isSelected(clip.id), clip.duration, clip.thumbnail, clip.custom_name, clip.game, clip.favorite, listStyles.fontSize]"
+                    :clip="clip"
+                    :selected="replay.isSelected(clip.id)"
+                    :font-size="listStyles.fontSize"
+                    :meta-font-size="listStyles.metaFontSize"
+                    :pill-pad-y="listStyles.pillPadY"
+                    :pill-pad-x="listStyles.pillPadX"
+                    :chip-font-size="listStyles.chipFontSize"
+                    :chip-pad-y="listStyles.chipPadY"
+                    :chip-pad-x="listStyles.chipPadX"
+                    :action-font-size="listStyles.actionFontSize"
+                    :action-pad-y="listStyles.actionPadY"
+                    :action-pad-x="listStyles.actionPadX"
+                    :padding="listStyles.padding"
+                    :thumb-w="listStyles.thumbW"
+                    :thumb-h="listStyles.thumbH"
+                    :media-url="mediaUrl"
+                    :media-port="mediaPortNum"
+                    @click="onCardClick"
+                    @contextmenu="openListMenu"
+                    @preview="openPreview"
+                    @editor="openAdvanced"
+                    @delete="deleteClip"
+                    @favorite="toggleListFav"
+                  />
                 </div>
               </div>
-            </div>
-          </div>
-          <div v-if="groupedClips.length === 0" class="empty-state">
-            <div class="empty-ic">🔍</div>
-            <p>{{ t('clips.noClipsFound') }}</p>
-            <p class="empty-sub">{{ t('clips.noClipsHint') }}</p>
-          </div>
+              <div v-else-if="item.type === 'spacer'" :style="{ height: item.height + 'px' }"></div>
+            </template>
           </div><!-- /date-groups -->
         </div>
         <OverlayScrollbar :scroll-el="groupedScrollRef" />
@@ -785,10 +1301,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
             <ClipCard
               v-for="clip in visibleClips"
               :key="clip.id"
+              v-memo="[clip.id, replay.isSelected(clip.id), clip.duration, clip.thumbnail, clip.custom_name, clip.game, clip.favorite, gridCols]"
               :clip="clip"
               :selected="replay.isSelected(clip.id)"
               :class="{ 'clip-enter': clip._isNew }"
               @click="onCardClick(clip)"
+              @contextmenu="openListMenu"
               @preview="openPreview"
               @editor="openAdvanced"
               @rename="startRename"
@@ -810,82 +1328,48 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
           ref="listScrollRef"
           :class="{ scrolling: isScrolling }"
           @scroll.passive="onScroll"
-          :style="{
-            '--list-thumb-w': listStyles.thumbW,
-            '--list-thumb-h': listStyles.thumbH,
-            '--list-font':    listStyles.fontSize,
-            '--list-pad':     listStyles.padding,
-          }"
         >
-          <div class="clip-list">
-            <div
-              v-for="clip in filteredRealClips"
+          <div
+            class="clip-list"
+            :style="{
+              paddingTop: virtualRange.padTop + 'px',
+              paddingBottom: virtualRange.padBot + 'px',
+            }"
+          >
+            <ClipListRow
+              v-for="clip in visibleClips"
               :key="clip.id"
-              class="list-row"
-              :class="{ selected: replay.isSelected(clip.id) }"
-              @click="onCardClick(clip)"
-              @contextmenu.prevent="openListMenu(clip, $event)"
-            >
-              <div class="list-thumb-wrap">
-                <img v-if="(replay.liveThumbs.get(clip.id) || clip.thumbnail) && mediaPortNum"
-                     class="list-thumb"
-                     :src="mediaUrl(replay.liveThumbs.get(clip.id) || clip.thumbnail, mediaPortNum)"
-                     loading="lazy" decoding="async"
-                     @error="(e: Event) => ((e.target as HTMLImageElement).style.display='none')" />
-                <div v-else class="list-thumb list-thumb-empty">▶</div>
-                <span v-if="replay.liveMeta.get(clip.id)?.duration || clip.duration" class="list-badge">{{ fmtDur(replay.liveMeta.get(clip.id)?.duration || clip.duration) }}</span>
-                <button class="lt-heart" :class="{ on: clip.favorite }" @click.stop="toggleListFav($event, clip)" title="Favorite">
-                  <svg viewBox="0 0 24 24" :fill="clip.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-                </button>
-                <div class="lt-sel-ov" :class="{ vis: replay.isSelected(clip.id) || replay.selectMode }" @click.stop="replay.toggleSelect(clip.id)">
-                  <div class="lt-sel-box" :class="{ checked: replay.isSelected(clip.id) }">✓</div>
-                </div>
-              </div>
-              <div class="list-info">
-                <span class="list-name">{{ clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename.replace(/\.[^.]+$/, '')) }}</span>
-                <span class="list-meta">
-                  <span v-if="clip.game && clip.game !== 'Unknown'" class="lm-game">{{ clip.game }}</span>
-                  <span v-if="clip.filesize" class="lm-pill">{{ fmtSize(clip.filesize) }}</span>
-                  <span v-if="replay.liveMeta.get(clip.id)?.width || clip.width" class="lm-pill">{{ fmtRes(replay.liveMeta.get(clip.id)?.width || clip.width, replay.liveMeta.get(clip.id)?.height || clip.height) }}</span>
-                  <span v-if="clip.created" class="lm-pill lm-date">{{ fmtDate(clip.created) }}</span>
-                </span>
-              </div>
-              <div class="list-actions">
-                <button class="list-act" @click.stop="openPreview(clip)">Preview</button>
-                <button class="list-act" @click.stop="openAdvanced(clip)">Edit</button>
-                <button class="list-act list-act-d" @click.stop="deleteClip(clip)">🗑</button>
-                <button class="list-kebab" @click.stop="openListMenu(clip, $event)" title="More options">
-                  <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
-                </button>
-              </div>
-            </div>
+              v-memo="[clip.id, replay.isSelected(clip.id), clip.duration, clip.thumbnail, clip.custom_name, clip.game, clip.favorite, listStyles.fontSize]"
+              :clip="clip"
+              :selected="replay.isSelected(clip.id)"
+              :font-size="listStyles.fontSize"
+              :meta-font-size="listStyles.metaFontSize"
+              :pill-pad-y="listStyles.pillPadY"
+              :pill-pad-x="listStyles.pillPadX"
+              :chip-font-size="listStyles.chipFontSize"
+              :chip-pad-y="listStyles.chipPadY"
+              :chip-pad-x="listStyles.chipPadX"
+              :action-font-size="listStyles.actionFontSize"
+              :action-pad-y="listStyles.actionPadY"
+              :action-pad-x="listStyles.actionPadX"
+              :padding="listStyles.padding"
+              :thumb-w="listStyles.thumbW"
+              :thumb-h="listStyles.thumbH"
+              :media-url="mediaUrl"
+              :media-port="mediaPortNum"
+              @click="onCardClick"
+              @contextmenu="openListMenu"
+              @preview="openPreview"
+              @editor="openAdvanced"
+              @delete="deleteClip"
+              @favorite="toggleListFav"
+            />
           </div>
         </div>
         <OverlayScrollbar :scroll-el="listScrollRef" />
       </div>
 
       </Transition><!-- /view-fade -->
-
-      <!-- Empty state A: no clips exist at all -->
-      <div
-        v-if="!replay.loading && replay.loaded && hasNoClipsAtAll"
-        class="empty-state"
-      >
-        <div class="empty-ic">📁</div>
-        <p>{{ t('clips.noClipsFound') }}</p>
-        <p class="empty-sub">{{ t('clips.noClipsEmptyHint') }}</p>
-        <button class="empty-import-btn" @click="importFolder">{{ t('clips.importFolder') }}</button>
-      </div>
-
-      <!-- Empty state B: clips exist but filtered/searched to zero -->
-      <div
-        v-if="!replay.loading && replay.loaded && isFilteredEmpty"
-        class="empty-state"
-      >
-        <div class="empty-ic">🔍</div>
-        <p>{{ t('clips.noClipsFound') }}</p>
-        <p class="empty-sub">{{ t('clips.noClipsHint') }}</p>
-      </div>
 
       <!-- Error state: fetchClips failed (e.g. missing data dir, permission error in AppImage) -->
       <div
@@ -921,7 +1405,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                 <input
                   v-model="bulkGameSearch"
                   class="bulk-game-search"
-                  placeholder="Filter games…"
+                  :placeholder="t('clips.gamesFilter.searchPlaceholder')"
                   autofocus
                   @keydown.escape="bulkGameOpen = false"
                 />
@@ -934,9 +1418,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                   :class="{ active: bulkGameValue === opt.value }"
                   @click="bulkGameValue = opt.value"
                 >
-                  {{ opt.label }}
+                  <img v-if="opt.icon" :src="opt.icon" alt="" class="bulk-game-icon" loading="lazy" />
+                  <span>{{ opt.label }}</span>
                 </button>
-                <div v-if="filteredBulkGames.length === 0" class="bulk-game-empty">{{ t('clips.noMatches') }}</div>
+                <div v-if="filteredBulkGames.length === 0" class="bulk-game-empty">{{ t('clips.gamesFilter.noMatches') }}</div>
               </div>
               <div class="bulk-game-footer">
                 <button class="sel-btn sel-btn-p" @click="bulkChangeGame()">{{ t('clips2.apply') }}</button>
@@ -975,36 +1460,37 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         class="ctx-menu"
         :style="{ left: replay.activeMenuPos.x + 'px', top: replay.activeMenuPos.y + 'px' }"
         @click.stop
+        @contextmenu.prevent
       >
         <template v-if="contextMenuClip">
-          <button class="ctx-item" @click="ctxAction('preview')">
+          <button class="ctx-item" @click="ctxAction('preview')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             {{ t('clips.contextMenu.preview') }}
           </button>
-          <button class="ctx-item" @click="ctxAction('editor')">
+          <button class="ctx-item" @click="ctxAction('editor')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20h-2a2 2 0 01-2-2v-2m0-4V8m0-4V4a2 2 0 012-2h2m4 0h4m4 0h2a2 2 0 012 2v2m0 4v4m0 4v2a2 2 0 01-2 2h-2m-4 0h-4"/><path d="M9 11l2 2 4-4"/></svg>
             {{ t('clips.contextMenu.edit') }}
           </button>
-          <div class="ctx-sep"></div>
-          <button class="ctx-item" @click="ctxAction('select')">
+          <div class="ctx-sep" @contextmenu.prevent></div>
+          <button class="ctx-item" @click="ctxAction('select')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="9 11 12 14 20 6"/></svg>
             {{ t('clips.contextMenu.select') }}
           </button>
-          <button class="ctx-item" @click="ctxAction('favorite')">
+          <button class="ctx-item" @click="ctxAction('favorite')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
             {{ contextMenuClip.favorite ? t('clips.contextMenu.unfavorite') : t('clips.contextMenu.favorite') }}
           </button>
-          <div class="ctx-sep"></div>
-          <button class="ctx-item" @click="ctxAction('rename')">
+          <div class="ctx-sep" @contextmenu.prevent></div>
+          <button class="ctx-item" @click="ctxAction('rename')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
             {{ t('clips.contextMenu.rename') }}
           </button>
-          <button class="ctx-item" @click="ctxAction('location')">
+          <button class="ctx-item" @click="ctxAction('location')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
             {{ t('clips.contextMenu.showInFolder') }}
           </button>
-          <div class="ctx-sep"></div>
-          <button class="ctx-item ctx-item-d" @click="ctxAction('delete')">
+          <div class="ctx-sep" @contextmenu.prevent></div>
+          <button class="ctx-item ctx-item-d" @click="ctxAction('delete')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
             {{ t('clips.contextMenu.delete') }}
           </button>
@@ -1078,6 +1564,37 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .fav-btn:hover { background:var(--bg-hover); }
 .fav-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
 
+.steam-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--bg-card)), var(--bg-card));
+}
+.steam-banner.ready {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.steam-banner-copy { min-width: 0; }
+.steam-banner-title { font-size: 13px; font-weight: 700; color: var(--text); }
+.steam-banner-body { margin-top: 3px; font-size: 12px; color: var(--text-sec); }
+.steam-banner-btn {
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-surface));
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.steam-banner-btn:hover:not(:disabled) { filter: brightness(1.06); }
+.steam-banner-btn:disabled { opacity: .6; cursor: default; }
+
 .view-toggle { display:flex; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
 .vt-btn { width:32px; height:32px; background:var(--bg-input); border:1px solid transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 200ms ease-in-out; }
 .vt-btn svg { width:14px; height:14px; }
@@ -1103,6 +1620,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   -webkit-overflow-scrolling: touch;
   will-change: scroll-position;
   user-select: none;
+  overflow-anchor: none;
 }
 .native-grid-host::-webkit-scrollbar { display: none; width: 0; }
 .native-grid { user-select: none; }
@@ -1156,113 +1674,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .clip-stagger { animation:fadeSlideIn .3s ease both; }
 @keyframes fadeSlideIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
 
-/* ★ Epic 3: List view — all sizing driven by CSS custom properties from listStyles computed */
+/* ★ Epic 3: List view container */
 .clip-list { display:flex; flex-direction:column; gap:6px; }
-
-.list-row {
-  display:flex; align-items:stretch; gap:12px;
-  padding: 0 calc(var(--list-pad, 8px) + 4px) 0 0;
-  background:var(--bg-card); border:1px solid var(--border); border-radius:8px;
-  cursor:pointer; overflow:hidden; user-select:none;
-  transition: background .15s, padding .25s ease;
-  contain: layout style paint; content-visibility: auto; contain-intrinsic-size: auto 60px;
-}
-.list-row:hover { background:var(--bg-hover); }
-.list-row.selected { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
-
-.list-thumb {
-  object-fit:cover; background:var(--bg-deep); user-select:none; -webkit-user-drag:none; pointer-events:none;
-}
-.list-thumb-empty {
-  background:var(--bg-deep); flex-shrink:0;
-  display:flex; align-items:center; justify-content:center;
-  font-size:18px; color:var(--text-muted);
-}
-.list-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; padding: var(--list-pad, 8px) 0; justify-content: center; }
-.list-name {
-  font-size: var(--list-font, 13px); font-weight:600;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  transition: font-size .25s ease;
-}
-.list-thumb-wrap {
-  position: relative; flex-shrink: 0;
-  width: var(--list-thumb-w, 160px); align-self: stretch;
-  transition: width .25s ease;
-}
-.list-thumb-wrap .list-thumb { width: 100%; height: 100%; object-fit: cover; display: block; transition: none; border-radius: 0; }
-.list-thumb-wrap .list-thumb-empty { width: 100%; height: 100%; transition: none; border-radius: 0; }
-.list-badge {
-  position: absolute; bottom: 3px; right: 3px;
-  background: rgba(0,0,0,.8); color: #fff;
-  font-size: 10px; font-weight: 600;
-  padding: 1px 5px; border-radius: 3px;
-  pointer-events: none; line-height: 1.4;
-}
-.list-meta { font-size:11px; color:var(--text-muted); display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
-.lm-game {
-  font-weight:700; font-size:10px;
-  color:var(--accent);
-  background:color-mix(in srgb, var(--accent) 14%, transparent);
-  padding:2px 8px; border-radius:4px;
-  white-space:nowrap;
-}
-.lm-pill { background:var(--bg-deep); padding:2px 6px; border-radius:3px; }
-.lm-date { opacity:.75; }
-.list-actions { display:flex; gap:6px; flex-shrink:0; align-items:center; padding: var(--list-pad, 8px) 0; }
-.list-act { padding: 4px 10px; border:1px solid var(--border); border-radius:5px; background:var(--bg-surface); color:var(--text-sec); font-size:12px; cursor:pointer; white-space:nowrap; }
-.list-act:hover { background:var(--bg-hover); }
-.list-act-d { color:var(--danger); }
-.list-act-d:hover { background:rgba(220,38,38,.1); }
-.list-fav { flex-shrink:0; width:28px; height:28px; border-radius:50%; border:none; background:transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:color .15s; }
-.list-fav:hover { color:var(--text); }
-.list-fav.on { color:#E94560; }
-.list-fav svg { width:15px; height:15px; }
-.list-kebab { flex-shrink:0; width:30px; height:30px; border-radius:6px; border:1px solid var(--border); background:var(--bg-deep); color:var(--text-sec); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
-.list-kebab:hover { background:var(--bg-hover); color:var(--text); border-color:var(--accent); }
-.list-kebab svg { width:15px; height:15px; }
-
-/* Thumbnail overlays for list view — heart (top-right) and select checkbox (top-left) */
-.lt-heart {
-  position: absolute; top: 5px; right: 5px;
-  width: 26px; height: 26px; border-radius: 50%;
-  border: none; background: rgba(0,0,0,.55);
-  color: var(--text-muted); cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  opacity: 0; transition: all .15s;
-}
-.list-row:hover .lt-heart { opacity: 1; }
-.lt-heart.on { opacity: 1; color: #E94560; }
-.lt-heart:hover { background: rgba(0,0,0,.8); transform: scale(1.15); }
-.lt-heart svg { width: 13px; height: 13px; }
-
-.lt-sel-ov {
-  position: absolute; top: 5px; left: 5px;
-  opacity: 0; transition: opacity .15s;
-}
-.lt-sel-ov.vis, .list-row:hover .lt-sel-ov { opacity: 1; }
-.lt-sel-box {
-  width: 20px; height: 20px; border-radius: 5px;
-  border: 2px solid rgba(255,255,255,.55); background: rgba(0,0,0,.4);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 11px; color: transparent; cursor: pointer;
-}
-.lt-sel-box.checked { background: var(--accent); border-color: var(--accent); color: #fff; }
-
-/* List view context menu */
-.list-ctx { position:fixed; z-index:10000; min-width:200px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:4px; box-shadow:0 8px 32px rgba(0,0,0,.5); }
-.list-ctx-i { display:flex; align-items:center; gap:8px; width:100%; padding:8px 12px; border:none; border-radius:5px; background:transparent; color:var(--text); font-size:13px; cursor:pointer; text-align:left; }
-.list-ctx-i:hover { background:var(--bg-hover); }
-.list-ctx-ic { width:15px; height:15px; flex-shrink:0; color:var(--text-muted); }
-.list-ctx-sep { height:1px; background:var(--border); margin:4px 0; }
-.list-ctx-d { color:var(--danger) !important; }
-
-/* Empty state */
-.empty-state { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text); padding:40px; text-align:center; pointer-events:none; }
-.empty-state > * { pointer-events:auto; }
-.empty-ic { font-size:48px; margin-bottom:12px; opacity:.6; }
-.empty-sub { font-size:13px; color:var(--text); opacity:.65; margin-top:4px; }
-.empty-import-btn { margin-top:18px; padding:8px 22px; border:1px solid var(--accent); border-radius:var(--radius); background:transparent; color:var(--accent); font-size:13px; font-weight:600; cursor:pointer; transition:background .15s, color .15s; }
-.empty-import-btn:hover { background:var(--accent); color:#fff; }
 
 /* Sentinel */
 .sentinel { height:48px; display:flex; align-items:center; justify-content:center; margin-top:8px; }
@@ -1302,9 +1715,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .bulk-game-search { width:100%; padding:6px 10px; background:var(--bg-input); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:12px; outline:none; }
 .bulk-game-search:focus { border-color:var(--accent); }
 .bulk-game-list { max-height:180px; overflow-y:auto; padding:4px; }
-.bulk-game-opt { width:100%; padding:7px 10px; background:transparent; border:none; border-radius:5px; color:var(--text-sec); font-size:12px; text-align:left; cursor:pointer; }
+.bulk-game-opt { width:100%; padding:7px 10px; background:transparent; border:none; border-radius:5px; color:var(--text-sec); font-size:12px; text-align:left; cursor:pointer; display:flex; align-items:center; gap:8px; }
 .bulk-game-opt:hover { background:var(--bg-hover); color:var(--text); }
 .bulk-game-opt.active { color:var(--accent); font-weight:600; background:color-mix(in srgb, var(--accent) 10%, transparent); }
+.bulk-game-icon { width:18px; height:18px; border-radius:4px; object-fit:cover; flex-shrink:0; }
 .bulk-game-empty { padding:10px; text-align:center; font-size:11px; color:var(--text-muted); }
 .bulk-game-footer { padding:8px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; }
 .dropup-enter-active { transition:opacity .12s, transform .12s; }
@@ -1323,9 +1737,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .dlg-pri { background:var(--accent); border-color:var(--accent); color:#fff; }
 
 /* Date grouping */
-.date-groups { display:flex; flex-direction:column; gap:28px; }
-.date-group { display:flex; flex-direction:column; gap:12px; }
+.date-groups { display:flex; flex-direction:column; }
+.date-group { display:flex; flex-direction:column; }
 .date-header { display:flex; align-items:center; gap:10px; padding-bottom:8px; border-bottom:1px solid var(--border); }
+.group-row { width:100%; }
+.group-row-grid { box-sizing:border-box; padding-top: 4px; }
+.grouped-grid { width: 100%; }
 .date-label { font-size:14px; font-weight:700; color:var(--text); }
 .date-count { font-size:11px; font-weight:600; color:var(--text-muted); background:var(--bg-deep); padding:2px 8px; border-radius:10px; }
 .group-sel-box { width:20px; height:20px; border-radius:5px; border:2px solid var(--text-muted); background:transparent; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px; color:transparent; transition:border-color .15s, background .15s; flex-shrink:0; user-select:none; }
@@ -1355,6 +1772,74 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .ctx-item-d { color:var(--danger); }
 .ctx-item-d:hover { background:rgba(220,38,38,.1); }
 .ctx-sep { height:1px; background:var(--border); margin:4px 0; }
+
+/* Empty State */
+.empty-state {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 40px;
+  user-select: none;
+}
+.empty-ic { font-size: 48px; opacity: 0.3; margin-bottom: 4px; }
+.empty-state p { margin: 0; font-size: 16px; font-weight: 700; color: var(--text-sec); }
+.empty-sub { font-size: 13px !important; font-weight: 400 !important; color: var(--text-muted) !important; max-width: 280px; }
+.empty-import-btn {
+  margin-top: 8px;
+  padding: 10px 24px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s, filter 0.2s;
+}
+.empty-import-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+.empty-import-btn:active {
+  transform: translateY(0);
+}
+
+/* Import Bar */
+.import-bar-wrap {
+  margin: 8px 22px 16px 10px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.2);
+}
+.import-bar-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-sec);
+}
+.import-bar-bg {
+  height: 6px;
+  background: var(--bg-deep);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.import-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+.thumb-progress-wrap { margin-top: 0; }
+.thumb-progress-wrap.done { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.thumb-progress-fill { background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 65%, #ffffff)); }
 </style>
 
 <!-- Unscoped: suppress hover transitions on cards while scrolling -->

@@ -30,8 +30,7 @@ pub fn spawn_media_server() -> u16 {
 
         rt.block_on(async move {
             // Route 1: /media/... → serve files directly (video playback with Range)
-            let media_route = warp::path("media")
-                .and(warp::fs::dir("/"));
+            let media_route = warp::path("media").and(warp::fs::dir("/"));
 
             // Route 2: /audio?file=/path/to/clip.mkv&stream=1
             // Extracts a single audio stream via ffmpeg → serves as audio/wav
@@ -51,8 +50,12 @@ pub fn spawn_media_server() -> u16 {
                 .allow_any_origin()
                 .allow_methods(vec!["GET", "HEAD", "OPTIONS"])
                 .allow_headers(vec![
-                    "Range", "Content-Type", "Accept",
-                    "If-Range", "If-Modified-Since", "If-None-Match",
+                    "Range",
+                    "Content-Type",
+                    "Accept",
+                    "If-Range",
+                    "If-Modified-Since",
+                    "If-None-Match",
                 ]);
 
             warp::serve(routes.with(cors))
@@ -82,20 +85,26 @@ async fn serve_audio_stream(q: AudioQuery) -> Result<Response<Vec<u8>>, warp::Re
 
     // Security check
     let ps = path.to_string_lossy();
-    if !(ps.starts_with("/home/") || ps.starts_with("/tmp/") || ps.contains(".local/share/opengg/")) {
+    if !(ps.starts_with("/home/") || ps.starts_with("/tmp/") || ps.contains(".local/share/opengg/"))
+    {
         return Err(warp::reject::not_found());
     }
 
     // Use ffmpeg to extract the specific audio stream as WAV
     let output = tokio::process::Command::new("ffmpeg")
         .args([
-            "-i", &decoded,
-            "-map", &format!("0:{}", q.stream),
-            "-ac", "2",        // stereo
-            "-ar", "48000",    // standard sample rate
-            "-f", "wav",       // WAV format for universal browser support
-            "-vn",             // no video
-            "pipe:1",          // output to stdout
+            "-i",
+            &decoded,
+            "-map",
+            &format!("0:{}", q.stream),
+            "-ac",
+            "2", // stereo
+            "-ar",
+            "48000", // standard sample rate
+            "-f",
+            "wav",    // WAV format for universal browser support
+            "-vn",    // no video
+            "pipe:1", // output to stdout
         ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -122,7 +131,9 @@ async fn serve_audio_stream(q: AudioQuery) -> Result<Response<Vec<u8>>, warp::Re
 ///
 /// Path-traversal protection: resolves the full canonical path and verifies
 /// it is strictly inside the extensions base directory before reading.
-async fn serve_extension_asset(tail: warp::path::Tail) -> Result<Response<Vec<u8>>, warp::Rejection> {
+async fn serve_extension_asset(
+    tail: warp::path::Tail,
+) -> Result<Response<Vec<u8>>, warp::Rejection> {
     let tail_str = tail.as_str();
     if tail_str.is_empty() {
         return Err(warp::reject::not_found());
@@ -156,18 +167,20 @@ async fn serve_extension_asset(tail: warp::path::Tail) -> Result<Response<Vec<u8
         return Err(warp::reject::not_found());
     }
 
-    let bytes = tokio::fs::read(&real).await.map_err(|_| warp::reject::not_found())?;
+    let bytes = tokio::fs::read(&real)
+        .await
+        .map_err(|_| warp::reject::not_found())?;
 
     // Derive Content-Type from extension
     let ct = match real.extension().and_then(|e| e.to_str()).unwrap_or("") {
-        "js"   | "mjs"  => "application/javascript; charset=utf-8",
-        "json"           => "application/json; charset=utf-8",
-        "svg"            => "image/svg+xml",
-        "png"            => "image/png",
-        "jpg" | "jpeg"   => "image/jpeg",
-        "webp"           => "image/webp",
-        "css"            => "text/css; charset=utf-8",
-        _                => "application/octet-stream",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "css" => "text/css; charset=utf-8",
+        _ => "application/octet-stream",
     };
 
     Ok(Response::builder()

@@ -1,27 +1,30 @@
 <script setup lang="ts">
-import { ref, inject, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, inject, watch, onMounted, onBeforeUnmount, nextTick, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { mediaUrl } from '../utils/assets'
 import type { Clip } from '../stores/replay'
 import { useReplayStore } from '../stores/replay'
 import { useSharedIntersectionObserver } from '../composables/useSharedIntersectionObserver'
 import { useThumbnailQueue } from '../composables/useThumbnailQueue'
-import { fmtDur, fmtSize, fmtRes, fmtDate } from '../utils/format'
+import { fmtDur, fmtSize, fmtRes, fmtDate, fmtTime, clipDisplayTitle } from '../utils/format'
 import type { Ref } from 'vue'
 
 const props = defineProps<{ clip: Clip; selected?: boolean }>()
-const emit = defineEmits<{ 'preview': [Clip]; 'editor': [Clip]; 'rename': [Clip]; 'delete': [Clip]; 'contextmenu': [{ clip: Clip; x: number; y: number }] }>()
+const emit = defineEmits<{ 'preview': [Clip]; 'editor': [Clip]; 'rename': [Clip]; 'delete': [Clip]; 'contextmenu': [Clip, MouseEvent] }>()
 
 const replay = useReplayStore()
 const cardRef = ref<HTMLElement | null>(null)
 const thumbUrl = ref('')
 const thumbLoaded = ref(false)
+const trimmedDuration = ref<number | null>(null)
 
 // Local duration/resolution — updated via liveMeta watch (same pattern as liveThumbs/thumbUrl).
 // Bypasses the filteredClips prop chain so they appear at the same time as the thumbnail.
 const liveDuration = ref(props.clip.duration)
 const liveWidth = ref(props.clip.width)
 const liveHeight = ref(props.clip.height)
+const displayDuration = computed(() => trimmedDuration.value ?? liveDuration.value)
+const isTrimmed = computed(() => trimmedDuration.value != null)
 
 // ★ Get media server port from App.vue's provide()
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
@@ -32,16 +35,11 @@ const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 // the <img> from the DOM and releases the decoded bitmap (~410KB–1.6MB per image).
 // When card scrolls back into view, we restore from this cached path instantly.
 let resolvedThumbPath = ''
+let removeTrimListener: (() => void) | null = null
 
 // Context menu — emit event to parent (ClipsPage) instead of managing own menu
 function openMenu(e: MouseEvent) {
-  e.preventDefault(); e.stopPropagation()
-  const menuW = 200, menuH = 270
-  const x = e.clientX + menuW > window.innerWidth  ? e.clientX - menuW : e.clientX
-  const y = e.clientY + menuH > window.innerHeight ? e.clientY - menuH : e.clientY
-  replay.activeMenuClipId = props.clip.id
-  replay.activeMenuPos = { x, y }
-  emit('contextmenu', { clip: props.clip, x, y })
+  emit('contextmenu', props.clip, e)
 }
 
 // ★ Lazy thumbnail — uses shared IntersectionObserver + concurrency-limited queue
@@ -78,6 +76,19 @@ function resolveInitialThumb(): string {
 onMounted(() => {
   const initial = resolveInitialThumb()
   if (initial) resolvedThumbPath = initial
+  void loadTrimState()
+  const trimListener = (event: Event) => {
+    const detail = (event as CustomEvent<{ filepath?: string; trimStart?: number; trimEnd?: number }>).detail
+    if (!detail || detail.filepath !== props.clip.filepath) return
+    if (typeof detail.trimStart === 'number' && typeof detail.trimEnd === 'number' && detail.trimEnd > detail.trimStart) {
+      const nextDuration = Math.max(0, detail.trimEnd - detail.trimStart)
+      trimmedDuration.value = nextDuration > 0 && Math.abs(nextDuration - liveDuration.value) > 0.05 ? nextDuration : null
+      return
+    }
+    void loadTrimState()
+  }
+  window.addEventListener('clip-trim-updated', trimListener as EventListener)
+  removeTrimListener = () => window.removeEventListener('clip-trim-updated', trimListener as EventListener)
 
   // Track whether this card has already kicked off its own thumbnail load so
   // repeated observer callbacks (e.g., scroll jitter) don't spawn duplicates.
@@ -141,7 +152,23 @@ watch(() => replay.pageActive, (active) => {
   }
 })
 
-onBeforeUnmount(() => { if (cardRef.value) unobserve(cardRef.value) })
+onBeforeUnmount(() => {
+  if (cardRef.value) unobserve(cardRef.value)
+  removeTrimListener?.()
+  removeTrimListener = null
+})
+
+async function loadTrimState() {
+  try {
+    const state = await invoke<{ trim_start: number; trim_end: number } | null>('get_trim_state', { filepath: props.clip.filepath })
+    if (state && state.trim_end > state.trim_start) {
+      const nextDuration = Math.max(0, state.trim_end - state.trim_start)
+      trimmedDuration.value = nextDuration > 0 && Math.abs(nextDuration - liveDuration.value) > 0.05 ? nextDuration : null
+      return
+    }
+  } catch {}
+  trimmedDuration.value = null
+}
 
 
 async function toggleFav(e: Event) {
@@ -149,13 +176,6 @@ async function toggleFav(e: Event) {
   const v = !props.clip.favorite
   replay.updateClipMeta(props.clip.filepath, { favorite: v })
   try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: props.clip.custom_name, favorite: v } }) } catch {}
-}
-
-function onDrag(e: DragEvent) {
-  if (!e.dataTransfer) return
-  e.dataTransfer.setData('text/uri-list', `file://${props.clip.filepath}`)
-  e.dataTransfer.setData('text/plain', props.clip.filepath)
-  e.dataTransfer.effectAllowed = 'copy'
 }
 
 
@@ -167,14 +187,14 @@ const editInput = ref<HTMLInputElement | null>(null)
 function startEdit(e: MouseEvent) {
   e.stopPropagation()
   isEditing.value = true
-  editValue.value = props.clip.custom_name || (props.clip.game !== 'Unknown' ? props.clip.game : props.clip.filename.replace(/\.[^.]+$/, ''))
+  editValue.value = clipDisplayTitle(props.clip.custom_name || '', props.clip.game || '', props.clip.filename)
   nextTick(() => editInput.value?.select())
 }
 async function confirmEdit() {
   if (!isEditing.value) return
   isEditing.value = false
   const n = editValue.value.trim()
-  const orig = props.clip.custom_name || (props.clip.game !== 'Unknown' ? props.clip.game : props.clip.filename.replace(/\.[^.]+$/, ''))
+  const orig = clipDisplayTitle(props.clip.custom_name || '', props.clip.game || '', props.clip.filename)
   if (!n || n === orig) return
   replay.updateClipMeta(props.clip.filepath, { custom_name: n })
   try { await invoke('set_clip_meta', { update: { filepath: props.clip.filepath, custom_name: n, favorite: props.clip.favorite } }) } catch {}
@@ -183,15 +203,27 @@ function cancelEdit() { isEditing.value = false }
 </script>
 
 <template>
-  <div ref="cardRef" class="card" :class="{ selected }" @contextmenu.prevent="openMenu" draggable="true" @dragstart="onDrag">
+  <div ref="cardRef" class="card" :class="{ selected }" @contextmenu.prevent="openMenu">
     <div class="thumb">
       <img v-if="thumbUrl" :src="thumbUrl" class="thumb-img" :class="{ loaded: thumbLoaded }" alt="" decoding="async" loading="lazy" @load="thumbLoaded = true" />
       <div v-else class="thumb-ph">🎬</div>
-      <span v-if="liveDuration" class="badge">{{ fmtDur(liveDuration) }}</span>
+      <span v-if="displayDuration" class="badge" :class="{ trimmed: isTrimmed }">
+        <svg v-if="isTrimmed" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M9.64 7.64a2.5 2.5 0 1 1-3.54-3.54 2.5 2.5 0 0 1 3.54 3.54Zm0 8.72a2.5 2.5 0 1 1-3.54 3.54 2.5 2.5 0 0 1 3.54-3.54ZM14.59 12l6.2 6.2-1.41 1.41L12 12.41l-7.38 7.2-1.4-1.42L9.41 12 3.22 5.8l1.4-1.41L12 11.59l7.38-7.2 1.41 1.42z"/>
+        </svg>
+        {{ fmtDur(displayDuration) }}
+      </span>
+      <span v-if="clip.created" class="time-badge">{{ fmtTime(clip.created) }}</span>
       <button class="heart" :class="{ on: clip.favorite }" @click="toggleFav"><svg viewBox="0 0 24 24" :fill="clip.favorite?'currentColor':'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></button>
       <div class="sel-ov" :class="{ vis: selected || replay.selectMode }" @click.stop="replay.toggleSelect(clip.id)">
         <div class="sel-box" :class="{ checked: selected }">✓</div>
       </div>
+      <Transition name="fade">
+        <div v-if="clip.probing" class="probing-ov">
+          <div class="probing-spinner"></div>
+          <span>Fetching video data…</span>
+        </div>
+      </Transition>
     </div>
     <div class="info">
       <div class="clip-name-row">
@@ -206,7 +238,7 @@ function cancelEdit() { isEditing.value = false }
             @keydown.escape.prevent="cancelEdit"
             @click.stop
           />
-          <span v-else>{{ clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename) }}</span>
+          <span v-else>{{ clipDisplayTitle(clip.custom_name || '', clip.game || '', clip.filename) }}</span>
         </div>
         <button class="kebab" @click.stop="openMenu" title="More options">
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
@@ -223,14 +255,17 @@ function cancelEdit() { isEditing.value = false }
 </template>
 
 <style scoped>
-.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; contain:layout style paint; content-visibility:auto; contain-intrinsic-size:auto 260px; contain-intrinsic-block-size:auto 280px; user-select:none; }
+.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; contain:layout style paint; height: 100%; user-select:none; }
 .card:hover { border-color:var(--accent); transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.25); }
 .card.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent); }
 .thumb { width:100%; aspect-ratio:16/9; background:var(--bg-deep); position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden; }
 .thumb-img { width:100%; height:100%; object-fit:cover; display:block; opacity:0; transition:opacity 0.25s; user-select:none; -webkit-user-drag:none; pointer-events:none; }
 .thumb-img.loaded { opacity:1; }
 .thumb-ph { font-size:28px; opacity:.3; }
-.badge { position:absolute; bottom:6px; right:6px; background:rgba(0,0,0,.8); color:#fff; font-size:11px; font-weight:600; padding:2px 7px; border-radius:4px; pointer-events:none; }
+.badge { position:absolute; bottom:6px; right:6px; background:rgba(0,0,0,.8); color:#fff; font-size:11px; font-weight:600; padding:2px 7px; border-radius:4px; pointer-events:none; display:flex; align-items:center; gap:4px; }
+.badge svg { width:12px; height:12px; }
+.badge.trimmed { color:#ffd27a; }
+.time-badge { position:absolute; bottom:6px; left:6px; background:rgba(0,0,0,.8); color:#fff; font-size:11px; font-weight:600; padding:2px 7px; border-radius:4px; pointer-events:none; }
 .heart { position:absolute; top:6px; right:6px; width:28px; height:28px; border-radius:50%; border:none; background:rgba(0,0,0,.5); color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; opacity:0; transition:all .15s; }
 .card:hover .heart { opacity:1; } .heart.on { opacity:1; color:#E94560; } .heart:hover { background:rgba(0,0,0,.8); transform:scale(1.15); } .heart svg { width:14px; height:14px; }
 .sel-ov { position:absolute; top:6px; left:6px; opacity:0; transition:opacity .15s; } .sel-ov.vis,.card:hover .sel-ov { opacity:1; }
@@ -239,15 +274,16 @@ function cancelEdit() { isEditing.value = false }
 .info { padding:10px 12px 12px; }
 .clip-name-row { display:flex; align-items:center; gap:4px; margin-bottom:6px; }
 .clip-name { font-size:var(--name-size, 13px); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; line-height:1.3; }
-.clip-meta { display:flex; align-items:center; gap:6px; font-size:var(--meta-size, 11px); color:var(--text-muted); flex-wrap:wrap; }
-.pill { background:var(--bg-deep); padding:2px 6px; border-radius:3px; }
-.date-pill { opacity:.75; }
+.clip-meta { display:flex; align-items:center; gap:6px; font-size:var(--meta-size, 11px); color:var(--text-muted); white-space:nowrap; overflow:hidden; }
+.clip-meta > * { min-width:0; }
+.pill { background:var(--bg-deep); padding:2px 6px; border-radius:3px; flex-shrink:0; max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+.date-pill { opacity:.75; max-width: 180px; }
 .game {
-  margin-left:auto; font-weight:700; font-size:10px;
+  margin-left:auto; min-width:0; max-width:100%; flex-shrink:1; font-weight:700; font-size:calc(var(--meta-size, 11px) - 1px);
   color:var(--accent);
   background:color-mix(in srgb, var(--accent) 14%, transparent);
   padding:2px 8px; border-radius:4px;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:120px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
 .kebab {
   flex-shrink:0; width:22px; height:22px; border-radius:4px; border:none;
@@ -262,6 +298,22 @@ function cancelEdit() { isEditing.value = false }
   width:100%; padding:2px 4px; margin:-2px -4px;
   background:var(--bg-input); border:1px solid var(--accent); border-radius:4px;
   color:var(--text); font-size:13px; font-weight:600; outline:none; line-height:1.3;
-}
+  }
 
-</style>
+  .probing-ov {
+  position:absolute; inset:0;
+  background:rgba(0,0,0,.7);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
+  color:var(--text); font-size:11px; font-weight:600;
+  z-index:5;
+  }
+  .probing-spinner {
+  width:20px; height:20px;
+  border:2px solid rgba(255,255,255,.2); border-top-color:#fff;
+  border-radius:50%; animation:spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  .fade-enter-active, .fade-leave-active { transition:opacity .2s; }
+  .fade-enter-from, .fade-leave-to { opacity:0; }
+  </style>

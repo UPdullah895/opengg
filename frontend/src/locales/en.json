@@ -264,7 +264,15 @@
       "free": "Free",
       "total": "Total",
       "diskUsage": "Disk Usage",
-      "loading": "Loading…"
+      "loading": "Loading…",
+      "readError": "Could not read storage info.",
+      "steamSection": "Steam Library",
+      "steamTitle": "Import your Steam library",
+      "steamBody": "Add your Steam library to OpenGG's game pickers and keep it visible here in Storage. After you allow access, OpenGG reads local Steam data and may request Steam Store metadata for names and artwork.",
+      "steamDeniedTitle": "Steam library access is off",
+      "steamDeniedBody": "Allow access to read local Steam data and request Steam Store metadata so OpenGG can list your Steam library here with names and artwork.",
+      "steamReadyTitle": "{count} Steam games in library",
+      "steamReadyBody": "Your Steam library is available in game pickers and listed here with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images."
     },
     "extensions": {
       "title": "Extensions",
@@ -414,7 +422,32 @@
     "importFolder": "Import Folder",
     "groupByDate": "Group by date",
     "viewGrid": "Grid view",
-    "viewList": "List view"
+    "viewList": "List view",
+    "gamesFilter": {
+      "label": "Games",
+      "allGames": "All Games",
+      "empty": "No games found",
+      "clear": "Clear all filters",
+      "searchPlaceholder": "Filter games…",
+      "noMatches": "No matches",
+      "gamePlaceholder": "Game..."
+    },
+    "steamImport": {
+      "title": "Import your Steam library",
+      "body": "Bring your Steam library into the existing game filters and tag pickers. After you allow it, OpenGG reads local Steam data and may request Steam Store metadata for game names and artwork.",
+      "deniedTitle": "Steam library access is off",
+      "deniedBody": "OpenGG has not imported your Steam library. Allow access to read local Steam data and request Steam Store metadata for game names and icons.",
+      "readyTitle": "{count} Steam games available",
+      "readyBody": "Your Steam library is available in the game filters and clip game pickers, with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images.",
+      "consentTitle": "Steam Library Access",
+      "consentMessage": "Allow OpenGG to read your local Steam data and request Steam Store metadata to populate your Steam library, game names, and artwork?",
+      "allowAndImport": "Allow and Import",
+      "import": "Import Steam Games",
+      "refresh": "Refresh Steam Library",
+      "loading": "Importing…",
+      "imported": "Imported {count} Steam games",
+      "failed": "Steam library import failed"
+    }
   },
   "notification": {
     "clipSaved": "Clip Saved",
