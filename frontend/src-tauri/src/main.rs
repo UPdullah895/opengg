@@ -455,6 +455,36 @@ fn main() {
                 });
             }
 
+            // Sleep/wake: emit system-resume after logind PrepareForSleep(false)
+            {
+                use futures_util::StreamExt;
+                let sl_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    async fn listen_sleep(handle: tauri::AppHandle) -> zbus::Result<()> {
+                        let conn = zbus::Connection::system().await?;
+                        let rule = zbus::MatchRule::builder()
+                            .msg_type(zbus::message::Type::Signal)
+                            .sender("org.freedesktop.login1")?
+                            .interface("org.freedesktop.login1.Manager")?
+                            .member("PrepareForSleep")?
+                            .build();
+                        let mut stream = zbus::MessageStream::for_match_rule(
+                            rule, &conn, None,
+                        ).await?;
+                        while let Some(Ok(msg)) = stream.next().await {
+                            if let Ok((going_to_sleep,)) = msg.body().deserialize::<(bool,)>() {
+                                if !going_to_sleep {
+                                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                                    let _ = handle.emit("system-resume", ());
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+                    let _ = listen_sleep(sl_handle).await;
+                });
+            }
+
             // ★ Epic 4: System Tray — "Show OpenGG" + "Quit"
             let show_i = MenuItem::with_id(app, "show", "Show OpenGG",  true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit OpenGG",  true, None::<&str>)?;

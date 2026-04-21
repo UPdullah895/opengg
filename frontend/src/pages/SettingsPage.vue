@@ -1284,7 +1284,7 @@ onMounted(async () => {
   transition: background .12s, color .12s, border-color .12s;
   border-right: 2px solid transparent;
 }
-.nav-item:hover { background: var(--bg-hover); color: var(--text); }
+.nav-item:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
 .nav-item.active {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent); border-right-color: var(--accent);
@@ -1475,6 +1475,7 @@ onMounted(async () => {
 }
 .theme-icon-btn:hover .btn-tooltip { opacity: 1; }
 .lang-actions .btn-tooltip { left: auto; right: 0; transform: none; text-align: end; }
+[data-tooltip-pos="below"] .btn-tooltip { bottom: auto; top: calc(100% + 6px); }
 .spinning { animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -1679,7 +1680,7 @@ onMounted(async () => {
   padding: 0;
 }
 .ext-gear-btn svg { width: 13px; height: 13px; }
-.ext-gear-btn:hover { background: var(--bg-hover); color: var(--text); }
+.ext-gear-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
 
 .ext-card-switch { flex-shrink: 0; }
 
@@ -1804,7 +1805,7 @@ onMounted(async () => {
   background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--text-sec); font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; text-align: left;
 }
-.social-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent); }
+.social-btn:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); border-color: var(--accent); }
 .social-btn svg { flex-shrink: 0; opacity: .8; }
 .social-btn:hover svg { opacity: 1; color: var(--accent); }
 .about-contributors { font-size: 12px; color: var(--text-muted); text-align: center; margin: 0; padding: 8px 0 16px; }
@@ -1818,7 +1819,7 @@ onMounted(async () => {
   background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius);
   cursor: pointer; transition: all .15s;
 }
-.notif-option:hover { background: var(--bg-hover); border-color: var(--accent); }
+.notif-option:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: var(--accent); }
 .notif-option.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .notif-option-icon { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: var(--text-sec); flex-shrink: 0; }
 .notif-option.active .notif-option-icon { color: var(--accent); }
@@ -1847,7 +1848,7 @@ onMounted(async () => {
   background: transparent; border: none; cursor: pointer;
   color: var(--text-muted); transition: color .12s; border-radius: 4px;
 }
-.track-vis-btn:hover { color: var(--text); background: var(--bg-hover); }
+.track-vis-btn:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .track-vis-btn svg { width: 14px; height: 14px; }
 .track-vis-btn.active { color: var(--accent); }
 
@@ -1871,7 +1872,7 @@ onMounted(async () => {
   transition: all .15s; flex-shrink: 0;
 }
 .ext-icon-btn svg { width: 14px; height: 14px; }
-.ext-icon-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent); }
+.ext-icon-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); border-color: var(--accent); }
 .ext-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── Store placeholder ── */

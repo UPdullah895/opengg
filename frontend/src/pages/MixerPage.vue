@@ -229,7 +229,7 @@ onUnmounted(() => {
   color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;
   transition: all .15s; white-space: nowrap;
 }
-.tab-btn:hover { color: var(--text); background: var(--bg-hover); }
+.tab-btn:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .tab-btn--active { background: var(--bg-card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 
 /* DSP / EQ tab panel */

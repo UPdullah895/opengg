@@ -255,7 +255,7 @@ function cancelEdit() { isEditing.value = false }
   display:flex; align-items:center; justify-content:center;
   transition:all .15s;
 }
-.kebab:hover { background:var(--bg-hover); color:var(--text); }
+.kebab:hover { background:color-mix(in srgb, var(--accent) 10%, transparent); color:var(--accent); }
 .kebab svg { width:16px; height:16px; }
 
 .inline-edit {

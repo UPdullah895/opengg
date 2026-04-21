@@ -3,7 +3,7 @@ import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDeviceStore } from '../stores/devices'
 import type { DeviceInfo } from '../stores/devices'
-import { getDeviceImage, ICON_AUDIO, ICON_POWER, ICON_VOLUME, ICON_BLUETOOTH } from '../assets/deviceAssets'
+import { getDeviceImage, trimDeviceName, ICON_AUDIO, ICON_POWER, ICON_VOLUME, ICON_BLUETOOTH } from '../assets/deviceAssets'
 
 const { t } = useI18n()
 const props = defineProps<{ device: DeviceInfo }>()
@@ -155,7 +155,7 @@ const deviceImage = computed(() => getDeviceImage(props.device.vid, props.device
       <div class="device-hero">
         <img :src="deviceImage" :alt="device.name" class="hero-img" />
         <div class="hero-overlay">
-          <span class="hero-name">{{ device.name }}</span>
+          <span class="hero-name">{{ trimDeviceName(device.name) }}</span>
           <span class="hero-type">{{ t(`devices.${device.deviceType}`) }}</span>
         </div>
       </div>

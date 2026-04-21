@@ -203,6 +203,7 @@ const headerBatteryColor = computed(() => {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 14px;
+  aspect-ratio: 1 / 1;
   padding: 18px;
   display: flex;
   flex-direction: column;
@@ -253,15 +254,31 @@ const headerBatteryColor = computed(() => {
   width: 34px;
   height: 34px;
   background: var(--bg-input);
-  border: none;
+  border: 1px solid transparent;
   color: var(--text-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background .15s, color .15s;
+  transition: all 200ms ease-in-out;
 }
-.vt-btn :deep(svg) { width: 14px; height: 14px; }
-.vt-btn:hover { background: var(--bg-hover); color: var(--text); }
-.vt-btn.active { background: var(--accent); color: #fff; }
+/* Explicitly center the v-html SVG spans */
+.vt-btn > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+.vt-btn :deep(svg) { width: 14px; height: 14px; display: block; }
+.vt-btn:hover {
+  background: var(--color-accent-alpha-10);
+  border: 1px solid var(--color-accent-alpha-50);
+  color: var(--accent);
+}
+.vt-btn.active {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border: 1px solid var(--color-accent-alpha-50);
+  color: var(--accent);
+}
 </style>

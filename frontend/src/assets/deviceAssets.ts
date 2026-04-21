@@ -7,6 +7,9 @@
  */
 
 const _deviceImages = import.meta.glob('./devices/*.png', { eager: true, import: 'default' }) as Record<string, string>
+const _deviceImagesLower = Object.fromEntries(
+  Object.entries(_deviceImages).map(([k, v]) => [k.toLowerCase(), v])
+)
 
 const PLACEHOLDERS: Record<string, string> = {
   headset: `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='200' viewBox='0 0 300 200'%3E%3Crect width='300' height='200' fill='%23171923'/%3E%3Cpath d='M60 140v-30a60 60 0 01120 0v30' stroke='%23E94560' stroke-width='8' fill='none' stroke-linecap='round'/%3E%3Crect x='40' y='130' width='30' height='50' rx='10' fill='%23E94560'/%3E%3Crect x='230' y='130' width='30' height='50' rx='10' fill='%23E94560'/%3E%3C/svg%3E`,
@@ -17,7 +20,7 @@ const PLACEHOLDERS: Record<string, string> = {
 /** Returns the PNG path for a device (auto-discovered from src/assets/devices/), or a type-appropriate SVG placeholder. */
 export function getDeviceImage(vid: number, pid: number, type = 'default'): string {
   const key = `${vid.toString(16).padStart(4, '0')}_${pid.toString(16).padStart(4, '0')}`
-  const img = _deviceImages[`./devices/${key}.png`]
+  const img = _deviceImagesLower[`./devices/${key}.png`]
   if (img) return img
   return PLACEHOLDERS[type] ?? PLACEHOLDERS.default
 }

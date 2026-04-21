@@ -10,6 +10,7 @@
     "tauri": "npx tauri"
   },
   "dependencies": {
+    "@floating-ui/vue": "^1.1.0",
     "@tauri-apps/api": "^2.0",
     "@tauri-apps/plugin-dialog": "^2.0",
     "@tauri-apps/plugin-opener": "^2.0",

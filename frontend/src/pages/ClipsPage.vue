@@ -1079,10 +1079,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .fav-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
 
 .view-toggle { display:flex; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
-.vt-btn { width:32px; height:32px; background:var(--bg-input); border:none; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background .15s,color .15s; }
+.vt-btn { width:32px; height:32px; background:var(--bg-input); border:1px solid transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 200ms ease-in-out; }
 .vt-btn svg { width:14px; height:14px; }
-.vt-btn:hover { background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); }
-.vt-btn.active { background:color-mix(in srgb, var(--accent) 22%, transparent); color:var(--accent); }
+.vt-btn:hover { background:var(--color-accent-alpha-10); border:1px solid var(--color-accent-alpha-50); color:var(--accent); }
+.vt-btn.active { background:color-mix(in srgb, var(--accent) 20%, transparent); border:1px solid var(--color-accent-alpha-50); color:var(--accent); }
 
 /* Scroll container */
 .scroll-area { flex:1; min-height:0; overflow:hidden; display:flex; flex-direction:column; position:relative; user-select:none; }

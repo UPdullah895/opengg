@@ -12,6 +12,7 @@ const props = defineProps<{
 const emit = defineEmits<{ 'open-settings': [] }>()
 
 const imgSrc = computed(() => getDeviceImage(props.device.vid, props.device.pid, props.device.deviceType))
+const hasRealImage = computed(() => imgSrc.value && !imgSrc.value.startsWith('data:image/svg'))
 
 const batteryColor = computed(() => {
   const lvl = props.device.batteryLevel ?? -1
@@ -20,10 +21,15 @@ const batteryColor = computed(() => {
   if (lvl > 20) return 'var(--accent)'
   return '#ef4444'
 })
+
+const cardStyle = computed(() => ({
+  '--device-img-bg': hasRealImage.value ? 'var(--bg-surface)' : 'transparent',
+} as Record<string, string>))
 </script>
 
 <template>
-  <div class="device-card" :class="mode ?? 'grid'" @click="emit('open-settings')">
+  <div class="device-card" :class="mode ?? 'grid'" :style="mode !== 'list' ? cardStyle : undefined" @click="emit('open-settings')">
+
     <!-- List layout -->
     <template v-if="mode === 'list'">
       <div class="list-image">
@@ -53,7 +59,9 @@ const batteryColor = computed(() => {
         </div>
       </div>
       <button class="gear-btn" @click.stop="emit('open-settings')" :title="t('devices.settings')">
-        <span v-html="ICON_GEAR" />
+        <span class="gear-icon">
+          <span v-html="ICON_GEAR" />
+        </span>
       </button>
     </template>
 
@@ -64,7 +72,7 @@ const batteryColor = computed(() => {
         <span class="type-badge">{{ t(`devices.${device.deviceType}`) }}</span>
       </div>
 
-      <div class="card-image">
+      <div class="card-image" :class="{ 'has-real-img': hasRealImage }">
         <img v-if="imgSrc" :src="imgSrc" :alt="device.name" draggable="false" />
         <div v-else class="device-icon">
           <svg v-if="device.deviceType === 'headset'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -88,7 +96,9 @@ const batteryColor = computed(() => {
         </div>
         <div class="spacer" />
         <button class="gear-btn" @click.stop="emit('open-settings')" :title="t('devices.settings')">
-          <span v-html="ICON_GEAR" />
+          <span class="gear-icon">
+            <span v-html="ICON_GEAR" />
+          </span>
         </button>
       </div>
     </template>
@@ -110,13 +120,14 @@ const batteryColor = computed(() => {
   box-shadow: 0 4px 20px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
-/* ── Grid card ── */
+/* ── Grid card — square ── */
 .device-card.grid {
+  aspect-ratio: 1 / 1;
   padding: 18px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  min-height: 280px;
+  min-height: unset;
 }
 .device-card.grid:hover { transform: translateY(-2px); }
 
@@ -148,18 +159,24 @@ const batteryColor = computed(() => {
   width: fit-content;
 }
 .card-image {
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 160px;
+  padding: 1.5rem;
   border-radius: 10px;
-  background: var(--bg-surface);
+  background: var(--device-img-bg, var(--bg-surface));
   overflow: hidden;
 }
 .card-image img {
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
+}
+/* Blend dark-background headset PNGs against the card */
+.card-image.has-real-img img {
+  mix-blend-mode: screen;
 }
 .device-icon {
   display: flex;
@@ -265,5 +282,13 @@ const batteryColor = computed(() => {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
-.gear-btn :deep(svg) { width: 16px; height: 16px; }
+/* Flex-center the inner v-html span */
+.gear-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.gear-icon :deep(svg) { width: 16px; height: 16px; }
 </style>

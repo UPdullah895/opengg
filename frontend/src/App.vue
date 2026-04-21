@@ -223,6 +223,14 @@ onMounted(async () => {
     }
   })
 
+  // Restore audio routing immediately after system wake (logind PrepareForSleep → false)
+  listen('system-resume', async () => {
+    const { useAudioStore } = await import('./stores/audio')
+    const audioStore = useAudioStore()
+    audioStore.fetchApps()
+    audioStore.fetchChannels()
+  })
+
   // ★ Epic 4: Listen for audio reset flow from SettingsPage danger zone
   window.addEventListener('openOnboarding', (e: Event) => {
     const detail = (e as CustomEvent<{ step?: number }>).detail
@@ -367,6 +375,9 @@ async function loadUserLocales() {
   --text-sec: #94a3b8;
   --text-muted: #4a5568;
   --accent: #E94560;
+  --accent-rgb: 233, 69, 96;
+  --color-accent-alpha-10: color-mix(in srgb, var(--accent) 10%, transparent);
+  --color-accent-alpha-50: color-mix(in srgb, var(--accent) 50%, transparent);
   --danger: #dc2626;
   --success: #10b981;
   --purple: #a855f7;

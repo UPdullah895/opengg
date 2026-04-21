@@ -53,6 +53,11 @@ fn parse_hex_u16(s: &str) -> u16 {
     u16::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0)
 }
 
+/// Format a VID and PID as "0xHHHH:0xHHHH" for headsetcontrol's --device argument.
+fn vid_pid_arg(vid: u16, pid: u16) -> String {
+    format!("0x{:04x}:0x{:04x}", vid, pid)
+}
+
 fn normalize_cap(cap: &str) -> String {
     cap.strip_prefix("CAP_").unwrap_or(cap).to_lowercase()
 }
@@ -60,6 +65,8 @@ fn normalize_cap(cap: &str) -> String {
 pub struct HeadsetManager;
 
 impl HeadsetManager {
+    /// List all connected headsets by invoking `headsetcontrol --output json`.
+    /// Returns one `DeviceInfo` per headset, using VID:PID-based device IDs.
     pub fn list_devices() -> Vec<DeviceInfo> {
         let path_env = std::env::var("PATH")
             .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
@@ -95,7 +102,7 @@ impl HeadsetManager {
             .devices
             .into_iter()
             .enumerate()
-            .map(|(idx, d)| {
+            .map(|(_idx, d)| {
                 let vid = parse_hex_u16(d.id_vendor.as_deref().unwrap_or(""));
                 let pid = parse_hex_u16(d.id_product.as_deref().unwrap_or(""));
 
@@ -117,7 +124,9 @@ impl HeadsetManager {
                 });
 
                 DeviceInfo {
-                    id: format!("headset:{idx}"),
+                    // Use "headset:{vid}:{pid}" so the ID encodes the VID:PID directly,
+                    // matching what headsetcontrol expects for --device selection.
+                    id: format!("headset:{}:{}", vid, pid),
                     name: d.product.clone(),
                     model: d.product,
                     device_type: DeviceType::Headset,
@@ -138,138 +147,108 @@ impl HeadsetManager {
             .collect()
     }
 
-    pub fn set_sidetone(device_idx: usize, level: u32) -> Result<()> {
-        let idx_str = device_idx.to_string();
+    /// Issue a headsetcontrol command targeting the device identified by vid:pid.
+    fn call_headsetcontrol(vid: u16, pid: u16, args: &[&str]) -> Result<()> {
+        let path_env = std::env::var("PATH")
+            .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
+        let device_arg = vid_pid_arg(vid, pid);
+        let mut all_args: Vec<&str> = vec!["--device", &device_arg];
+        all_args.extend(args);
         let output = Command::new("headsetcontrol")
-            .args(["--device", &idx_str, "-s", &level.to_string()])
+            .env("PATH", path_env)
+            .args(&all_args)
             .output()
             .context("headsetcontrol spawn failed")?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("headsetcontrol failed (exit {:?}): {}", output.status.code(), stderr.trim());
+            anyhow::bail!(
+                "headsetcontrol --device {} failed (exit {:?}): {}",
+                device_arg,
+                output.status.code(),
+                stderr.trim()
+            );
         }
         Ok(())
     }
 
-    pub fn set_chatmix(device_idx: usize, level: u32) -> Result<()> {
-        let idx_str = device_idx.to_string();
-        let output = Command::new("headsetcontrol")
-            .args(["--device", &idx_str, "--chatmix", &level.to_string()])
-            .output()
-            .context("headsetcontrol spawn failed")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("headsetcontrol failed (exit {:?}): {}", output.status.code(), stderr.trim());
-        }
-        Ok(())
+    pub fn set_sidetone(vid: u16, pid: u16, level: u32) -> Result<()> {
+        Self::call_headsetcontrol(
+            vid,
+            pid,
+            &["-s", &level.to_string()],
+        )
     }
 
-    pub fn set_inactive_time(device_idx: usize, minutes: u32) -> Result<()> {
-        let idx_str = device_idx.to_string();
-        let output = Command::new("headsetcontrol")
-            .args(["--device", &idx_str, "-i", &minutes.to_string()])
-            .output()
-            .context("headsetcontrol spawn failed")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("headsetcontrol failed (exit {:?}): {}", output.status.code(), stderr.trim());
-        }
-        Ok(())
+    pub fn set_chatmix(vid: u16, pid: u16, level: u32) -> Result<()> {
+        Self::call_headsetcontrol(
+            vid,
+            pid,
+            &["--chatmix", &level.to_string()],
+        )
     }
 
-    pub fn set_microphone_volume(device_idx: usize, level: u32) -> Result<()> {
-        let idx_str = device_idx.to_string();
-        let output = Command::new("headsetcontrol")
-            .args(["--device", &idx_str, "--microphone-volume", &level.to_string()])
-            .output()
-            .context("headsetcontrol spawn failed")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("headsetcontrol failed (exit {:?}): {}", output.status.code(), stderr.trim());
-        }
-        Ok(())
+    pub fn set_inactive_time(vid: u16, pid: u16, minutes: u32) -> Result<()> {
+        Self::call_headsetcontrol(
+            vid,
+            pid,
+            &["-i", &minutes.to_string()],
+        )
     }
 
-    pub fn set_mic_mute_led_brightness(device_idx: usize, brightness: u32) -> Result<()> {
-        let idx_str = device_idx.to_string();
-        let output = Command::new("headsetcontrol")
-            .args(["--device", &idx_str, "--microphone-mute-led-brightness", &brightness.to_string()])
-            .output()
-            .context("headsetcontrol spawn failed")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("headsetcontrol failed (exit {:?}): {}", output.status.code(), stderr.trim());
-        }
-        Ok(())
+    pub fn set_microphone_volume(vid: u16, pid: u16, level: u32) -> Result<()> {
+        Self::call_headsetcontrol(
+            vid,
+            pid,
+            &["--microphone-volume", &level.to_string()],
+        )
     }
 
-    pub fn set_volume_limiter(device_idx: usize, enabled: bool) -> Result<()> {
-        let idx_str = device_idx.to_string();
-        let output = Command::new("headsetcontrol")
-            .args(["--device", &idx_str, "--volume-limiter", if enabled { "1" } else { "0" }])
-            .output()
-            .context("headsetcontrol spawn failed")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("headsetcontrol failed (exit {:?}): {}", output.status.code(), stderr.trim());
-        }
-        Ok(())
+    pub fn set_mic_mute_led_brightness(vid: u16, pid: u16, brightness: u32) -> Result<()> {
+        Self::call_headsetcontrol(
+            vid,
+            pid,
+            &["--microphone-mute-led-brightness", &brightness.to_string()],
+        )
     }
 
-    pub fn set_bt_when_powered_on(device_idx: usize, enabled: bool) -> Result<()> {
-        let idx_str = device_idx.to_string();
-        let output = Command::new("headsetcontrol")
-            .args(["--device", &idx_str, "--bt-when-powered-on", if enabled { "1" } else { "0" }])
-            .output()
-            .context("headsetcontrol spawn failed")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("headsetcontrol failed (exit {:?}): {}", output.status.code(), stderr.trim());
-        }
-        Ok(())
+    pub fn set_volume_limiter(vid: u16, pid: u16, enabled: bool) -> Result<()> {
+        Self::call_headsetcontrol(
+            vid,
+            pid,
+            &["--volume-limiter", if enabled { "1" } else { "0" }],
+        )
     }
 
-    pub fn set_bt_call_volume(device_idx: usize, level: u32) -> Result<()> {
-        let idx_str = device_idx.to_string();
-        let output = Command::new("headsetcontrol")
-            .args(["--device", &idx_str, "--bt-call-volume", &level.to_string()])
-            .output()
-            .context("headsetcontrol spawn failed")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("headsetcontrol failed (exit {:?}): {}", output.status.code(), stderr.trim());
-        }
-        Ok(())
+    pub fn set_bt_when_powered_on(vid: u16, pid: u16, enabled: bool) -> Result<()> {
+        Self::call_headsetcontrol(
+            vid,
+            pid,
+            &["--bt-when-powered-on", if enabled { "1" } else { "0" }],
+        )
     }
 
-    pub fn set_eq_preset(device_idx: usize, preset_idx: u32) -> Result<()> {
-        let idx_str = device_idx.to_string();
-        let output = Command::new("headsetcontrol")
-            .args(["--device", &idx_str, "-p", &preset_idx.to_string()])
-            .output()
-            .context("headsetcontrol spawn failed")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("headsetcontrol failed (exit {:?}): {}", output.status.code(), stderr.trim());
-        }
-        Ok(())
+    pub fn set_bt_call_volume(vid: u16, pid: u16, level: u32) -> Result<()> {
+        Self::call_headsetcontrol(
+            vid,
+            pid,
+            &["--bt-call-volume", &level.to_string()],
+        )
     }
 
-    pub fn set_eq_curve(device_idx: usize, bands: &[f32]) -> Result<()> {
-        let idx_str = device_idx.to_string();
+    pub fn set_eq_preset(vid: u16, pid: u16, preset_idx: u32) -> Result<()> {
+        Self::call_headsetcontrol(
+            vid,
+            pid,
+            &["-p", &preset_idx.to_string()],
+        )
+    }
+
+    pub fn set_eq_curve(vid: u16, pid: u16, bands: &[f32]) -> Result<()> {
         let csv = bands
             .iter()
             .map(|v| v.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        let output = Command::new("headsetcontrol")
-            .args(["--device", &idx_str, "-e", &csv])
-            .output()
-            .context("headsetcontrol spawn failed")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("headsetcontrol failed (exit {:?}): {}", output.status.code(), stderr.trim());
-        }
-        Ok(())
+        Self::call_headsetcontrol(vid, pid, &["-e", &csv])
     }
 }
