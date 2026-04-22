@@ -518,7 +518,9 @@
     "macroRecord": "Record Key",
     "macroSave": "Save",
     "macroClear": "Clear",
-    "macroNoButton": "Select a button on the mouse diagram"
+    "macroNoButton": "Select a button on the mouse diagram",
+    "comingSoon": "Devices — Coming Soon",
+    "comingSoonDesc": "We are working on providing full support for your favourite devices. Stay tuned for upcoming updates."
   },
   "onboarding": {
     "steps": {

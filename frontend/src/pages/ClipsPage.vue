@@ -1518,7 +1518,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .title-count { font-size:14px; font-weight:400; color:var(--text-muted); margin-left:8px; }
 
 /* ★ Epic 2: Mixer-style grid size slider */
-.size-slider-wrap { display:flex; align-items:center; gap:6px; padding:0 10px; height:32px; background:var(--bg-card); border:1px solid var(--border); border-radius:7px; user-select:none; }
+.size-slider-wrap { display:flex; align-items:center; gap:6px; padding:0 10px; height:32px; background:var(--bg-card); border:1px solid var(--border); border-radius:7px; }
 .size-ic { width:14px; height:14px; color:var(--text-muted); flex-shrink:0; }
 .size-range-wrap { position:relative; display:flex; align-items:center; }
 
@@ -1526,7 +1526,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   -webkit-appearance: none; appearance: none;
   width: 72px; height: 6px;
   background: var(--bg-deep); border: 1px solid var(--border); border-radius: 3px;
-  outline: none; cursor: pointer; user-select: none;
+  outline: none; cursor: pointer;
 }
 /* Rectangular thumb — same style as Audio Mixer fader */
 .size-range::-webkit-slider-thumb {
@@ -1602,7 +1602,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .vt-btn.active { background:color-mix(in srgb, var(--accent) 20%, transparent); border:1px solid var(--color-accent-alpha-50); color:var(--accent); }
 
 /* Scroll container */
-.scroll-area { flex:1; min-height:0; overflow:hidden; display:flex; flex-direction:column; position:relative; user-select:none; }
+.scroll-area { flex:1; min-height:0; overflow:hidden; display:flex; flex-direction:column; position:relative; }
 
 /* scroll-host: positions the OverlayScrollbar relative to itself */
 .scroll-host {
@@ -1619,11 +1619,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
   will-change: scroll-position;
-  user-select: none;
   overflow-anchor: none;
 }
 .native-grid-host::-webkit-scrollbar { display: none; width: 0; }
-.native-grid { user-select: none; }
+
 
 /* Scan banner */
 .scan-banner {
@@ -1745,7 +1744,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .grouped-grid { width: 100%; }
 .date-label { font-size:14px; font-weight:700; color:var(--text); }
 .date-count { font-size:11px; font-weight:600; color:var(--text-muted); background:var(--bg-deep); padding:2px 8px; border-radius:10px; }
-.group-sel-box { width:20px; height:20px; border-radius:5px; border:2px solid var(--text-muted); background:transparent; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px; color:transparent; transition:border-color .15s, background .15s; flex-shrink:0; user-select:none; }
+.group-sel-box { width:20px; height:20px; border-radius:5px; border:2px solid var(--text-muted); background:transparent; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px; color:transparent; transition:border-color .15s, background .15s; flex-shrink:0; }
 .group-sel-box:hover { border-color:var(--accent); }
 .group-sel-box.checked { background:var(--accent); border-color:var(--accent); color:#fff; }
 .group-sel-box.indeterminate { border-color:var(--accent); color:var(--accent); }
@@ -1782,7 +1781,6 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   color: var(--text-muted);
   text-align: center;
   padding: 40px;
-  user-select: none;
 }
 .empty-ic { font-size: 48px; opacity: 0.3; margin-bottom: 4px; }
 .empty-state p { margin: 0; font-size: 16px; font-weight: 700; color: var(--text-sec); }

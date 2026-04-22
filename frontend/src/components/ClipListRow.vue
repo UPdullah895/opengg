@@ -199,7 +199,7 @@ async function loadTrimState() {
   display:flex; align-items:stretch; gap:12px;
   padding: 0 calc(var(--list-pad, 8px) + 4px) 0 0;
   background:var(--bg-card); border:1px solid var(--border); border-radius:8px;
-  cursor:pointer; overflow:hidden; user-select:none;
+  cursor:pointer; overflow:hidden;
   transition: background .15s, padding .25s ease;
   contain: layout style paint;
 }
@@ -223,7 +223,7 @@ async function loadTrimState() {
 .list-sel-box.checked { background:var(--accent); border-color:var(--accent); color:#fff; }
 
 .list-thumb {
-  object-fit:cover; background:var(--bg-deep); user-select:none; -webkit-user-drag:none; pointer-events:none;
+  object-fit:cover; background:var(--bg-deep); pointer-events:none;
 }
 .list-thumb-empty {
   background:var(--bg-deep); flex-shrink:0;

@@ -177,7 +177,7 @@ function onFaderDown(e: MouseEvent) {
 .hdr { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
 .icon-box { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
 .icon-box :deep(svg) { width: 15px; height: 15px; }
-.name { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; }
+.name { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; user-select: none; }
 
 .fader-row {
   display: flex; gap: 5px; align-items: stretch; width: 100%; justify-content: center;
@@ -239,9 +239,9 @@ function onFaderDown(e: MouseEvent) {
 @keyframes tip-in { from { opacity: 0; transform: translateX(-50%) translateY(3px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 
 /* Volume label */
-.vol { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: center; line-height: 1; transition: color .2s; flex-shrink: 0; }
+.vol { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: center; line-height: 1; transition: color .2s; flex-shrink: 0; user-select: none; }
 .vol-u { font-size: 10px; font-weight: 600; opacity: .5; margin-left: 1px; }
-.vol-db { font-size: 9px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-muted); opacity: .55; text-align: center; flex-shrink: 0; margin-top: -3px; }
+.vol-db { font-size: 9px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-muted); opacity: .55; text-align: center; flex-shrink: 0; margin-top: -3px; user-select: none; }
 .voldb-u { font-size: 7px; opacity: .7; }
 
 /* Buttons */

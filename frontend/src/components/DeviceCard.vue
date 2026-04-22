@@ -33,7 +33,7 @@ const cardStyle = computed(() => ({
     <!-- List layout -->
     <template v-if="mode === 'list'">
       <div class="list-image">
-        <img v-if="imgSrc" :src="imgSrc" :alt="device.name" draggable="false" />
+        <img v-if="hasRealImage" :src="imgSrc" :alt="device.name" draggable="false" />
         <div v-else class="list-icon">
           <svg v-if="device.deviceType === 'headset'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M3 18v-6a9 9 0 0 1 18 0v6M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
@@ -73,7 +73,7 @@ const cardStyle = computed(() => ({
       </div>
 
       <div class="card-image" :class="{ 'has-real-img': hasRealImage }">
-        <img v-if="imgSrc" :src="imgSrc" :alt="device.name" draggable="false" />
+        <img v-if="hasRealImage" :src="imgSrc" :alt="device.name" draggable="false" />
         <div v-else class="device-icon">
           <svg v-if="device.deviceType === 'headset'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M3 18v-6a9 9 0 0 1 18 0v6M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
@@ -157,6 +157,7 @@ const cardStyle = computed(() => ({
   border-radius: 20px;
   flex-shrink: 0;
   width: fit-content;
+  user-select: none;
 }
 .card-image {
   flex: 1;
@@ -173,10 +174,16 @@ const cardStyle = computed(() => ({
   width: 100%;
   height: 100%;
   object-fit: contain;
+  user-select: none;
+  pointer-events: none;
 }
 /* Blend dark-background headset PNGs against the card */
 .card-image.has-real-img img {
   mix-blend-mode: screen;
+}
+/* Light theme: disable blending so transparent PNGs don't bleach out */
+html.light .card-image.has-real-img img {
+  mix-blend-mode: normal;
 }
 .device-icon {
   display: flex;
@@ -186,7 +193,7 @@ const cardStyle = computed(() => ({
   height: 100%;
   color: var(--accent);
 }
-.device-icon svg { width: 56px; height: 56px; opacity: 0.7; }
+.device-icon svg { width: 56px; height: 56px; opacity: 0.7; user-select: none; pointer-events: none; }
 
 .card-footer {
   display: flex;
@@ -219,6 +226,8 @@ const cardStyle = computed(() => ({
   width: 100%;
   height: 100%;
   object-fit: contain;
+  pointer-events: none;
+  user-select: none;
 }
 .list-icon {
   display: flex;
@@ -228,7 +237,7 @@ const cardStyle = computed(() => ({
   height: 100%;
   color: var(--accent);
 }
-.list-icon svg { width: 36px; height: 36px; opacity: 0.7; }
+.list-icon svg { width: 36px; height: 36px; opacity: 0.7; user-select: none; pointer-events: none; -webkit-user-drag: none; }
 
 .list-body {
   flex: 1;
@@ -282,13 +291,14 @@ const cardStyle = computed(() => ({
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
-/* Flex-center the inner v-html span */
+/* Gear icon: pixel-perfect center in the 32px button */
 .gear-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
+  display: grid;
+  place-items: center;
+  line-height: 0;
 }
-.gear-icon :deep(svg) { width: 16px; height: 16px; }
+.gear-icon :deep(svg) {
+  width: 18px;
+  height: 18px;
+}
 </style>

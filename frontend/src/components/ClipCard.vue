@@ -255,11 +255,11 @@ function cancelEdit() { isEditing.value = false }
 </template>
 
 <style scoped>
-.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; contain:layout style paint; height: 100%; user-select:none; }
+.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; contain:layout style paint; height: 100%; }
 .card:hover { border-color:var(--accent); transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.25); }
 .card.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent); }
 .thumb { width:100%; aspect-ratio:16/9; background:var(--bg-deep); position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden; }
-.thumb-img { width:100%; height:100%; object-fit:cover; display:block; opacity:0; transition:opacity 0.25s; user-select:none; -webkit-user-drag:none; pointer-events:none; }
+.thumb-img { width:100%; height:100%; object-fit:cover; display:block; opacity:0; transition:opacity 0.25s; pointer-events:none; }
 .thumb-img.loaded { opacity:1; }
 .thumb-ph { font-size:28px; opacity:.3; }
 .badge { position:absolute; bottom:6px; right:6px; background:rgba(0,0,0,.8); color:#fff; font-size:11px; font-weight:600; padding:2px 7px; border-radius:4px; pointer-events:none; display:flex; align-items:center; gap:4px; }

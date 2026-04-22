@@ -26,6 +26,14 @@ import { useToast } from './composables/useToast'
 
 const { t, locale } = useI18n()
 
+// Global context menu lockdown — native app feel
+// Allow native copy/paste only inside text input fields
+document.addEventListener('contextmenu', (e) => {
+  const target = e.target as HTMLElement
+  if (target.closest('input, textarea, [contenteditable="true"]')) return
+  e.preventDefault()
+}, { passive: false })
+
 // Overlay mode: this window was opened by show_clip_notification (Rust) with ?overlay=1
 const isOverlay = typeof window !== 'undefined' &&
   new URLSearchParams(window.location.search).get('overlay') === '1'
@@ -418,32 +426,39 @@ html.light {
   --text-muted: #9ca3af;
   color-scheme: light;
 }
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-/* Text is selectable by default — informational content should be copyable.
-   Only interactive chrome is locked down to preserve native-app feel. */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--bg-surface);
   color: var(--text);
   overflow: hidden;
-  -webkit-user-select: none;
-  user-select: none;
 }
-/* Prevent drag-highlighting on non-text UI chrome */
-img, svg { user-select: none; -webkit-user-drag: none; }
-/* Interactive elements: no text selection (native app feel) */
-button,
+
+/* ═══ Global lockdown — nothing selectable or draggable by default ═══ */
+* {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-user-drag: none !important;
+  user-drag: none !important;
+}
+
+/* ═══ THE ONLY exceptions — input/textarea/contenteditable ARE selectable ═══ */
 input,
 textarea,
-select,
-.sidebar-btn,
-.nav-item,
-.tab-btn,
-.thumb,
-.thumb-img,
-[data-tauri-drag-region],
-.card-head,
-.tb-btn { user-select: none; -webkit-user-select: none; }
+[contenteditable="true"] {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+}
+
 .app-layout { display: flex; flex-direction: column; height: 100vh; }
 .app-body { display: flex; flex: 1; overflow: hidden; }
 .content { flex: 1; padding: 20px 28px; overflow-y: auto; }

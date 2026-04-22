@@ -258,7 +258,7 @@ impl RatbagManager {
                     .build()
                     .await?;
                 if res.is_active().await.unwrap_or(false) {
-                    res.inner().set_property("Resolution", zvariant::Value::from((dpi, dpi))).await?;
+                    res.inner().set_property("Resolution", zvariant::Value::from(dpi)).await?;
                     dev.commit().await?;
                     tracing::info!("Set DPI to {dpi} on {sysname}");
                     return Ok(());
