@@ -30,9 +30,13 @@ const items = [
       </button>
     </div>
     <div class="sidebar-footer">
-      <div class="daemon-status">
-        <span class="dot connected"></span>
-        <span>Core Active</span>
+      <div class="sidebar-tip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tip-icon">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="16" x2="12" y2="12"/>
+          <line x1="12" y1="8" x2="12.01" y2="8"/>
+        </svg>
+        <span class="tip-text"><span class="tip-text-inner">{{ t('sidebar.tip') }}</span></span>
       </div>
     </div>
   </nav>
@@ -97,5 +101,55 @@ const items = [
 .dot.connected {
   background: var(--success);
   box-shadow: 0 0 6px var(--success);
+}
+.sidebar-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  user-select: none !important;
+}
+.tip-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
+  opacity: 0.7;
+}
+.tip-text {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.tip-text-inner {
+  display: inline-block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  will-change: transform;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  transform: translateX(0);
+  opacity: 1;
+}
+.tip-text:hover .tip-text-inner {
+  overflow: visible;
+  text-overflow: initial;
+  animation: tip-marquee 8s linear infinite;
+  opacity: 0;
+}
+@keyframes tip-marquee {
+  0%   { transform: translateX(0);     opacity: 0; }
+  5%   { opacity: 1; }
+  45%  { transform: translateX(-100%); opacity: 1; }
+  50%  { transform: translateX(-100%); opacity: 0; }
+  55%  { transform: translateX(calc(-100% - 4px)); opacity: 0; }
+  95%  { opacity: 1; }
+  100% { transform: translateX(0);     opacity: 0; }
 }
 </style>

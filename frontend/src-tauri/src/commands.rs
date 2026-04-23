@@ -1210,7 +1210,7 @@ pub async fn export_clip_with_filters(
     let mut out = if output_path.is_empty() {
         auto_name(&input_path, "_export")
     } else {
-        smart_prefix(&output_path)
+        output_path
     };
     if out == input_path || Path::new(&out) == Path::new(&input_path) {
         out = auto_name(&input_path, "_export");
@@ -2655,7 +2655,7 @@ pub async fn export_clip_sized(
     let mut out = if output_path.is_empty() {
         auto_name(&input_path, &format!("_{}mb", target_mb as u32))
     } else {
-        smart_prefix(&output_path)
+        output_path
     };
     if out == input_path {
         out = auto_name(&input_path, &format!("_{}mb", target_mb as u32));
@@ -2933,7 +2933,7 @@ pub async fn export_with_progress(
     let out = if output_path.is_empty() {
         auto_name(&input_path, "_export")
     } else {
-        smart_prefix(&output_path)
+        output_path
     };
 
     // Input-side seeking: -ss/-to BEFORE -i so FFmpeg seeks to the keyframe
@@ -4278,6 +4278,14 @@ fn smart_prefix(path: &str) -> String {
         .join(new_name)
         .to_string_lossy()
         .into()
+}
+
+/// Write text to the system clipboard.
+#[tauri::command]
+pub async fn write_clipboard(text: String) -> Result<(), String> {
+    let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    cb.set_text(&text).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

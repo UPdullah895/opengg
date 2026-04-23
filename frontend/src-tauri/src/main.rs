@@ -227,6 +227,7 @@ fn main() {
             commands::generate_waveform,
             commands::export_with_progress,
             commands::cancel_export,
+            commands::write_clipboard,
             // Recording
             commands::start_screen_recording,
             commands::stop_screen_recording,

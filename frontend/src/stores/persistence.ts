@@ -121,7 +121,7 @@ export const DEFAULTS: PersistedState = {
     rtlMode:               false,
   },
   modules: { audio: true, device: true, replay: true },
-  extensions: { 'overlays-system': true, 'tiktok-export': true },
+  extensions: {},
   macros: {},
 }
 
@@ -176,15 +176,6 @@ export const usePersistenceStore = defineStore('persistence', () => {
         if (a1i === -1 && a1Def) {
           const v1Pos = defs.findIndex(d => d.id === 'V1')
           defs.splice(v1Pos !== -1 ? v1Pos + 1 : defs.length, 0, { ...a1Def })
-        }
-        // Migration: extensions changed from { overlays, tiktokExport } to Record<string, boolean>
-        if (typeof state.value.extensions?.['overlays'] === 'boolean') {
-          state.value.extensions['overlays-system'] = state.value.extensions['overlays'] as boolean
-          delete state.value.extensions['overlays']
-        }
-        if (typeof state.value.extensions?.['tiktokExport'] === 'boolean') {
-          state.value.extensions['tiktok-export'] = state.value.extensions['tiktokExport'] as boolean
-          delete state.value.extensions['tiktokExport']
         }
         // Migration: ensure all existing tracks have the visible field
         for (const def of defs) {

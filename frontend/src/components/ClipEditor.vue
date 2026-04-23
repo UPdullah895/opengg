@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, inject } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { mediaUrl } from '../utils/assets'
+import { useModalStore } from '../stores/modal'
 import type { Clip, SteamGame } from '../stores/replay'
 import { useReplayStore } from '../stores/replay'
 import type { Ref } from 'vue'
@@ -12,6 +13,7 @@ const props = defineProps<{ clip: Clip; mode: 'preview' | 'trim' }>()
 const emit = defineEmits<{ 'close': []; 'saved': [string]; 'toast': [string] }>()
 
 const replay = useReplayStore()
+const modal = useModalStore()
 const playerComp = ref<InstanceType<typeof CustomVideoPlayer> | null>(null)
 
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
@@ -88,9 +90,14 @@ async function toggleFavorite() {
 }
 
 async function deleteClip() {
-  if (!confirm(`Delete "${editTitle.value || props.clip.filename}"?`)) return
-  try { await invoke('delete_clip', { filepath: props.clip.filepath }); emit('close') }
-  catch (e) { emit('toast', `Delete failed: ${e}`) }
+  modal.showConfirm({
+    message: `Delete "${editTitle.value || props.clip.filename}"?`,
+    kind: 'danger',
+    onConfirm: async () => {
+      try { await invoke('delete_clip', { filepath: props.clip.filepath }); emit('close') }
+      catch (e) { emit('toast', `Delete failed: ${e}`) }
+    },
+  })
 }
 function selectGame(g: string) { gameTag.value = g; gameOpen.value = false; saveTitle() }
 function closeGameDropDelayed() { setTimeout(() => { gameOpen.value = false }, 150) }

@@ -22,6 +22,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { AudioDevice } from './stores/audio'
 import ToastContainer from './components/ToastContainer.vue'
+import GlobalModal from './components/GlobalModal.vue'
 import { useToast } from './composables/useToast'
 
 const { t, locale } = useI18n()
@@ -385,6 +386,7 @@ async function loadUserLocales() {
       </div>
     </Teleport>
 
+    <GlobalModal />
     <ToastContainer />
   </div>
 </template>

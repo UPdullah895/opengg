@@ -20,11 +20,13 @@ import PageHeader from '../components/PageHeader.vue'
 import { mediaUrl } from '../utils/assets'
 import { viewMode } from '../composables/useViewMode'
 import { ICON_DELETE } from '../assets/deviceAssets'
+import { useModalStore } from '../stores/modal'
 import type { Ref } from 'vue'
 
 const { t } = useI18n()
 const replay = useReplayStore()
 const persist = usePersistenceStore()
+const modal = useModalStore()
 const _mediaPortRef = inject<Ref<number>>('mediaPort', ref(0))
 const mediaPortNum  = computed(() => _mediaPortRef.value)
 
@@ -702,8 +704,13 @@ async function confirmRename() {
 }
 
 async function deleteClip(clip: Clip) {
-  if (!confirm(`Delete "${clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename)}"?`)) return
-  try { await invoke('delete_clip', { filepath: clip.filepath }); replay.removeClip(clip.filepath); showToast('Clip deleted') } catch (e) { showToast(`Error: ${e}`) }
+  modal.showConfirm({
+    message: `Delete "${clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename)}"?`,
+    kind: 'danger',
+    onConfirm: async () => {
+      try { await invoke('delete_clip', { filepath: clip.filepath }); replay.removeClip(clip.filepath); showToast('Clip deleted') } catch (e) { showToast(`Error: ${e}`) }
+    },
+  })
 }
 
 function openListMenu(clip: Clip, e: MouseEvent) {
@@ -725,9 +732,14 @@ async function toggleListFav(clip: Clip, e?: Event) {
 async function deleteSelected() {
   const ids = Array.from(replay.selectedIds)
   const clips = replay.clips.filter(c => ids.includes(c.id))
-  if (!confirm(`Delete ${clips.length} clip(s)?`)) return
-  for (const c of clips) { try { await invoke('delete_clip', { filepath: c.filepath }); replay.removeClip(c.filepath) } catch {} }
-  replay.clearSelection(); showToast(`${clips.length} clip(s) deleted`)
+  modal.showConfirm({
+    message: `Delete ${clips.length} clip(s)?`,
+    kind: 'danger',
+    onConfirm: async () => {
+      for (const c of clips) { try { await invoke('delete_clip', { filepath: c.filepath }); replay.removeClip(c.filepath) } catch {} }
+      replay.clearSelection(); showToast(`${clips.length} clip(s) deleted`)
+    },
+  })
 }
 
 // ── Live file-watcher (Epic 3 fix) ──

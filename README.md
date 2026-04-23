@@ -119,9 +119,6 @@ opengg/
 │           ├── main.rs     # Tauri setup, tray, file watcher, shortcuts
 │           ├── commands.rs # All invoke() handlers
 │           └── media_server.rs  # Local warp server for video/thumbnail assets
-├── extensions/             # Built-in optional extensions
-│   ├── overlays-system/    # Burn text/images into clips at export
-│   └── tiktok-export/      # 9:16 portrait crop/export for TikTok/Reels
 ├── extension-template/     # Scaffold for third-party extension development
 └── packaging/              # udev rules, systemd unit, D-Bus service, polkit policy
 ```
@@ -131,13 +128,6 @@ opengg/
 ## Extensions
 
 Drop an extension folder into `~/.local/share/opengg/extensions/`. Each folder must contain a `manifest.json`. Enable/disable extensions in **Settings → Extensions** — no restart required.
-
-### Built-in Extensions
-
-| Extension | Description |
-|-----------|-------------|
-| **Overlays System** | Burn text, images, and GIFs into clips at export time |
-| **TikTok Vertical Export** | Crop and export clips in 9:16 portrait mode for TikTok / Reels |
 
 ---
 

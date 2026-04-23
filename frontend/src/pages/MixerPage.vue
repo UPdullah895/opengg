@@ -13,6 +13,7 @@
  */
 
 import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
 import { useAudioStore } from '../stores/audio'
 import { usePersistenceStore } from '../stores/persistence'
@@ -22,6 +23,7 @@ import ChatMix from '../components/ChatMix.vue'
 import GraphicEQ from '../components/GraphicEQ.vue'
 import DspControls from '../components/DspControls.vue'
 
+const { t } = useI18n()
 const audio  = useAudioStore()
 const persist = usePersistenceStore()
 
@@ -112,7 +114,7 @@ watch(overdriveEnabled, enabled => {
 <template>
   <div class="mixer">
     <div class="mixer-hdr">
-        <div><h1 class="t">Audio Mixer</h1></div>
+        <div><h1 class="t">{{ t('dashboard.audioMixer') }}</h1></div>
       <div class="hdr-actions">
         <!-- Tab bar -->
         <nav class="tab-bar">

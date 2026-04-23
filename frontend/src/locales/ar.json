@@ -7,6 +7,27 @@
     "devices": "الأجهزة",
     "settings": "الإعدادات"
   },
+  "common": {
+    "confirm": "تأكيد",
+    "cancel": "إلغاء",
+    "confirmDelete": "تأكيد الحذف"
+  },
+  "editor": {
+    "exportClip": "تصدير المقطع",
+    "exportComplete": "اكتمل التصدير",
+    "dragIdle": "اضغط واسحب لإرسال الملف إلى مجلد",
+    "dragReady": "اسحب هذا الملف إلى Discord أو Telegram أو مجلد",
+    "changeFolder": "تغيير المسار",
+    "selectExportDir": "اختر مجلد التصدير",
+    "directory": "المجلد",
+    "filename": "اسم الملف",
+    "copyPath": "نسخ المسار",
+    "showInFolder": "عرض في المجلد",
+    "pathCopied": "تم نسخ المسار إلى الحافظة"
+  },
+  "sidebar": {
+    "tip": "نصيحة: يمكنك تخصيص اختصاراتك من صفحة الإعدادات."
+  },
   "dashboard": {
     "title": "لوحة التحكم",
     "audioMixer": "خلاط الصوت",

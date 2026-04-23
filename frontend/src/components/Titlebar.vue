@@ -2,7 +2,6 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { onMounted, onBeforeUnmount } from 'vue'
-import { appVersion } from '../composables/useAppVersion'
 
 const win = getCurrentWindow()
 
@@ -47,7 +46,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKey))
         </svg>
         <span class="title" data-tauri-drag-region>
           OpenGG
-          <span class="version">V{{ appVersion }}</span>
           <span class="beta-badge">Beta</span>
         </span>
       </div>
@@ -107,7 +105,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKey))
   pointer-events: none;
   user-select: none;
 }
-.version { font-size: 11px; color: var(--text-muted); font-weight: 400; }
 .beta-badge {
   display: inline-block;
   background: var(--accent);

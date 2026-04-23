@@ -7,6 +7,27 @@
     "devices": "Devices",
     "settings": "Settings"
   },
+  "common": {
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "confirmDelete": "Confirm Deletion"
+  },
+  "editor": {
+    "exportClip": "Export Clip",
+    "exportComplete": "Export Complete",
+    "dragIdle": "Hold to drag this file to a folder",
+    "dragReady": "Drag this file to Discord, Telegram, or a folder",
+    "changeFolder": "Change folder",
+    "selectExportDir": "Select export directory",
+    "directory": "Directory",
+    "filename": "Filename",
+    "copyPath": "Copy path",
+    "showInFolder": "Show in folder",
+    "pathCopied": "Path copied to clipboard"
+  },
+  "sidebar": {
+    "tip": "Tip: You can customize your shortcuts from the settings page."
+  },
   "dashboard": {
     "title": "Dashboard",
     "audioMixer": "Audio Mixer",

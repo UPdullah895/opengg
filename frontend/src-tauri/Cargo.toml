@@ -20,6 +20,7 @@ zbus = { version = "4", features = ["tokio"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 dirs = "5"
+arboard = "3"
 rusqlite = { version = "0.31", features = ["bundled"] }
 warp = "0.3"
 percent-encoding = "2"
