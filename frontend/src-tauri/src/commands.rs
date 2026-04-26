@@ -1201,11 +1201,22 @@ pub async fn export_clip_with_filters(
     overlays: Vec<ExportOverlay>,
     target_mb: f64,
     output_path: String,
+    codec: String,
+    audio_start_sec: Option<f64>,
+    audio_end_sec: Option<f64>,
 ) -> Result<String, String> {
     let dur = end_sec - start_sec;
     if dur <= 0.0 {
         return Err("Invalid trim range".into());
     }
+
+    let video_codec = match codec.as_str() {
+        "libx265" => "libx265",
+        "libvpx-vp9" => "libvpx-vp9",
+        "libsvtav1" => "libsvtav1",
+        "copy" => "copy",
+        _ => "libx264",
+    };
 
     let mut out = if output_path.is_empty() {
         auto_name(&input_path, "_export")
@@ -1228,6 +1239,12 @@ pub async fn export_clip_with_filters(
         "image" | "gif" => !o.content.is_empty() && Path::new(&o.content).exists(),
         _ => false,
     });
+
+    // Audio sub-range: gap (silence) at the start if audio starts after video trim.
+    let audio_gap_ms: i64 = audio_start_sec
+        .map(|a| ((a - start_sec).max(0.0) * 1000.0) as i64)
+        .unwrap_or(0);
+    let audio_end = audio_end_sec.unwrap_or(end_sec);
 
     if !has_valid_overlays {
         // Even with no visual overlays we still need correct audio handling:
@@ -1252,29 +1269,65 @@ pub async fn export_clip_with_filters(
 
         let mut cond_a_fc: Vec<String> = Vec::new();
         let a_map: String = if audio_tracks.is_empty() {
-            // No audio track info from frontend: map all source audio as-is.
+            // No audio track info from frontend.
             "0:a".to_string()
         } else if valid_audio_a.is_empty() {
             // All tracks muted — output silence.
             cond_a_fc.push("anullsrc=r=48000:cl=stereo:d=1[aout]".into());
             "[aout]".to_string()
-        } else if valid_audio_a.len() == 1 && (valid_audio_a[0].0.volume - 1.0).abs() < 0.01 {
-            // Single track at unity gain → no filter needed, direct map.
+        } else if valid_audio_a.len() == 1
+            && (valid_audio_a[0].0.volume - 1.0).abs() < 0.01
+            && audio_gap_ms <= 0
+        {
+            // Single track at unity gain with no audio gap → no filter needed, direct map.
             format!("0:a:{}", valid_audio_a[0].1)
         } else {
-            // Multiple tracks OR custom volume → build amix with per-track gain.
-            let mut mix_ins = Vec::new();
+            // Build audio filter chain.
+            // Strategy:
+            //   1. Apply volume per track
+            //   2. If audio gap: apply adelay to pad with silence, then atrim to output window
+            //   3. amix all tracks together
+            //   4. If no audio gap: [amix] is the output; if gap: another atrim to final window
+            let mut mix_ins: Vec<String> = Vec::new();
             for (i, (t, rel)) in valid_audio_a.iter().enumerate() {
                 let lbl = format!("[ca{i}]");
-                cond_a_fc.push(format!("[0:a:{rel}]volume={:.4}{lbl}", t.volume));
-                mix_ins.push(lbl);
+                if audio_gap_ms > 0 {
+                    // Delay this track to create silence gap, then trim to output window.
+                    // adelay accepts format: delay_in_ms|channels (all=1 for stereo-to-stereo).
+                    let delay_lbl = format!("[cd{i}]");
+                    cond_a_fc.push(format!(
+                        "[0:a:{rel}]volume={:.4},adelay={}:all=1{lbl}",
+                        t.volume, audio_gap_ms
+                    ));
+                    // After adelay, silence fills the gap; atrim clips to output window.
+                    cond_a_fc.push(format!(
+                        "{lbl}atrim=start=0:end={:.3}{delay_lbl}",
+                        audio_end - start_sec
+                    ));
+                    mix_ins.push(delay_lbl);
+                } else {
+                    cond_a_fc.push(format!("[0:a:{rel}]volume={:.4}{lbl}", t.volume));
+                    mix_ins.push(lbl);
+                }
             }
             let joined = mix_ins.join("");
-            cond_a_fc.push(format!(
-                "{joined}amix=inputs={}:normalize=0:duration=longest[amix]",
-                mix_ins.len()
-            ));
-            "[amix]".to_string()
+            let out_label = if mix_ins.len() == 1 && audio_gap_ms <= 0 {
+                // Single track, no gap, no extra filter needed
+                mix_ins[0].clone()
+            } else {
+                // Mix all tracks
+                cond_a_fc.push(format!(
+                    "{joined}amix=inputs={}:normalize=0:duration=longest[amix]",
+                    mix_ins.len()
+                ));
+                if audio_gap_ms > 0 {
+                    // Final atrim on mixed output to ensure clean output window
+                    format!("[amix]atrim=start=0:end={:.3}[aout]", audio_end - start_sec)
+                } else {
+                    "[amix]".to_string()
+                }
+            };
+            out_label
         };
 
         let mut args: Vec<String> = vec![
@@ -1295,7 +1348,7 @@ pub async fn export_clip_with_filters(
             "-map".into(),
             a_map,
             "-c:v".into(),
-            "copy".into(),
+            video_codec.into(),
             "-c:a".into(),
             "aac".into(),
             "-b:a".into(),
@@ -1409,25 +1462,41 @@ pub async fn export_clip_with_filters(
         .filter(|t| !t.muted && t.volume > 0.0)
         .filter_map(|t| to_audio_relative(t.stream_index).map(|rel| (t, rel)))
         .collect();
+    let audio_end = audio_end_sec.unwrap_or(end_sec);
     let audio_label = if valid_audio.is_empty() {
         filter_parts.push("anullsrc=r=48000:cl=stereo:d=1[aout]".into());
         "[aout]".to_string()
-    } else if valid_audio.len() == 1 {
+    } else if valid_audio.len() == 1 && audio_gap_ms <= 0 {
         let (t, rel) = valid_audio[0];
         filter_parts.push(format!("[0:a:{rel}]volume={:.2}[amix]", t.volume));
         "[amix]".to_string()
     } else {
-        let mut mix_ins = Vec::new();
+        let mut mix_ins: Vec<String> = Vec::new();
         for (i, (t, rel)) in valid_audio.iter().enumerate() {
             let lbl = format!("[a{i}]");
-            filter_parts.push(format!("[0:a:{rel}]volume={:.2}{lbl}", t.volume));
+            if audio_gap_ms > 0 {
+                filter_parts.push(format!(
+                    "[0:a:{rel}]adelay={}:all=1,volume={:.2},atrim=start=0:end={:.3}{lbl}",
+                    audio_gap_ms, t.volume, audio_end - start_sec
+                ));
+            } else {
+                filter_parts.push(format!("[0:a:{rel}]volume={:.2}{lbl}", t.volume));
+            }
             mix_ins.push(lbl);
         }
         let mix_in = mix_ins.join("");
-        filter_parts.push(format!(
-            "{mix_in}amix=inputs={}:duration=longest[amix]",
-            valid_audio.len()
-        ));
+        if audio_gap_ms > 0 {
+            filter_parts.push(format!(
+                "{mix_in}amix=inputs={}:duration=longest,atrim=start=0:end={:.3}[amix]",
+                mix_ins.len(),
+                audio_end - start_sec
+            ));
+        } else {
+            filter_parts.push(format!(
+                "{mix_in}amix=inputs={}:duration=longest[amix]",
+                mix_ins.len()
+            ));
+        }
         "[amix]".to_string()
     };
 
@@ -1524,7 +1593,7 @@ pub async fn export_clip_with_filters(
         let video_kbps = ((target_mb * 8192.0 / dur) - 128.0).max(100.0);
         args.extend([
             "-c:v".into(),
-            "libx264".into(),
+            video_codec.into(),
             "-pix_fmt".into(),
             "yuv420p".into(),
             "-b:v".into(),
@@ -1535,7 +1604,7 @@ pub async fn export_clip_with_filters(
     } else {
         args.extend([
             "-c:v".into(),
-            "libx264".into(),
+            video_codec.into(),
             "-pix_fmt".into(),
             "yuv420p".into(),
             "-crf".into(),
@@ -2604,6 +2673,7 @@ pub async fn trim_clip(
     start_sec: f64,
     end_sec: f64,
     output_path: String,
+    _codec: String,
 ) -> Result<String, String> {
     let mut out = if output_path.is_empty() {
         auto_name(&input_path, "_trim")
@@ -2646,11 +2716,22 @@ pub async fn export_clip_sized(
     end_sec: f64,
     target_mb: f64,
     output_path: String,
+    codec: String,
+    _audio_start_sec: Option<f64>,
+    _audio_end_sec: Option<f64>,
 ) -> Result<String, String> {
     let dur = end_sec - start_sec;
     if dur <= 0.0 {
         return Err("Invalid trim range".into());
     }
+
+    let video_codec = match codec.as_str() {
+        "libx265" => "libx265",
+        "libvpx-vp9" => "libvpx-vp9",
+        "libsvtav1" => "libsvtav1",
+        "copy" => "copy",
+        _ => "libx264",
+    };
 
     let mut out = if output_path.is_empty() {
         auto_name(&input_path, &format!("_{}mb", target_mb as u32))
@@ -2667,7 +2748,7 @@ pub async fn export_clip_sized(
             "export-progress",
             serde_json::json!({"percent": 50, "stage": "copying"}),
         );
-        let result = trim_clip(input_path, start_sec, end_sec, out.clone()).await;
+        let result = trim_clip(input_path, start_sec, end_sec, out.clone(), "copy".to_string()).await;
         let _ = app.emit(
             "export-progress",
             serde_json::json!({"percent": 100, "stage": "done"}),
@@ -2695,7 +2776,7 @@ pub async fn export_clip_sized(
             "-to",
             &format!("{end_sec:.3}"),
             "-c:v",
-            "libx264",
+            &video_codec,
             "-pix_fmt",
             "yuv420p",
             "-b:v",
@@ -2738,7 +2819,7 @@ pub async fn export_clip_sized(
             "-to",
             &format!("{end_sec:.3}"),
             "-c:v",
-            "libx264",
+            &video_codec,
             "-pix_fmt",
             "yuv420p",
             "-b:v",
@@ -2924,11 +3005,20 @@ pub async fn export_with_progress(
     end_sec: f64,
     target_mb: f64,
     output_path: String,
+    codec: String,
 ) -> Result<String, String> {
     let dur = end_sec - start_sec;
     if dur <= 0.0 {
         return Err("Invalid trim range".into());
     }
+
+    let video_codec = match codec.as_str() {
+        "libx265" => "libx265",
+        "libvpx-vp9" => "libvpx-vp9",
+        "libsvtav1" => "libsvtav1",
+        "copy" => "copy",
+        _ => "libx264",
+    };
 
     let out = if output_path.is_empty() {
         auto_name(&input_path, "_export")
@@ -2957,7 +3047,7 @@ pub async fn export_with_progress(
         );
         args.extend([
             "-c:v".into(),
-            "libx264".into(),
+            video_codec.into(),
             "-pix_fmt".into(),
             "yuv420p".into(),
             "-b:v".into(),
@@ -2980,7 +3070,7 @@ pub async fn export_with_progress(
                 "-map".into(),
                 "0:a:0".into(),
                 "-c:v".into(),
-                "copy".into(),
+                video_codec.into(),
                 "-c:a".into(),
                 "aac".into(),
                 "-b:a".into(),
@@ -3000,7 +3090,7 @@ pub async fn export_with_progress(
                 "-map".into(),
                 "[amix]".into(),
                 "-c:v".into(),
-                "copy".into(),
+                video_codec.into(),
                 "-c:a".into(),
                 "aac".into(),
                 "-b:a".into(),

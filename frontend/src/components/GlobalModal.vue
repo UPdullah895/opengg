@@ -97,4 +97,31 @@ function label(localeKey: string) {
   border-top: 1px solid var(--border);
   padding-top: 20px;
 }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 20px; border-radius: 8px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background .15s, box-shadow .15s, border-color .15s, color .15s;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-cancel {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--text-sec) 50%, transparent);
+  color: var(--text-sec);
+}
+.btn-cancel:hover:not(:disabled) {
+  border-color: var(--text);
+  color: var(--text);
+}
+.btn-danger, .btn-accent {
+  background: #FF4B61;
+  border-color: #FF4B61;
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled), .btn-accent:hover:not(:disabled) {
+  background: color-mix(in srgb, #FF4B61 85%, #000);
+  box-shadow: 0 0 14px color-mix(in srgb, #FF4B61 40%, transparent);
+}
 </style>

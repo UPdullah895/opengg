@@ -23,7 +23,14 @@
     "filename": "Filename",
     "copyPath": "Copy path",
     "showInFolder": "Show in folder",
-    "pathCopied": "Path copied to clipboard"
+    "pathCopied": "Path copied to clipboard",
+    "advancedSettings": "Advanced Settings",
+    "codec": "Codec",
+    "codecH264": "H.264 — Maximum compatibility",
+    "codecH265": "H.265 (HEVC) — Better quality, smaller size",
+    "codecVP9": "VP9 — WebM, good quality",
+    "codecAV1": "AV1 — Next-gen efficiency",
+    "codecOriginal": "Original — No re-encode"
   },
   "sidebar": {
     "tip": "Tip: You can customize your shortcuts from the settings page."

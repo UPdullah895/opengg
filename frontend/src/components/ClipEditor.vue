@@ -106,8 +106,8 @@ async function doExport(targetMb: number) {
   exportMenuOpen.value = false; exporting.value = true
   try {
     const out = targetMb <= 0
-      ? await invoke<string>('trim_clip', { inputPath: props.clip.filepath, startSec: trimStart.value, endSec: trimEnd.value, outputPath: '' })
-      : await invoke<string>('export_clip_sized', { inputPath: props.clip.filepath, startSec: trimStart.value, endSec: trimEnd.value, targetMb, outputPath: '' })
+      ? await invoke<string>('trim_clip', { inputPath: props.clip.filepath, startSec: trimStart.value, endSec: trimEnd.value, outputPath: '', codec: 'libx264' })
+      : await invoke<string>('export_clip_sized', { inputPath: props.clip.filepath, startSec: trimStart.value, endSec: trimEnd.value, targetMb, outputPath: '', codec: 'libx264', audioStartSec: null, audioEndSec: null })
     emit('saved', out); emit('toast', `Export complete: ${out.split('/').pop()}`)
   } catch (e) { emit('toast', `Export failed: ${e}`) }
   finally { exporting.value = false }

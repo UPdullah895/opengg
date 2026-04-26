@@ -43,6 +43,9 @@ const info = ref<MInfo | null>(null)
 const trimS = ref(0)
 const trimE = ref(dur.value)
 const trimDur = computed(() => Math.max(0, trimE.value - trimS.value))
+const magnetMode = ref(true)
+const audioTrimS = ref(0)
+const audioTrimE = ref(0)
 const editName = ref(clipDisplayTitle(props.clip.custom_name || '', props.clip.game || '', props.clip.filename))
 const gameTag = ref('')
 const gameOpen = ref(false)
@@ -78,8 +81,8 @@ const sideOpen = ref(true)
 const sideWidth = ref(200) // E4: resizable
 const previewFlex = ref(3)
 const tlFlex = ref(1.2)
-const undoStack = ref<{ s: number; e: number }[]>([])
-const redoStack = ref<{ s: number; e: number }[]>([])
+const undoStack = ref<{ s: number; e: number; as: number; ae: number }[]>([])
+const redoStack = ref<{ s: number; e: number; as: number; ae: number }[]>([])
 const sideTab = ref('info')
 
 
@@ -93,6 +96,15 @@ const exporting = ref(false)
 const exportProgress = ref(0)
 const exportSpeed = ref('')
 const exportStage = ref('')
+const exportCodec = ref('libx264')
+const exportAdvancedOpen = ref(false)
+const codecOptions = computed(() => [
+  { value: 'libx264', label: 'H.264' },
+  { value: 'libx265', label: 'H.265' },
+  { value: 'libvpx-vp9', label: 'VP9' },
+  { value: 'libsvtav1', label: 'AV1' },
+  { value: 'copy', label: t('editor.codecOriginal') },
+])
 let progressUnsub: UnlistenFn | null = null
 const toast = ref('')
 const toastFile = ref('')
@@ -100,7 +112,7 @@ function showToast(m: string, f = '') { toast.value = m; toastFile.value = f; se
 function unmuteMediaStreams() { invoke('unmute_media_streams').catch(() => {}) }
 
 // ── Video ──
-function onMeta() { if (videoRef.value) { dur.value = videoRef.value.duration; if (trimE.value <= 0 || trimE.value > dur.value) trimE.value = dur.value } }
+function onMeta() { if (videoRef.value) { dur.value = videoRef.value.duration; if (trimE.value <= 0 || trimE.value > dur.value) trimE.value = dur.value; if (audioTrimE.value <= 0 || audioTrimE.value > dur.value) { audioTrimS.value = trimS.value; audioTrimE.value = trimE.value } } }
 // Intercept 'play' event to resume AudioContext (handles native controls too)
 async function onVideoPlay() { await resumeAudioContext(); playing.value = true }
 async function togglePlay() {
@@ -230,10 +242,12 @@ const tlRef = ref<HTMLElement | null>(null)
 const scrubbing = ref(false)
 function pxToSec(e: MouseEvent) { if (!tlRef.value) return 0; const r = tlRef.value.getBoundingClientRect(); return Math.max(0, Math.min(dur.value, ((e.clientX - r.left) / r.width) * dur.value)) }
 function tlClick(e: MouseEvent) { if ((e.target as HTMLElement).closest('.no-seek')) return; seekTo(pxToSec(e)) }
-function pushUndo() { undoStack.value.push({ s: trimS.value, e: trimE.value }); redoStack.value = [] }
-function undo() { const p = undoStack.value.pop(); if (p) { redoStack.value.push({ s: trimS.value, e: trimE.value }); trimS.value = p.s; trimE.value = p.e; saveMeta() } }
-function redo() { const r = redoStack.value.pop(); if (r) { undoStack.value.push({ s: trimS.value, e: trimE.value }); trimS.value = r.s; trimE.value = r.e; saveMeta() } }
-function dragTrim(w: 'start' | 'end', e: MouseEvent) { e.preventDefault(); e.stopPropagation(); pushUndo(); const mv = (ev: MouseEvent) => { const s = pxToSec(ev); if (w === 'start') trimS.value = Math.min(s, trimE.value - 0.3); else trimE.value = Math.max(s, trimS.value + 0.3) }; const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); saveMeta() }; document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up) }
+function pushUndo() { undoStack.value.push({ s: trimS.value, e: trimE.value, as: audioTrimS.value, ae: audioTrimE.value }); redoStack.value = [] }
+function undo() { const p = undoStack.value.pop(); if (p) { redoStack.value.push({ s: trimS.value, e: trimE.value, as: audioTrimS.value, ae: audioTrimE.value }); trimS.value = p.s; trimE.value = p.e; audioTrimS.value = p.as; audioTrimE.value = p.ae; saveMeta() } }
+function redo() { const r = redoStack.value.pop(); if (r) { undoStack.value.push({ s: trimS.value, e: trimE.value, as: audioTrimS.value, ae: audioTrimE.value }); trimS.value = r.s; trimE.value = r.e; audioTrimS.value = r.as; audioTrimE.value = r.ae; saveMeta() } }
+function dragTrimBoth(w: 'start' | 'end', e: MouseEvent) { e.preventDefault(); e.stopPropagation(); pushUndo(); const mv = (ev: MouseEvent) => { const s = pxToSec(ev); if (w === 'start') { const ns = Math.min(s, trimE.value - 0.3); trimS.value = ns; audioTrimS.value = ns } else { const ne = Math.max(s, trimS.value + 0.3); trimE.value = ne; audioTrimE.value = ne } }; const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); saveMeta() }; document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up) }
+function dragTrimVideo(w: 'start' | 'end', e: MouseEvent) { e.preventDefault(); e.stopPropagation(); pushUndo(); const mv = (ev: MouseEvent) => { const s = pxToSec(ev); if (w === 'start') trimS.value = Math.min(s, trimE.value - 0.3); else trimE.value = Math.max(s, trimS.value + 0.3) }; const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); saveMeta() }; document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up) }
+function dragTrimAudio(w: 'start' | 'end', e: MouseEvent) { e.preventDefault(); e.stopPropagation(); pushUndo(); const mv = (ev: MouseEvent) => { const s = pxToSec(ev); if (w === 'start') audioTrimS.value = Math.max(trimS.value, Math.min(s, audioTrimE.value - 0.3)); else audioTrimE.value = Math.min(trimE.value, Math.max(s, audioTrimS.value + 0.3)) }; const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); saveMeta() }; document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up) }
 function phDown(e: MouseEvent) { e.preventDefault(); scrubbing.value = true; seekTo(pxToSec(e)); document.addEventListener('mousemove', scrubMv); document.addEventListener('mouseup', phUp) }
 function scrubMv(e: MouseEvent) { if (scrubbing.value) seekTo(pxToSec(e)) }
 function phUp() { scrubbing.value = false; document.removeEventListener('mousemove', scrubMv); document.removeEventListener('mouseup', phUp) }
@@ -322,7 +336,7 @@ async function saveMeta() {
   } catch {}
 }
 async function loadMeta() {
-  try { const s = await invoke<{ trim_start: number; trim_end: number } | null>('get_trim_state', { filepath: props.clip.filepath }); if (s && s.trim_end > 0) { trimS.value = s.trim_start; trimE.value = s.trim_end } } catch {}
+  try { const s = await invoke<{ trim_start: number; trim_end: number } | null>('get_trim_state', { filepath: props.clip.filepath }); if (s && s.trim_end > 0) { trimS.value = s.trim_start; trimE.value = s.trim_end; audioTrimS.value = s.trim_start; audioTrimE.value = s.trim_end } } catch {}
   try {
     const m = await invoke<string>('get_clip_meta', { filepath: props.clip.filepath })
     if (m && m !== 'null') {
@@ -370,28 +384,15 @@ onMounted(() => document.addEventListener('mousedown', onDocClick)); onBeforeUnm
 function selectGame(g: string) { gameTag.value = g; gameOpen.value = false; saveMeta() }
 
 // Export
-async function openExport() { exportModal.value = true; exportName.value = editName.value || 'export'; exportDir.value = props.clip.filepath.replace(/\/[^/]+$/, ''); exportTarget.value = 0; exportProgress.value = 0; exportSpeed.value = ''; exportStage.value = ''; await updateProj() }
-async function updateProj() { if (exportTarget.value <= 0) { exportSettings.value = `Stream copy • ${info.value?.width || 1920}x${info.value?.height || 1080}`; return } try { const j = await invoke<string>('calc_export_settings', { durationSec: trimDur.value, targetMb: exportTarget.value, width: info.value?.width || 1920, height: info.value?.height || 1080 }); const s = JSON.parse(j); exportSettings.value = `${s.resolution} • ${s.video_bitrate_kbps}kbps video • ${s.audio_bitrate_kbps}kbps audio • H.264` } catch { exportSettings.value = '...' } }
-watch(exportTarget, updateProj)
+async function openExport() { exportModal.value = true; exportName.value = editName.value || 'export'; exportDir.value = props.clip.filepath.replace(/\/[^/]+$/, ''); exportTarget.value = 0; exportProgress.value = 0; exportSpeed.value = ''; exportStage.value = ''; exportCodec.value = 'libx264'; exportAdvancedOpen.value = false; await updateProj() }
+const codecDisplayName: Record<string, string> = { libx264: 'H.264', libx265: 'H.265', 'libvpx-vp9': 'VP9', libsvtav1: 'AV1', copy: 'Original' }
+async function updateProj() { const cname = codecDisplayName[exportCodec.value] || 'H.264'; if (exportTarget.value <= 0) { exportSettings.value = `Stream copy • ${cname} • ${info.value?.width || 1920}x${info.value?.height || 1080}`; return } try { const j = await invoke<string>('calc_export_settings', { durationSec: trimDur.value, targetMb: exportTarget.value, width: info.value?.width || 1920, height: info.value?.height || 1080 }); const s = JSON.parse(j); exportSettings.value = `${s.resolution} • ${s.video_bitrate_kbps}kbps video • ${s.audio_bitrate_kbps}kbps audio • ${cname}` } catch { exportSettings.value = '...' } }
+watch([exportTarget, exportCodec], updateProj)
 const exportResult = ref('')
 
 async function pickExportDir() {
   const dir = await openDialog({ defaultPath: exportDir.value, directory: true, multiple: false, title: t('editor.selectExportDir') })
   if (dir) exportDir.value = dir as string
-}
-
-async function copyPath() {
-  if (!exportResult.value) return
-  try {
-    if (navigator.clipboard) {
-      await navigator.clipboard.writeText(exportResult.value)
-      showToast(t('editor.pathCopied'))
-    } else {
-      await invoke('open_file_location', { filepath: exportResult.value })
-    }
-  } catch (e) {
-    showToast(`Copy failed: ${e}`)
-  }
 }
 
 async function openFolder() {
@@ -421,11 +422,15 @@ async function doExport() {
       out = await invoke<string>('export_clip_with_filters', {
         inputPath: props.clip.filepath, startSec: trimS.value, endSec: trimE.value,
         audioTracks, overlays: [], targetMb: exportTarget.value, outputPath: p,
+        codec: exportCodec.value,
+        audioStartSec: audioTrimS.value,
+        audioEndSec: audioTrimE.value,
       })
     } else {
       out = await invoke<string>('export_with_progress', {
         inputPath: props.clip.filepath, startSec: trimS.value, endSec: trimE.value,
         targetMb: exportTarget.value, outputPath: p,
+        codec: exportCodec.value,
       })
     }
     // ★ Epic 3: Stay open on success — show drag zone
@@ -451,6 +456,12 @@ async function cancelExport() {
   showToast('Export cancelled')
 }
 function onToastDrag(e: DragEvent) { if (e.dataTransfer && toastFile.value) { e.dataTransfer.setData('text/uri-list', `file://${toastFile.value}`); e.dataTransfer.effectAllowed = 'copy' } }
+function startFileDrag(e: DragEvent) {
+  if (!exportResult.value) return
+  e.dataTransfer!.setData('text/uri-list', `file://${exportResult.value}`)
+  e.dataTransfer!.setData('text/plain', exportResult.value)
+  e.dataTransfer!.effectAllowed = 'copy'
+}
 
 // Hotkeys — all configurable shortcuts read from settings store dynamically
 function onKey(e: KeyboardEvent) {
@@ -467,6 +478,10 @@ function onKey(e: KeyboardEvent) {
   else if (shortcutMatches(e, sc.screenshot)) { e.preventDefault(); takeScreenshot() }
   else if (shortcutMatches(e, sc.exportClip)) { e.preventDefault(); openExport() }
   else if (shortcutMatches(e, sc.splitClip))  { e.preventDefault(); pushUndo(); trimE.value = Math.max(ct.value, trimS.value + 0.1); saveMeta() }
+  else if (e.code === 'KeyM' && hoveredTrackId.value) {
+    const t = tracks.value.find(t => t.id === hoveredTrackId.value)
+    if (t) { t.muted = !t.muted; applyAudioVolumes() }
+  }
   else if (shortcutMatches(e, sc.toggleMic))  {
     e.preventDefault()
     if (hoveredTrackId.value) {
@@ -632,6 +647,15 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
       <input type="range" min="0" max="1" step="0.05" v-model.number="localVol" class="vol-monitor-range" />
       <span class="vol-monitor-val">{{ Math.round(localVol * 100) }}</span>
     </div>
+    <!-- Magnet Mode toggle -->
+    <button class="tr-btn" :class="{ active: magnetMode }" @click="magnetMode = !magnetMode" title="Magnet Mode — sync video/audio trim handles">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ic">
+        <path d="M6 15V9a6 6 0 0112 0v6"/>
+        <path d="M6 9H3a3 3 0 000 6h3"/>
+        <path d="M18 9h3a3 3 0 010 6h-3"/>
+        <rect x="5" y="15" width="14" height="4" rx="1"/>
+      </svg>
+    </button>
     <!-- ★ E3-P5: Screenshot button -->
     <button class="tr-btn" @click="takeScreenshot" title="Screenshot (save to Pictures)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ic"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -689,9 +713,18 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
           </div>
         </div>
 
-        <!-- Trim handles -->
-        <div class="trim-handle" :style="{ left: pct(trimS) }" @mousedown="dragTrim('start', $event)"><div class="trim-grip">‹</div></div>
-        <div class="trim-handle" :style="{ left: pct(trimE) }" @mousedown="dragTrim('end', $event)"><div class="trim-grip">›</div></div>
+        <!-- Trim handles — Magnet ON: unified handles span all tracks -->
+        <template v-if="magnetMode">
+          <div class="trim-handle unified" :style="{ left: pct(trimS), height: tracks.length * 36 + 'px' }" @mousedown="dragTrimBoth('start', $event)"><div class="trim-grip">‹</div></div>
+          <div class="trim-handle unified" :style="{ left: pct(trimE), height: tracks.length * 36 + 'px' }" @mousedown="dragTrimBoth('end', $event)"><div class="trim-grip">›</div></div>
+        </template>
+        <!-- Magnet OFF: per-track handles -->
+        <template v-else>
+          <div class="trim-handle" :style="{ left: pct(trimS) }" @mousedown="dragTrimVideo('start', $event)"><div class="trim-grip">‹</div></div>
+          <div class="trim-handle" :style="{ left: pct(trimE) }" @mousedown="dragTrimVideo('end', $event)"><div class="trim-grip">›</div></div>
+          <div class="trim-handle audio-handle" :style="{ left: pct(audioTrimS) }" @mousedown="dragTrimAudio('start', $event)"><div class="trim-grip audio">‹</div></div>
+          <div class="trim-handle audio-handle" :style="{ left: pct(audioTrimE) }" @mousedown="dragTrimAudio('end', $event)"><div class="trim-grip audio">›</div></div>
+        </template>
 
         <!-- Playhead -->
         <div class="playhead" :style="{ left: `calc(${pct(ct)} - 10px)` }" @mousedown="phDown">
@@ -706,17 +739,23 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
   <Teleport to="body">
     <div v-if="exportModal" class="modal-overlay" @click.self="closeExportModal">
       <div class="modal-box">
-        <!-- ★ Success state: file path + copy/open actions -->
+        <!-- ★ Success state: draggable file row + open folder -->
         <template v-if="exportResult">
           <h2>✓ {{ t('editor.exportComplete') }}</h2>
-          <div class="export-success-file">{{ exportResult.split('/').pop() }}</div>
-          <div class="export-success-actions">
-            <button class="btn btn-icon" @click="copyPath" :title="t('editor.copyPath')">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h6a2 2 0 012 2v6a2 2 0 01-2 2z"/>
+          <div class="export-success-row">
+            <div
+              class="export-file-name"
+              :title="t('editor.dragReady')"
+              draggable="true"
+              @dragstart="startFileDrag"
+            >
+              <svg class="file-drag-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
               </svg>
-            </button>
+              <span class="file-name-text">{{ exportResult.split('/').pop() }}</span>
+            </div>
             <button class="btn btn-icon" @click="openFolder" :title="t('editor.showInFolder')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
@@ -730,10 +769,10 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
         <!-- Normal export form -->
         <template v-else>
         <h2>{{ t('editor.exportClip') }}</h2>
-        <div class="modal-field"><label>Filename</label><input v-model="exportName" class="modal-input" /></div>
-        <div class="modal-field"><label>Directory</label>
+        <div class="modal-field">
+          <label>{{ t('editor.filename') }}</label>
           <div class="dir-row">
-            <input v-model="exportDir" class="modal-input" readonly />
+            <input v-model="exportName" class="modal-input" />
             <button class="btn btn-icon" @click="pickExportDir" :title="t('editor.changeFolder')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
@@ -741,11 +780,41 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
             </button>
           </div>
         </div>
-        <div class="modal-field"><label>Target Size</label>
+        <div class="modal-field">
+          <label>{{ t('editor.directory') }}</label>
+          <div class="dir-row">
+            <input v-model="exportDir" class="modal-input" readonly />
+            <button class="btn btn-icon" @click="pickExportDir" :title="t('editor.selectExportDir')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="modal-field">
+          <label>Target Size</label>
           <div class="radio-row">
             <label v-for="v in [0, 100, 50, 10]" :key="v" :class="{ active: exportTarget === v }">
               <input type="radio" v-model.number="exportTarget" :value="v" />{{ v === 0 ? 'Original' : `${v}MB` }}
             </label>
+          </div>
+        </div>
+        <div class="modal-field">
+          <button class="adv-toggle" @click="exportAdvancedOpen = !exportAdvancedOpen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="{ rotated: exportAdvancedOpen }">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+            {{ t('editor.advancedSettings') }}
+          </button>
+          <div v-if="exportAdvancedOpen" class="adv-panel">
+            <div class="adv-row">
+              <span class="adv-label">{{ t('editor.codec') }}</span>
+              <div class="radio-row">
+                <label v-for="c in codecOptions" :key="c.value" :class="{ active: exportCodec === c.value }">
+                  <input type="radio" v-model="exportCodec" :value="c.value" />{{ c.label }}
+                </label>
+              </div>
+            </div>
           </div>
         </div>
         <div class="proj-box">{{ exportSettings }}</div>
@@ -889,6 +958,7 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 .transport { display: flex; align-items: center; gap: 6px; padding: 4px 12px; border-top: 1px solid var(--border); background: var(--bg-card); flex-shrink: 0; }
 .tr-btn { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-card); color: var(--text-sec); cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .tr-btn:hover { background: var(--bg-hover); }
+.tr-btn.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .play-btn { width: 34px; height: 34px; background: var(--accent); border-color: var(--accent); color: #fff; }
 .tr-time { font-size: 11px; font-variant-numeric: tabular-nums; }
 .tr-time.dim { color: var(--text-sec); }
@@ -950,8 +1020,11 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 
 /* Trim handles */
 .trim-handle { position: absolute; top: 0; bottom: 0; width: 18px; transform: translateX(-9px); z-index: 6; cursor: ew-resize; display: flex; align-items: center; justify-content: center; }
-.trim-grip { width: 14px; height: 30px; background: var(--accent); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #fff; font-weight: 700; box-shadow: 0 0 6px rgba(0,0,0,.3); }
+.trim-handle.unified { cursor: ew-resize; }
+.trim-grip { width: 14px; height: 30px; background: var(--accent); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #fff; font-weight: 700; box-shadow: 0 0 6px rgba(0,0,0,.3); transition: transform .1s; }
+.trim-grip.audio { background: #10B981; }
 .trim-handle:hover .trim-grip { transform: scaleX(1.15); }
+.trim-handle.audio-handle { z-index: 7; }
 
 /* Playhead */
 .playhead { position: absolute; top: 0; bottom: 0; width: 20px; z-index: 5; cursor: col-resize; display: flex; flex-direction: column; align-items: center; }
@@ -978,21 +1051,49 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .btn-cancel { border-color: var(--danger); color: var(--danger); }
 .btn-cancel:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
-.export-success-file { padding: 10px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 12px; word-break: break-all; }
-.export-success-actions { display: flex; gap: 8px; margin-bottom: 16px; }
-.export-success-actions .btn-icon {
-  flex: 1; height: 38px; border-radius: 8px;
+.export-success-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 16px;
+}
+.export-success-row {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 16px;
+}
+.export-file-name {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-deep); border: 1.5px solid var(--border);
+  border-radius: 8px;
+  cursor: grab;
+  transition: border-color .15s, box-shadow .15s;
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+  user-drag: none;
+}
+.export-file-name:active { cursor: grabbing; }
+.export-file-name:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.file-drag-icon { width: 16px; height: 16px; color: var(--accent); flex-shrink: 0; }
+.file-name-text { flex: 1; font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.export-success-row .btn-icon {
+  width: 38px; height: 38px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--bg-card);
   color: var(--text-sec); cursor: pointer;
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  font-size: 12px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
   transition: border-color .12s, color .12s, background .12s;
+  flex-shrink: 0;
 }
-.export-success-actions .btn-icon:hover {
+.export-success-row .btn-icon:hover {
   border-color: var(--accent); color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
-.export-success-actions .btn-icon svg { width: 16px; height: 16px; }
+.export-success-row .btn-icon svg { width: 16px; height: 16px; }
+.dir-row {
+  display: flex; gap: 8px; align-items: center;
+}
+.dir-row .modal-input { flex: 1; min-width: 0; }
 .dir-row .btn-icon {
   width: 36px; height: 36px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--bg-input);
@@ -1006,6 +1107,23 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .dir-row .btn-icon svg { width: 15px; height: 15px; }
+.adv-toggle {
+  display: flex; align-items: center; gap: 6px;
+  background: none; border: none;
+  color: var(--text-sec); font-size: 11px; font-weight: 600;
+  cursor: pointer; padding: 4px 0;
+  transition: color .12s;
+}
+.adv-toggle:hover { color: var(--accent); }
+.adv-toggle svg { width: 14px; height: 14px; transition: transform .2s; }
+.adv-toggle svg.rotated { transform: rotate(90deg); }
+.adv-panel {
+  margin-top: 10px; padding: 12px;
+  background: var(--bg-deep); border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.adv-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.adv-label { font-size: 10px; font-weight: 600; color: var(--text-sec); text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }
 
 /* Toast */
 .toast-box { position: fixed; bottom: 14px; right: 14px; z-index: 9999; background: var(--bg-card); border: 1px solid var(--accent); padding: 10px 14px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.4); font-size: 11px; font-weight: 600; display: flex; flex-direction: column; gap: 5px; color: var(--text); }
