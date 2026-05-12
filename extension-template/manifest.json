@@ -2,7 +2,7 @@
   "id":          "my-extension",
   "name":        "My Extension",
   "description": "A short description of what this extension does.",
-  "version":     "0.1.0",
+  "version":     "0.1.2",
   "author":      "Your Name",
   "icon":        "assets/icon.svg",
   "main":        "dist/index.iife.js",

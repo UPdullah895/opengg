@@ -35,3 +35,4 @@ opengg.desktop
 
 # Runtime per-session logs
 Logs/
+.tauri-signing-private-key.txt

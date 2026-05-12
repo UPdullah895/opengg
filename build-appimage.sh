@@ -9,7 +9,8 @@
 # Requires: wget (for appimagetool if not cached), FUSE or kernel ≥ 5.13
 set -euo pipefail
 
-VERSION="0.1.1"
+# Read version from tauri.conf.json (falls back to 0.1.2 if jq is unavailable)
+VERSION="$(jq -r '.version' "$(dirname "$0")/frontend/src-tauri/tauri.conf.json" 2>/dev/null || echo "0.1.2")"
 ARCH="x86_64"
 OUTPUT="OpenGG-${VERSION}-${ARCH}.AppImage"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
