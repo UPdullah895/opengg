@@ -3,14 +3,14 @@ import { deepMerge, runMigrations } from './persistence'
 
 describe('runMigrations', () => {
   it('migrates clipsFolder to clip_directories', () => {
-    const state = { settings: { clipsFolder: '/old/path' }, _schemaVersion: 0 }
+    const state = { settings: { clipsFolder: '/old/path' }, _schemaVersion: 0 } as any
     runMigrations(state)
     expect(state.settings.clip_directories).toEqual(['/old/path'])
     expect(state.settings.clipsFolder).toBeUndefined()
   })
 
   it('migrates screenshotDir to screenshotDirs', () => {
-    const state = { settings: { screenshotDir: '/old/pic' }, _schemaVersion: 0 }
+    const state = { settings: { screenshotDir: '/old/pic' }, _schemaVersion: 0 } as any
     runMigrations(state)
     expect(state.settings.screenshotDirs).toEqual(['/old/pic'])
     expect(state.settings.screenshotDir).toBeUndefined()

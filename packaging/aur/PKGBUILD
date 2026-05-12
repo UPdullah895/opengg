@@ -11,53 +11,9 @@ optdepends=('polkit: for privileged device setup')
 provides=('opengg')
 conflicts=('opengg')
 install=opengg.install
-source=(
-  "${url}/releases/download/v${pkgver}/OpenGG-v${pkgver}-x86_64.AppImage"
-  "99-opengg.rules"
-  "openggd.service"
-  "org.opengg.Daemon.service"
-  "org.opengg.setup.policy"
-)
-sha256sums=(
-  'SKIP'
-  '20ddc5f9411a643d12ee9ce4f74a7101830539d3f527b0ca479b2a9a010f75fd'
-  '16ba21359a6d718cbb5dc082d4a615fad7dd27aa35080af1bf955080d6e08317'
-  'b129b4d1246e152410d245ec92ff94aa9ecceab5d65a70d3f3e1d3f04771a291'
-  '6b748a6f7f2de8673ed6e90f3bfe5ca053de416bbfb19038e59585e98f74a61b'
-)
+source=("${url}/releases/download/v${pkgver}/opengg-v${pkgver}-linux-x86_64.tar.gz")
+sha256sums=('SKIP')
 
 package() {
-  # AppImage
-  install -Dm755 "${srcdir}/OpenGG-v${pkgver}-x86_64.AppImage" \
-    "${pkgdir}/opt/opengg/opengg.AppImage"
-
-  # Wrapper script
-  install -Dm755 /dev/stdin "${pkgdir}/usr/bin/opengg" <<'EOF'
-#!/bin/bash
-exec /opt/opengg/opengg.AppImage "$@"
-EOF
-
-  # Desktop integration — extract from AppImage
-  cd "${pkgdir}/opt/opengg"
-  ./opengg.AppImage --appimage-extract >/dev/null 2>&1 || true
-  if [[ -d squashfs-root ]]; then
-    install -Dm644 squashfs-root/usr/share/applications/*.desktop \
-      "${pkgdir}/usr/share/applications/opengg.desktop" 2>/dev/null || true
-    for size in 32 128 256 512; do
-      icon="squashfs-root/usr/share/icons/hicolor/${size}x${size}/apps/opengg.png"
-      [[ -f "$icon" ]] && install -Dm644 "$icon" \
-        "${pkgdir}/usr/share/icons/hicolor/${size}x${size}/apps/opengg.png"
-    done
-    rm -rf squashfs-root
-  fi
-
-  # System integration files
-  install -Dm644 "${srcdir}/99-opengg.rules" \
-    "${pkgdir}/usr/lib/udev/rules.d/99-opengg.rules"
-  install -Dm644 "${srcdir}/openggd.service" \
-    "${pkgdir}/usr/lib/systemd/user/openggd.service"
-  install -Dm644 "${srcdir}/org.opengg.Daemon.service" \
-    "${pkgdir}/usr/share/dbus-1/services/org.opengg.Daemon.service"
-  install -Dm644 "${srcdir}/org.opengg.setup.policy" \
-    "${pkgdir}/usr/share/polkit-1/actions/org.opengg.setup.policy"
+  tar -xzf "${srcdir}/opengg-v${pkgver}-linux-x86_64.tar.gz" -C "${pkgdir}" --strip-components=1
 }
