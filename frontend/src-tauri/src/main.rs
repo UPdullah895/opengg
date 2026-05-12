@@ -3,8 +3,10 @@
 mod commands;
 mod media_server;
 
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -300,6 +302,7 @@ fn main() {
             app.manage(ExportProcess::default());
             app.manage(GsrProcess(Mutex::new(None)));
             app.manage(JalvProcesses(Mutex::new(std::collections::HashMap::new())));
+            app.manage(RouteState::new());
 
             // ★ Epic 4: RunInBackground defaults true; overridden from saved settings below
             let run_bg_flag = Arc::new(AtomicBool::new(true));
@@ -540,28 +543,34 @@ fn main() {
                 }
             }
 
-            // Device-changed watcher: polls D-Bus every 5 s, emits only on change
+            // Device-changed watcher: polls D-Bus every 3 s, emits only on change.
+            // Reuses a single D-Bus connection instead of reconnecting every tick.
             {
                 use std::time::Duration;
                 let dv_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let mut last: String = String::new();
-                    let mut interval = tokio::time::interval(Duration::from_millis(500));
+                    let mut interval = tokio::time::interval(Duration::from_millis(3000));
+                    let conn = match zbus::Connection::session().await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("device-watcher: D-Bus connection failed: {e}");
+                            return;
+                        }
+                    };
                     loop {
                         interval.tick().await;
-                        if let Ok(conn) = zbus::Connection::session().await {
-                            if let Ok(reply) = conn.call_method(
-                                Some("org.opengg.Daemon"),
-                                "/org/opengg/Daemon/Device",
-                                Some("org.opengg.Daemon.Device"),
-                                "GetDevices",
-                                &(),
-                            ).await {
-                                if let Ok(json) = reply.body().deserialize::<String>() {
-                                    if json != last {
-                                        last = json.clone();
-                                        let _ = dv_handle.emit("device-changed", json);
-                                    }
+                        if let Ok(reply) = conn.call_method(
+                            Some("org.opengg.Daemon"),
+                            "/org/opengg/Daemon/Device",
+                            Some("org.opengg.Daemon.Device"),
+                            "GetDevices",
+                            &(),
+                        ).await {
+                            if let Ok(json) = reply.body().deserialize::<String>() {
+                                if json != last {
+                                    last = json.clone();
+                                    let _ = dv_handle.emit("device-changed", json);
                                 }
                             }
                         }
@@ -643,7 +652,9 @@ fn main() {
                     log::info!("OpenGG: window hidden (running in background)");
                 } else {
                     log::info!("OpenGG: window closed (exiting)");
-                    // Allow the default close, which will exit the app on the last window
+                    tauri::async_runtime::block_on(async {
+                        let _ = commands::remove_virtual_audio().await;
+                    });
                 }
             }
         })
@@ -694,3 +705,114 @@ pub struct JalvProcesses(
 /// Tracks which directories the watcher is currently watching, so
 /// `update_watch_dirs` can diff current vs desired and call watch/unwatch.
 pub struct WatchedDirs(pub Mutex<Vec<std::path::PathBuf>>);
+
+// ══════════════════════════════════════════════════════════════════════
+//  ★ RouteState: Thread-safe audio routing deduplication + blacklist
+// ══════════════════════════════════════════════════════════════════════
+
+const ROUTE_COOLDOWN_SECS: u64 = 5;
+const ROUTE_BLACKLIST: &[&str] = &[
+    "plasmashell", "kwin_wayland", "kwin_x11", "swaync", "sway",
+    "xdg-desktop-portal", "xdg-desktop-portal-gnome", "xdg-desktop-portal-kde",
+    "wireplumber", "pipewire", "pipewire-pulse", "opengg", "peak detect",
+];
+const FAIL_THRESHOLD: u32 = 3;
+const FAIL_WINDOW_SECS: u64 = 30;
+const FAIL_COOLDOWN_SECS: u64 = 30;
+
+/// Tracks routing attempts, successes, and failures per PID to prevent
+/// the infinite re-routing loop that spawns pactl/pw-metadata thousands
+/// of times per second and eventually OOM-kills the system.
+pub struct RouteState {
+    /// PID → last routing attempt time. Prevents retry during cooldown.
+    pub cooldown: Mutex<HashMap<u32, SystemTime>>,
+    /// PID → (channel, success_time). Tracks successfully routed PIDs.
+    pub routed: Mutex<HashMap<u32, (String, SystemTime)>>,
+    /// PID → (fail_count, first_fail_time). Circuit breaker for repeated failures.
+    pub fail_counts: Mutex<HashMap<u32, (u32, SystemTime)>>,
+    /// Binary names that must never be routed.
+    pub blacklist: HashSet<&'static str>,
+}
+
+impl RouteState {
+    pub fn new() -> Self {
+        let mut blacklist = HashSet::new();
+        for &name in ROUTE_BLACKLIST {
+            blacklist.insert(name);
+        }
+        Self {
+            cooldown: Mutex::new(HashMap::new()),
+            routed: Mutex::new(HashMap::new()),
+            fail_counts: Mutex::new(HashMap::new()),
+            blacklist,
+        }
+    }
+
+    pub fn is_blacklisted(&self, binary: &str) -> bool {
+        self.blacklist.contains(binary.to_lowercase().as_str())
+    }
+
+    pub fn is_on_cooldown(&self, pid: u32) -> bool {
+        let map = self.cooldown.lock().unwrap();
+        map.get(&pid).map_or(false, |t| {
+            SystemTime::now().duration_since(*t).unwrap_or(Duration::MAX)
+                < Duration::from_secs(ROUTE_COOLDOWN_SECS)
+        })
+    }
+
+    pub fn record_attempt(&self, pid: u32) {
+        self.cooldown.lock().unwrap().insert(pid, SystemTime::now());
+    }
+
+    pub fn record_success(&self, pid: u32, channel: String) {
+        self.routed.lock().unwrap().insert(pid, (channel, SystemTime::now()));
+        // Clear failure count on success
+        self.fail_counts.lock().unwrap().remove(&pid);
+    }
+
+    pub fn is_already_routed(&self, pid: u32, channel: &str) -> bool {
+        let map = self.routed.lock().unwrap();
+        map.get(&pid).map_or(false, |(ch, _)| ch == channel)
+    }
+
+    pub fn clear_pid(&self, pid: u32) {
+        self.cooldown.lock().unwrap().remove(&pid);
+        self.routed.lock().unwrap().remove(&pid);
+        self.fail_counts.lock().unwrap().remove(&pid);
+    }
+
+    /// Records a failure and returns `true` if the circuit breaker is now
+    /// open (PID should be blocked from further attempts).
+    pub fn record_failure(&self, pid: u32) -> bool {
+        let mut map = self.fail_counts.lock().unwrap();
+        let now = SystemTime::now();
+        let entry = map.entry(pid).or_insert((0, now));
+        if now.duration_since(entry.1).unwrap_or(Duration::MAX)
+            > Duration::from_secs(FAIL_WINDOW_SECS)
+        {
+            *entry = (1, now);
+        } else {
+            entry.0 += 1;
+        }
+        if entry.0 >= FAIL_THRESHOLD {
+            // Also put on extended cooldown
+            self.cooldown.lock().unwrap().insert(
+                pid,
+                now + Duration::from_secs(FAIL_COOLDOWN_SECS),
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_circuit_open(&self, pid: u32) -> bool {
+        let map = self.fail_counts.lock().unwrap();
+        let now = SystemTime::now();
+        map.get(&pid).map_or(false, |(count, first)| {
+            *count >= FAIL_THRESHOLD
+                && now.duration_since(*first).unwrap_or(Duration::MAX)
+                    <= Duration::from_secs(FAIL_COOLDOWN_SECS)
+        })
+    }
+}

@@ -14,6 +14,11 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// Minimum interval between `pactl` spawns for the same channel.
+/// Prevents process storm during slider drags (≤10 spawns/sec instead of 60+).
+const VOLUME_DEBOUNCE_MS: u128 = 100;
 
 pub const CHANNEL_NAMES: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
 /// All channels get virtual null-sinks, including Mic.
@@ -53,10 +58,9 @@ pub struct SinkManager {
     pub channels: Arc<Mutex<HashMap<String, ChannelInfo>>>,
     /// Module IDs from pactl load-module (for cleanup if needed)
     module_ids: Arc<Mutex<Vec<u32>>>,
+    /// Last time `pactl set-sink-volume` was spawned per channel.
+    last_volume_spawn: Arc<Mutex<HashMap<String, Instant>>>,
 }
-
-unsafe impl Send for SinkManager {}
-unsafe impl Sync for SinkManager {}
 
 impl SinkManager {
     /// Create virtual sinks gracefully — NO PipeWire restart.
@@ -66,13 +70,6 @@ impl SinkManager {
 
         for &ch in SINK_CHANNELS {
             let sink_name = format!("OpenGG_{ch}");
-            // Reference-guided fix: for live sink-facing names, replace stale
-            // non-mic sink objects instead of depending on in-place relabel.
-            if RELABEL_CHANNELS.contains(&ch) && sink_exists(&sink_name) {
-                if let Err(e) = unload_null_sink_module(&sink_name) {
-                    tracing::warn!("Failed to unload existing {sink_name}: {e}");
-                }
-            }
 
             // Step 1: Check if this sink already exists (idempotent)
             if !sink_exists(&sink_name) {
@@ -119,7 +116,11 @@ impl SinkManager {
         }
 
         tracing::info!("Virtual sinks ready (no PipeWire restart)");
-        Ok(Self { channels, module_ids })
+        Ok(Self {
+            channels,
+            module_ids,
+            last_volume_spawn: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     pub fn set_volume(&self, channel: &str, volume: f32) -> Result<()> {
@@ -127,6 +128,19 @@ impl SinkManager {
         if let Some(info) = self.channels.lock().unwrap().get_mut(channel) {
             info.volume = volume;
         }
+
+        // Debounce: skip pactl spawn if this channel was touched <100ms ago.
+        let now = Instant::now();
+        {
+            let mut last_map = self.last_volume_spawn.lock().unwrap();
+            if let Some(last) = last_map.get(channel) {
+                if now.duration_since(*last).as_millis() < VOLUME_DEBOUNCE_MS {
+                    return Ok(());
+                }
+            }
+            last_map.insert(channel.to_string(), now);
+        }
+
         let vol_pct = (volume * 100.0) as u32;
         let pct_str = format!("{vol_pct}%");
         // All channels (including Mic) now have a virtual null-sink — control it uniformly.
@@ -162,6 +176,18 @@ impl SinkManager {
     }
 }
 
+impl Drop for SinkManager {
+    fn drop(&mut self) {
+        if let Ok(ids) = self.module_ids.lock() {
+            for id in ids.iter() {
+                let _ = Command::new("pactl")
+                    .args(["unload-module", &id.to_string()])
+                    .status();
+            }
+        }
+    }
+}
+
 /// Check if a PipeWire sink with this name already exists.
 fn sink_exists(name: &str) -> bool {
     if let Ok(output) = Command::new("pactl").args(["list", "sinks", "short"]).output() {
@@ -169,57 +195,6 @@ fn sink_exists(name: &str) -> bool {
         return text.lines().any(|line| line.contains(name));
     }
     false
-}
-
-fn unload_null_sink_module(sink_name: &str) -> Result<()> {
-    let output = Command::new("pactl")
-        .args(["list", "short", "modules"])
-        .output()
-        .context("pactl list modules failed")?;
-    let modules = String::from_utf8_lossy(&output.stdout);
-
-    for line in modules.lines() {
-        let mut parts = line.split('\t');
-        let Some(idx) = parts.next() else { continue };
-        let Some(name) = parts.next() else { continue };
-        let args = parts.next().unwrap_or("");
-        if name != "module-null-sink" || !args.contains(&format!("sink_name={sink_name}")) {
-            continue;
-        }
-
-        let unload = Command::new("pactl")
-            .args(["unload-module", idx])
-            .output()
-            .context("pactl unload-module failed")?;
-        if !unload.status.success() {
-            let err = String::from_utf8_lossy(&unload.stderr);
-            anyhow::bail!("pactl unload-module failed: {err}");
-        }
-    }
-
-    for _ in 0..20 {
-        let modules_cleared = Command::new("pactl")
-            .args(["list", "short", "modules"])
-            .output()
-            .ok()
-            .map(|output| {
-                String::from_utf8_lossy(&output.stdout).lines().all(|line| {
-                    let mut parts = line.split('\t');
-                    let _idx = parts.next();
-                    let name = parts.next().unwrap_or("");
-                    let args = parts.next().unwrap_or("");
-                    name != "module-null-sink" || !args.contains(&format!("sink_name={sink_name}"))
-                })
-            })
-            .unwrap_or(false);
-        let sink_cleared = !sink_exists(sink_name);
-        if modules_cleared && sink_cleared {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-
-    Ok(())
 }
 
 /// Create a null-sink via `pactl load-module` — returns the module ID.

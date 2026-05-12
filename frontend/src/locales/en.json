@@ -109,6 +109,19 @@
     },
     "changelog": [
       {
+        "version": "V0.1.2",
+        "date": "2026-05-12",
+        "items": [
+          "Per-app volume popover menu with live fill gradient and mute/unmute",
+          "Auto-hide timers on volume menu and context menu",
+          "Muted-state dimming for 0% volume apps",
+          "VU tick labels moved to left of track",
+          "Rounded window corners in non-fullscreen mode",
+          "Fixed 'Start on Boot' .desktop file fields",
+          "Fixed 'Minimize to Tray' close button behavior"
+        ]
+      },
+      {
         "version": "V0.1.1",
         "date": "2026-04-06",
         "items": [
@@ -146,6 +159,69 @@
           "Mic input strip with NC toggle",
           "Per-app volume sliders in drop zones",
           "i18n scaffold (Arabic + English)"
+        ]
+      },
+      {
+        "version": "V0.0.7",
+        "date": "2025-12-10",
+        "items": [
+          "GPU Screen Recorder integration — NVENC / VAAPI replay buffer",
+          "Global hotkey support for instant replay save",
+          "Clip gallery with thumbnail grid and metadata"
+        ]
+      },
+      {
+        "version": "V0.0.6",
+        "date": "2025-11-05",
+        "items": [
+          "Full Arabic localization with RTL layout support",
+          "Theme engine — dark/light mode with custom accent colors",
+          "Vue i18n integration with locale persistence"
+        ]
+      },
+      {
+        "version": "V0.0.5",
+        "date": "2025-10-18",
+        "items": [
+          "Device manager scaffold — ratbagd D-Bus mouse detection",
+          "OpenRGB SDK integration for unified RGB control",
+          "Game profile auto-switching foundation"
+        ]
+      },
+      {
+        "version": "V0.0.4",
+        "date": "2025-09-22",
+        "items": [
+          "Clip editor scaffold with custom video player",
+          "Thumbnail generation via FFmpeg probes",
+          "Clip metadata storage with SQLite backend"
+        ]
+      },
+      {
+        "version": "V0.0.3",
+        "date": "2025-08-14",
+        "items": [
+          "Dark theme v1 — surface/card/deep layering",
+          "Sidebar navigation with page routing",
+          "Settings page with persistence layer"
+        ]
+      },
+      {
+        "version": "V0.0.2",
+        "date": "2025-07-03",
+        "items": [
+          "Initial PipeWire mixer — 5-channel virtual sinks",
+          "Per-app audio routing via pw-metadata",
+          "Basic volume faders and mute toggles"
+        ]
+      },
+      {
+        "version": "V0.0.1",
+        "date": "2025-06-01",
+        "items": [
+          "Tauri 2 + Vue 3 scaffold",
+          "Custom titlebar with window controls",
+          "Project bootstrap and architecture setup"
         ]
       }
     ]

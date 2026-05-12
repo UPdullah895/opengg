@@ -4,8 +4,14 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use super::types::{DeviceInfo, DeviceType, EqMeta};
+
+/// TTL cache for headsetcontrol output — avoids spawning the CLI on every poll.
+static HEADSET_CACHE: OnceLock<Mutex<(Vec<DeviceInfo>, Instant)>> = OnceLock::new();
+const HEADSET_CACHE_TTL_SECS: u64 = 5;
 
 // headsetcontrol --output json top-level response
 #[derive(Debug, Deserialize)]
@@ -66,8 +72,24 @@ pub struct HeadsetManager;
 
 impl HeadsetManager {
     /// List all connected headsets by invoking `headsetcontrol --output json`.
-    /// Returns one `DeviceInfo` per headset, using VID:PID-based device IDs.
+    /// Results are cached for 5 seconds to avoid spawning the CLI on every poll.
     pub fn list_devices() -> Vec<DeviceInfo> {
+        let cache = HEADSET_CACHE.get_or_init(|| Mutex::new((Vec::new(), Instant::now())));
+        if let Ok(lock) = cache.lock() {
+            if lock.1.elapsed() < Duration::from_secs(HEADSET_CACHE_TTL_SECS) && !lock.0.is_empty() {
+                return lock.0.clone();
+            }
+        }
+
+        let devices = Self::list_devices_fresh();
+
+        if let Ok(mut lock) = cache.lock() {
+            *lock = (devices.clone(), Instant::now());
+        }
+        devices
+    }
+
+    fn list_devices_fresh() -> Vec<DeviceInfo> {
         let path_env = std::env::var("PATH")
             .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
 

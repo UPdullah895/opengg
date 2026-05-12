@@ -59,42 +59,57 @@ impl Recorder {
         *mode
     }
 
+    /// Map user-facing quality preset to GSR's CLI quality argument.
+    fn gsr_quality_arg(&self) -> &'static str {
+        match self.quality.as_str() {
+            "Low" => "medium",
+            "Medium" => "high",
+            "High" => "very_high",
+            "Ultra" => "ultra",
+            _ => "very_high",
+        }
+    }
+
+    /// Detect the appropriate GSR capture target based on the session type.
+    fn gsr_capture_target(&self) -> &'static str {
+        if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
+            "portal"
+        } else {
+            "screen"
+        }
+    }
+
+    /// Build the base GSR command with shared arguments.
+    fn build_gsr_cmd(&self, quality: &'static str, target: &'static str) -> Command {
+        let mut cmd = Command::new("gpu-screen-recorder");
+        cmd.args([
+            "-w", target,
+            "-f", &self.fps.to_string(),
+            "-q", quality,
+            "-c", "mp4",
+            "-a", "OpenGG_Game.monitor",
+            "-a", "OpenGG_Chat.monitor",
+            "-a", "default_input",
+            "-o", self.output_dir.to_str().unwrap_or("/tmp"),
+        ]);
+        cmd.kill_on_drop(true);
+        cmd
+    }
+
     /// Start the replay buffer.
     pub async fn start_replay(&self, duration: u32) -> Result<()> {
         if self.status().await != RecordMode::Idle {
             anyhow::bail!("Recorder already running");
         }
 
-        let quality_arg = match self.quality.as_str() {
-            "Low" => "medium",
-            "Medium" => "high",
-            "High" => "very_high",
-            "Ultra" => "ultra",
-            _ => "very_high",
-        };
+        let quality = self.gsr_quality_arg();
+        let target = self.gsr_capture_target();
+        tracing::info!("GSR capture target: {target} (session type: {:?})", std::env::var("XDG_SESSION_TYPE"));
 
-        let capture_target = if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
-            "portal"
-        } else {
-            "screen"
-        };
-        tracing::info!("GSR capture target: {capture_target} (session type: {:?})", std::env::var("XDG_SESSION_TYPE"));
+        let mut cmd = self.build_gsr_cmd(quality, target);
+        cmd.args(["-r", &duration.to_string()]);
 
-        let child = Command::new("gpu-screen-recorder")
-            .args([
-                "-w", capture_target,
-                "-f", &self.fps.to_string(),
-                "-q", quality_arg,
-                "-r", &duration.to_string(),
-                "-c", "mp4",
-                "-a", "OpenGG_Game.monitor",
-                "-a", "OpenGG_Chat.monitor",
-                "-a", "default_input",
-                "-o", self.output_dir.to_str().unwrap_or("/tmp"),
-            ])
-            .kill_on_drop(true)
-            .spawn()
-            .context("gpu-screen-recorder not found")?;
+        let child = cmd.spawn().context("gpu-screen-recorder not found")?;
 
         *self.process.lock().await = Some(child);
         *self.mode.lock().await = RecordMode::Replay { duration };
@@ -109,33 +124,11 @@ impl Recorder {
             anyhow::bail!("Recorder already running");
         }
 
-        let quality_arg = match self.quality.as_str() {
-            "Low" => "medium",
-            "Medium" => "high",
-            "High" => "very_high",
-            "Ultra" => "ultra",
-            _ => "very_high",
-        };
+        let quality = self.gsr_quality_arg();
+        let target = self.gsr_capture_target();
+        tracing::info!("GSR capture target: {target} (session type: {:?})", std::env::var("XDG_SESSION_TYPE"));
 
-        let capture_target = if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
-            "portal"
-        } else {
-            "screen"
-        };
-        tracing::info!("GSR capture target: {capture_target} (session type: {:?})", std::env::var("XDG_SESSION_TYPE"));
-
-        let child = Command::new("gpu-screen-recorder")
-            .args([
-                "-w", capture_target,
-                "-f", &self.fps.to_string(),
-                "-q", quality_arg,
-                "-c", "mp4",
-                "-a", "OpenGG_Game.monitor",
-                "-a", "OpenGG_Chat.monitor",
-                "-a", "default_input",
-                "-o", self.output_dir.to_str().unwrap_or("/tmp"),
-            ])
-            .kill_on_drop(true)
+        let child = self.build_gsr_cmd(quality, target)
             .spawn()
             .context("gpu-screen-recorder not found")?;
 

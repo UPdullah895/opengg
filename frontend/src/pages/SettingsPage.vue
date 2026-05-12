@@ -16,8 +16,10 @@ import IconPicker from '../components/IconPicker.vue'
 import InfoIcon from '../components/InfoIcon.vue'
 import { settingsTargetTab } from '../composables/useNavSignal'
 import { mediaUrl } from '../utils/assets'
+import { useToast } from '../composables/useToast'
 
 const { t, locale } = useI18n()
+const toast = useToast()
 const persist = usePersistenceStore()
 const appVersion = ref('')
 const replay = useReplayStore()
@@ -283,7 +285,11 @@ async function restartGsr() {
   if (!settings.value.gsrEnabled) return
   try {
     await invoke('restart_gsr_replay', gsrInvokeParams())
-  } catch (e) { console.error('GSR restart:', e) }
+    toast.success('Recording restarted with new settings')
+  } catch (e) {
+    console.error('GSR restart:', e)
+    toast.error(`Failed to restart recording: ${e}`)
+  }
 }
 
 // ─── Resource estimation ───

@@ -13,809 +13,16 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Manager};
 
-const AU_PATH: &str = "/org/opengg/Daemon/Audio";
-const AU_IFACE: &str = "org.opengg.Daemon.Audio";
-const RP_PATH: &str = "/org/opengg/Daemon/Replay";
-const RP_IFACE: &str = "org.opengg.Daemon.Replay";
-const DV_PATH: &str = "/org/opengg/Daemon/Device";
-const DV_IFACE: &str = "org.opengg.Daemon.Device";
+pub(crate) const AU_PATH: &str = "/org/opengg/Daemon/Audio";
+pub(crate) const AU_IFACE: &str = "org.opengg.Daemon.Audio";
+pub(crate) const RP_PATH: &str = "/org/opengg/Daemon/Replay";
+pub(crate) const RP_IFACE: &str = "org.opengg.Daemon.Replay";
+pub(crate) const DV_PATH: &str = "/org/opengg/Daemon/Device";
+pub(crate) const DV_IFACE: &str = "org.opengg.Daemon.Device";
 
-// ═══ Audio ═══
-#[command]
-pub async fn get_channels() -> Result<String, String> {
-    call_dbus("GetChannels", AU_PATH, AU_IFACE, ()).await
-}
-/// Volume control with pactl fallback — controls both sinks and sink-inputs
-#[command]
-pub async fn set_volume(channel: String, volume: u32) -> Result<(), String> {
-    // Try D-Bus first
-    if call_dbus_void("SetVolume", AU_PATH, AU_IFACE, (channel.as_str(), volume))
-        .await
-        .is_ok()
-    {
-        return Ok(());
-    }
-    // Direct pactl fallback
-    let pct = format!("{volume}%");
-    if channel == "Master" {
-        run_cmd("pactl", &["set-sink-volume", "@DEFAULT_SINK@", &pct])?;
-    } else if channel == "Mic" {
-        run_cmd("pactl", &["set-source-volume", "@DEFAULT_SOURCE@", &pct])?;
-    } else {
-        let sink = format!("OpenGG_{channel}");
-        run_cmd("pactl", &["set-sink-volume", &sink, &pct])?;
-    }
-    Ok(())
-}
+mod audio;
+pub use audio::*;
 
-#[command]
-pub async fn set_mute(channel: String, muted: bool) -> Result<(), String> {
-    if call_dbus_void("SetMute", AU_PATH, AU_IFACE, (channel.as_str(), muted))
-        .await
-        .is_ok()
-    {
-        return Ok(());
-    }
-    let val = if muted { "1" } else { "0" };
-    if channel == "Master" {
-        run_cmd("pactl", &["set-sink-mute", "@DEFAULT_SINK@", val])?;
-    } else if channel == "Mic" {
-        run_cmd("pactl", &["set-source-mute", "@DEFAULT_SOURCE@", val])?;
-    } else {
-        run_cmd(
-            "pactl",
-            &["set-sink-mute", &format!("OpenGG_{channel}"), val],
-        )?;
-    }
-    Ok(())
-}
-
-/// Unmute any WebKit video/webaudio sink-inputs belonging to this app.
-/// Called whenever clip playback starts to counteract module-stream-restore
-/// auto-muting the media.role="video" stream.
-#[command]
-pub async fn unmute_media_streams() -> Result<(), String> {
-    let output = Command::new("pactl")
-        .args(["list", "sink-inputs"])
-        .output()
-        .map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&output.stdout);
-
-    let mut current_id: Option<u32> = None;
-    let mut is_opengg = false;
-    let mut is_media = false;
-
-    for line in text.lines() {
-        let t = line.trim();
-        if let Some(rest) = t.strip_prefix("Sink Input #") {
-            if let Some(id) = current_id {
-                if is_opengg && is_media {
-                    let _ = Command::new("pactl")
-                        .args(["set-sink-input-mute", &id.to_string(), "0"])
-                        .output();
-                }
-            }
-            current_id = rest.parse().ok();
-            is_opengg = false;
-            is_media = false;
-        } else if t.contains(r#"application.name = "opengg""#) {
-            is_opengg = true;
-        } else if t.contains(r#"media.role = "video""#) || t.contains(r#"media.role = "webaudio""#)
-        {
-            is_media = true;
-        }
-    }
-    // handle last block
-    if let Some(id) = current_id {
-        if is_opengg && is_media {
-            let _ = Command::new("pactl")
-                .args(["set-sink-input-mute", &id.to_string(), "0"])
-                .output();
-        }
-    }
-    Ok(())
-}
-
-/// Set volume for an individual app (sink-input) by its pactl index
-#[command]
-pub async fn set_app_volume(app_index: u32, volume: u32) -> Result<(), String> {
-    let pct = format!("{volume}%");
-    run_cmd(
-        "pactl",
-        &["set-sink-input-volume", &app_index.to_string(), &pct],
-    )?;
-    Ok(())
-}
-#[command]
-pub async fn get_apps() -> Result<String, String> {
-    match call_dbus("GetApps", AU_PATH, AU_IFACE, ()).await {
-        Ok(r) => Ok(r),
-        Err(_) => scan_sink_inputs(),
-    }
-}
-
-// ══════════════════════════════════════════════════════════════════════
-//  ★ AUDIO ROUTING — Ported from Python pulsectl (backend.py line 110)
-//
-//  Python:   pulse.sink_input_move(si.index, sink.index)
-//  Rust:     pactl move-sink-input <si_index> <sink_index>
-//
-//  BOTH arguments must be PulseAudio INTEGER INDICES.
-//  Using a PipeWire node ID or a sink NAME string will silently fail.
-// ══════════════════════════════════════════════════════════════════════
-
-#[command]
-pub async fn route_app(app: tauri::AppHandle, app_id: u32, channel: String) -> Result<(), String> {
-    // Try D-Bus daemon first
-    match call_dbus_void("RouteApp", AU_PATH, AU_IFACE, (app_id, channel.as_str())).await {
-        Ok(()) => {
-            let _ = app.emit("audio-mixer-refresh", ());
-            return Ok(());
-        }
-        Err(e) => eprintln!("route_app: D-Bus route failed ({e}), falling back to pactl"),
-    }
-
-    log_routing_context(app_id, &channel);
-
-    // Resolve the target sink name once — used by both pactl and pw-metadata paths
-    let sink_name = if channel == "default" || channel == "Master" {
-        run_cmd("pactl", &["get-default-sink"])?
-    } else {
-        let name = format!("OpenGG_{channel}");
-        ensure_sink_exists(&name, &channel).await?;
-        name
-    };
-
-    // Get target sink's INTEGER INDEX (needed by pactl move-sink-input)
-    let sink_idx = get_sink_index_by_name(&sink_name)?;
-
-    let cmd_str = format!("pactl move-sink-input {} {}", app_id, sink_idx);
-
-    // Attempt 1: app_id IS the correct pactl sink-input index — with 3 retries
-    for attempt in 0..=2 {
-        if attempt > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(150));
-        }
-
-        if !validate_sink_input_exists(app_id) {
-            if attempt == 0 {
-                eprintln!("route_app: sink-input {app_id} not found in pactl list, skipping to PW-ID scan...");
-            }
-            break;
-        }
-
-        eprintln!(
-            "route_app: [attempt {}/3] executing: {cmd_str}",
-            attempt + 1
-        );
-        let r = Command::new("pactl")
-            .args([
-                "move-sink-input",
-                &app_id.to_string(),
-                &sink_idx.to_string(),
-            ])
-            .output()
-            .map_err(|e| format!("{cmd_str} — exec error: {e}"))?;
-
-        if r.status.success() {
-            eprintln!(
-                "route_app: ✓ attempt {}/3: sink-input {app_id} → sink #{sink_idx} ({channel})",
-                attempt + 1
-            );
-            let _ = app.emit("audio-mixer-refresh", ());
-            return Ok(());
-        }
-
-        let err = String::from_utf8_lossy(&r.stderr);
-        eprintln!("route_app: attempt {}/3 failed ({err})", attempt + 1);
-
-        if attempt == 2 {
-            eprintln!("route_app: all 3 attempts exhausted for direct index, scanning for correct sink-input...");
-        }
-    }
-
-    // Attempt 2: app_id might be a PipeWire node ID — find the correct pactl sink-input index
-    if let Ok(si_idx) = find_pactl_si_for_pw_id(app_id) {
-        let cmd2 = format!("pactl move-sink-input {} {}", si_idx, sink_idx);
-        eprintln!("route_app: found PW#{app_id} → pactl si#{si_idx}, executing: {cmd2}");
-        let r2 = Command::new("pactl")
-            .args([
-                "move-sink-input",
-                &si_idx.to_string(),
-                &sink_idx.to_string(),
-            ])
-            .output()
-            .map_err(|e| format!("{cmd2} — exec error: {e}"))?;
-        if r2.status.success() {
-            eprintln!(
-                "route_app: ✓ PW#{app_id} → pactl si#{si_idx} → sink #{sink_idx} ({channel})"
-            );
-            let _ = app.emit("audio-mixer-refresh", ());
-            return Ok(());
-        }
-        let err2 = String::from_utf8_lossy(&r2.stderr);
-        eprintln!("route_app: corrected pactl index also failed ({err2}), trying pw-metadata...");
-    } else {
-        eprintln!("route_app: no pactl sink-input found for PW#{app_id}, trying pw-metadata...");
-    }
-
-    // Attempt 3: pw-metadata target.node — WirePlumber-native stream move.
-    // Resolves the sink's PipeWire node.id (different from the pactl integer index)
-    // and writes it into the WirePlumber settings metadata so WirePlumber moves the stream.
-    match get_pw_node_id_for_sink(&sink_name) {
-        Ok(sink_pw_id) => {
-            eprintln!(
-                "route_app: [pw-metadata] node#{app_id} → target.node={sink_pw_id} (sink '{}', channel '{channel}')",
-                sink_name
-            );
-            if let Err(e) = route_via_pw_metadata(app_id, sink_pw_id) {
-                eprintln!("route_app: pw-metadata failed: {e}");
-                return Err(format!(
-                    "route_app: all routing methods failed for id {app_id} → {channel}. \
-                     See logs above for diagnostics."
-                ));
-            }
-            eprintln!("route_app: ✓ pw-metadata succeeded for {app_id} → {channel}");
-            let _ = app.emit("audio-mixer-refresh", ());
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!(
-                "route_app: cannot resolve sink '{}' PW node.id: {e}",
-                sink_name
-            );
-            Err(format!(
-                "route_app: all routing methods failed for id {app_id} → {channel}. \
-                 Sink PW node.id unavailable: {e}"
-            ))
-        }
-    }
-}
-
-/// Get default sink's pactl integer index
-fn get_default_sink_index() -> Result<u32, String> {
-    let name = run_cmd("pactl", &["get-default-sink"])?;
-    get_sink_index_by_name(&name)
-}
-
-/// Look up sink's pactl integer index by name — mirrors pulsectl.sink_list()
-fn get_sink_index_by_name(sink_name: &str) -> Result<u32, String> {
-    let j = run_cmd("pactl", &["-f", "json", "list", "sinks"])?;
-    let sinks: Vec<serde_json::Value> = serde_json::from_str(&j).map_err(|e| format!("{e}"))?;
-    for s in &sinks {
-        if s["name"].as_str() == Some(sink_name) {
-            if let Some(idx) = s["index"].as_u64() {
-                return Ok(idx as u32);
-            }
-        }
-    }
-    Err(format!("sink '{sink_name}' not found"))
-}
-
-/// Extended sink-input info for cross-referencing PipeWire IDs
-#[derive(Debug)]
-struct SiInfo {
-    idx: u32,
-    app_name: String,
-    binary: String,
-    pw_ids: Vec<u32>,
-}
-
-/// Build a comprehensive map of all sink-inputs with their PW node IDs and app metadata.
-fn build_si_map() -> Result<HashMap<u32, SiInfo>, String> {
-    let j = run_cmd("pactl", &["-f", "json", "list", "sink-inputs"])?;
-    let sis: Vec<serde_json::Value> =
-        serde_json::from_str(&j).map_err(|e| format!("parse sink-inputs: {e}"))?;
-    let mut map = HashMap::new();
-    for si in sis {
-        let idx = si["index"].as_u64().unwrap_or(0) as u32;
-        let p = &si["properties"];
-        let app_name = p["application.name"]
-            .as_str()
-            .or(p["media.name"].as_str())
-            .unwrap_or("")
-            .to_string();
-        let binary = p["application.process.binary"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        let mut pw_ids = Vec::new();
-        for key in [
-            "object.serial",
-            "object.id",
-            "node.id",
-            "pipewire.access.portal.app_id",
-            "pipewire.client.access",
-        ] {
-            if let Some(s) = p[key].as_str() {
-                if let Ok(id) = s.parse::<u32>() {
-                    pw_ids.push(id);
-                }
-            }
-        }
-        // Some clients expose the node ID embedded in media.name or application.name
-        if let Some(s) = p["media.name"].as_str() {
-            if let Ok(id) = s.parse::<u32>() {
-                pw_ids.push(id);
-            }
-        }
-
-        map.insert(
-            idx,
-            SiInfo {
-                idx,
-                app_name,
-                binary,
-                pw_ids,
-            },
-        );
-    }
-    Ok(map)
-}
-
-/// Check whether a sink-input index currently exists in the system.
-fn validate_sink_input_exists(si_idx: u32) -> bool {
-    if let Ok(j) = run_cmd("pactl", &["-f", "json", "list", "sink-inputs"]) {
-        if let Ok(sis) = serde_json::from_str::<Vec<serde_json::Value>>(&j) {
-            return sis
-                .iter()
-                .any(|si| si["index"].as_u64() == Some(si_idx as u64));
-        }
-    }
-    false
-}
-
-/// Cross-reference PipeWire node ID → pactl sink-input index using the full SI map.
-fn find_pactl_si_for_pw_id(pw_id: u32) -> Result<u32, String> {
-    let map = build_si_map()?;
-    for (idx, info) in &map {
-        if info.pw_ids.contains(&pw_id) {
-            return Ok(*idx);
-        }
-    }
-    Err(format!("no pactl si for PW#{pw_id}"))
-}
-
-/// Resolve a PipeWire sink's node.id (PW namespace) from its pactl name.
-/// The PW node.id is stored in the sink's properties["node.id"] in pactl JSON output
-/// and is the correct identifier for pw-metadata target.node writes.
-fn get_pw_node_id_for_sink(sink_name: &str) -> Result<u32, String> {
-    let j = run_cmd("pactl", &["-f", "json", "list", "sinks"])?;
-    let sinks: Vec<serde_json::Value> =
-        serde_json::from_str(&j).map_err(|e| format!("parse sinks: {e}"))?;
-    for s in &sinks {
-        if s["name"].as_str() == Some(sink_name) {
-            // WirePlumber surfaces the PW node.id as a string property
-            if let Some(nid) = s["properties"]["node.id"]
-                .as_str()
-                .and_then(|v| v.parse::<u32>().ok())
-            {
-                return Ok(nid);
-            }
-            // Fallback: object.id is the same value on older PipeWire builds
-            if let Some(nid) = s["properties"]["object.id"]
-                .as_str()
-                .and_then(|v| v.parse::<u32>().ok())
-            {
-                return Ok(nid);
-            }
-        }
-    }
-    Err(format!("no PW node.id found for sink '{sink_name}'"))
-}
-
-/// Route a stream via WirePlumber metadata — the correct PipeWire-native move.
-///
-/// `pw-metadata -n settings <stream_node_id> target.node <sink_node_id>`
-///
-/// WirePlumber watches the "settings" metadata namespace and moves the stream
-/// when it sees a `target.node` entry for a managed stream node. This is
-/// the same mechanism used internally by pavucontrol and the GNOME audio panel.
-fn route_via_pw_metadata(stream_pw_id: u32, sink_pw_id: u32) -> Result<(), String> {
-    eprintln!(
-        "route_via_pw_metadata: pw-metadata -n settings {} target.node {}",
-        stream_pw_id, sink_pw_id
-    );
-    let r = Command::new("pw-metadata")
-        .args([
-            "-n",
-            "settings",
-            &stream_pw_id.to_string(),
-            "target.node",
-            &sink_pw_id.to_string(),
-        ])
-        .output()
-        .map_err(|e| format!("pw-metadata exec error: {e}"))?;
-    if r.status.success() {
-        return Ok(());
-    }
-    Err(format!(
-        "pw-metadata: {}",
-        String::from_utf8_lossy(&r.stderr).trim()
-    ))
-}
-
-/// Log full environment context and PipeWire state before routing attempts.
-fn log_routing_context(app_id: u32, channel: &str) {
-    eprintln!(
-        "=== route_app[{} → {channel}] environment context ===",
-        app_id
-    );
-    eprintln!(
-        "  PULSE_SERVER:        {:?}",
-        std::env::var("PULSE_SERVER").ok()
-    );
-    eprintln!(
-        "  PIPEWIRE_DEBUG:      {:?}",
-        std::env::var("PIPEWIRE_DEBUG").ok()
-    );
-    eprintln!(
-        "  XDG_SESSION_TYPE:    {:?}",
-        std::env::var("XDG_SESSION_TYPE").ok()
-    );
-    eprintln!(
-        "  WAYLAND_DISPLAY:     {:?}",
-        std::env::var("WAYLAND_DISPLAY").ok()
-    );
-    eprintln!("  DISPLAY:             {:?}", std::env::var("DISPLAY").ok());
-    eprintln!(
-        "  XDG_CURRENT_DESKTOP: {:?}",
-        std::env::var("XDG_CURRENT_DESKTOP").ok()
-    );
-
-    // Resolve stream identity: find node.name and binary for app_id in the SI map
-    match build_si_map() {
-        Ok(map) => {
-            let matched: Vec<_> = map
-                .values()
-                .filter(|info| info.pw_ids.contains(&app_id) || info.idx == app_id)
-                .collect();
-            if matched.is_empty() {
-                eprintln!("  stream id={app_id}: not found in current pactl sink-inputs (may be a PW node ID)");
-            } else {
-                for info in &matched {
-                    eprintln!(
-                        "  stream id={app_id}: pactl-idx={} name='{}' binary='{}'",
-                        info.idx, info.app_name, info.binary
-                    );
-                }
-            }
-        }
-        Err(e) => eprintln!("  stream id={app_id}: SI map unavailable ({e})"),
-    }
-
-    // Resolve target sink PW node.id (what pw-metadata will use)
-    let sink_name = if channel == "default" || channel == "Master" {
-        run_cmd("pactl", &["get-default-sink"]).unwrap_or_default()
-    } else {
-        format!("OpenGG_{channel}")
-    };
-    match get_pw_node_id_for_sink(&sink_name) {
-        Ok(nid) => eprintln!("  target sink '{}' → PW node.id={}", sink_name, nid),
-        Err(e) => eprintln!(
-            "  target sink '{}' → PW node.id unavailable: {}",
-            sink_name, e
-        ),
-    }
-
-    if let Ok(j) = run_cmd("pactl", &["-f", "json", "list", "sinks"]) {
-        let count = serde_json::from_str::<Vec<serde_json::Value>>(&j)
-            .map(|v| v.len())
-            .unwrap_or(0);
-        eprintln!("  pactl sinks visible: {count}");
-    }
-
-    eprintln!("====================================================");
-}
-
-/// Ensure virtual sink exists (non-blocking, with extended settling time)
-async fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
-    if let Ok(o) = Command::new("pactl")
-        .args(["list", "sinks", "short"])
-        .output()
-    {
-        if String::from_utf8_lossy(&o.stdout).contains(name) {
-            if matches!(ch, "Game" | "Chat" | "Media" | "Aux") {
-                unload_null_sink_module(name)?;
-            } else {
-                return Ok(());
-            }
-        }
-    }
-    let display_name = live_display_name(ch);
-    eprintln!("ensure_sink_exists: creating virtual sink '{name}' for channel '{ch}'");
-    let c = Command::new("pactl")
-        .args([
-            "load-module",
-            "module-null-sink",
-            &format!("sink_name={name}"),
-            &format!(
-                "sink_properties=node.description={} node.nick={} device.description={} media.name={}",
-                sink_prop_value(&display_name),
-                sink_prop_value(&display_name),
-                sink_prop_value(&display_name),
-                sink_prop_value(&display_name),
-            ),
-            "channels=2",
-            "channel_map=front-left,front-right",
-        ])
-        .output()
-        .map_err(|e| format!("{e}"))?;
-    if !c.status.success() {
-        let err = String::from_utf8_lossy(&c.stderr);
-        eprintln!("ensure_sink_exists: pactl load-module FAILED: {err}");
-        return Err(err.to_string());
-    }
-    // Increase settling time: 600ms to allow PipeWire to fully enumerate the new sink
-    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-
-    // Set up loopback links to default sink
-    if let Ok(def) = run_cmd("pactl", &["get-default-sink"]) {
-        for p in ["FL", "FR"] {
-            let result = Command::new("pw-link")
-                .args([
-                    &format!("{name}:monitor_{p}"),
-                    &format!("{def}:playback_{p}"),
-                ])
-                .output();
-            if let Err(e) = result {
-                eprintln!(
-                    "ensure_sink_exists: pw-link {name}:monitor_{p} → {def}:playback_{p}: {e}"
-                );
-            }
-        }
-    }
-    eprintln!("ensure_sink_exists: sink '{name}' ready");
-    Ok(())
-}
-
-fn live_display_name(channel: &str) -> String {
-    if matches!(channel, "Game" | "Chat" | "Media" | "Aux") {
-        channel.to_string()
-    } else {
-        format!("OpenGG - {channel}")
-    }
-}
-
-fn sink_prop_value(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\\\""))
-}
-
-fn unload_null_sink_module(sink_name: &str) -> Result<(), String> {
-    let modules = run_cmd("pactl", &["list", "short", "modules"])?;
-    for line in modules.lines() {
-        let mut parts = line.split('\t');
-        let Some(idx) = parts.next() else { continue };
-        let Some(name) = parts.next() else { continue };
-        let args = parts.next().unwrap_or("");
-        if name != "module-null-sink" || !args.contains(&format!("sink_name={sink_name}")) {
-            continue;
-        }
-        run_cmd("pactl", &["unload-module", idx])?;
-    }
-    for _ in 0..20 {
-        let modules = run_cmd("pactl", &["list", "short", "modules"])?;
-        let modules_cleared = modules.lines().all(|line| {
-            let mut parts = line.split('\t');
-            let _idx = parts.next();
-            let name = parts.next().unwrap_or("");
-            let args = parts.next().unwrap_or("");
-            name != "module-null-sink" || !args.contains(&format!("sink_name={sink_name}"))
-        });
-        let sinks = run_cmd("pactl", &["list", "sinks", "short"])?;
-        if modules_cleared && !sinks.contains(sink_name) {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    Ok(())
-}
-
-/// Scan sink-inputs — mirrors pulsectl.sink_input_list()
-/// ★ FIX 2: Filters out streams going to OpenGG virtual sinks' monitors
-fn scan_sink_inputs() -> Result<String, String> {
-    let j = run_cmd("pactl", &["-f", "json", "list", "sink-inputs"])?;
-    let sis: Vec<serde_json::Value> = serde_json::from_str(&j).map_err(|e| format!("{e}"))?;
-    let mut apps = Vec::new();
-    for si in &sis {
-        let idx = si["index"].as_u64().unwrap_or(0) as u32;
-        let p = &si["properties"];
-        if is_internal_stream(
-            p["application.name"].as_str(),
-            p["media.name"].as_str(),
-            p["application.process.binary"].as_str(),
-        ) {
-            continue;
-        }
-        let binary = p["application.process.binary"].as_str().unwrap_or("");
-        let name = normalized_stream_name(
-            p["application.name"].as_str(),
-            p["media.name"].as_str(),
-            Some(binary),
-        );
-
-        let sink_idx = si["sink"].as_u64().unwrap_or(0) as u32;
-        let channel = lookup_sink_channel(sink_idx);
-        let auto_channel = classify_channel(&p);
-
-        // Include volume info (0-100) for per-app volume control
-        let vol = si["volume"]
-            .as_object()
-            .and_then(|v| v.values().next())
-            .and_then(|ch| ch["value_percent"].as_str())
-            .and_then(|s| s.trim_end_matches('%').parse::<u32>().ok())
-            .unwrap_or(100);
-
-        apps.push(serde_json::json!({
-            "id": idx, "name": name, "binary": binary,
-            "channel": channel, "icon": "", "volume": vol,
-            "auto_channel": auto_channel
-        }));
-    }
-
-    // ★ Epic 3: Also scan source-outputs — apps recording from the mic
-    // IDs are offset by 90000 to avoid conflicts with sink-input IDs.
-    if let Ok(sj) = run_cmd("pactl", &["-f", "json", "list", "source-outputs"]) {
-        if let Ok(sos) = serde_json::from_str::<Vec<serde_json::Value>>(&sj) {
-            for (idx, so) in sos.iter().enumerate() {
-                let p = &so["properties"];
-                if is_internal_stream(
-                    p["application.name"].as_str(),
-                    p["media.name"].as_str(),
-                    p["application.process.binary"].as_str(),
-                ) {
-                    continue;
-                }
-                let binary = p["application.process.binary"].as_str().unwrap_or("");
-                let name = normalized_stream_name(
-                    p["application.name"].as_str(),
-                    p["media.name"].as_str(),
-                    Some(binary),
-                );
-                let fake_id = 90000u32 + idx as u32;
-                apps.push(serde_json::json!({
-                    "id": fake_id, "name": name, "binary": binary,
-                    "channel": "Mic", "icon": "", "volume": 100
-                }));
-            }
-        }
-    }
-
-    Ok(serde_json::to_string(&apps).unwrap_or("[]".into()))
-}
-
-fn normalized_stream_name(
-    app_name: Option<&str>,
-    media_name: Option<&str>,
-    binary_name: Option<&str>,
-) -> String {
-    let app = app_name.map(str::trim).filter(|v| !v.is_empty());
-    let media = media_name.map(str::trim).filter(|v| !v.is_empty());
-    let binary = binary_name.map(str::trim).filter(|v| !v.is_empty());
-
-    match app {
-        Some(name) if !name.eq_ignore_ascii_case("opengg") => name.to_string(),
-        _ => media.or(binary).unwrap_or("Unknown").to_string(),
-    }
-}
-
-fn is_internal_stream(
-    app_name: Option<&str>,
-    media_name: Option<&str>,
-    binary_name: Option<&str>,
-) -> bool {
-    let matches_internal = |value: Option<&str>| {
-        value
-            .map(str::to_lowercase)
-            .map(|raw| {
-                raw.contains("opengg")
-                    || raw.contains("wireplumber")
-                    || raw.contains("pipewire")
-                    || raw.contains("peak detect")
-                    || raw.contains("monitor")
-            })
-            .unwrap_or(false)
-    };
-    matches_internal(app_name) || matches_internal(media_name) || matches_internal(binary_name)
-}
-
-/// Suggest an OpenGG channel for an app based on PipeWire stream properties.
-/// Returns an empty string when no confident classification can be made.
-fn classify_channel(props: &serde_json::Value) -> &'static str {
-    let role = props["media.role"].as_str().unwrap_or("").to_lowercase();
-    let binary = props["application.process.binary"]
-        .as_str()
-        .unwrap_or("")
-        .to_lowercase();
-    let name = props["application.name"]
-        .as_str()
-        .unwrap_or("")
-        .to_lowercase();
-
-    // media.role is the most authoritative signal (set by the app itself)
-    match role.as_str() {
-        "game" => return "Game",
-        "music" | "video" | "movie" => return "Media",
-        "phone" | "communication" => return "Chat",
-        _ => {}
-    }
-
-    // Binary / app-name heuristics
-    const CHAT_BINS: &[&str] = &[
-        "discord",
-        "teamspeak",
-        "mumble",
-        "signal",
-        "telegram",
-        "zoom",
-        "slack",
-        "skype",
-        "element",
-        "hexchat",
-    ];
-    const GAME_BINS: &[&str] = &[
-        "steam",
-        "heroic",
-        "lutris",
-        "wine",
-        "proton",
-        "gameoverlayui",
-        "gamescope",
-        "mangohud",
-    ];
-    const MEDIA_BINS: &[&str] = &[
-        "spotify",
-        "rhythmbox",
-        "clementine",
-        "vlc",
-        "mpv",
-        "celluloid",
-        "strawberry",
-        "quodlibet",
-        "cmus",
-        "lollypop",
-        "elisa",
-        "audacious",
-    ];
-
-    if CHAT_BINS
-        .iter()
-        .any(|b| binary.contains(b) || name.contains(b))
-    {
-        return "Chat";
-    }
-    if GAME_BINS
-        .iter()
-        .any(|b| binary.contains(b) || name.contains(b))
-    {
-        return "Game";
-    }
-    if MEDIA_BINS
-        .iter()
-        .any(|b| binary.contains(b) || name.contains(b))
-    {
-        return "Media";
-    }
-
-    "" // No confident match — leave in Master
-}
-
-fn lookup_sink_channel(sink_idx: u32) -> String {
-    if let Ok(j) = run_cmd("pactl", &["-f", "json", "list", "sinks"]) {
-        if let Ok(sinks) = serde_json::from_str::<Vec<serde_json::Value>>(&j) {
-            for s in &sinks {
-                if s["index"].as_u64() == Some(sink_idx as u64) {
-                    let n = s["name"].as_str().unwrap_or("");
-                    if let Some(ch) = n.strip_prefix("OpenGG_") {
-                        return ch.into();
-                    }
-                }
-            }
-        }
-    }
-    String::new()
-}
 
 // ══════════════════════════════════════════════════════════════
 //  ★ EPIC 1: Media Analysis via ffprobe
@@ -846,18 +53,13 @@ pub struct MediaInfo {
 
 #[command]
 pub async fn analyze_media(filepath: String) -> Result<MediaInfo, String> {
-    let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            &filepath,
-        ])
-        .output()
-        .map_err(|e| format!("ffprobe: {e}"))?;
+    let output = run_command_output_async("ffprobe", &[
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        "-show_streams",
+        &filepath,
+    ]).await?;
 
     if !output.status.success() {
         return Err(format!(
@@ -1066,23 +268,14 @@ pub async fn export_timeline(
         clips.iter().filter(|c| c.track == "video").collect();
     if video_clips.len() == 1 {
         let vc = video_clips[0];
-        let r = Command::new("ffmpeg")
-            .args([
-                "-i",
-                &vc.filepath,
-                "-ss",
-                &format!("{:.3}", vc.start),
-                "-to",
-                &format!("{:.3}", vc.end),
-                "-c",
-                "copy",
-                "-avoid_negative_ts",
-                "make_zero",
-                "-y",
-                &outfile.to_string_lossy(),
-            ])
-            .output()
-            .map_err(|e| format!("{e}"))?;
+        let r = run_command_output_async("ffmpeg", &[
+            "-i", &vc.filepath,
+            "-ss", &format!("{:.3}", vc.start),
+            "-to", &format!("{:.3}", vc.end),
+            "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+            "-y", &outfile.to_string_lossy(),
+        ]).await?;
         if r.status.success() {
             return Ok(outfile.to_string_lossy().to_string());
         }
@@ -1109,22 +302,14 @@ pub async fn generate_waveform(
     let peaks_count = num_peaks.max(100).min(2000);
 
     // Extract raw PCM audio from the specified stream
-    let output = Command::new("ffmpeg")
-        .args([
-            "-i",
-            &filepath,
-            "-map",
-            &format!("0:{stream_index}"),
-            "-ac",
-            "1",
-            "-f",
-            "s16le",
-            "-ar",
-            "8000",
-            "-",
-        ])
-        .output()
-        .map_err(|e| format!("ffmpeg waveform: {e}"))?;
+    let output = run_command_output_async("ffmpeg", &[
+        "-i", &filepath,
+        "-map", &format!("0:{stream_index}"),
+        "-ac", "1",
+        "-f", "s16le",
+        "-ar", "8000",
+        "-",
+    ]).await?;
 
     if !output.status.success() || output.stdout.is_empty() {
         return Ok(vec![0.0; peaks_count as usize]);
@@ -1501,7 +686,10 @@ pub async fn export_clip_with_filters(
     };
 
     // Probe resolution for proportional sizing
-    let (src_w, src_h) = probe_resolution(&input_path);
+    let input_path_clone = input_path.clone();
+    let (src_w, src_h) = tokio::task::spawn_blocking(move || probe_resolution(&input_path_clone))
+        .await
+        .map_err(|e| format!("spawn_blocking: {e}"))?;
     eprintln!("export (encode): source {src_w}x{src_h}");
 
     // Burn overlays into the video filter chain
@@ -1879,22 +1067,24 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
     if !dir.exists() {
         return Ok(0);
     }
-    let count = walkdir::WalkDir::new(&dir)
-        .min_depth(1)
-        .into_iter()
-        .flatten()
-        .filter(|e| {
-            let p = e.path();
-            p.is_file() && {
-                let ext = p
-                    .extension()
-                    .and_then(|x| x.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                VIDEO_EXTS.contains(&ext.as_str())
-            }
-        })
-        .count();
+    let count = tokio::task::spawn_blocking(move || {
+        walkdir::WalkDir::new(&dir)
+            .min_depth(1)
+            .into_iter()
+            .flatten()
+            .filter(|e| {
+                let p = e.path();
+                p.is_file() && {
+                    let ext = p
+                        .extension()
+                        .and_then(|x| x.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    VIDEO_EXTS.contains(&ext.as_str())
+                }
+            })
+            .count()
+    }).await.map_err(|e| format!("spawn_blocking: {e}"))?;
     Ok(count)
 }
 
@@ -2362,7 +1552,10 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
         .unwrap_or(0);
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
     let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
-    let (dur, w, h) = probe_video(&p);
+    let p_clone = p.clone();
+    let (dur, w, h) = tokio::task::spawn_blocking(move || probe_video(&p_clone))
+        .await
+        .map_err(|e| format!("spawn_blocking: {e}"))?;
     let game_from_filename = stem
         .split('_')
         .next()
@@ -2418,23 +1611,14 @@ pub async fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Resu
     let t_probe_ms = t_start.elapsed().as_millis();
     let seek = if dur > 1.0 { dur * 0.1 } else { 0.0 };
     // 480p thumbnails: ~853x480 at q:v 3 (~90KB each). Matches SteelSeries quality.
-    let r = Command::new("ffmpeg")
-        .args([
-            "-ss",
-            &format!("{seek:.2}"),
-            "-i",
-            &filepath,
-            "-vframes",
-            "1",
-            "-vf",
-            "scale=-2:480",
-            "-q:v",
-            "3",
-            "-y",
-            &out.to_string_lossy(),
-        ])
-        .output()
-        .map_err(|e| format!("{e}"))?;
+    let r = run_command_output_async("ffmpeg", &[
+        "-ss", &format!("{seek:.2}"),
+        "-i", &filepath,
+        "-vframes", "1",
+        "-vf", "scale=-2:480",
+        "-q:v", "3",
+        "-y", &out.to_string_lossy(),
+    ]).await?;
     #[cfg(debug_assertions)]
     {
         let fname = filepath
@@ -2595,21 +1779,13 @@ pub async fn take_screenshot(
         .as_secs();
     let out = pics_dir.join(format!("opengg_screenshot_{ts}.png"));
 
-    let r = Command::new("ffmpeg")
-        .args([
-            "-ss",
-            &format!("{time_sec:.3}"),
-            "-i",
-            &filepath,
-            "-vframes",
-            "1",
-            "-q:v",
-            "2",
-            "-y",
-            &out.to_string_lossy(),
-        ])
-        .output()
-        .map_err(|e| format!("ffmpeg: {e}"))?;
+    let r = run_command_output_async("ffmpeg", &[
+        "-ss", &format!("{time_sec:.3}"),
+        "-i", &filepath,
+        "-vframes", "1",
+        "-q:v", "2",
+        "-y", &out.to_string_lossy(),
+    ]).await?;
 
     if r.status.success() && out.exists() {
         Ok(out.to_string_lossy().to_string())
@@ -2683,23 +1859,14 @@ pub async fn trim_clip(
     if out == input_path {
         out = auto_name(&input_path, "_trim")
     }
-    let r = Command::new("ffmpeg")
-        .args([
-            "-i",
-            &input_path,
-            "-ss",
-            &format!("{start_sec:.3}"),
-            "-to",
-            &format!("{end_sec:.3}"),
-            "-c",
-            "copy",
-            "-avoid_negative_ts",
-            "make_zero",
-            "-y",
-            &out,
-        ])
-        .output()
-        .map_err(|e| format!("{e}"))?;
+    let r = run_command_output_async("ffmpeg", &[
+        "-i", &input_path,
+        "-ss", &format!("{start_sec:.3}"),
+        "-to", &format!("{end_sec:.3}"),
+        "-c", "copy",
+        "-avoid_negative_ts", "make_zero",
+        "-y", &out,
+    ]).await?;
     if r.status.success() {
         Ok(out)
     } else {
@@ -3327,315 +2494,7 @@ pub async fn get_media_server_port(app: AppHandle) -> Result<u16, String> {
     Ok(app.state::<crate::MediaServerPort>().0)
 }
 
-// ═══ Audio Devices ═══
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AudioDevice {
-    pub name: String,
-    pub description: String,
-    pub device_type: String,
-    pub is_default: bool,
-}
-#[command]
-pub async fn get_audio_devices() -> Result<Vec<AudioDevice>, String> {
-    let mut d = Vec::new();
-    let ds = run_cmd("pactl", &["get-default-sink"]).unwrap_or_default();
-    let dr = run_cmd("pactl", &["get-default-source"]).unwrap_or_default();
-    if let Ok(o) = run_cmd("pactl", &["-f", "json", "list", "sinks"]) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&o) {
-            for s in v.as_array().unwrap_or(&vec![]) {
-                let n = s["name"].as_str().unwrap_or("").to_string();
-                if n.starts_with("OpenGG_") {
-                    continue;
-                }
-                d.push(AudioDevice {
-                    is_default: n == ds,
-                    description: s["description"].as_str().unwrap_or(&n).into(),
-                    name: n,
-                    device_type: "sink".into(),
-                });
-            }
-        }
-    }
-    if let Ok(o) = run_cmd("pactl", &["-f", "json", "list", "sources"]) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&o) {
-            for s in v.as_array().unwrap_or(&vec![]) {
-                let n = s["name"].as_str().unwrap_or("").to_string();
-                if n.contains(".monitor") {
-                    continue;
-                }
-                d.push(AudioDevice {
-                    is_default: n == dr,
-                    description: s["description"].as_str().unwrap_or(&n).into(),
-                    name: n,
-                    device_type: "source".into(),
-                });
-            }
-        }
-    }
-    Ok(d)
-}
-// ══════════════════════════════════════════════════════════════
-//  ★ EPIC 1 FIX: PipeWire routing leak — audio duplication bug
-//
-//  Previous bug: the old code only unlinked from the system-default
-//  sink. If the channel had been routed to a DIFFERENT device earlier,
-//  that link was never destroyed → audio played from two outputs.
-//
-//  Fix: query ALL current sinks and run `pw-link -d` for every one.
-//  pw-link -d is a no-op when no link exists, so it's safe to spam.
-// ══════════════════════════════════════════════════════════════
 
-/// Destroy every existing pw-link from `{sink_name}:monitor_FL/FR` to
-/// any physical sink that is currently listed by PulseAudio.
-fn unlink_virtual_sink_from_all(sink_name: &str) {
-    let json = match run_cmd("pactl", &["-f", "json", "list", "sinks"]) {
-        Ok(j) => j,
-        Err(_) => return,
-    };
-    let sinks: Vec<serde_json::Value> = match serde_json::from_str(&json) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    for s in &sinks {
-        if let Some(target) = s["name"].as_str() {
-            for p in ["FL", "FR"] {
-                // pw-link -d silently exits 0 when the link doesn't exist
-                Command::new("pw-link")
-                    .args([
-                        "-d",
-                        &format!("{sink_name}:monitor_{p}"),
-                        &format!("{target}:playback_{p}"),
-                    ])
-                    .output()
-                    .ok();
-            }
-        }
-    }
-    eprintln!(
-        "set_channel_device: unlinked {sink_name} from {} sinks",
-        sinks.len()
-    );
-}
-
-#[command]
-pub async fn set_channel_device(channel: String, device_name: String) -> Result<(), String> {
-    if channel == "Mic" {
-        let _ = Command::new("pactl")
-            .args(["set-default-source", &device_name])
-            .output();
-        return Ok(());
-    }
-    if channel == "Master" {
-        let _ = Command::new("pactl")
-            .args(["set-default-sink", &device_name])
-            .output();
-        return Ok(());
-    }
-
-    let sink = format!("OpenGG_{channel}");
-
-    // ★ Step 1: tear down ALL existing links for this virtual sink.
-    //   This is the core fix for the routing leak / audio duplication bug.
-    unlink_virtual_sink_from_all(&sink);
-
-    // ★ Step 2: create fresh links to the newly selected device.
-    for p in ["FL", "FR"] {
-        let r = Command::new("pw-link")
-            .args([
-                &format!("{sink}:monitor_{p}"),
-                &format!("{device_name}:playback_{p}"),
-            ])
-            .output();
-        if let Ok(o) = r {
-            if o.status.success() {
-                eprintln!(
-                    "set_channel_device: linked {sink}:monitor_{p} → {device_name}:playback_{p}"
-                );
-            } else {
-                eprintln!(
-                    "set_channel_device: pw-link failed: {}",
-                    String::from_utf8_lossy(&o.stderr).trim()
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-// ═══ VU ═══
-#[derive(Serialize, Clone)]
-struct VuLevels {
-    channels: HashMap<String, f32>,
-}
-
-/// Real-time per-channel VU meters via native libpulse.
-///
-/// One `pa_simple` connection per channel reads S16LE PCM from the channel's
-/// monitor source.  Each reader runs in `spawn_blocking` so the async runtime
-/// is never stalled.  Stopping is cooperative: set the AtomicBool to false and
-/// each thread exits on its next 32 ms read; the `Simple` handle is dropped at
-/// thread exit, calling `pa_simple_free()` automatically (RAII).
-///
-/// Using native libpulse completely eliminates:
-///  • Process spawns (old pw-cat approach spawned 6 OS processes per stream)
-///  • Mic fallback bug (pw-cat silently routed unknown targets to the mic)
-///  • SIGTERM dance on shutdown
-#[command]
-pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
-    use libpulse_binding::sample::{Format, Spec};
-    use libpulse_binding::stream::Direction;
-    use libpulse_simple_binding::Simple;
-
-    let st = app.state::<crate::VuState>();
-
-    // ── Generation-counter dedup ─────────────────────────────────────────────
-    // Stop any live reader threads from the previous session by toggling the
-    // running flag off, bumping the generation, then turning it back on.
-    // Threads blocked in pa.read() will see their generation is stale and exit.
-    st.0.store(false, Ordering::Relaxed);
-    let my_gen = st.1.fetch_add(1, Ordering::SeqCst) + 1;
-    // Give old threads one read-period (~32 ms) to notice the flag is false.
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    st.0.store(true, Ordering::Relaxed);
-
-    let running = st.0.clone();
-    let gen = st.1.clone();
-    let handle = app.clone();
-
-    // Resolve default sink/source once — not inside the hot path.
-    let master_monitor = run_cmd("pactl", &["get-default-sink"])
-        .map(|s| format!("{s}.monitor"))
-        .unwrap_or_default();
-    let mic_source = run_cmd("pactl", &["get-default-source"]).unwrap_or_default();
-
-    // Guard: only connect to sources that currently exist.
-    let known_sources: std::collections::HashSet<String> = {
-        let mut set = std::collections::HashSet::new();
-        if let Ok(json) = run_cmd("pactl", &["-f", "json", "list", "sources"]) {
-            if let Ok(sources) = serde_json::from_str::<Vec<serde_json::Value>>(&json) {
-                for s in &sources {
-                    if let Some(name) = s["name"].as_str() {
-                        set.insert(name.to_string());
-                    }
-                }
-            }
-        }
-        set
-    };
-    eprintln!(
-        "start_vu_stream: {} PA sources: {:?}",
-        known_sources.len(),
-        known_sources
-    );
-
-    let levels: Arc<Mutex<HashMap<String, f32>>> = Arc::new(Mutex::new(HashMap::new()));
-
-    let channel_targets: Vec<(&'static str, String)> = vec![
-        ("Master", master_monitor),
-        ("Game", "OpenGG_Game.monitor".into()),
-        ("Chat", "OpenGG_Chat.monitor".into()),
-        ("Media", "OpenGG_Media.monitor".into()),
-        ("Aux", "OpenGG_Aux.monitor".into()),
-        ("Mic", mic_source),
-    ];
-
-    let spec = Spec {
-        format: Format::S16le,
-        rate: 8000,
-        channels: 1,
-    };
-
-    for (name, target) in channel_targets {
-        if target.is_empty() || !known_sources.contains(target.as_str()) {
-            eprintln!("start_vu_stream: {name} → '{target}' not in PA sources, level=0");
-            levels.lock().unwrap().insert(name.to_string(), 0.0);
-            continue;
-        }
-
-        let levels_clone = Arc::clone(&levels);
-        let running_clone = running.clone();
-        let gen_clone = gen.clone();
-
-        tokio::task::spawn_blocking(move || {
-            // Create the PA simple connection inside spawn_blocking — Simple is !Send.
-            let pa = match Simple::new(
-                None,
-                "OpenGG VU",
-                Direction::Record,
-                Some(target.as_str()),
-                name,
-                &spec,
-                None,
-                None,
-            ) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("libpulse: {name} → failed to open '{target}': {e:?}");
-                    return;
-                }
-            };
-            eprintln!("start_vu_stream: {name} → libpulse connected to '{target}' (gen={my_gen})");
-
-            // 512 bytes = 256 i16 samples = 32 ms at 8 kHz mono — fast enough to
-            // check `running` + generation frequently while producing smooth meter values.
-            let mut buf = vec![0u8; 512];
-            let mut prev = 0.0f32;
-
-            // Check BOTH the running flag AND the generation counter so that stale
-            // threads spawned by a previous `start_vu_stream` call stop cleanly even
-            // if the flag was reset to `true` before they exited pa.read().
-            while running_clone.load(Ordering::Relaxed)
-                && gen_clone.load(Ordering::Relaxed) == my_gen
-            {
-                if pa.read(&mut buf).is_err() {
-                    break;
-                }
-
-                // RMS for perceptual loudness (vs peak which looks jittery).
-                let sum_sq: f32 = buf
-                    .chunks_exact(2)
-                    .map(|c| {
-                        let s = i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0;
-                        s * s
-                    })
-                    .sum();
-                let rms = (sum_sq / (buf.len() / 2) as f32).sqrt().min(1.0);
-
-                // Fast attack, slow decay for natural VU ballistics.
-                let smoothed = if rms > prev {
-                    rms * 0.9 + prev * 0.1
-                } else {
-                    rms * 0.3 + prev * 0.7
-                };
-                prev = smoothed;
-                let db = (20.0_f32 * smoothed.max(1e-9_f32).log10()).max(-60.0_f32);
-                levels_clone.lock().unwrap().insert(name.to_string(), db);
-            }
-            // `pa` is dropped here → pa_simple_free() called automatically (RAII).
-        });
-    }
-
-    // Emitter: publishes the shared map at ~60 fps, stops when this generation ends.
-    tokio::spawn(async move {
-        while running.load(Ordering::Relaxed) && gen.load(Ordering::Relaxed) == my_gen {
-            let snapshot = levels.lock().unwrap().clone();
-            let _ = handle.emit("vu-levels", VuLevels { channels: snapshot });
-            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
-        }
-    });
-
-    Ok(())
-}
-
-/// Stops the VU stream. Reader threads exit cooperatively within one read
-/// period (~32 ms) and free their PA connections via RAII.
-#[command]
-pub async fn stop_vu_stream(app: AppHandle) -> Result<(), String> {
-    app.state::<crate::VuState>()
-        .0
-        .store(false, Ordering::Relaxed);
-    Ok(())
-}
 
 // ═══ Settings ═══
 fn settings_path() -> PathBuf {
@@ -3981,44 +2840,47 @@ pub struct StorageInfo {
 /// Returns disk usage for the clips folder plus filesystem free/total space.
 #[command]
 pub async fn get_storage_info(clip_directories: Vec<String>) -> Result<StorageInfo, String> {
-    let mut total_count = 0u64;
-    let mut total_used = 0u64;
-    let mut first_existing: Option<PathBuf> = None;
+    let (total_count, total_used, first_existing) = tokio::task::spawn_blocking(move || {
+        let mut total_count = 0u64;
+        let mut total_used = 0u64;
+        let mut first_existing: Option<PathBuf> = None;
 
-    for dir_str in &clip_directories {
-        let folder = PathBuf::from(shexp(dir_str));
-        if !folder.exists() {
-            continue;
-        }
-        if first_existing.is_none() {
-            first_existing = Some(folder.clone());
-        }
-        for e in walkdir::WalkDir::new(&folder)
-            .min_depth(1)
-            .into_iter()
-            .flatten()
-        {
-            let p = e.path().to_path_buf();
-            if !p.is_file() {
+        for dir_str in &clip_directories {
+            let folder = PathBuf::from(shexp(dir_str));
+            if !folder.exists() {
                 continue;
             }
-            let name = p
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_lowercase();
-            if name.ends_with(".mp4")
-                || name.ends_with(".mkv")
-                || name.ends_with(".webm")
-                || name.ends_with(".mov")
+            if first_existing.is_none() {
+                first_existing = Some(folder.clone());
+            }
+            for e in walkdir::WalkDir::new(&folder)
+                .min_depth(1)
+                .into_iter()
+                .flatten()
             {
-                total_count += 1;
-                if let Ok(meta) = e.metadata() {
-                    total_used += meta.len();
+                let p = e.path().to_path_buf();
+                if !p.is_file() {
+                    continue;
+                }
+                let name = p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase();
+                if name.ends_with(".mp4")
+                    || name.ends_with(".mkv")
+                    || name.ends_with(".webm")
+                    || name.ends_with(".mov")
+                {
+                    total_count += 1;
+                    if let Ok(meta) = e.metadata() {
+                        total_used += meta.len();
+                    }
                 }
             }
         }
-    }
+        (total_count, total_used, first_existing)
+    }).await.map_err(|e| format!("spawn_blocking: {e}"))?;
 
     let fs_root = first_existing.unwrap_or_else(|| PathBuf::from("/"));
     let (total_bytes, free_bytes) = get_fs_stats(&fs_root);
@@ -4593,149 +3455,6 @@ pub async fn open_crash_logs_folder() -> Result<(), String> {
     Ok(())
 }
 
-// ══════════════════════════════════════════════════════════════
-//  ★ Virtual Audio Onboarding / Factory Reset
-// ══════════════════════════════════════════════════════════════
-
-const VIRTUAL_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
-
-/// Returns true if all 4 OpenGG virtual sinks are present in PipeWire.
-#[command]
-pub async fn check_virtual_audio_status() -> Result<bool, String> {
-    let out = run_cmd("pactl", &["list", "sinks", "short"]).unwrap_or_default();
-    let all_present = VIRTUAL_CHANNELS
-        .iter()
-        .all(|ch| out.contains(&format!("OpenGG_{ch}")));
-    Ok(all_present)
-}
-
-/// Create all OpenGG virtual null sinks via pactl (idempotent — skips existing).
-#[command]
-pub async fn create_virtual_audio() -> Result<(), String> {
-    let existing = run_cmd("pactl", &["list", "sinks", "short"]).unwrap_or_default();
-    for ch in VIRTUAL_CHANNELS {
-        let sink_name = format!("OpenGG_{ch}");
-        if existing.contains(&sink_name) {
-            if matches!(*ch, "Game" | "Chat" | "Media" | "Aux") {
-                unload_null_sink_module(&sink_name)?;
-            } else {
-                continue;
-            }
-        }
-        let display_name = live_display_name(ch);
-        run_cmd("pactl", &[
-            "load-module", "module-null-sink",
-            &format!("sink_name={sink_name}"),
-            &format!(
-                "sink_properties=node.description={} node.nick={} device.description={} media.name={}",
-                sink_prop_value(&display_name),
-                sink_prop_value(&display_name),
-                sink_prop_value(&display_name),
-                sink_prop_value(&display_name),
-            ),
-            "channels=2", "channel_map=front-left,front-right",
-        ])?;
-    }
-    log::info!("Virtual audio sinks created");
-    Ok(())
-}
-
-/// Unload only the OpenGG virtual sinks without restarting PipeWire/WirePlumber.
-#[command]
-pub async fn remove_virtual_audio() -> Result<(), String> {
-    let modules_json = run_cmd("pactl", &["-f", "json", "list", "modules"]).unwrap_or_default();
-    if let Ok(mods) = serde_json::from_str::<Vec<serde_json::Value>>(&modules_json) {
-        for m in &mods {
-            if m["name"].as_str() != Some("module-null-sink") {
-                continue;
-            }
-            let args = m["argument"].as_str().unwrap_or("");
-            if !args.contains("OpenGG_") {
-                continue;
-            }
-            if let Some(idx) = m["index"].as_u64() {
-                let _ = run_cmd("pactl", &["unload-module", &idx.to_string()]);
-            }
-        }
-    }
-    log::info!("Virtual audio removed (PipeWire/WirePlumber left running)");
-    Ok(())
-}
-
-// ══════════════════════════════════════════════════════════════
-//  ★ EPIC 3: Startup audio hydration
-//
-//  Reads the saved per-channel device map from ui-settings.json
-//  and re-applies pw-link connections so virtual sinks stay
-//  routed to the correct physical output after a restart.
-// ══════════════════════════════════════════════════════════════
-
-#[command]
-pub fn hydrate_audio_routing() {
-    let settings_path = dirs::config_dir()
-        .unwrap_or_default()
-        .join("opengg/ui-settings.json");
-
-    let json = match std::fs::read_to_string(&settings_path) {
-        Ok(j) => j,
-        Err(_) => return, // no saved settings yet — nothing to hydrate
-    };
-    let v: serde_json::Value = match serde_json::from_str(&json) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    let devices = match v["mixer"]["devices"].as_object() {
-        Some(d) => d.clone(),
-        None => return,
-    };
-
-    for (channel, device_val) in &devices {
-        let device = match device_val.as_str() {
-            Some(d) if !d.is_empty() => d.to_string(),
-            _ => continue,
-        };
-
-        if channel == "Mic" {
-            Command::new("pactl")
-                .args(["set-default-source", &device])
-                .output()
-                .ok();
-            eprintln!("hydrate: Mic source → {device}");
-        } else if channel == "Master" {
-            // Setting default sink is intentionally skipped — it changes the
-            // system-wide default and surprises the user.  The frontend will
-            // call set_channel_device if the user actively changes it.
-        } else if !VIRTUAL_CHANNELS.contains(&channel.as_str()) {
-            continue;
-        } else {
-            // Virtual sink (Game/Chat/Media/Aux): disconnect old links then
-            // reconnect to the saved physical device.
-            let sink = format!("OpenGG_{channel}");
-            if let Ok(def) = run_cmd("pactl", &["get-default-sink"]) {
-                for p in ["FL", "FR"] {
-                    Command::new("pw-link")
-                        .args([
-                            "-d",
-                            &format!("{sink}:monitor_{p}"),
-                            &format!("{def}:playback_{p}"),
-                        ])
-                        .output()
-                        .ok();
-                }
-            }
-            for p in ["FL", "FR"] {
-                Command::new("pw-link")
-                    .args([
-                        &format!("{sink}:monitor_{p}"),
-                        &format!("{device}:playback_{p}"),
-                    ])
-                    .output()
-                    .ok();
-            }
-            eprintln!("hydrate: {channel} → {device}");
-        }
-    }
-}
 
 // ══════════════════════════════════════════════════════════════
 //  ★ EPIC 4: Background-daemon control commands
@@ -4772,7 +3491,15 @@ pub async fn set_autostart(enable: bool) -> Result<(), String> {
     if enable {
         let exe = std::env::current_exe().map_err(|e| format!("{e}"))?;
         let content = format!(
-            "[Desktop Entry]\nType=Application\nName=OpenGG\nExec={}\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
+            "[Desktop Entry]\n\
+            Type=Application\n\
+            Name=OpenGG\n\
+            Exec=\"{}\"\n\
+            Terminal=false\n\
+            Icon=opengg\n\
+            Hidden=false\n\
+            NoDisplay=false\n\
+            X-GNOME-Autostart-enabled=true\n",
             exe.display()
         );
         std::fs::write(&desktop, content).map_err(|e| format!("{e}"))?;
@@ -4825,47 +3552,6 @@ fn detect_primary_resolution() -> String {
     "1920x1080".to_string()
 }
 
-/// List PipeWire/PulseAudio sink names for the audio capture devices dropdown.
-#[command]
-pub fn list_audio_sinks() -> Result<Vec<String>, String> {
-    let output = std::process::Command::new("pactl")
-        .args(["list", "sinks", "short"])
-        .output()
-        .map_err(|e| format!("pactl not found: {e}"))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let sinks: Vec<String> = text
-        .lines()
-        .filter_map(|line| {
-            // Format: "<id>\t<name>\t<driver>\t<sample_spec>\t<state>"
-            line.split('\t').nth(1).map(|s| s.trim().to_string())
-        })
-        .filter(|s| !s.is_empty())
-        .collect();
-    if sinks.is_empty() {
-        Err("No audio sinks found via pactl".into())
-    } else {
-        Ok(sinks)
-    }
-}
-
-/// Returns the current display server session type: "wayland", "x11", or "unknown".
-#[command]
-pub fn get_session_type() -> String {
-    if let Ok(t) = std::env::var("XDG_SESSION_TYPE") {
-        let t = t.trim().to_lowercase();
-        if !t.is_empty() {
-            return t;
-        }
-    }
-    // Fallback: check well-known environment variables
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        return "wayland".to_string();
-    }
-    if std::env::var_os("DISPLAY").is_some() {
-        return "x11".to_string();
-    }
-    "unknown".to_string()
-}
 
 /// Returns a list of connected monitors via Tauri's built-in monitor enumeration.
 /// Each entry has a `name` (connector name as reported by the OS, e.g. "DP-1") and
@@ -5062,6 +3748,33 @@ pub fn start_gsr_replay(
     let expanded = shexp(&output_dir);
     std::fs::create_dir_all(&expanded)
         .map_err(|e| format!("Cannot create output dir '{expanded}': {e}"))?;
+
+    // ★ FIX: Validate that all virtual sinks exist before passing them to GSR.
+    // If a sink is missing, GSR silently records silence for that audio track.
+    let sinks_short = std::process::Command::new("pactl")
+        .args(["list", "sinks", "short"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    for src in &audio_sources {
+        let sink_name = if src.contains('_') || src.contains('.') || src.contains('-') {
+            src.clone()
+        } else {
+            format!("OpenGG_{src}")
+        };
+        let monitor_name = if sink_name.ends_with(".monitor") {
+            sink_name.clone()
+        } else {
+            format!("{sink_name}.monitor")
+        };
+        // Check both the sink and its monitor source exist
+        if !sinks_short.contains(&sink_name) {
+            return Err(format!(
+                "Virtual audio sink '{}' not found. Open the Audio Mixer and click 'Create Virtual Audio Engine' before recording.",
+                sink_name
+            ));
+        }
+    }
 
     // Guard against stale settings that contain EDID model names or resolution strings
     // (e.g. "1920x1080", "BenQ GW2780") left over from the old Tauri monitor API.
@@ -5631,7 +4344,7 @@ pub fn show_clip_notification(
     fn notify_system(success: bool, game: &str, filename: &str, duration_ms: u64) {
         let summary = if success { "Clip Saved" } else { "Clip Save Failed" };
         let body = format!("{game} — {filename}");
-        let _ = std::process::Command::new("notify-send")
+        if let Err(e) = std::process::Command::new("notify-send")
             .args([
                 "--app-name=OpenGG",
                 "--urgency=normal",
@@ -5639,7 +4352,10 @@ pub fn show_clip_notification(
                 summary,
                 &body,
             ])
-            .spawn();
+            .spawn()
+        {
+            eprintln!("[opengg] notify-send failed: {e}");
+        }
     }
     /// Returns true if the gsr-notify binary was found and launched.
     fn try_gsr_notify(success: bool, game: &str, filename: &str, filesize_mb: f64, duration_ms: u64) -> bool {
@@ -5787,16 +4503,27 @@ pub fn show_clip_notification(
     Ok(())
 }
 
-// rng() removed — VU meters now use real PipeWire peak data
-async fn call_dbus<R: serde::de::DeserializeOwned + zbus::zvariant::Type>(
+// Cached D-Bus session connection to avoid reconnecting on every call.
+static DBUS_SESSION: std::sync::OnceLock<zbus::Connection> = std::sync::OnceLock::new();
+
+async fn dbus_session() -> Result<&'static zbus::Connection, String> {
+    if let Some(c) = DBUS_SESSION.get() {
+        return Ok(c);
+    }
+    let c = zbus::Connection::session().await.map_err(|e| format!("{e}"))?;
+    match DBUS_SESSION.set(c) {
+        Ok(()) => Ok(DBUS_SESSION.get().unwrap()),
+        Err(_) => Ok(DBUS_SESSION.get().unwrap()),
+    }
+}
+
+pub(crate) async fn call_dbus<R: serde::de::DeserializeOwned + zbus::zvariant::Type>(
     m: &str,
     p: &str,
     i: &str,
     a: impl serde::Serialize + zbus::zvariant::Type,
 ) -> Result<R, String> {
-    let c = zbus::Connection::session()
-        .await
-        .map_err(|e| format!("{e}"))?;
+    let c = dbus_session().await?;
     let r: R = c
         .call_method(Some("org.opengg.Daemon"), p, Some(i), m, &a)
         .await
@@ -5806,20 +4533,14 @@ async fn call_dbus<R: serde::de::DeserializeOwned + zbus::zvariant::Type>(
         .map_err(|e| format!("{m}:{e}"))?;
     Ok(r)
 }
-async fn call_dbus_void(
+pub(crate) async fn call_dbus_void(
     m: &str,
     p: &str,
     i: &str,
     a: impl serde::Serialize + zbus::zvariant::Type,
 ) -> Result<(), String> {
-    let conn = match zbus::Connection::session().await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("call_dbus: session connection failed — {e}");
-            return Err(format!("D-Bus session connect: {e}"));
-        }
-    };
-    match conn
+    let c = dbus_session().await?;
+    match c
         .call_method(Some("org.opengg.Daemon"), p, Some(i), m, &a)
         .await
     {
@@ -5830,7 +4551,9 @@ async fn call_dbus_void(
         }
     }
 }
-fn run_cmd(c: &str, a: &[&str]) -> Result<String, String> {
+/// Synchronous process runner — safe for sync contexts only.
+/// Async commands MUST use `run_cmd_async` to avoid blocking the Tokio runtime.
+pub(crate) fn run_cmd_sync(c: &str, a: &[&str]) -> Result<String, String> {
     let o = Command::new(c)
         .args(a)
         .output()
@@ -5840,6 +4563,39 @@ fn run_cmd(c: &str, a: &[&str]) -> Result<String, String> {
     } else {
         Err(String::from_utf8_lossy(&o.stderr).trim().into())
     }
+}
+
+/// Asynchronous wrapper around `run_cmd_sync`.
+/// Delegates to `tokio::task::spawn_blocking` so the async runtime
+/// never blocks on a subprocess syscall.
+pub(crate) async fn run_cmd_async(c: &str, a: &[&str]) -> Result<String, String> {
+    let c = c.to_string();
+    let a: Vec<String> = a.iter().map(|s| s.to_string()).collect();
+    tokio::task::spawn_blocking(move || {
+        let a_refs: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+        run_cmd_sync(&c, &a_refs)
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+/// Async wrapper around `std::process::Command::output()`.
+/// Use this for ffmpeg/ffprobe and other potentially long-running subprocesses
+/// so the Tokio runtime never blocks.
+pub(crate) async fn run_command_output_async(
+    cmd: &str,
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let cmd = cmd.to_string();
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    tokio::task::spawn_blocking(move || {
+        Command::new(&cmd)
+            .args(&args)
+            .output()
+            .map_err(|e| format!("{cmd}: {e}"))
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking join: {e}"))?
 }
 
 // ═══ Devices ═══
@@ -5907,90 +4663,98 @@ pub async fn scan_folder_recursive(app: AppHandle, folder: String) -> Result<(),
     let td = thumb_dir();
     let db = open_db().ok();
 
-    let mut count = 0;
-    for e in walkdir::WalkDir::new(&dir)
-        .min_depth(1)
-        .into_iter()
-        .flatten()
-    {
-        let p = e.path();
-        if !p.is_file() {
-            continue;
-        }
-        let ext = p
-            .extension()
-            .and_then(|x| x.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if !VIDEO_EXTS.contains(&ext.as_str()) {
-            continue;
-        }
+    // Collect all entries in spawn_blocking, then emit in async context
+    let dir_clone = dir.clone();
+    let meta_clone = meta.clone();
+    let clips = tokio::task::spawn_blocking(move || {
+        let mut clips = Vec::new();
+        for e in walkdir::WalkDir::new(&dir_clone)
+            .min_depth(1)
+            .into_iter()
+            .flatten()
+        {
+            let p = e.path();
+            if !p.is_file() {
+                continue;
+            }
+            let ext = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !VIDEO_EXTS.contains(&ext.as_str()) {
+                continue;
+            }
 
-        let fp = p.to_string_lossy().to_string();
-        let m = match e.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let fname = p
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let id = format!("{:x}", hash_str(&fp));
-        let mtime = m
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let created = date_from_stem(
-            p.file_stem()
+            let fp = p.to_string_lossy().to_string();
+            let m = match e.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let fname = p
+                .file_name()
                 .unwrap_or_default()
-                .to_str()
-                .unwrap_or_default(),
-        )
-        .unwrap_or_else(|| fmt_ts_local(mtime as i64));
+                .to_string_lossy()
+                .to_string();
+            let id = format!("{:x}", hash_str(&fp));
+            let mtime = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let created = date_from_stem(
+                p.file_stem()
+                    .unwrap_or_default()
+                    .to_str()
+                    .unwrap_or_default(),
+            )
+            .unwrap_or_else(|| fmt_ts_local(mtime as i64));
 
-        let (dur, w, h) = db
-            .as_ref()
-            .and_then(|db| probe_cache_get(db, &fp, mtime))
-            .unwrap_or((0.0, 0, 0));
-        let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
-        let stem = p.file_stem().unwrap_or_default().to_string_lossy();
-        let game_from_filename = stem
-            .split('_')
-            .next()
-            .unwrap_or("Unknown")
-            .replace('-', " ");
-        let game = if game_tag.is_empty() {
-            game_from_filename
-        } else {
-            game_tag
-        };
-        let thumb = td.join(format!("{id}.jpg"));
-        let thumbnail = if thumb.exists() {
-            thumb.to_string_lossy().to_string()
-        } else {
-            String::new()
-        };
+            let (dur, w, h) = db
+                .as_ref()
+                .and_then(|db| probe_cache_get(db, &fp, mtime))
+                .unwrap_or((0.0, 0, 0));
+            let (cn, fav, game_tag) = meta_clone.get(&fp).cloned().unwrap_or_default();
+            let stem = p.file_stem().unwrap_or_default().to_string_lossy();
+            let game_from_filename = stem
+                .split('_')
+                .next()
+                .unwrap_or("Unknown")
+                .replace('-', " ");
+            let game = if game_tag.is_empty() {
+                game_from_filename
+            } else {
+                game_tag
+            };
+            let thumb = td.join(format!("{id}.jpg"));
+            let thumbnail = if thumb.exists() {
+                thumb.to_string_lossy().to_string()
+            } else {
+                String::new()
+            };
 
-        let clip = ClipInfo {
-            id,
-            filename: fname,
-            filepath: fp,
-            filesize: m.len(),
-            created,
-            created_ts: mtime,
-            duration: dur,
-            width: w,
-            height: h,
-            game,
-            custom_name: cn,
-            favorite: fav,
-            thumbnail,
-            probing: dur == 0.0,
-        };
+            clips.push(ClipInfo {
+                id,
+                filename: fname,
+                filepath: fp,
+                filesize: m.len(),
+                created,
+                created_ts: mtime,
+                duration: dur,
+                width: w,
+                height: h,
+                game,
+                custom_name: cn,
+                favorite: fav,
+                thumbnail,
+                probing: dur == 0.0,
+            });
+        }
+        clips
+    }).await.map_err(|e| format!("spawn_blocking: {e}"))?;
 
+    for (count, clip) in clips.iter().enumerate() {
         log::info!(
             "Import emitted clip {}/{}: {} (thumbnail_cached={}, probing={})",
             count + 1,
@@ -5999,12 +4763,11 @@ pub async fn scan_folder_recursive(app: AppHandle, folder: String) -> Result<(),
             !clip.thumbnail.is_empty(),
             clip.probing
         );
-        let _ = app.emit("import-item", clip);
-        count += 1;
+        let _ = app.emit("import-item", clip.clone());
         let _ = app.emit(
             "import-progress",
             serde_json::json!({
-                "current": count,
+                "current": count + 1,
                 "total": total,
             }),
         );
@@ -6012,7 +4775,7 @@ pub async fn scan_folder_recursive(app: AppHandle, folder: String) -> Result<(),
 
     log::info!(
         "Import scan completed: {} clips emitted from {}",
-        count,
+        clips.len(),
         dir.display()
     );
     Ok(())
@@ -6413,3 +5176,4 @@ pub async fn get_steam_games() -> Result<Vec<SteamGameEntry>, String> {
     });
     Ok(games)
 }
+

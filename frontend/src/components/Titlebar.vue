@@ -11,9 +11,10 @@ async function minimize() {
 async function toggleMaximize() {
   try { await win.toggleMaximize() } catch (e) { console.warn('maximize:', e) }
 }
-// ★ Epic 4: Close = hide to background
+// ★ Epic 4: Close triggers backend CloseRequested handler,
+// which respects the RunInBackground setting (hide to tray vs. quit).
 async function close() {
-  try { await win.hide() } catch (e) { console.warn('hide:', e) }
+  try { await win.close() } catch (e) { console.warn('close:', e) }
 }
 // Real quit via Ctrl+Q
 async function quit() {

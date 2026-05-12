@@ -87,23 +87,33 @@ function devDesc(ch: string, type: 'sink' | 'source') {
 
 let unlistenRefresh: (() => void) | null = null
 
+function onMixerClick(e: MouseEvent) {
+  // Deselect click-to-route app when clicking outside of any chip or dropzone
+  const target = e.target as HTMLElement
+  if (!target.closest('.dz-chip') && !target.closest('.dropzone')) {
+    audio.deselectApp()
+  }
+}
+
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
   await audio.refreshVirtualAudioStatus()
-  if (audio.virtualAudioReady) audio.startPolling(2000)
+  // Polling is started/stopped centrally by App.vue based on currentPage.
 
   // Push-based refresh: backend emits 'audio-mixer-refresh' after every successful
   // route_app call so the UI updates immediately instead of waiting for the next poll.
   unlistenRefresh = await listen('audio-mixer-refresh', () => { audio.fetchApps() })
+  document.addEventListener('click', onMixerClick)
 })
 onUnmounted(() => {
-  audio.stopPolling()
   unlistenRefresh?.()
+  document.removeEventListener('click', onMixerClick)
 })
 
 watch(() => audio.virtualAudioReady, ready => {
-  if (ready) audio.startPolling(2000)
-  else audio.stopPolling()
+  // Polling is managed centrally by App.vue; this watch just ensures
+  // we don't try to poll when virtual audio isn't ready.
+  if (!ready) audio.stopPolling()
 })
 
 watch(overdriveEnabled, enabled => {
@@ -281,7 +291,7 @@ watch(overdriveEnabled, enabled => {
 }
 /* ★ Epic 1: Strict flex rules — strip grows to fill, dropzone is fixed-height scrollable */
 .col :deep(.strip)    { width: 100% !important; flex: 1 1 0% !important; min-height: 0 !important; height: auto !important; }
-.col :deep(.dropzone) { width: 100% !important; flex: 0 0 70px !important; height: 70px !important; overflow-y: auto !important; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.col :deep(.dropzone) { width: 100% !important; flex: 0 0 70px !important; height: 70px !important; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
 /* ★ Empty state */
 .empty-state {

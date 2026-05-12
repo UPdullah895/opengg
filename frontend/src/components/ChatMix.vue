@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 
-defineProps<{
+const props = defineProps<{
   gameVolume: number
   chatVolume: number
 }>()
@@ -10,20 +10,24 @@ const emit = defineEmits<{
   'update:balance': [game: number, chat: number]
 }>()
 
-// Balance: -100 (all game) to +100 (all chat), 0 = balanced
-const balance = ref(0)
+// ★ FIX: Two-way sync — balance is computed from actual volumes, not a separate ref.
+// Balance: -100 (all game) to +100 (all chat), 0 = balanced at 100% each.
+const balance = computed(() => {
+  const diff = props.chatVolume - props.gameVolume
+  return Math.max(-100, Math.min(100, diff))
+})
 
-const gameLevel = computed(() => Math.round(Math.max(0, 100 - Math.max(0, balance.value)))) 
+const gameLevel = computed(() => Math.round(Math.max(0, 100 - Math.max(0, balance.value))))
 const chatLevel = computed(() => Math.round(Math.max(0, 100 - Math.max(0, -balance.value))))
 
 function onSliderInput(e: Event) {
   const val = parseInt((e.target as HTMLInputElement).value)
-  balance.value = val
-  emit('update:balance', gameLevel.value, chatLevel.value)
+  const g = Math.round(Math.max(0, 100 - Math.max(0, val)))
+  const c = Math.round(Math.max(0, 100 - Math.max(0, -val)))
+  emit('update:balance', g, c)
 }
 
 function resetBalance() {
-  balance.value = 0
   emit('update:balance', 100, 100)
 }
 </script>

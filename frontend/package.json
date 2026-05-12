@@ -7,7 +7,9 @@
     "dev": "npx vite",
     "build": "npx vue-tsc --noEmit && npx vite build",
     "preview": "npx vite preview",
-    "tauri": "npx tauri"
+    "tauri": "npx tauri",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@floating-ui/vue": "^1.1.0",
@@ -25,6 +27,7 @@
     "@vitejs/plugin-vue": "^5.0",
     "typescript": "^5.4",
     "vite": "^5.4",
+    "vitest": "^4.1.6",
     "vue-tsc": "^2.0"
   }
 }

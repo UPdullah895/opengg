@@ -26,6 +26,8 @@ export interface TrackDef {
 }
 
 export interface PersistedState {
+  /** Internal schema version for automated migrations. */
+  _schemaVersion: number
   mixer: { volumes: Record<string, number>; mutes: Record<string, boolean>; devices: Record<string, string>; appRules: Record<string, string> }
   settings: {
     fps: number; quality: string; replayDuration: number
@@ -74,7 +76,10 @@ export interface PersistedState {
   macros: Record<string, MouseMacro[]>
 }
 
+const CURRENT_SCHEMA_VERSION = 8
+
 export const DEFAULTS: PersistedState = {
+  _schemaVersion: CURRENT_SCHEMA_VERSION,
   mixer: { volumes: { Game:100, Chat:100, Media:100, Aux:100, Mic:100 }, mutes:{}, devices:{}, appRules:{} },
   settings: {
     fps: 60, quality: 'High', replayDuration: 30,
@@ -125,6 +130,94 @@ export const DEFAULTS: PersistedState = {
   macros: {},
 }
 
+// ══════════════════════════════════════════════════════════════════════
+//  Versioned Migrations
+// ══════════════════════════════════════════════════════════════════════
+// Each key is the target schema version. The function mutates the parsed
+// state object in-place. Migrations run sequentially from (savedVersion+1)
+// up to CURRENT_SCHEMA_VERSION.
+
+const MIGRATIONS: Record<number, (state: any) => void> = {
+  1: (s) => {
+    // clipsFolder → clip_directories
+    if (s?.settings?.clipsFolder && !s?.settings?.clip_directories?.length) {
+      s.settings.clip_directories = [s.settings.clipsFolder]
+    }
+    delete s?.settings?.clipsFolder
+    delete s?.settings?.clipSources
+  },
+  2: (s) => {
+    // screenshotDir (string) → screenshotDirs (array)
+    if (s?.settings?.screenshotDir && !s?.settings?.screenshotDirs?.length) {
+      s.settings.screenshotDirs = [s.settings.screenshotDir]
+    }
+    delete s?.settings?.screenshotDir
+  },
+  3: (s) => {
+    // drop stale showTrackIcons
+    delete s?.settings?.showTrackIcons
+  },
+  4: (s) => {
+    // fix stale gsrMonitorTarget values
+    const target = s?.settings?.gsrMonitorTarget
+    if (target && (/^\d+x\d+/.test(target) || target.includes(' '))) {
+      s.settings.gsrMonitorTarget = 'screen'
+    }
+  },
+  5: (s) => {
+    // ensure O1 (Overlays) exists and is positioned before V1 (Video)
+    const defs = s?.settings?.trackDefs
+    if (!Array.isArray(defs)) return
+    const o1Def = DEFAULTS.settings.trackDefs.find((d: TrackDef) => d.id === 'O1')
+    const o1i = defs.findIndex((d: TrackDef) => d.id === 'O1')
+    const v1i = defs.findIndex((d: TrackDef) => d.id === 'V1')
+    if (o1i === -1 && o1Def) {
+      defs.splice(v1i !== -1 ? v1i : 0, 0, { ...o1Def })
+    } else if (o1i !== -1 && v1i !== -1 && o1i > v1i) {
+      const [o1] = defs.splice(o1i, 1)
+      defs.splice(v1i, 0, o1)
+    }
+  },
+  6: (s) => {
+    // ensure A1 exists
+    const defs = s?.settings?.trackDefs
+    if (!Array.isArray(defs)) return
+    const a1Def = DEFAULTS.settings.trackDefs.find((d: TrackDef) => d.id === 'A1')
+    const a1i = defs.findIndex((d: TrackDef) => d.id === 'A1')
+    if (a1i === -1 && a1Def) {
+      const v1Pos = defs.findIndex((d: TrackDef) => d.id === 'V1')
+      defs.splice(v1Pos !== -1 ? v1Pos + 1 : defs.length, 0, { ...a1Def })
+    }
+  },
+  7: (s) => {
+    // ensure all tracks have the visible field
+    const defs = s?.settings?.trackDefs
+    if (!Array.isArray(defs)) return
+    for (const def of defs) {
+      if (def.visible === undefined) def.visible = true
+    }
+  },
+  8: (s) => {
+    // schema version field introduced — no data changes, just bookkeeping
+    s._schemaVersion = CURRENT_SCHEMA_VERSION
+  },
+}
+
+export function runMigrations(parsed: any): void {
+  const savedVersion = typeof parsed?._schemaVersion === 'number' ? parsed._schemaVersion : 0
+  for (let v = savedVersion + 1; v <= CURRENT_SCHEMA_VERSION; v++) {
+    const migrate = MIGRATIONS[v]
+    if (migrate) {
+      try {
+        migrate(parsed)
+      } catch (e) {
+        console.warn(`Migration ${v} failed:`, e)
+      }
+    }
+  }
+  parsed._schemaVersion = CURRENT_SCHEMA_VERSION
+}
+
 export const usePersistenceStore = defineStore('persistence', () => {
   const state = ref<PersistedState>(structuredClone(DEFAULTS))
   const loaded = ref(false)
@@ -134,53 +227,8 @@ export const usePersistenceStore = defineStore('persistence', () => {
       const j = await invoke<string>('load_ui_settings')
       if (j && j !== 'null') {
         const parsed = JSON.parse(j)
-        // Migration: clipsFolder → clip_directories
-        if (parsed?.settings?.clipsFolder && !parsed?.settings?.clip_directories?.length) {
-          parsed.settings.clip_directories = [parsed.settings.clipsFolder]
-        }
-        delete parsed?.settings?.clipsFolder
-        delete parsed?.settings?.clipSources
-        // Migration: screenshotDir (string) → screenshotDirs (array)
-        if (parsed?.settings?.screenshotDir && !parsed?.settings?.screenshotDirs?.length) {
-          parsed.settings.screenshotDirs = [parsed.settings.screenshotDir]
-        }
-        delete parsed?.settings?.screenshotDir
-        // Migration: drop stale showTrackIcons (replaced by per-track visible toggle)
-        delete parsed?.settings?.showTrackIcons
+        runMigrations(parsed)
         state.value = deepMerge(structuredClone(DEFAULTS), parsed)
-        // Migration: stale gsrMonitorTarget values from the old Tauri monitor API were
-        // EDID model names or resolution strings (e.g. "1920x1080", "BenQ GW2780").
-        // GSR only accepts connector names ("screen", "DP-1", "HDMI-A-1").
-        // Reset to "screen" if the saved value looks like a resolution or contains spaces.
-        const target = state.value.settings.gsrMonitorTarget
-        if (target && (/^\d+x\d+/.test(target) || target.includes(' '))) {
-          state.value.settings.gsrMonitorTarget = 'screen'
-        }
-        // Migration: ensure O1 (Overlays) exists and is positioned before V1 (Video)
-        const defs = state.value.settings.trackDefs
-        const o1Def = DEFAULTS.settings.trackDefs.find(d => d.id === 'O1')!
-        const o1i = defs.findIndex(d => d.id === 'O1')
-        const v1i = defs.findIndex(d => d.id === 'V1')
-        if (o1i === -1 && o1Def) {
-          // O1 missing entirely — insert it before V1 (or at 0)
-          defs.splice(v1i !== -1 ? v1i : 0, 0, { ...o1Def })
-        } else if (o1i !== -1 && v1i !== -1 && o1i > v1i) {
-          // O1 exists but is below V1 — move it above
-          const [o1] = defs.splice(o1i, 1)
-          defs.splice(v1i, 0, o1)
-        }
-        // Migration: ensure A1 exists (deepMerge replaces arrays wholesale; saved settings
-        // predating A1 will be missing it, causing a ghost "Track 1" in the editor)
-        const a1Def = DEFAULTS.settings.trackDefs.find(d => d.id === 'A1')!
-        const a1i = defs.findIndex(d => d.id === 'A1')
-        if (a1i === -1 && a1Def) {
-          const v1Pos = defs.findIndex(d => d.id === 'V1')
-          defs.splice(v1Pos !== -1 ? v1Pos + 1 : defs.length, 0, { ...a1Def })
-        }
-        // Migration: ensure all existing tracks have the visible field
-        for (const def of defs) {
-          if (def.visible === undefined) def.visible = true
-        }
       }
     } catch (e) { console.warn('load settings:', e) }
     loaded.value = true
@@ -208,7 +256,7 @@ export const usePersistenceStore = defineStore('persistence', () => {
   return { state, loaded, load, save, setChannelVolume, setChannelMute, setChannelDevice, setAppRule, getAppRule, resetShortcuts }
 })
 
-function deepMerge(a: any, b: any): any {
+export function deepMerge(a: any, b: any): any {
   if (b == null) return a
   if (typeof a !== 'object' || typeof b !== 'object') return b
   if (Array.isArray(a)) return b

@@ -190,6 +190,73 @@ fn md5_hash(input: &str) -> u64 {
 }
 
 fn chrono_format(unix_secs: u64) -> String {
-    // Simple ISO-ish format without pulling in chrono crate
-    format!("{}s since epoch", unix_secs)
+    // ISO-8601 local time without pulling in the chrono crate.
+    let secs = unix_secs as i64;
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&secs, &mut tm).is_null() {
+            return format!("{secs}");
+        }
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_sec
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_md5_hash_consistency() {
+        assert_eq!(md5_hash("hello"), md5_hash("hello"));
+        assert_ne!(md5_hash("hello"), md5_hash("world"));
+    }
+
+    #[test]
+    fn test_md5_hash_empty() {
+        let h = md5_hash("");
+        assert_eq!(h, 5381);
+    }
+
+    #[test]
+    fn test_guess_game_name_standard() {
+        let path = Path::new("/clips/GameName_2025-01-15_12-30-45.mp4");
+        assert_eq!(guess_game_name(path), "GameName");
+    }
+
+    #[test]
+    fn test_guess_game_name_with_dashes() {
+        let path = Path::new("/clips/My-Game_2025-01-15_12-30-45.mp4");
+        assert_eq!(guess_game_name(path), "My Game");
+    }
+
+    #[test]
+    fn test_guess_game_name_no_underscore() {
+        let path = Path::new("/clips/RandomClip.mp4");
+        assert_eq!(guess_game_name(path), "RandomClip");
+    }
+
+    #[test]
+    fn test_chrono_format_epoch() {
+        // 1970-01-01 00:00:00 UTC — localtime_r applies local timezone offset
+        let result = chrono_format(0);
+        // Just verify it's not the buggy "0s since epoch" and matches expected pattern
+        assert!(
+            !result.contains("since epoch"),
+            "chrono_format should not return 'since epoch' template: got {}",
+            result
+        );
+        assert!(
+            result.contains('-') && result.contains(':'),
+            "chrono_format should return a date-like string: got {}",
+            result
+        );
+    }
 }

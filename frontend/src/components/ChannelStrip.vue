@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Channel, AudioDevice } from '../stores/audio'
 
@@ -31,21 +31,35 @@ const vu            = computed(() => {
   const db = props.vuLevel ?? -60
   return ((Math.max(-60, Math.min(0, db)) + 60) / 60) * 100
 })
-const currentVuHeight = ref(0)   // lerped display value (drives DOM)
-
-// Peak ballistics still driven by the raw vu value
-watch(vu, (newVal) => {
-  if (newVal > peakLevel.value) peakLevel.value = newVal
-  else peakLevel.value = Math.max(0, peakLevel.value - 1.2)
-})
+const currentVuHeight = ref(0)   // lerped display value
+const vuFillEl = ref<HTMLElement | null>(null)
+const vuPeakEl = ref<HTMLElement | null>(null)
 
 // rAF lerp loop — fast attack (α=0.4), slow release (α=0.12)
+// Peak hold is computed inline here instead of a separate watch() to
+// eliminate Vue reactivity scheduler overhead on every frame.
 let vuRaf = 0
 onMounted(() => {
   const tick = () => {
     const target = vu.value
     const alpha  = target > currentVuHeight.value ? 0.4 : 0.12
     currentVuHeight.value = currentVuHeight.value + (target - currentVuHeight.value) * alpha
+
+    // Peak hold — inline, no reactive overhead
+    if (currentVuHeight.value > peakLevel.value) peakLevel.value = currentVuHeight.value
+    else peakLevel.value = Math.max(0, peakLevel.value - 1.2)
+
+    // Direct DOM manipulation — bypasses Vue style-diffing
+    if (vuFillEl.value) {
+      const h = Math.max(currentVuHeight.value, 0.5)
+      vuFillEl.value.style.height = h + '%'
+      vuFillEl.value.classList.toggle('vu-fill--empty', h < 1)
+    }
+    if (vuPeakEl.value) {
+      vuPeakEl.value.style.bottom = peakLevel.value + '%'
+      vuPeakEl.value.style.display = peakLevel.value > 2 ? 'block' : 'none'
+    }
+
     vuRaf = requestAnimationFrame(tick)
   }
   vuRaf = requestAnimationFrame(tick)
@@ -58,7 +72,8 @@ const vuColor = computed(() => {
 })
 const vuDbText = computed(() => {
   const db = props.vuLevel ?? -60
-  return db <= -59.9 ? '-∞' : db.toFixed(1)
+  if (db <= -59.9) return '—'
+  return db.toFixed(1)
 })
 
 // ★ Epic 2 — Overdrive: max volume cap
@@ -107,11 +122,11 @@ function onFaderDown(e: MouseEvent) {
     <div class="fader-row">
       <!-- VU meter -->
       <div class="vu">
-        <div class="vu-track">
-          <div class="vu-fill" :style="{ height:currentVuHeight+'%', background:`linear-gradient(to top,${color}50,${vuColor})` }"></div>
-          <div class="vu-peak" :style="{ bottom:peakLevel+'%' }" v-show="peakLevel > 2"></div>
-        </div>
         <div class="vu-ticks"><span>0</span><span>-20</span><span>-40</span><span>-60</span></div>
+        <div class="vu-track">
+          <div ref="vuFillEl" class="vu-fill" :style="{ background:`linear-gradient(to top,${color}50,${vuColor})` }"></div>
+          <div ref="vuPeakEl" class="vu-peak"></div>
+        </div>
       </div>
 
       <!-- Custom fader -->
@@ -189,8 +204,9 @@ function onFaderDown(e: MouseEvent) {
 .vu { display: flex; gap: 2px; }
 .vu-track { width: 5px; background: var(--bg-deep); border-radius: 3px; position: relative; overflow: hidden; border: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
 .vu-fill  { position: absolute; bottom: 0; left: 0; right: 0; border-radius: 3px; opacity: .85; /* no CSS transition — height driven by rAF lerp */ }
+.vu-fill--empty { opacity: .3; border: 1px dashed color-mix(in srgb, var(--border) 70%, transparent); background: transparent !important; }
 .vu-peak  { position: absolute; left: -1px; right: -1px; height: 2px; background: #fff; border-radius: 1px; transition: bottom 0.08s ease-out; box-shadow: 0 0 4px rgba(255,255,255,.5); }
-.vu-ticks { display: flex; flex-direction: column; justify-content: space-between; font-size: 7px; color: var(--text-muted); width: 14px; text-align: right; opacity: .5; }
+.vu-ticks { display: flex; flex-direction: column; justify-content: space-between; font-size: 7px; color: var(--text-muted); width: 14px; text-align: left; opacity: .5; }
 
 /* Fader */
 .fader       { cursor: pointer; display: flex; padding: 4px 6px; /* 4px top/bottom within fader column */ }

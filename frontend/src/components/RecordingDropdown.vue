@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { useReplayStore } from '../stores/replay'
@@ -18,15 +18,22 @@ const root = ref<HTMLElement | null>(null)
 
 // ── Live timer ──
 const elapsed = ref(0)  // seconds since GSR was started / replay began
-let timerHandle: ReturnType<typeof setInterval> | null = null
+let timerStartMs = 0
+let timerRaf = 0
 
 function startTimer() {
   elapsed.value = 0
-  timerHandle = setInterval(() => { elapsed.value++ }, 1000)
+  timerStartMs = Date.now()
+  const tick = () => {
+    elapsed.value = Math.floor((Date.now() - timerStartMs) / 1000)
+    timerRaf = requestAnimationFrame(tick)
+  }
+  timerRaf = requestAnimationFrame(tick)
 }
 function stopTimer() {
-  if (timerHandle) { clearInterval(timerHandle); timerHandle = null }
+  if (timerRaf) { cancelAnimationFrame(timerRaf); timerRaf = 0 }
   elapsed.value = 0
+  timerStartMs = 0
 }
 function fmtElapsed(s: number) {
   const h = Math.floor(s / 3600)
@@ -114,8 +121,21 @@ async function saveClip() {
 
 async function restartGsr() {
   if (!isRunning.value) return
-  try { await invoke('restart_gsr_replay', gsrParams()) } catch {}
+  try {
+    await invoke('restart_gsr_replay', gsrParams())
+    toast.success(t('recording.restartSuccess'))
+  } catch (e) {
+    toast.error(t('recording.restartFailed', { error: String(e) }))
+  }
 }
+
+// ── Sync timer with backend status ──
+watch(() => replay.status, (status, prev) => {
+  // If backend says idle but our timer is running, stop it
+  if (status === 'idle' && prev !== 'idle') {
+    stopTimer()
+  }
+})
 
 // ── Close on outside click ──
 function onDocClick(e: MouseEvent) {

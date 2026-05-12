@@ -13,10 +13,6 @@ pub struct AudioHub {
     streams: Arc<RwLock<Vec<routing::StreamInfo>>>,
 }
 
-// SinkManager is Send+Sync, so AudioHub is too.
-unsafe impl Send for AudioHub {}
-unsafe impl Sync for AudioHub {}
-
 impl AudioHub {
     pub async fn new(config: &AudioConfig) -> Result<Self> {
         // SinkManager::create_all is blocking (subprocess calls) — run off-tokio

@@ -25,9 +25,9 @@ export type DateFormat = 'YMD' | 'YDM' // YYYY/MM/DD or YYYY/DD/MM
 
 export function normalizeGameTitle(title: string): string {
   return (title || '')
+    .replace(/[©®™]/g, ' ')
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[©®™]/g, ' ')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .replace(/\s+/g, ' ')
@@ -52,7 +52,7 @@ const MONTH_MAP: Record<string, string> = {
 const MONTH_NAMES_FULL = ['', 'january','february','march','april','may','june','july','august','september','october','november','december']
 
 // Build pre-lowercased searchable haystack for a clip.
-function buildSearch(c: { custom_name: string; filename: string; game: string; created: string }): string {
+export function buildSearch(c: { custom_name: string; filename: string; game: string; created: string }): string {
   const parts: string[] = []
   if (c.custom_name) parts.push(c.custom_name.toLowerCase())
   if (c.filename)    parts.push(c.filename.toLowerCase())
@@ -85,7 +85,7 @@ function compareOldestFirst(a: Clip, b: Clip): number {
     || a.filename.localeCompare(b.filename)
 }
 
-function parseSearchQuery(q: string, dateFormat: DateFormat): string[] {
+export function parseSearchQuery(q: string, dateFormat: DateFormat): string[] {
   const raw = q.trim().toLowerCase()
   if (!raw) return []
   const out: string[] = []

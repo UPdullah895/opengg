@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, provide, onMounted, watch } from 'vue'
+import { ref, computed, provide, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Sidebar from './components/Sidebar.vue'
 import Titlebar from './components/Titlebar.vue'
@@ -14,12 +14,14 @@ import { usePersistenceStore } from './stores/persistence'
 import { useDeviceStore } from './stores/devices'
 import type { DeviceInfo } from './stores/devices'
 import { useReplayStore } from './stores/replay'
+import { useAudioStore } from './stores/audio'
 import { loadTheme } from './utils/theme'
 import { getMediaPort } from './utils/assets'
 import { installAudioUnlocker } from './utils/audio'
 import { registerLocale } from './i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { AudioDevice } from './stores/audio'
 import ToastContainer from './components/ToastContainer.vue'
 import GlobalModal from './components/GlobalModal.vue'
@@ -52,6 +54,12 @@ if (isOverlay) {
 const currentPage = ref('home')
 const persist = usePersistenceStore()
 const toast = useToast()
+const isWindowFullscreen = ref(false)
+let unlistenFs: (() => void) | null = null
+
+onBeforeUnmount(() => {
+  if (unlistenFs) unlistenFs()
+})
 
 // ★ Global media server port — provided to all components
 const mediaPort = ref(0)
@@ -63,6 +71,13 @@ function navigate(page: string) { currentPage.value = page }
 watch(currentPage, (v) => {
   const replay = useReplayStore()
   replay.pageActive = (v === 'clips')
+  // Pause audio polling when not on the Mixer page to reduce IPC/process load.
+  const audio = useAudioStore()
+  if (v === 'mixer') {
+    audio.startPolling(2000)
+  } else {
+    audio.stopPolling()
+  }
 }, { immediate: true })
 
 // ═══ Epic 2: Virtual Audio Onboarding ═══
@@ -141,6 +156,37 @@ onMounted(async () => {
   }
   await registerGlobalShortcuts()
 
+  // ── Window fullscreen detection for rounded corners ──
+  const win = getCurrentWindow()
+  const checkFs = async () => { isWindowFullscreen.value = await win.isFullscreen() }
+  await checkFs()
+  unlistenFs = await win.onResized(checkFs)
+
+  // ★ FIX: gsrAutoStart safety guard — only auto-start if virtual sinks exist
+  if (persist.state.settings.gsrEnabled && persist.state.settings.gsrAutoStart) {
+    try {
+      const vaReady = await invoke<boolean>('check_virtual_audio_status')
+      if (vaReady) {
+        const outputDir = persist.state.settings.clip_directories?.[0] ?? '~/Videos/OpenGG'
+        await invoke('start_gsr_replay', {
+          outputDir,
+          replaySecs: persist.state.settings.gsrReplaySecs,
+          fps: persist.state.settings.gsrFps,
+          quality: persist.state.settings.gsrQuality,
+          bitrateKbps: persist.state.settings.gsrQuality === 'cbr' ? persist.state.settings.gsrCbrBitrate : null,
+          monitorTarget: persist.state.settings.gsrMonitorTarget || 'screen',
+          audioSources: persist.state.settings.captureTracks.map((t: { source: string }) => t.source),
+        })
+        const replay = useReplayStore()
+        replay.status = 'replay'
+      } else {
+        console.warn('[opengg] gsrAutoStart skipped: virtual audio sinks not ready')
+      }
+    } catch (e) {
+      console.warn('[opengg] gsrAutoStart failed:', e)
+    }
+  }
+
   // ── Extension API — expose a restricted invoke bridge and Vue helpers ──
   // Extensions evaluate as IIFEs and can use window.opengg.invoke() to call
   // a whitelist of read-only Tauri commands.  window.Vue gives them access to
@@ -206,7 +252,10 @@ onMounted(async () => {
         position:     persist.state.settings.notificationPosition ?? 'top-right',
         durationSecs: persist.state.settings.notificationDuration ?? 4,
       })
-    } catch (e) { console.warn('show_clip_notification:', e) }
+    } catch (e) {
+      console.warn('show_clip_notification:', e)
+      toast.info(`${t('notification.clipSaved')} — ${event.payload.filename}`)
+    }
   })
 
   // ★ Epic 3: Toast on new clip saved (event payload is filepath string)
@@ -296,7 +345,7 @@ async function loadUserLocales() {
   <!-- Overlay notification window — minimal render, no layout chrome -->
   <ClipNotification v-if="isOverlay" />
 
-  <div v-else class="app-layout" @contextmenu.prevent>
+  <div v-else class="app-layout" :class="{ 'app-layout--rounded': !isWindowFullscreen }" @contextmenu.prevent>
     <Titlebar />
     <div class="app-body">
       <Sidebar :active="currentPage" @navigate="navigate" />
@@ -461,7 +510,11 @@ textarea,
   -ms-user-select: text !important;
 }
 
-.app-layout { display: flex; flex-direction: column; height: 100vh; }
+.app-layout { display: flex; flex-direction: column; height: 100vh; background: var(--bg-surface); }
+.app-layout--rounded {
+  border-radius: 10px;
+  overflow: hidden;
+}
 .app-body { display: flex; flex: 1; overflow: hidden; }
 .content { flex: 1; padding: 20px 28px; overflow-y: auto; }
 ::-webkit-scrollbar { width: 6px; }
