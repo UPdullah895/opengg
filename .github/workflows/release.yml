@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  release-linux:
+    name: Build & Release (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      # ── Checkout ──
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Install system dependencies ──
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # ── Rust toolchain ──
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache (daemon)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./daemon"
+
+      - name: Rust cache (tauri)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./frontend/src-tauri"
+
+      # ── Node.js ──
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ./frontend/package-lock.json
+
+      # ── Build daemon ──
+      - name: Build daemon (release)
+        run: |
+          cd daemon
+          cargo build --release
+
+      # ── Build frontend + Tauri bundles ──
+      - name: Build Tauri bundles
+        run: |
+          cd frontend
+          npm ci
+          npx tauri build
+
+      # ── Create release tarball ──
+      - name: Create release tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAURI_BIN="frontend/src-tauri/target/release/opengg"
+          DAEMON_BIN="daemon/target/release/openggd"
+          BUNDLE_DIR="frontend/src-tauri/target/release/bundle"
+
+          STAGING="opengg-v${VERSION}-linux-x86_64"
+          mkdir -p "$STAGING/usr/bin"
+          mkdir -p "$STAGING/usr/share/applications"
+          mkdir -p "$STAGING/usr/share/icons/hicolor/512x512/apps"
+          mkdir -p "$STAGING/usr/lib/udev/rules.d"
+          mkdir -p "$STAGING/usr/lib/systemd/user"
+          mkdir -p "$STAGING/usr/share/polkit-1/actions"
+          mkdir -p "$STAGING/usr/share/dbus-1/services"
+
+          cp "$TAURI_BIN" "$STAGING/usr/bin/opengg"
+          cp "$DAEMON_BIN" "$STAGING/usr/bin/openggd"
+
+          # Desktop file and icons from Tauri bundle
+          if [[ -d "$BUNDLE_DIR/deb" ]]; then
+            DEB_DIR=$(find "$BUNDLE_DIR/deb" -name "opengg_*_amd64" -type d | head -1)
+            if [[ -n "$DEB_DIR" ]]; then
+              cp "$DEB_DIR/usr/share/applications/opengg.desktop" "$STAGING/usr/share/applications/" 2>/dev/null || true
+              cp -r "$DEB_DIR/usr/share/icons/hicolor/"* "$STAGING/usr/share/icons/hicolor/" 2>/dev/null || true
+            fi
+          fi
+
+          # Packaging assets
+          cp "packaging/99-opengg.rules" "$STAGING/usr/lib/udev/rules.d/"
+          cp "packaging/openggd.service" "$STAGING/usr/lib/systemd/user/"
+          cp "packaging/org.opengg.Daemon.service" "$STAGING/usr/share/dbus-1/services/"
+          cp "packaging/org.opengg.setup.policy" "$STAGING/usr/share/polkit-1/actions/"
+
+          tar -czf "${STAGING}.tar.gz" "$STAGING"
+          echo "Created ${STAGING}.tar.gz"
+          ls -lh "${STAGING}.tar.gz"
+
+      # ── Create GitHub Release ──
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: OpenGG ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            opengg-v*-linux-x86_64.tar.gz
+            frontend/src-tauri/target/release/bundle/deb/*.deb
+            frontend/src-tauri/target/release/bundle/rpm/*.rpm

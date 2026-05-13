@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
     let device_module = if cfg.modules.device_enabled {
         info!("Device Manager module: ENABLED");
         device::profiles::ProfileManager::create_example_profile(&cfg.device.profiles_dir).ok();
-        Some(device::DeviceInterface::new())
+        Some(device::DeviceInterface::new().await)
     } else { None };
 
     // ── Module 3: Replay & Clipping ─────────────────────────────

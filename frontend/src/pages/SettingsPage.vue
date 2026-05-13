@@ -8,17 +8,23 @@ import { ask, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { usePersistenceStore, DEFAULTS } from '../stores/persistence'
 import { useReplayStore } from '../stores/replay'
+import { useAudioStore } from '../stores/audio'
 import { loadTheme, saveTheme, getCurrentTheme, applyThemeMode, getThemeMode } from '../utils/theme'
 import { LANGUAGES, registerLocale } from '../i18n'
 import SelectField from '../components/SelectField.vue'
 import IconPicker from '../components/IconPicker.vue'
 import InfoIcon from '../components/InfoIcon.vue'
 import { settingsTargetTab } from '../composables/useNavSignal'
+import { mediaUrl } from '../utils/assets'
+import { useToast } from '../composables/useToast'
 
 const { t, locale } = useI18n()
+const toast = useToast()
 const persist = usePersistenceStore()
 const appVersion = ref('')
 const replay = useReplayStore()
+const audio = useAudioStore()
+const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
   if (!persist.loaded) await persist.load()
@@ -36,19 +42,30 @@ onMounted(async () => {
 
 const settings = computed(() => persist.state.settings)
 
-// ─── RTL: NEVER touch <html dir>. Only the .settings-content wrapper flips. ───
-const contentDir = ref<'ltr' | 'rtl'>('ltr')
 function syncLocale() {
   if (settings.value.language) locale.value = settings.value.language
-  const entry = LANGUAGES.find(l => l.code === settings.value.language)
-  contentDir.value = (entry?.dir ?? 'ltr') as 'ltr' | 'rtl'
 }
 function setLanguage(code: string) {
   settings.value.language = code
   locale.value = code
-  const entry = LANGUAGES.find(l => l.code === code)
-  contentDir.value = (entry?.dir ?? 'ltr') as 'ltr' | 'rtl'
 }
+
+const isRtlLanguage = computed(() => {
+  const entry = LANGUAGES.find(l => l.code === settings.value.language)
+  return entry?.dir === 'rtl'
+})
+function enableRtl() {
+  settings.value.rtlMode = true
+  document.documentElement.dir = 'rtl'
+}
+function disableRtl() {
+  settings.value.rtlMode = false
+  document.documentElement.dir = 'ltr'
+}
+watch(() => settings.value.language, (newLang) => {
+  const entry = LANGUAGES.find(l => l.code === newLang)
+  if (entry?.dir !== 'rtl' && settings.value.rtlMode) disableRtl()
+})
 
 // ─── Nav ───
 type Section = 'general' | 'language' | 'shortcuts' | 'mixerRouting' | 'captureSound' | 'trackManagement' | 'storage' | 'extensions' | 'store' | 'about' | 'notifications'
@@ -268,7 +285,11 @@ async function restartGsr() {
   if (!settings.value.gsrEnabled) return
   try {
     await invoke('restart_gsr_replay', gsrInvokeParams())
-  } catch (e) { console.error('GSR restart:', e) }
+    toast.success('Recording restarted with new settings')
+  } catch (e) {
+    console.error('GSR restart:', e)
+    toast.error(`Failed to restart recording: ${e}`)
+  }
 }
 
 // ─── Resource estimation ───
@@ -363,10 +384,8 @@ async function removeVirtualAudio() {
   dangerLoading.value = true; dangerMsg.value = ''
   try {
     await invoke('remove_virtual_audio')
-    dangerMsg.value = '✓ Virtual audio removed. Select your devices below.'
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 2 } }))
-    }, 600)
+    audio.setVirtualAudioReady(false)
+    dangerMsg.value = '✓ Virtual audio removed.'
   } catch (e) { dangerMsg.value = `Error: ${e}` }
   finally { dangerLoading.value = false }
 }
@@ -421,6 +440,18 @@ async function clearCache() {
 interface StorageInfo { clip_count: number; used_bytes: number; total_bytes: number; free_bytes: number }
 const storageInfo = ref<StorageInfo | null>(null)
 const storageLoading = ref(false)
+const steamImportBusy = ref(false)
+const steamAccess = computed(() => persist.state.settings.steamLibraryAccess)
+const steamGamesLoaded = computed(() => replay.steamGames.length > 0)
+function steamIconUrl(path: string | null | undefined) {
+  if (!path) return ''
+  return path.startsWith('/') ? mediaUrl(path, mediaPort.value) : path
+}
+watch(steamAccess, (access) => {
+  if (access === 'granted' && replay.steamGames.length === 0) {
+    void replay.fetchSteamGames()
+  }
+}, { immediate: true })
 async function loadStorage() {
   storageLoading.value = true
   try { storageInfo.value = await invoke<StorageInfo>('get_storage_info', { clipDirectories: settings.value.clip_directories ?? ['~/Videos/OpenGG'] }) }
@@ -429,6 +460,44 @@ async function loadStorage() {
 }
 watch(active, v => { if (v === 'storage') loadStorage() })
 onMounted(() => { if (active.value === 'storage') loadStorage() })
+
+async function importSteamLibrary(forcePrompt = false) {
+  if (steamImportBusy.value) return
+
+  const access = persist.state.settings.steamLibraryAccess
+  if (access !== 'granted' || forcePrompt) {
+    const confirmed = await ask(t('clips.steamImport.consentMessage'), {
+      title: t('clips.steamImport.consentTitle'),
+      kind: 'info',
+    })
+    persist.state.settings.steamLibraryAccess = confirmed ? 'granted' : 'denied'
+    if (!confirmed) return
+  }
+
+  steamImportBusy.value = true
+  const ok = await replay.fetchSteamGames()
+  steamImportBusy.value = false
+  if (!ok) return
+}
+
+const steamStorageTitle = computed(() => {
+  if (steamGamesLoaded.value) return t('settings.storage.steamReadyTitle', { count: replay.steamGames.length })
+  if (steamAccess.value === 'denied') return t('settings.storage.steamDeniedTitle')
+  return t('settings.storage.steamTitle')
+})
+
+const steamStorageBody = computed(() => {
+  if (steamGamesLoaded.value) return t('settings.storage.steamReadyBody')
+  if (steamAccess.value === 'denied') return t('settings.storage.steamDeniedBody')
+  return t('settings.storage.steamBody')
+})
+
+const steamStorageButtonLabel = computed(() => {
+  if (steamImportBusy.value) return t('clips.steamImport.loading')
+  if (steamGamesLoaded.value) return t('clips.steamImport.refresh')
+  if (steamAccess.value === 'granted') return t('clips.steamImport.import')
+  return t('clips.steamImport.allowAndImport')
+})
 
 function fmtBytes(b: number) {
   if (b >= 1e9) return (b / 1e9).toFixed(1) + ' GB'
@@ -441,7 +510,10 @@ async function openExternal(url: string) {
 }
 
 // SelectField option helpers
-const clickOptions = [{ value:'preview', label: 'Quick Preview' }, { value:'editor', label: 'Advanced Editor' }]
+const clickOptions = computed(() => [
+  { value: 'preview', label: t('settings.clipSettings.defaultClickPreview') },
+  { value: 'editor',  label: t('settings.clipSettings.defaultClickEditor') },
+])
 const dateFormatOptions = [
   { value: 'YMD', label: 'YYYY/MM/DD' },
   { value: 'YDM', label: 'YYYY/DD/MM' },
@@ -472,7 +544,6 @@ interface ExtensionInfo {
   _color?: string
 }
 
-const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 const scannedExtensions = ref<ExtensionInfo[]>([])
 const extensionScanLoading = ref(false)
 
@@ -541,8 +612,8 @@ onMounted(async () => {
       </div>
     </aside>
 
-    <!-- ── Content ── dir is set per-section, NEVER on <html> ── -->
-    <div class="settings-content" :dir="contentDir">
+    <!-- ── Content ── -->
+    <div class="settings-content">
 
       <!-- ════════════════════ GENERAL ════════════════════ -->
       <section v-if="active === 'general'">
@@ -648,6 +719,16 @@ onMounted(async () => {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="{ spinning: localesReloading }"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
                 <span class="info-tooltip-wrap"><span class="btn-tooltip">{{ t('settings.language.reloadLanguages') }}</span></span>
               </button>
+              <button
+                v-if="isRtlLanguage"
+                class="theme-icon-btn"
+                :class="{ active: settings.rtlMode }"
+                @click="settings.rtlMode ? disableRtl() : enableRtl()"
+                aria-label="Toggle RTL layout"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 10H3"/><path d="M21 6H3"/><path d="M21 14H3"/><path d="M17 18H3"/><polyline points="21 10 17 14 21 18"/></svg>
+                <span class="info-tooltip-wrap"><span class="btn-tooltip">{{ t('settings.language.rtlModeHint') }}</span></span>
+              </button>
             </div>
           </div>
           <div class="lang-list">
@@ -682,7 +763,7 @@ onMounted(async () => {
             >
               <span class="shortcut-action">
                 {{ action.label }}
-                <span class="sc-info" :title="action.hint">?</span>
+                <InfoIcon :title="action.hint" />
               </span>
               <button
                 class="shortcut-key"
@@ -718,8 +799,10 @@ onMounted(async () => {
           <p class="hint" style="color:color-mix(in srgb,var(--danger) 80%,var(--text-sec))">{{ t('settings.dangerZone.subtitle') }}</p>
           <div class="danger-action-row">
             <div class="danger-info">
-              <span class="danger-label">{{ t('settings.dangerZone.removeVirtualAudio') }}</span>
-              <span class="danger-desc">{{ t('settings.dangerZone.removeVirtualAudioDesc') }}</span>
+              <span class="danger-label">
+                {{ t('settings.dangerZone.removeVirtualAudio') }}
+                <InfoIcon :title="t('settings.dangerZone.removeVirtualAudioDesc')" />
+              </span>
             </div>
             <button class="btn-danger" :disabled="dangerLoading" @click="removeVirtualAudio">
               <svg v-if="!dangerLoading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
@@ -979,7 +1062,27 @@ onMounted(async () => {
                 </div>
               </div>
             </template>
-            <div v-else class="hint">Could not read storage info.</div>
+            <div v-else class="hint">{{ t('settings.storage.readError') }}</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">{{ t('settings.storage.steamSection') }}</div>
+          <div class="steam-storage-head">
+            <div class="steam-storage-copy">
+              <div class="steam-storage-title">{{ steamStorageTitle }}</div>
+              <div class="steam-storage-body">{{ steamStorageBody }}</div>
+            </div>
+            <button class="btn btn-sm steam-storage-btn" :disabled="steamImportBusy" @click="importSteamLibrary(steamAccess === 'denied')">
+              {{ steamStorageButtonLabel }}
+            </button>
+          </div>
+          <div v-if="steamGamesLoaded" class="steam-storage-list">
+            <div v-for="game in replay.steamGames" :key="game.appid" class="steam-storage-row">
+              <img v-if="steamIconUrl(game.icon_url)" :src="steamIconUrl(game.icon_url)" alt="" class="steam-storage-icon" loading="lazy" />
+              <div v-else class="steam-storage-icon steam-storage-icon--fallback">S</div>
+              <span class="steam-storage-name">{{ game.name }}</span>
+            </div>
           </div>
         </div>
       </section>
@@ -1258,7 +1361,7 @@ onMounted(async () => {
   transition: background .12s, color .12s, border-color .12s;
   border-right: 2px solid transparent;
 }
-.nav-item:hover { background: var(--bg-hover); color: var(--text); }
+.nav-item:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
 .nav-item.active {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent); border-right-color: var(--accent);
@@ -1429,6 +1532,9 @@ onMounted(async () => {
 .lang-code { font-size: 11px; font-weight: 800; color: var(--accent); min-width: 26px; }
 .lang-label { font-size: 14px; font-weight: 600; }
 .lang-dir-badge { font-size: 10px; color: var(--text-muted); background: var(--bg-deep); padding: 2px 6px; border-radius: 3px; flex-shrink: 0; }
+.lang-rtl-btn { padding: 6px 16px; border-radius: 20px; border: 1px solid var(--border); background: var(--bg-surface); color: var(--text-sec); font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s; }
+.lang-rtl-btn:hover { color: var(--text); border-color: var(--accent); }
+.lang-rtl-btn.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); border-color: var(--accent); }
 .path-hint { font-size: 11px; color: var(--text-muted); font-family: monospace; margin-inline-start: 8px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lang-actions { display: flex; align-items: center; gap: 4px; margin-inline-start: auto; }
 /* Icon button tooltip (for lang-actions buttons) */
@@ -1437,7 +1543,7 @@ onMounted(async () => {
 .btn-tooltip {
   position: absolute; bottom: calc(100% + 6px); left: 50%;
   transform: translateX(-50%);
-  white-space: nowrap;
+  white-space: normal; max-width: 220px; text-align: center;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
   padding: 5px 8px; font-size: 11px; color: var(--text-sec);
   box-shadow: 0 4px 12px rgba(0,0,0,.4);
@@ -1445,6 +1551,8 @@ onMounted(async () => {
   font-weight: 400;
 }
 .theme-icon-btn:hover .btn-tooltip { opacity: 1; }
+.lang-actions .btn-tooltip { left: auto; right: 0; transform: none; text-align: end; }
+[data-tooltip-pos="below"] .btn-tooltip { bottom: auto; top: calc(100% + 6px); }
 .spinning { animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -1649,7 +1757,7 @@ onMounted(async () => {
   padding: 0;
 }
 .ext-gear-btn svg { width: 13px; height: 13px; }
-.ext-gear-btn:hover { background: var(--bg-hover); color: var(--text); }
+.ext-gear-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
 
 .ext-card-switch { flex-shrink: 0; }
 
@@ -1710,8 +1818,7 @@ onMounted(async () => {
 .danger-head { color: var(--danger) !important; display: flex; align-items: center; gap: 8px; }
 .danger-action-row { display: flex; align-items: flex-start; gap: 16px; }
 .danger-info { flex: 1; display: flex; flex-direction: column; gap: 4px; }
-.danger-label { font-size: 13px; font-weight: 600; color: var(--text); }
-.danger-desc { font-size: 12px; color: var(--text-sec); line-height: 1.45; }
+.danger-label { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; }
 .btn-danger {
   display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
   padding: 8px 16px; border: 1px solid var(--danger);
@@ -1735,11 +1842,22 @@ onMounted(async () => {
   transition: all .15s;
 }
 .theme-icon-btn svg { width: 14px; height: 14px; }
-.theme-icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+.theme-icon-btn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.theme-icon-btn.active { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
 .theme-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── Storage side-by-side grid ── */
 .storage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.steam-storage-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.steam-storage-copy { min-width:0; }
+.steam-storage-title { font-size:13px; font-weight:700; color:var(--text); }
+.steam-storage-body { margin-top:4px; font-size:12px; color:var(--text-sec); line-height:1.45; }
+.steam-storage-btn { flex-shrink:0; }
+.steam-storage-list { display:flex; flex-direction:column; gap:8px; max-height:280px; overflow:auto; padding-right:4px; }
+.steam-storage-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-deep); }
+.steam-storage-icon { width:24px; height:24px; border-radius:6px; object-fit:cover; flex-shrink:0; }
+.steam-storage-icon--fallback { display:flex; align-items:center; justify-content:center; background:color-mix(in srgb, var(--accent) 18%, var(--bg-card)); color:var(--accent); font-size:11px; font-weight:800; }
+.steam-storage-name { font-size:12px; color:var(--text); }
 
 /* ── Disabled track delete button ── */
 .btn-icon:disabled { opacity: .35; cursor: not-allowed; }
@@ -1774,7 +1892,7 @@ onMounted(async () => {
   background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--text-sec); font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; text-align: left;
 }
-.social-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent); }
+.social-btn:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); border-color: var(--accent); }
 .social-btn svg { flex-shrink: 0; opacity: .8; }
 .social-btn:hover svg { opacity: 1; color: var(--accent); }
 .about-contributors { font-size: 12px; color: var(--text-muted); text-align: center; margin: 0; padding: 8px 0 16px; }
@@ -1788,7 +1906,7 @@ onMounted(async () => {
   background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius);
   cursor: pointer; transition: all .15s;
 }
-.notif-option:hover { background: var(--bg-hover); border-color: var(--accent); }
+.notif-option:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: var(--accent); }
 .notif-option.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .notif-option-icon { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: var(--text-sec); flex-shrink: 0; }
 .notif-option.active .notif-option-icon { color: var(--accent); }
@@ -1817,7 +1935,7 @@ onMounted(async () => {
   background: transparent; border: none; cursor: pointer;
   color: var(--text-muted); transition: color .12s; border-radius: 4px;
 }
-.track-vis-btn:hover { color: var(--text); background: var(--bg-hover); }
+.track-vis-btn:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .track-vis-btn svg { width: 14px; height: 14px; }
 .track-vis-btn.active { color: var(--accent); }
 
@@ -1841,7 +1959,7 @@ onMounted(async () => {
   transition: all .15s; flex-shrink: 0;
 }
 .ext-icon-btn svg { width: 14px; height: 14px; }
-.ext-icon-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--accent); }
+.ext-icon-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); border-color: var(--accent); }
 .ext-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── Store placeholder ── */

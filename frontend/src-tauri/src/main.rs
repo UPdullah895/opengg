@@ -3,8 +3,10 @@
 mod commands;
 mod media_server;
 
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -24,14 +26,18 @@ fn get_watch_dirs() -> Vec<std::path::PathBuf> {
                     for s in arr {
                         if let Some(p) = s.as_str() {
                             let pb = std::path::PathBuf::from(commands::shexp(p));
-                            if !dirs.contains(&pb) { dirs.push(pb); }
+                            if !dirs.contains(&pb) {
+                                dirs.push(pb);
+                            }
                         }
                     }
                 }
             }
         }
     }
-    if dirs.is_empty() { dirs.push(commands::default_clips_dir()); }
+    if dirs.is_empty() {
+        dirs.push(commands::default_clips_dir());
+    }
     dirs
 }
 
@@ -39,31 +45,35 @@ fn get_watch_dirs() -> Vec<std::path::PathBuf> {
 //  ★ EPIC 2: File-based crash / info logger
 // ══════════════════════════════════════════════════════
 
-/// Resolves to `<repo-root>/Logs` at compile time. CARGO_MANIFEST_DIR points at
-/// `frontend/src-tauri`, so `../../Logs` lands at the repo root.
-const LOGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Logs");
-
 /// How many log files to retain before pruning the oldest.
 const MAX_LOG_FILES: usize = 10;
 
-/// Returns the absolute log directory (compile-time path above, canonicalized).
+/// Returns the runtime log directory (`$XDG_DATA_HOME/opengg/logs`, fallback `/tmp/opengg/logs`).
 pub fn logs_dir() -> std::path::PathBuf {
-    let p = std::path::PathBuf::from(LOGS_DIR);
+    let p = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("opengg/logs");
     let _ = std::fs::create_dir_all(&p);
-    p.canonicalize().unwrap_or(p)
+    p
 }
 
 /// Delete all but the `MAX_LOG_FILES` most recent `opengg_*.log` files in the
 /// log directory. Called once at startup so a new session counts against the cap.
 fn prune_old_logs(dir: &std::path::Path) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = rd
         .flatten()
         .filter_map(|e| {
             let p = e.path();
             let name = p.file_name()?.to_string_lossy().to_string();
-            if !p.is_file() { return None }
-            if !name.starts_with("opengg_") || !name.ends_with(".log") { return None }
+            if !p.is_file() {
+                return None;
+            }
+            if !name.starts_with("opengg_") || !name.ends_with(".log") {
+                return None;
+            }
             let mtime = e.metadata().ok()?.modified().ok()?;
             Some((p, mtime))
         })
@@ -89,8 +99,12 @@ fn local_ts_filename() -> String {
         libc::localtime_r(&secs, &mut tm);
         format!(
             "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
-            tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-            tm.tm_hour, tm.tm_min, tm.tm_sec
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_sec
         )
     }
 }
@@ -163,47 +177,81 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             // Audio
-            commands::get_channels, commands::set_volume, commands::set_mute,
-            commands::get_apps, commands::route_app,
-            commands::get_audio_devices, commands::set_channel_device,
-            commands::set_app_volume, commands::unmute_media_streams,
-            commands::start_vu_stream, commands::stop_vu_stream,
+            commands::get_channels,
+            commands::set_volume,
+            commands::set_mute,
+            commands::get_apps,
+            commands::route_app,
+            commands::get_audio_devices,
+            commands::set_channel_device,
+            commands::set_app_volume,
+            commands::unmute_media_streams,
+            commands::start_vu_stream,
+            commands::stop_vu_stream,
             // Replay
-            commands::get_recorder_status, commands::start_replay,
-            commands::stop_recorder, commands::save_replay,
+            commands::get_recorder_status,
+            commands::start_replay,
+            commands::stop_recorder,
+            commands::save_replay,
             // Clips
-            commands::get_clips, commands::get_clips_fast, commands::probe_clips,
-            commands::generate_thumbnail, commands::generate_thumbnails_batch,
-            commands::set_clip_meta, commands::get_clip_meta,
+            commands::get_clips,
+            commands::get_clips_fast,
+            commands::probe_clips,
+            commands::generate_thumbnail,
+            commands::generate_thumbnails_batch,
+            commands::set_clip_meta,
+            commands::get_clip_meta,
             commands::take_screenshot,
-            commands::clear_thumbnail_cache, commands::delete_clip,
-            commands::trim_clip, commands::export_clip_sized,
-            commands::save_trim_state, commands::get_trim_state,
+            commands::clear_thumbnail_cache,
+            commands::delete_clip,
+            commands::trim_clip,
+            commands::export_clip_sized,
+            commands::save_trim_state,
+            commands::get_trim_state,
             commands::open_file_location,
             // ★ Power User: single-file fetch for watcher
             commands::get_clip_by_path,
             // Editor
-            commands::analyze_media, commands::rename_clip, commands::export_timeline,
-            commands::calc_export_settings, commands::export_clip_with_filters,
-            commands::generate_waveform, commands::export_with_progress,
+            commands::analyze_media,
+            commands::rename_clip,
+            commands::export_timeline,
+            commands::calc_export_settings,
+            commands::export_clip_with_filters,
+            commands::generate_waveform,
+            commands::export_with_progress,
             commands::cancel_export,
+            commands::write_clipboard,
             // Recording
-            commands::start_screen_recording, commands::stop_screen_recording,
+            commands::start_screen_recording,
+            commands::stop_screen_recording,
             // Theme + Settings
-            commands::load_theme, commands::save_theme,
+            commands::load_theme,
+            commands::save_theme,
             commands::get_media_server_port,
-            commands::save_ui_settings, commands::load_ui_settings,
-            commands::get_storage_info, commands::open_locales_folder,
+            commands::save_ui_settings,
+            commands::load_ui_settings,
+            commands::get_storage_info,
+            commands::open_locales_folder,
             commands::list_user_locales,
-            commands::scan_extensions, commands::open_extensions_folder,
+            commands::scan_extensions,
+            commands::open_extensions_folder,
             // ★ Epic 2: Crash log
             commands::open_crash_logs_folder,
             // ★ Epic 4: Background daemon + autostart
             commands::quit_app,
             commands::set_run_in_background,
-            commands::get_autostart, commands::set_autostart,
+            commands::get_autostart,
+            commands::set_autostart,
             // ★ Session 3: Home page clip count
             commands::get_clips_count,
             // ★ Virtual audio onboarding + factory reset + routing hydration
@@ -211,12 +259,17 @@ fn main() {
             commands::create_virtual_audio,
             commands::remove_virtual_audio,
             commands::hydrate_audio_routing,
+            // ★ Job #3: Optimization & Features
+            commands::scan_folder_recursive,
+            commands::get_steam_games,
             // ★ Epic 1C: Global OS shortcuts
             commands::register_global_shortcuts,
             // ★ GPU Screen Recorder
             commands::check_gsr_installed,
-            commands::start_gsr_replay, commands::save_gsr_replay,
-            commands::stop_gsr_replay, commands::is_gsr_running,
+            commands::start_gsr_replay,
+            commands::save_gsr_replay,
+            commands::stop_gsr_replay,
+            commands::is_gsr_running,
             commands::restart_gsr_replay,
             commands::get_active_window_title,
             commands::list_audio_sinks,
@@ -224,18 +277,33 @@ fn main() {
             commands::list_monitors,
             commands::show_clip_notification,
             // ★ DSP: EQ engine + effect stubs
-            commands::apply_eq, commands::apply_noise_gate,
-            commands::apply_compressor, commands::apply_noise_reduction,
-            commands::start_eq_engine, commands::stop_eq_engine,
+            commands::apply_eq,
+            commands::apply_noise_gate,
+            commands::apply_compressor,
+            commands::apply_noise_reduction,
+            commands::start_eq_engine,
+            commands::stop_eq_engine,
             // ★ Live watcher directory sync
             commands::update_watch_dirs,
+            // ★ Epic 5: Devices
+            commands::get_devices,
+            commands::set_mouse_dpi, commands::set_mouse_polling_rate,
+            commands::set_headset_sidetone, commands::set_headset_chatmix,
+            commands::set_headset_inactive_time, commands::set_headset_mic_volume,
+            commands::set_headset_mic_mute_led, commands::set_headset_volume_limiter,
+            commands::set_headset_bt_powered_on, commands::set_headset_bt_call_volume,
+            commands::set_headset_eq_preset, commands::set_headset_eq_curve,
         ])
         .setup(|app| {
             // ── Managed states ──
-            app.manage(VuState(Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(0))));
+            app.manage(VuState(
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicU64::new(0)),
+            ));
             app.manage(ExportProcess::default());
             app.manage(GsrProcess(Mutex::new(None)));
             app.manage(JalvProcesses(Mutex::new(std::collections::HashMap::new())));
+            app.manage(RouteState::new());
 
             // ★ Epic 4: RunInBackground defaults true; overridden from saved settings below
             let run_bg_flag = Arc::new(AtomicBool::new(true));
@@ -257,7 +325,15 @@ fn main() {
                 .join("opengg/ui-settings.json");
 
             // Parameters for optional GSR auto-start (read before spawning threads)
-            let mut gsr_auto_params: Option<(String, u32, u32, String, Option<u32>, String, Vec<String>)> = None;
+            let mut gsr_auto_params: Option<(
+                String,
+                u32,
+                u32,
+                String,
+                Option<u32>,
+                String,
+                Vec<String>,
+            )> = None;
 
             if let Ok(json) = std::fs::read_to_string(&settings_path) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
@@ -267,26 +343,46 @@ fn main() {
                     }
 
                     // ★ Auto-start GSR if enabled and gsrAutoStart is true
-                    let gsr_enabled   = v["settings"]["gsrEnabled"].as_bool().unwrap_or(false);
-                    let gsr_auto      = v["settings"]["gsrAutoStart"].as_bool().unwrap_or(true);
+                    let gsr_enabled = v["settings"]["gsrEnabled"].as_bool().unwrap_or(false);
+                    let gsr_auto = v["settings"]["gsrAutoStart"].as_bool().unwrap_or(true);
                     if gsr_enabled && gsr_auto {
                         let output_dir = v["settings"]["clip_directories"][0]
-                            .as_str().unwrap_or("~/Videos/OpenGG").to_string();
-                        let replay_secs = v["settings"]["gsrReplaySecs"].as_u64().unwrap_or(30) as u32;
-                        let fps         = v["settings"]["gsrFps"].as_u64().unwrap_or(60) as u32;
-                        let quality     = v["settings"]["gsrQuality"].as_str().unwrap_or("cbr").to_string();
+                            .as_str()
+                            .unwrap_or("~/Videos/OpenGG")
+                            .to_string();
+                        let replay_secs =
+                            v["settings"]["gsrReplaySecs"].as_u64().unwrap_or(30) as u32;
+                        let fps = v["settings"]["gsrFps"].as_u64().unwrap_or(60) as u32;
+                        let quality = v["settings"]["gsrQuality"]
+                            .as_str()
+                            .unwrap_or("cbr")
+                            .to_string();
                         let bitrate_kbps = if quality == "cbr" {
                             v["settings"]["gsrCbrBitrate"].as_u64().map(|b| b as u32)
-                        } else { None };
+                        } else {
+                            None
+                        };
                         let monitor_target = v["settings"]["gsrMonitorTarget"]
-                            .as_str().unwrap_or("screen").to_string();
+                            .as_str()
+                            .unwrap_or("screen")
+                            .to_string();
                         let audio_sources: Vec<String> = v["settings"]["captureTracks"]
                             .as_array()
-                            .map(|arr| arr.iter()
-                                .filter_map(|t| t["source"].as_str().map(|s| s.to_string()))
-                                .collect())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|t| t["source"].as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
                             .unwrap_or_else(|| vec!["Game".into(), "Chat".into(), "Mic".into()]);
-                        gsr_auto_params = Some((output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources));
+                        gsr_auto_params = Some((
+                            output_dir,
+                            replay_secs,
+                            fps,
+                            quality,
+                            bitrate_kbps,
+                            monitor_target,
+                            audio_sources,
+                        ));
                     }
                 }
             }
@@ -298,11 +394,29 @@ fn main() {
             });
 
             // ★ Auto-start GSR replay buffer (2 s delay lets PipeWire sinks settle)
-            if let Some((output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources)) = gsr_auto_params {
+            if let Some((
+                output_dir,
+                replay_secs,
+                fps,
+                quality,
+                bitrate_kbps,
+                monitor_target,
+                audio_sources,
+            )) = gsr_auto_params
+            {
                 let gsr_app = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(2000));
-                    match commands::start_gsr_replay(gsr_app, output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources) {
+                    match commands::start_gsr_replay(
+                        gsr_app,
+                        output_dir,
+                        replay_secs,
+                        fps,
+                        quality,
+                        bitrate_kbps,
+                        monitor_target,
+                        audio_sources,
+                    ) {
                         Ok(()) => log::info!("GSR auto-started on launch"),
                         Err(e) => log::warn!("GSR auto-start failed: {e}"),
                     }
@@ -313,14 +427,16 @@ fn main() {
             // Also watches `~/.local/share/opengg/extensions/` and emits `plugins-changed`
             // when a manifest.json is created, modified, or removed.
             {
+                use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind};
                 use notify::{Config, RecursiveMode, Watcher};
-                use notify::event::{CreateKind, RemoveKind, ModifyKind, EventKind};
 
                 let watch_handle = app.handle().clone();
                 let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
 
                 match notify::RecommendedWatcher::new(
-                    move |res| { let _ = tx.send(res); },
+                    move |res| {
+                        let _ = tx.send(res);
+                    },
                     Config::default(),
                 ) {
                     Ok(mut watcher) => {
@@ -339,7 +455,10 @@ fn main() {
                         let extensions_dir = commands::extensions_dir_pub();
                         let _ = std::fs::create_dir_all(&extensions_dir);
                         if let Err(e) = watcher.watch(&extensions_dir, RecursiveMode::Recursive) {
-                            log::warn!("Watcher: cannot watch extensions dir {:?}: {e}", extensions_dir);
+                            log::warn!(
+                                "Watcher: cannot watch extensions dir {:?}: {e}",
+                                extensions_dir
+                            );
                         } else {
                             log::info!("Watcher: watching extensions {:?}", extensions_dir);
                         }
@@ -357,25 +476,32 @@ fn main() {
                                 .checked_sub(std::time::Duration::from_secs(10))
                                 .unwrap_or(std::time::Instant::now());
                             for res in rx {
-                                let event = match res { Ok(e) => e, Err(_) => continue };
+                                let event = match res {
+                                    Ok(e) => e,
+                                    Err(_) => continue,
+                                };
                                 for path in &event.paths {
-                                    let filename = path.file_name()
-                                        .and_then(|n| n.to_str())
-                                        .unwrap_or("");
+                                    let filename =
+                                        path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                                     // Extension manifest events — debounced 500ms
                                     if filename == "manifest.json" {
-                                        let is_manifest_event = matches!(&event.kind,
-                                            EventKind::Create(_) |
-                                            EventKind::Remove(_) |
-                                            EventKind::Modify(ModifyKind::Data(_)) |
-                                            EventKind::Modify(ModifyKind::Name(_)) |
-                                            EventKind::Modify(_)
+                                        let is_manifest_event = matches!(
+                                            &event.kind,
+                                            EventKind::Create(_)
+                                                | EventKind::Remove(_)
+                                                | EventKind::Modify(ModifyKind::Data(_))
+                                                | EventKind::Modify(ModifyKind::Name(_))
+                                                | EventKind::Modify(_)
                                         );
                                         if is_manifest_event
-                                            && last_plugin_emit.elapsed() > std::time::Duration::from_millis(500)
+                                            && last_plugin_emit.elapsed()
+                                                > std::time::Duration::from_millis(500)
                                         {
-                                            log::info!("Watcher: extensions-changed (manifest: {:?})", path);
+                                            log::info!(
+                                                "Watcher: extensions-changed (manifest: {:?})",
+                                                path
+                                            );
                                             let _ = watch_handle.emit("plugins-changed", ());
                                             last_plugin_emit = std::time::Instant::now();
                                         }
@@ -383,18 +509,23 @@ fn main() {
                                     }
 
                                     // Clip file events
-                                    let ext = path.extension()
+                                    let ext = path
+                                        .extension()
                                         .and_then(|e| e.to_str())
                                         .unwrap_or("")
                                         .to_lowercase();
-                                    if !VIDEO_WATCH_EXTS.contains(&ext.as_str()) { continue; }
+                                    if !VIDEO_WATCH_EXTS.contains(&ext.as_str()) {
+                                        continue;
+                                    }
                                     let fp = path.to_string_lossy().to_string();
                                     match &event.kind {
-                                        EventKind::Create(CreateKind::File) | EventKind::Create(_) => {
+                                        EventKind::Create(CreateKind::File)
+                                        | EventKind::Create(_) => {
                                             log::info!("Watcher: clip_added {fp}");
                                             let _ = watch_handle.emit("clip_added", &fp);
                                         }
-                                        EventKind::Remove(RemoveKind::File) | EventKind::Remove(_) => {
+                                        EventKind::Remove(RemoveKind::File)
+                                        | EventKind::Remove(_) => {
                                             log::info!("Watcher: clip_removed {fp}");
                                             let _ = watch_handle.emit("clip_removed", &fp);
                                         }
@@ -413,17 +544,83 @@ fn main() {
                 }
             }
 
+            // Device-changed watcher: polls D-Bus every 3 s, emits only on change.
+            // Reuses a single D-Bus connection instead of reconnecting every tick.
+            {
+                use std::time::Duration;
+                let dv_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut last: String = String::new();
+                    let mut interval = tokio::time::interval(Duration::from_millis(3000));
+                    let conn = match zbus::Connection::session().await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("device-watcher: D-Bus connection failed: {e}");
+                            return;
+                        }
+                    };
+                    loop {
+                        interval.tick().await;
+                        if let Ok(reply) = conn.call_method(
+                            Some("org.opengg.Daemon"),
+                            "/org/opengg/Daemon/Device",
+                            Some("org.opengg.Daemon.Device"),
+                            "GetDevices",
+                            &(),
+                        ).await {
+                            if let Ok(json) = reply.body().deserialize::<String>() {
+                                if json != last {
+                                    last = json.clone();
+                                    let _ = dv_handle.emit("device-changed", json);
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Sleep/wake: emit system-resume after logind PrepareForSleep(false)
+            {
+                use futures_util::StreamExt;
+                let sl_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    async fn listen_sleep(handle: tauri::AppHandle) -> zbus::Result<()> {
+                        let conn = zbus::Connection::system().await?;
+                        let rule = zbus::MatchRule::builder()
+                            .msg_type(zbus::message::Type::Signal)
+                            .sender("org.freedesktop.login1")?
+                            .interface("org.freedesktop.login1.Manager")?
+                            .member("PrepareForSleep")?
+                            .build();
+                        let mut stream = zbus::MessageStream::for_match_rule(
+                            rule, &conn, None,
+                        ).await?;
+                        while let Some(Ok(msg)) = stream.next().await {
+                            if let Ok((going_to_sleep,)) = msg.body().deserialize::<(bool,)>() {
+                                if !going_to_sleep {
+                                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                                    let _ = handle.emit("system-resume", ());
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+                    let _ = listen_sleep(sl_handle).await;
+                });
+            }
+
             // ★ Epic 4: System Tray — "Show OpenGG" + "Quit"
-            let show_i = MenuItem::with_id(app, "show", "Show OpenGG",  true, None::<&str>)?;
-            let quit_i = MenuItem::with_id(app, "quit", "Quit OpenGG",  true, None::<&str>)?;
-            let menu   = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let show_i = MenuItem::with_id(app, "show", "Show OpenGG", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Quit OpenGG", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().expect("app icon missing").clone())
                 .menu(&menu)
                 .tooltip("OpenGG")
-                .on_menu_event(|app: &tauri::AppHandle, event: tauri::menu::MenuEvent| {
-                    match event.id.as_ref() {
+                .on_menu_event(
+                    |app: &tauri::AppHandle, event: tauri::menu::MenuEvent| match event.id.as_ref()
+                    {
                         "show" => {
                             if let Some(w) = app.get_webview_window("main") {
                                 let _ = w.show();
@@ -435,8 +632,8 @@ fn main() {
                             app.exit(0);
                         }
                         _ => {}
-                    }
-                })
+                    },
+                )
                 .build(app)?;
 
             Ok(())
@@ -456,7 +653,9 @@ fn main() {
                     log::info!("OpenGG: window hidden (running in background)");
                 } else {
                     log::info!("OpenGG: window closed (exiting)");
-                    // Allow the default close, which will exit the app on the last window
+                    tauri::async_runtime::block_on(async {
+                        let _ = commands::remove_virtual_audio().await;
+                    });
                 }
             }
         })
@@ -500,8 +699,121 @@ pub struct GsrProcess(pub Mutex<Option<(std::process::Child, GsrSpawnParams)>>);
 
 /// jalv LV2-host subprocesses keyed by channel name (e.g. "Game", "Chat").
 /// Each entry is (Child, ChildStdin) — stdin is kept open for runtime parameter updates.
-pub struct JalvProcesses(pub Mutex<std::collections::HashMap<String, (std::process::Child, std::process::ChildStdin)>>);
+pub struct JalvProcesses(
+    pub Mutex<std::collections::HashMap<String, (std::process::Child, std::process::ChildStdin)>>,
+);
 
 /// Tracks which directories the watcher is currently watching, so
 /// `update_watch_dirs` can diff current vs desired and call watch/unwatch.
 pub struct WatchedDirs(pub Mutex<Vec<std::path::PathBuf>>);
+
+// ══════════════════════════════════════════════════════════════════════
+//  ★ RouteState: Thread-safe audio routing deduplication + blacklist
+// ══════════════════════════════════════════════════════════════════════
+
+const ROUTE_COOLDOWN_SECS: u64 = 5;
+const ROUTE_BLACKLIST: &[&str] = &[
+    "plasmashell", "kwin_wayland", "kwin_x11", "swaync", "sway",
+    "xdg-desktop-portal", "xdg-desktop-portal-gnome", "xdg-desktop-portal-kde",
+    "wireplumber", "pipewire", "pipewire-pulse", "opengg", "peak detect",
+];
+const FAIL_THRESHOLD: u32 = 3;
+const FAIL_WINDOW_SECS: u64 = 30;
+const FAIL_COOLDOWN_SECS: u64 = 30;
+
+/// Tracks routing attempts, successes, and failures per PID to prevent
+/// the infinite re-routing loop that spawns pactl/pw-metadata thousands
+/// of times per second and eventually OOM-kills the system.
+pub struct RouteState {
+    /// PID → last routing attempt time. Prevents retry during cooldown.
+    pub cooldown: Mutex<HashMap<u32, SystemTime>>,
+    /// PID → (channel, success_time). Tracks successfully routed PIDs.
+    pub routed: Mutex<HashMap<u32, (String, SystemTime)>>,
+    /// PID → (fail_count, first_fail_time). Circuit breaker for repeated failures.
+    pub fail_counts: Mutex<HashMap<u32, (u32, SystemTime)>>,
+    /// Binary names that must never be routed.
+    pub blacklist: HashSet<&'static str>,
+}
+
+impl RouteState {
+    pub fn new() -> Self {
+        let mut blacklist = HashSet::new();
+        for &name in ROUTE_BLACKLIST {
+            blacklist.insert(name);
+        }
+        Self {
+            cooldown: Mutex::new(HashMap::new()),
+            routed: Mutex::new(HashMap::new()),
+            fail_counts: Mutex::new(HashMap::new()),
+            blacklist,
+        }
+    }
+
+    pub fn is_blacklisted(&self, binary: &str) -> bool {
+        self.blacklist.contains(binary.to_lowercase().as_str())
+    }
+
+    pub fn is_on_cooldown(&self, pid: u32) -> bool {
+        let map = self.cooldown.lock().unwrap();
+        map.get(&pid).map_or(false, |t| {
+            SystemTime::now().duration_since(*t).unwrap_or(Duration::MAX)
+                < Duration::from_secs(ROUTE_COOLDOWN_SECS)
+        })
+    }
+
+    pub fn record_attempt(&self, pid: u32) {
+        self.cooldown.lock().unwrap().insert(pid, SystemTime::now());
+    }
+
+    pub fn record_success(&self, pid: u32, channel: String) {
+        self.routed.lock().unwrap().insert(pid, (channel, SystemTime::now()));
+        // Clear failure count on success
+        self.fail_counts.lock().unwrap().remove(&pid);
+    }
+
+    pub fn is_already_routed(&self, pid: u32, channel: &str) -> bool {
+        let map = self.routed.lock().unwrap();
+        map.get(&pid).map_or(false, |(ch, _)| ch == channel)
+    }
+
+    pub fn clear_pid(&self, pid: u32) {
+        self.cooldown.lock().unwrap().remove(&pid);
+        self.routed.lock().unwrap().remove(&pid);
+        self.fail_counts.lock().unwrap().remove(&pid);
+    }
+
+    /// Records a failure and returns `true` if the circuit breaker is now
+    /// open (PID should be blocked from further attempts).
+    pub fn record_failure(&self, pid: u32) -> bool {
+        let mut map = self.fail_counts.lock().unwrap();
+        let now = SystemTime::now();
+        let entry = map.entry(pid).or_insert((0, now));
+        if now.duration_since(entry.1).unwrap_or(Duration::MAX)
+            > Duration::from_secs(FAIL_WINDOW_SECS)
+        {
+            *entry = (1, now);
+        } else {
+            entry.0 += 1;
+        }
+        if entry.0 >= FAIL_THRESHOLD {
+            // Also put on extended cooldown
+            self.cooldown.lock().unwrap().insert(
+                pid,
+                now + Duration::from_secs(FAIL_COOLDOWN_SECS),
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_circuit_open(&self, pid: u32) -> bool {
+        let map = self.fail_counts.lock().unwrap();
+        let now = SystemTime::now();
+        map.get(&pid).map_or(false, |(count, first)| {
+            *count >= FAIL_THRESHOLD
+                && now.duration_since(*first).unwrap_or(Duration::MAX)
+                    <= Duration::from_secs(FAIL_COOLDOWN_SECS)
+        })
+    }
+}

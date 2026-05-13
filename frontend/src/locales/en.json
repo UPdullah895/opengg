@@ -7,6 +7,34 @@
     "devices": "Devices",
     "settings": "Settings"
   },
+  "common": {
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "confirmDelete": "Confirm Deletion"
+  },
+  "editor": {
+    "exportClip": "Export Clip",
+    "exportComplete": "Export Complete",
+    "dragIdle": "Hold to drag this file to a folder",
+    "dragReady": "Drag this file to Discord, Telegram, or a folder",
+    "changeFolder": "Change folder",
+    "selectExportDir": "Select export directory",
+    "directory": "Directory",
+    "filename": "Filename",
+    "copyPath": "Copy path",
+    "showInFolder": "Show in folder",
+    "pathCopied": "Path copied to clipboard",
+    "advancedSettings": "Advanced Settings",
+    "codec": "Codec",
+    "codecH264": "H.264 — Maximum compatibility",
+    "codecH265": "H.265 (HEVC) — Better quality, smaller size",
+    "codecVP9": "VP9 — WebM, good quality",
+    "codecAV1": "AV1 — Next-gen efficiency",
+    "codecOriginal": "Original — No re-encode"
+  },
+  "sidebar": {
+    "tip": "Tip: You can customize your shortcuts from the settings page."
+  },
   "dashboard": {
     "title": "Dashboard",
     "audioMixer": "Audio Mixer",
@@ -22,6 +50,7 @@
     "scan": "Scan",
     "quickMixer": "Quick Mixer",
     "openMixer": "Open Mixer",
+    "subtitleVirtualAudioRouter": "OpenGG Virtual Audio Router",
     "captureSettings": "Capture Settings",
     "recordingSettings": "Recording Settings",
     "quality": "Quality",
@@ -80,6 +109,19 @@
     },
     "changelog": [
       {
+        "version": "V0.1.2",
+        "date": "2026-05-12",
+        "items": [
+          "Per-app volume popover menu with live fill gradient and mute/unmute",
+          "Auto-hide timers on volume menu and context menu",
+          "Muted-state dimming for 0% volume apps",
+          "VU tick labels moved to left of track",
+          "Rounded window corners in non-fullscreen mode",
+          "Fixed 'Start on Boot' .desktop file fields",
+          "Fixed 'Minimize to Tray' close button behavior"
+        ]
+      },
+      {
         "version": "V0.1.1",
         "date": "2026-04-06",
         "items": [
@@ -117,6 +159,69 @@
           "Mic input strip with NC toggle",
           "Per-app volume sliders in drop zones",
           "i18n scaffold (Arabic + English)"
+        ]
+      },
+      {
+        "version": "V0.0.7",
+        "date": "2025-12-10",
+        "items": [
+          "GPU Screen Recorder integration — NVENC / VAAPI replay buffer",
+          "Global hotkey support for instant replay save",
+          "Clip gallery with thumbnail grid and metadata"
+        ]
+      },
+      {
+        "version": "V0.0.6",
+        "date": "2025-11-05",
+        "items": [
+          "Full Arabic localization with RTL layout support",
+          "Theme engine — dark/light mode with custom accent colors",
+          "Vue i18n integration with locale persistence"
+        ]
+      },
+      {
+        "version": "V0.0.5",
+        "date": "2025-10-18",
+        "items": [
+          "Device manager scaffold — ratbagd D-Bus mouse detection",
+          "OpenRGB SDK integration for unified RGB control",
+          "Game profile auto-switching foundation"
+        ]
+      },
+      {
+        "version": "V0.0.4",
+        "date": "2025-09-22",
+        "items": [
+          "Clip editor scaffold with custom video player",
+          "Thumbnail generation via FFmpeg probes",
+          "Clip metadata storage with SQLite backend"
+        ]
+      },
+      {
+        "version": "V0.0.3",
+        "date": "2025-08-14",
+        "items": [
+          "Dark theme v1 — surface/card/deep layering",
+          "Sidebar navigation with page routing",
+          "Settings page with persistence layer"
+        ]
+      },
+      {
+        "version": "V0.0.2",
+        "date": "2025-07-03",
+        "items": [
+          "Initial PipeWire mixer — 5-channel virtual sinks",
+          "Per-app audio routing via pw-metadata",
+          "Basic volume faders and mute toggles"
+        ]
+      },
+      {
+        "version": "V0.0.1",
+        "date": "2025-06-01",
+        "items": [
+          "Tauri 2 + Vue 3 scaffold",
+          "Custom titlebar with window controls",
+          "Project bootstrap and architecture setup"
         ]
       }
     ]
@@ -162,7 +267,7 @@
       "replayClips": "Replay & Clips",
       "replayClipsDesc": "Recording, replay buffer, clips",
       "about": "About",
-      "version": "v1.0.0",
+      "version": "v0.1.2",
       "openSource": "Open-source Linux gaming hub",
       "github": "GitHub ↗"
     },
@@ -172,7 +277,12 @@
       "hint": "Changes take effect immediately. RTL languages are fully supported.",
       "addLanguage": "Add New Language",
       "openFolderHint": "Drop a new xx.json file into the locales folder to add a custom language.",
-      "reloadLanguages": "Reload languages from disk"
+      "reloadLanguages": "Reload languages from disk",
+      "rtlMode": "RTL Layout",
+      "rtlModeHint": "Switches the entire interface to right-to-left layout, including the sidebar position.",
+      "rtlModeLabel": "Interface direction",
+      "rtlEnable": "Enable RTL",
+      "rtlReset": "Reset to LTR"
     },
     "shortcuts": {
       "title": "Shortcuts",
@@ -258,7 +368,15 @@
       "free": "Free",
       "total": "Total",
       "diskUsage": "Disk Usage",
-      "loading": "Loading…"
+      "loading": "Loading…",
+      "readError": "Could not read storage info.",
+      "steamSection": "Steam Library",
+      "steamTitle": "Import your Steam library",
+      "steamBody": "Add your Steam library to OpenGG's game pickers and keep it visible here in Storage. After you allow access, OpenGG reads local Steam data and may request Steam Store metadata for names and artwork.",
+      "steamDeniedTitle": "Steam library access is off",
+      "steamDeniedBody": "Allow access to read local Steam data and request Steam Store metadata so OpenGG can list your Steam library here with names and artwork.",
+      "steamReadyTitle": "{count} Steam games in library",
+      "steamReadyBody": "Your Steam library is available in game pickers and listed here with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images."
     },
     "extensions": {
       "title": "Extensions",
@@ -294,11 +412,13 @@
       "title": "Danger Zone",
       "subtitle": "These actions are destructive. Use only if your audio routing is broken and needs a full reset.",
       "removeVirtualAudio": "Remove Virtual Audio & Restore OS Defaults",
-      "removeVirtualAudioDesc": "Unloads all OpenGG virtual sinks and restarts PipeWire + WirePlumber. Your physical hardware routes will be restored. The onboarding wizard will guide re-setup on next launch.",
-      "confirmMsg": "This will unload all OpenGG virtual audio sinks and restart PipeWire. Your audio routing will be reset. Continue?"
+      "removeVirtualAudioDesc": "Unloads all OpenGG virtual sinks/sources without restarting PipeWire or WirePlumber. Your physical hardware routes will be restored. The onboarding wizard will guide re-setup on next launch.",
+      "confirmMsg": "This will unload all OpenGG virtual audio sinks. Other audio (browser, games) will keep playing. Continue?"
     },
     "timelineTracks": {
       "title": "Timeline Tracks",
+      "trackIcons": "Track Icons",
+      "showIconsDesc": "Show a small icon next to each track label in the editor timeline",
       "trackList": "Track List",
       "trackListHint": "Customize the name, color, and icon for each editor timeline track. Changes apply live — open the editor to see them instantly.",
       "livePreview": "Live Preview",
@@ -393,6 +513,44 @@
     "renameDialog": {
       "title": "Rename Clip",
       "save":  "Save"
+    },
+    "loadError": "Failed to load clips",
+    "retry": "Retry",
+    "search": "Search clips…",
+    "allGames": "All Games",
+    "noMatches": "No matches",
+    "games": "Games",
+    "noClipsFound": "No clips found",
+    "noClipsHint": "Try again or adjust your filters",
+    "noClipsEmptyHint": "Start recording some or import them if you have any",
+    "importFolder": "Import Folder",
+    "groupByDate": "Group by date",
+    "viewGrid": "Grid view",
+    "viewList": "List view",
+    "gamesFilter": {
+      "label": "Games",
+      "allGames": "All Games",
+      "empty": "No games found",
+      "clear": "Clear all filters",
+      "searchPlaceholder": "Filter games…",
+      "noMatches": "No matches",
+      "gamePlaceholder": "Game..."
+    },
+    "steamImport": {
+      "title": "Import your Steam library",
+      "body": "Bring your Steam library into the existing game filters and tag pickers. After you allow it, OpenGG reads local Steam data and may request Steam Store metadata for game names and artwork.",
+      "deniedTitle": "Steam library access is off",
+      "deniedBody": "OpenGG has not imported your Steam library. Allow access to read local Steam data and request Steam Store metadata for game names and icons.",
+      "readyTitle": "{count} Steam games available",
+      "readyBody": "Your Steam library is available in the game filters and clip game pickers, with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images.",
+      "consentTitle": "Steam Library Access",
+      "consentMessage": "Allow OpenGG to read your local Steam data and request Steam Store metadata to populate your Steam library, game names, and artwork?",
+      "allowAndImport": "Allow and Import",
+      "import": "Import Steam Games",
+      "refresh": "Refresh Steam Library",
+      "loading": "Importing…",
+      "imported": "Imported {count} Steam games",
+      "failed": "Steam library import failed"
     }
   },
   "notification": {
@@ -402,6 +560,103 @@
     "filename": "Filename",
     "filesize": "File Size",
     "enableClipNotifications": "Clip Save Notifications",
-    "enableClipNotificationsDesc": "Show an overlay toast when a clip is saved successfully or fails"
+    "enableClipNotificationsDesc": "Show an overlay toast when a clip is saved successfully or fails",
+    "recordingStarted": "Recording started",
+    "recordingFailed": "Recording failed: {error}"
+  },
+  "recording": {
+    "stopped": "Stopped",
+    "replayBuffer": "Replay Buffer",
+    "replay": "Replay",
+    "gsrRunning": "GSR Replay Buffer Running",
+    "quickSettings": "Quick Settings",
+    "saveClip": "Save Clip"
+  },
+  "devices": {
+    "title": "Devices",
+    "noDevices": "No devices detected",
+    "noDevicesDesc": "Connect a supported mouse or headset and click Refresh",
+    "noApps": "No apps",
+    "dropHere": "Drop here",
+    "refresh": "Refresh",
+    "back": "Back",
+    "battery": "Battery",
+    "charging": "Charging",
+    "sidetone": "Sidetone",
+    "chatmix": "ChatMix",
+    "game": "Game",
+    "chat": "Chat",
+    "dpi": "DPI",
+    "pollingRate": "Polling Rate",
+    "headset": "Headset",
+    "mouse": "Mouse",
+    "settings": "Settings",
+    "eqPreset": "Equalizer Preset",
+    "eqFlat": "Flat",
+    "eqBass": "Bass",
+    "eqFocus": "Focus",
+    "eqSmiley": "Smiley",
+    "autoOff": "Auto-Off",
+    "autoOffNever": "Never",
+    "autoOffMinutes": "{n} min",
+    "micVolume": "Mic Volume",
+    "micMuteLed": "Mute LED",
+    "micMuteLedOff": "Off",
+    "micMuteLedLow": "Low",
+    "micMuteLedMed": "Med",
+    "micMuteLedHigh": "High",
+    "volumeLimiter": "Volume Limiter",
+    "btPoweredOn": "BT When Powered On",
+    "btCallVolume": "BT Call Volume",
+    "viewGrid": "Grid view",
+    "viewList": "List view",
+    "defaultDevice": "Default",
+    "macros": "Macros",
+    "macroButton": "Button",
+    "macroName": "Macro Name",
+    "macroActions": "Actions",
+    "macroPlayback": "Playback",
+    "playbackRunOnce": "Run Once",
+    "playbackHoldRepeat": "Hold to Repeat",
+    "playbackToggle": "Toggle",
+    "macroRecord": "Record Key",
+    "macroSave": "Save",
+    "macroClear": "Clear",
+    "macroNoButton": "Select a button on the mouse diagram",
+    "comingSoon": "Devices — Coming Soon",
+    "comingSoonDesc": "We are working on providing full support for your favourite devices. Stay tuned for upcoming updates."
+  },
+  "onboarding": {
+    "steps": {
+      "createVirtualAudio": "Create Virtual Audio",
+      "linkDevices": "Link Devices"
+    },
+    "step1": {
+      "title": "Virtual Audio Engine Required",
+      "description": "OpenGG uses virtual audio sinks to route Game, Chat, Media, and Aux channels independently. This one-time setup takes about 2 seconds.",
+      "create": "Create Virtual Audio Engine"
+    },
+    "step2": {
+      "title": "Link Your Devices",
+      "description": "Select which physical devices the mixer should use by default. You can change these anytime in the Mixer.",
+      "headphonesLabel": "Headphones / Output",
+      "selectOutput": "Select output device…",
+      "micLabel": "Microphone / Input",
+      "selectInput": "Select input device…",
+      "finish": "Finish Setup"
+    },
+    "skip": "Skip for now",
+    "skipShort": "Skip",
+    "creating": "Creating…",
+    "saving": "Saving…",
+    "errorCreate": "Setup failed: {error}",
+    "errorComplete": "Could not complete setup: {error}"
+  },
+  "clips2": {
+    "scanning": "Scanning for new clips…",
+    "foundCount": "{n} found",
+    "newClipDetected": "New clip detected…",
+    "apply": "Apply",
+    "cancel": "Cancel"
   }
 }

@@ -12,8 +12,8 @@
  * That's a Phase 2 optimization — polling at 2s is sufficient for now.
  */
 
-import { ref, onMounted, onUnmounted } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
 import { useAudioStore } from '../stores/audio'
 import { usePersistenceStore } from '../stores/persistence'
@@ -23,11 +23,16 @@ import ChatMix from '../components/ChatMix.vue'
 import GraphicEQ from '../components/GraphicEQ.vue'
 import DspControls from '../components/DspControls.vue'
 
+const { t } = useI18n()
 const audio  = useAudioStore()
 const persist = usePersistenceStore()
 
 // ★ Epic 2: Overdrive toggle — expands all faders from 100% max to 150%
 const overdriveEnabled = ref(false)
+const MIXER_CHANNELS = ['Master', 'Game', 'Chat', 'Media', 'Aux', 'Mic'] as const
+watch(overdriveEnabled, (enabled) => {
+  if (!enabled) void clampChannelsTo100()
+})
 
 type Tab = 'mixer' | 'game' | 'chat' | 'media' | 'aux' | 'mic'
 const activeTab = ref<Tab>('mixer')
@@ -40,9 +45,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'mic',   label: 'Mic'   },
 ]
 
-// ★ Virtual Audio Engine state
-const audioReady    = ref(false)
-const checkingAudio = ref(true)
 const setupLoading  = ref(false)
 
 
@@ -56,6 +58,15 @@ const COLORS: Record<string, string> = {
 }
 
 function onChatMix(g: number, c: number) { audio.setVolume('Game', g); audio.setVolume('Chat', c) }
+
+async function clampChannelsTo100() {
+  await Promise.all(
+    MIXER_CHANNELS.map(async ch => {
+      const current = audio.channelVolumes[ch] ?? 100
+      if (current > 100) await audio.setVolume(ch, 100)
+    }),
+  )
+}
 
 function devDesc(ch: string, type: 'sink' | 'source') {
   const n = audio.channelDevices[ch]
@@ -76,27 +87,44 @@ function devDesc(ch: string, type: 'sink' | 'source') {
 
 let unlistenRefresh: (() => void) | null = null
 
+function onMixerClick(e: MouseEvent) {
+  // Deselect click-to-route app when clicking outside of any chip or dropzone
+  const target = e.target as HTMLElement
+  if (!target.closest('.dz-chip') && !target.closest('.dropzone')) {
+    audio.deselectApp()
+  }
+}
+
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
-  try { audioReady.value = await invoke<boolean>('check_virtual_audio_status') } catch { audioReady.value = false }
-  checkingAudio.value = false
-  // ★ FIX 4: Poll every 2s (down from 3s) for tighter PipeWire sync
-  if (audioReady.value) audio.startPolling(2000)
+  await audio.refreshVirtualAudioStatus()
+  // Polling is started/stopped centrally by App.vue based on currentPage.
 
   // Push-based refresh: backend emits 'audio-mixer-refresh' after every successful
   // route_app call so the UI updates immediately instead of waiting for the next poll.
   unlistenRefresh = await listen('audio-mixer-refresh', () => { audio.fetchApps() })
+  document.addEventListener('click', onMixerClick)
 })
 onUnmounted(() => {
-  audio.stopPolling()
   unlistenRefresh?.()
+  document.removeEventListener('click', onMixerClick)
+})
+
+watch(() => audio.virtualAudioReady, ready => {
+  // Polling is managed centrally by App.vue; this watch just ensures
+  // we don't try to poll when virtual audio isn't ready.
+  if (!ready) audio.stopPolling()
+})
+
+watch(overdriveEnabled, enabled => {
+  if (!enabled) clampChannelsTo100().catch(e => console.error('[opengg] overdrive clamp failed:', e))
 })
 </script>
 
 <template>
   <div class="mixer">
     <div class="mixer-hdr">
-      <div><h1 class="t">Audio Mixer</h1><span class="sub">OpenGG Virtual Audio Router</span></div>
+        <div><h1 class="t">{{ t('dashboard.audioMixer') }}</h1></div>
       <div class="hdr-actions">
         <!-- Tab bar -->
         <nav class="tab-bar">
@@ -123,11 +151,11 @@ onUnmounted(() => {
     </div>
 
     <!-- ★ Virtual Audio empty state -->
-    <div v-if="checkingAudio" class="empty-state">
+    <div v-if="audio.checkingVirtualAudio" class="empty-state">
       <span class="empty-spin">⟳</span>
       <p>Checking audio engine…</p>
     </div>
-    <div v-else-if="!audioReady" class="empty-state">
+    <div v-else-if="!audio.virtualAudioReady" class="empty-state">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
       <p class="empty-title">Virtual Audio Engine not running</p>
       <p class="empty-desc">OpenGG virtual sinks are not loaded. Create them to start routing audio.</p>
@@ -157,7 +185,7 @@ onUnmounted(() => {
       <div v-else class="strips-row">
       <!-- MASTER -->
       <div class="col">
-        <ChannelStrip :channel="audio.masterChannel" :color="COLORS.Master" type="master" :vuLevel="audio.vuLevels['Master'] ?? 0"
+        <ChannelStrip :channel="audio.masterChannel" :color="COLORS.Master" type="master" :vuLevel="audio.vuLevels['Master'] ?? -60"
           :overdrive="overdriveEnabled"
           :devices="audio.outputDevices" :selectedDevice="devDesc('Master','sink')"
           @update:volume="v=>audio.setVolume('Master',v)" @update:mute="m=>audio.setMute('Master',m)" @update:device="d=>audio.setChannelDevice('Master',d)">
@@ -165,13 +193,12 @@ onUnmounted(() => {
         </ChannelStrip>
         <DropZone channel="Master" :color="COLORS.Master" :apps="audio.masterChannel.apps" />
       </div>
-      <div class="divider"><div class="dv"></div></div>
 
       <!-- OUTPUTS -->
       <div class="col" v-for="ch in ['Game','Chat','Media','Aux']" :key="ch">
         <ChannelStrip
           :channel="audio.channelMap[ch] || { name: ch, volume: 100, muted: false, node_id: 0, apps: [] }"
-          :color="COLORS[ch]" type="output" :vuLevel="audio.vuLevels[ch] ?? 0"
+          :color="COLORS[ch]" type="output" :vuLevel="audio.vuLevels[ch] ?? -60"
           :overdrive="overdriveEnabled"
           :devices="audio.outputDevices" :selectedDevice="devDesc(ch,'sink')"
           @update:volume="v=>audio.setVolume(ch,v)" @update:mute="m=>audio.setMute(ch,m)"
@@ -185,13 +212,12 @@ onUnmounted(() => {
         </ChannelStrip>
         <DropZone :channel="ch" :color="COLORS[ch]" :apps="(audio.channelMap[ch]?.apps || [])" />
       </div>
-      <div class="divider"><div class="dv"></div></div>
 
       <!-- INPUT: Mic -->
       <div class="col">
         <ChannelStrip
           :channel="{ ...audio.micChannel, name: 'Mic' }"
-          :color="COLORS.Mic" type="input" :vuLevel="audio.vuLevels['Mic'] ?? 0"
+          :color="COLORS.Mic" type="input" :vuLevel="audio.vuLevels['Mic'] ?? -60"
           :overdrive="overdriveEnabled"
           :devices="audio.inputDevices" :selectedDevice="devDesc('Mic','source')"
           @update:volume="v=>audio.setVolume('Mic',v)" @update:mute="m=>audio.setMute('Mic',m)"
@@ -203,7 +229,7 @@ onUnmounted(() => {
       </div><!-- end strips-row -->
     </template><!-- end v-else audioReady -->
 
-    <ChatMix v-if="audioReady" :gameVolume="audio.channelMap['Game']?.volume ?? 100"
+    <ChatMix v-if="audio.virtualAudioReady" :gameVolume="audio.channelMap['Game']?.volume ?? 100"
       :chatVolume="audio.channelMap['Chat']?.volume ?? 100" @update:balance="onChatMix" />
   </div>
 </template>
@@ -222,7 +248,7 @@ onUnmounted(() => {
   color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer;
   transition: all .15s; white-space: nowrap;
 }
-.tab-btn:hover { color: var(--text); background: var(--bg-hover); }
+.tab-btn:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .tab-btn--active { background: var(--bg-card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 
 /* DSP / EQ tab panel */
@@ -247,7 +273,7 @@ onUnmounted(() => {
 /* ★ FIX 3: strips-row fills vertical space, min 55vh for tall faders */
 .strips-row {
   display: flex;
-  gap: 0;
+  gap: 10px;
   align-items: stretch;   /* ← all cols same height */
   flex: 1;
   min-height: 55vh;       /* ← guarantees tall faders */
@@ -265,11 +291,7 @@ onUnmounted(() => {
 }
 /* ★ Epic 1: Strict flex rules — strip grows to fill, dropzone is fixed-height scrollable */
 .col :deep(.strip)    { width: 100% !important; flex: 1 1 0% !important; min-height: 0 !important; height: auto !important; }
-.col :deep(.dropzone) { width: 100% !important; flex: 0 0 70px !important; height: 70px !important; overflow-y: auto !important; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
-
-
-.divider { display: flex; align-items: center; padding: 0 4px; align-self: stretch; flex-shrink: 0; }
-.dv { width: 1px; height: 100%; background: linear-gradient(180deg, transparent, var(--border) 15%, var(--text-muted) 50%, var(--border) 85%, transparent); opacity: .4; }
+.col :deep(.dropzone) { width: 100% !important; flex: 0 0 70px !important; height: 70px !important; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
 /* ★ Empty state */
 .empty-state {

@@ -15,7 +15,7 @@ ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
 FRONTEND := $(ROOT)/frontend
 
-.PHONY: dev daemon ui build setup clean install install-desktop lint check help
+.PHONY: dev daemon ui build appimage setup clean install install-desktop lint check help
 
 # ── Default ──────────────────────────────────────────────────────
 help:
@@ -26,6 +26,7 @@ help:
 	@echo "  make daemon    Build & run daemon (debug)"
 	@echo "  make ui        Run Tauri frontend dev server"
 	@echo "  make build     Release build"
+	@echo "  make appimage  Build self-contained AppImage (calls build + packages)"
 	@echo "  make setup     Install all dependencies"
 	@echo "  make clean     Remove build artifacts"
 	@echo "  make install   Install daemon to ~/.local/bin"
@@ -57,6 +58,10 @@ ui-deps:
 # ── Release build ────────────────────────────────────────────────
 build: daemon-release
 	cd $(FRONTEND) && npm install && npx tauri build
+
+# ── AppImage ──────────────────────────────────────────────────────
+appimage:
+	@chmod +x build-appimage.sh && ./build-appimage.sh
 
 # ── Setup ────────────────────────────────────────────────────────
 setup:

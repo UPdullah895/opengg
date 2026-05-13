@@ -21,7 +21,9 @@ Thumbs.db
 
 # AI / Claude Code (never push these)
 CLAUDE.md
+GEMINI.md
 .claude/
+.gemini/
 
 # Build artifacts
 *.AppImage
@@ -33,3 +35,4 @@ opengg.desktop
 
 # Runtime per-session logs
 Logs/
+.tauri-signing-private-key.txt

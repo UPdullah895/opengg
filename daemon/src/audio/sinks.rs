@@ -14,12 +14,30 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// Minimum interval between `pactl` spawns for the same channel.
+/// Prevents process storm during slider drags (≤10 spawns/sec instead of 60+).
+const VOLUME_DEBOUNCE_MS: u128 = 100;
 
 pub const CHANNEL_NAMES: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
 /// All channels get virtual null-sinks, including Mic.
 /// The Mic sink is fed by a loopback from the hardware source — its monitor
 /// port becomes the capturable "OpenGG_Mic" node for GSR and DSP chains.
 const SINK_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
+const RELABEL_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
+
+fn live_display_name(channel: &str) -> String {
+    if RELABEL_CHANNELS.contains(&channel) {
+        channel.to_string()
+    } else {
+        format!("OpenGG - {channel}")
+    }
+}
+
+fn sink_prop_value(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\\\""))
+}
 
 #[derive(Debug, Clone)]
 pub struct ChannelInfo {
@@ -40,10 +58,9 @@ pub struct SinkManager {
     pub channels: Arc<Mutex<HashMap<String, ChannelInfo>>>,
     /// Module IDs from pactl load-module (for cleanup if needed)
     module_ids: Arc<Mutex<Vec<u32>>>,
+    /// Last time `pactl set-sink-volume` was spawned per channel.
+    last_volume_spawn: Arc<Mutex<HashMap<String, Instant>>>,
 }
-
-unsafe impl Send for SinkManager {}
-unsafe impl Sync for SinkManager {}
 
 impl SinkManager {
     /// Create virtual sinks gracefully — NO PipeWire restart.
@@ -55,9 +72,7 @@ impl SinkManager {
             let sink_name = format!("OpenGG_{ch}");
 
             // Step 1: Check if this sink already exists (idempotent)
-            if sink_exists(&sink_name) {
-                tracing::info!("Sink {sink_name} already exists — skipping creation");
-            } else {
+            if !sink_exists(&sink_name) {
                 // Step 2: Create via pactl load-module (non-destructive)
                 match create_null_sink(&sink_name, ch) {
                     Ok(module_id) => {
@@ -70,6 +85,8 @@ impl SinkManager {
                         tracing::info!("Trying WirePlumber config fallback for {sink_name}");
                     }
                 }
+            } else {
+                tracing::info!("Sink {sink_name} already exists — skipping creation");
             }
         }
 
@@ -99,7 +116,11 @@ impl SinkManager {
         }
 
         tracing::info!("Virtual sinks ready (no PipeWire restart)");
-        Ok(Self { channels, module_ids })
+        Ok(Self {
+            channels,
+            module_ids,
+            last_volume_spawn: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     pub fn set_volume(&self, channel: &str, volume: f32) -> Result<()> {
@@ -107,6 +128,19 @@ impl SinkManager {
         if let Some(info) = self.channels.lock().unwrap().get_mut(channel) {
             info.volume = volume;
         }
+
+        // Debounce: skip pactl spawn if this channel was touched <100ms ago.
+        let now = Instant::now();
+        {
+            let mut last_map = self.last_volume_spawn.lock().unwrap();
+            if let Some(last) = last_map.get(channel) {
+                if now.duration_since(*last).as_millis() < VOLUME_DEBOUNCE_MS {
+                    return Ok(());
+                }
+            }
+            last_map.insert(channel.to_string(), now);
+        }
+
         let vol_pct = (volume * 100.0) as u32;
         let pct_str = format!("{vol_pct}%");
         // All channels (including Mic) now have a virtual null-sink — control it uniformly.
@@ -142,6 +176,18 @@ impl SinkManager {
     }
 }
 
+impl Drop for SinkManager {
+    fn drop(&mut self) {
+        if let Ok(ids) = self.module_ids.lock() {
+            for id in ids.iter() {
+                let _ = Command::new("pactl")
+                    .args(["unload-module", &id.to_string()])
+                    .status();
+            }
+        }
+    }
+}
+
 /// Check if a PipeWire sink with this name already exists.
 fn sink_exists(name: &str) -> bool {
     if let Ok(output) = Command::new("pactl").args(["list", "sinks", "short"]).output() {
@@ -159,11 +205,14 @@ fn sink_exists(name: &str) -> bool {
 fn create_null_sink(sink_name: &str, description: &str) -> Result<u32> {
     // All three property keys are set so the sink shows correctly in every
     // sound panel (GNOME Settings, pavucontrol, KDE, etc.)
-    let display_name = format!("OpenGG - {description}");
+    let display_name = live_display_name(description);
     let sink_props = format!(
-        "sink_properties=device.description=\"{display_name}\" \
-         node.description=\"{display_name}\" \
-         media.name=\"{display_name}\""
+        "sink_properties=device.description={} \
+         node.description={} \
+         media.name={}",
+        sink_prop_value(&display_name),
+        sink_prop_value(&display_name),
+        sink_prop_value(&display_name)
     );
     let output = Command::new("pactl")
         .args([

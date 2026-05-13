@@ -8,6 +8,8 @@ const props = defineProps<{
   muted?: boolean
   captureKeyboard?: boolean
   showControls?: boolean  // default true; set false to hide built-in ctrl-bar
+  alwaysShowControls?: boolean
+  nativeControls?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -31,7 +33,7 @@ const isFullscreen = ref(false)
 const isHovering   = ref(false)
 
 const ctrlVisible = computed(() =>
-  !playing.value || isHovering.value || isFullscreen.value
+  props.alwaysShowControls || !playing.value || isHovering.value || isFullscreen.value
 )
 
 // ── RAF loop for smooth currentTime ──
@@ -104,6 +106,7 @@ function toggleFullscreen() {
 function onKeydown(e: KeyboardEvent) {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
   if (e.code === 'Space')      { e.preventDefault(); togglePlay() }
+  else if (e.code === 'KeyF')       { e.preventDefault(); toggleFullscreen() }
   else if (e.code === 'ArrowRight') { e.preventDefault(); skip(5) }
   else if (e.code === 'ArrowLeft')  { e.preventDefault(); skip(-5) }
   else if (e.code === 'ArrowUp')    { e.preventDefault(); setVolume(Math.min(1, volume.value + 0.1)) }
@@ -136,6 +139,7 @@ defineExpose({ videoRef, playing, currentTime, duration, isFullscreen, seekTo, t
       ref="videoRef"
       :src="src"
       :muted="muted ?? false"
+      :controls="nativeControls ?? false"
       preload="metadata"
       class="cvp-video"
       @loadedmetadata="onMeta"
@@ -150,7 +154,7 @@ defineExpose({ videoRef, playing, currentTime, duration, isFullscreen, seekTo, t
     <slot :isFullscreen="isFullscreen" :toggleFullscreen="toggleFullscreen" />
 
     <!-- Built-in controls (hidden when showControls === false) -->
-    <div v-if="showControls !== false" class="cvp-ctrl" :class="{ 'cvp-ctrl-vis': ctrlVisible }">
+    <div v-if="showControls !== false && !nativeControls" class="cvp-ctrl" :class="{ 'cvp-ctrl-vis': ctrlVisible }">
       <div class="cvp-prog" @click="onProgressClick">
         <div class="cvp-prog-fill" :style="{ width: duration ? (currentTime/duration*100)+'%' : '0%' }">
           <div class="cvp-prog-thumb"></div>

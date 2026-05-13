@@ -55,7 +55,7 @@ impl ProcessWatcher {
         let active = Arc::clone(&self.active_pids);
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
 
             loop {
                 interval.tick().await;
@@ -116,6 +116,9 @@ impl ProcessWatcher {
 fn scan_processes(known_games: &HashSet<String>) -> Result<Vec<(i32, PathBuf)>> {
     let mut matches = Vec::new();
 
+    // Pre-compute lowercase game names once instead of inside the per-process loop.
+    let games_lower: Vec<String> = known_games.iter().map(|g| g.to_lowercase()).collect();
+
     // Use procfs crate for safe /proc access
     for proc_result in procfs::process::all_processes()? {
         let proc = match proc_result {
@@ -135,7 +138,7 @@ fn scan_processes(known_games: &HashSet<String>) -> Result<Vec<(i32, PathBuf)>> 
             .to_string_lossy()
             .to_lowercase();
 
-        if known_games.iter().any(|g| basename.contains(&g.to_lowercase())) {
+        if games_lower.iter().any(|g| basename.contains(g)) {
             matches.push((proc.pid, exe));
         }
     }

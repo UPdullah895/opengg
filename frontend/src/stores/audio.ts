@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, reactive, shallowRef } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { usePersistenceStore } from './persistence'
 
-export interface AppInfo { id: number; name: string; binary: string; channel: string; icon: string; volume?: number; auto_channel?: string }
+export interface AppInfo { id: number; name: string; binary: string; channel: string; icon: string; volume?: number; auto_channel?: string; locked?: boolean }
 export interface Channel { name: string; volume: number; muted: boolean; node_id: number }
 export interface AudioDevice { name: string; description: string; device_type: 'sink' | 'source'; is_default: boolean }
 
@@ -13,11 +13,14 @@ const CHANNEL_NAMES = ['Game', 'Chat', 'Media', 'Aux']
 export const useAudioStore = defineStore('audio', () => {
   const allApps = ref<AppInfo[]>([])
   const devices = ref<AudioDevice[]>([])
-  const vuLevels = ref<Record<string, number>>({})
+  const virtualAudioReady = ref(false)
+  const checkingVirtualAudio = ref(true)
+  const vuLevels = shallowRef<Record<string, number>>({})
   const loading = ref(false)
   const error = ref<string | null>(null)
   const channelDevices = reactive<Record<string, string>>({})
   const draggedApp = ref<AppInfo | null>(null)
+  const selectedAppForClickRoute = ref<AppInfo | null>(null)
   const routingInProgress = ref(false)
   let vuUnlisten: UnlistenFn | null = null
 
@@ -110,6 +113,20 @@ export const useAudioStore = defineStore('audio', () => {
         return normalized
       })
 
+      // Re-apply saved routing rules to streams whose actual PipeWire channel doesn't
+      // match the saved rule — happens after reboot, wake-from-sleep, or daemon restart.
+      // Uses `fetched` (raw backend state) not `allApps.value` (already rule-overridden).
+      // Cooldown guard prevents infinite loop when routing appears to fail (pw-metadata
+      // reports success but stream move is not actually applied by PipeWire).
+      for (const fetchedApp of fetched) {
+        const key = fetchedApp.binary || fetchedApp.name
+        const rule = key ? rules[key] : undefined
+        if (!rule || rule === 'default' || rule === 'Master') continue
+        if ((fetchedApp.channel || '') !== rule && !isRoutingCooldown(Number(fetchedApp.id))) {
+          routeApp(Number(fetchedApp.id), rule, fetchedApp.binary).catch(() => {})
+        }
+      }
+
       // Smart auto-routing: for apps with no saved rule and no current channel,
       // use the backend's classification suggestion. Only fires on first appearance
       // (once routed, the rule is saved and this branch is never reached again).
@@ -118,13 +135,31 @@ export const useAudioStore = defineStore('audio', () => {
         const key = app.binary || app.name
         const rule = key ? rules[key] : undefined
         if (rule && rule !== 'default' && rule !== 'Master') continue
-        // Route without waiting — optimistic update happens inside routeApp
-        routeApp(app.id, app.auto_channel).catch(() => {})
+        // ★ FIX: apply cooldown guard to auto-routing branch too
+        if (isRoutingCooldown(app.id)) continue
+        routeApp(app.id, app.auto_channel, app.binary).catch(() => {})
       }
     } catch (e) { console.error('[opengg] fetchApps:', e) }
   }
   async function fetchDevices() {
     try { devices.value = await invoke<AudioDevice[]>('get_audio_devices') } catch {}
+  }
+
+  async function refreshVirtualAudioStatus() {
+    checkingVirtualAudio.value = true
+    try {
+      virtualAudioReady.value = await invoke<boolean>('check_virtual_audio_status')
+    } catch {
+      virtualAudioReady.value = false
+    } finally {
+      checkingVirtualAudio.value = false
+    }
+  }
+
+  function setVirtualAudioReady(ready: boolean) {
+    virtualAudioReady.value = ready
+    checkingVirtualAudio.value = false
+    if (!ready) stopPolling()
   }
 
   // ★ P7: setVolume marks the channel as recently changed
@@ -145,11 +180,31 @@ export const useAudioStore = defineStore('audio', () => {
     try { await invoke('set_app_volume', { appIndex, volume: vol }) } catch {}
   }
 
-  async function routeApp(appId: number, channel: string) {
-    await invoke('route_app', { appId, channel })
-    const app = allApps.value.find(a => a.id === appId)
-    const key = app?.binary || app?.name
-    if (key) usePersistenceStore().setAppRule(key, channel)
+  // Routing cooldown: prevents the same app from being re-routed within ROUTING_COOLDOWN_MS
+  // during polling. Fixes the infinite re-routing loop where pw-metadata reports success
+  // but the stream isn't actually moved, causing fetchApps() to trigger routeApp again
+  // every 2 seconds → thousands of command executions per minute.
+  const pendingRoutes = new Map<number, number>()
+  const ROUTING_COOLDOWN_MS = 8000
+
+  function isRoutingCooldown(appId: number): boolean {
+    const lastRoute = pendingRoutes.get(appId)
+    if (lastRoute && Date.now() - lastRoute < ROUTING_COOLDOWN_MS) return true
+    return false
+  }
+  function setRoutingDone(appId: number) { pendingRoutes.set(appId, Date.now()) }
+
+  async function routeApp(appId: number, channel: string, binary?: string) {
+    if (isRoutingCooldown(appId)) return
+    pendingRoutes.set(appId, Date.now())
+    try {
+      await invoke('route_app', { appId, channel, binary: binary || '' })
+      const app = allApps.value.find(a => a.id === appId)
+      const key = app?.binary || app?.name
+      if (key) usePersistenceStore().setAppRule(key, channel)
+    } finally {
+      setRoutingDone(appId)
+    }
   }
   async function unrouteApp(id: number) { await routeApp(id, 'default') }
 
@@ -166,6 +221,9 @@ export const useAudioStore = defineStore('audio', () => {
   function startDrag(app: AppInfo) { draggedApp.value = app }
   function endDrag() { draggedApp.value = null; routingInProgress.value = false }
 
+  function selectAppForRoute(app: AppInfo | null) { selectedAppForClickRoute.value = app }
+  function deselectApp() { selectedAppForClickRoute.value = null }
+
   async function dropOnChannel(channel: string) {
     if (!draggedApp.value || routingInProgress.value) return
     await dropOnChannelById(draggedApp.value.id, channel)
@@ -180,12 +238,13 @@ export const useAudioStore = defineStore('audio', () => {
     if (!app) { routingInProgress.value = false; return }
     const prev = app.channel || ''
     draggedApp.value = null
+    selectedAppForClickRoute.value = null
     // Optimistic update: replace array so Vue reactivity is guaranteed
     const targetChannel = (channel === 'Master') ? '' : channel
     allApps.value = allApps.value.map(a => a.id === appId ? { ...a, channel: targetChannel } : a)
     try {
       if (channel === 'Master') await unrouteApp(appId)
-      else await routeApp(appId, channel)
+      else await routeApp(appId, channel, app?.binary)
       // Delay refresh — let PipeWire settle before querying; optimistic update is already applied
       setTimeout(() => fetchApps(), 600)
     } catch (e) {
@@ -196,7 +255,7 @@ export const useAudioStore = defineStore('audio', () => {
     } finally { routingInProgress.value = false }
   }
 
-  async function startVuStream() { try { await invoke('start_vu_stream'); vuUnlisten = await listen<{ channels: Record<string, number> }>('vu-levels', e => { vuLevels.value = e.payload.channels }) } catch {} }
+  async function startVuStream() { try { await invoke('start_vu_stream'); vuUnlisten = await listen<{ channels: Array<[string, number]> }>('vu-levels', e => { const map: Record<string, number> = {}; for (const [ch, db] of e.payload.channels) { map[ch] = db } vuLevels.value = map }) } catch {} }
   async function stopVuStream() { try { await invoke('stop_vu_stream'); vuUnlisten?.(); vuUnlisten = null } catch {} }
 
   let interval: ReturnType<typeof setInterval> | null = null
@@ -210,12 +269,14 @@ export const useAudioStore = defineStore('audio', () => {
 
   return {
     allApps, devices, vuLevels, channelDevices, channelVolumes, channelMutes,
+    virtualAudioReady, checkingVirtualAudio,
     unassignedApps, channelMap, masterChannel, micChannel, outputDevices, inputDevices,
-    loading, error, draggedApp, routingInProgress,
+    loading, error, draggedApp, selectedAppForClickRoute, routingInProgress,
     fetchChannels, fetchApps, fetchDevices,
+    refreshVirtualAudioStatus, setVirtualAudioReady,
     setVolume, setMute, setAppVolume, routeApp, unrouteApp,
     setChannelDevice, restoreFromPersistence,
-    startDrag, endDrag, dropOnChannel, dropOnChannelById,
+    startDrag, endDrag, selectAppForRoute, deselectApp, dropOnChannel, dropOnChannelById,
     startPolling, stopPolling,
   }
 })

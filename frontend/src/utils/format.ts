@@ -26,3 +26,30 @@ export function fmtDate(created: string): string {
   if (isNaN(d.getTime())) return ''
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
+
+export function fmtTime(created: string): string {
+  if (!created) return ''
+  const d = new Date(created.replace(' ', 'T'))
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
+
+export function fmtDateTime(created: string): string {
+  if (!created) return ''
+  const d = new Date(created.replace(' ', 'T'))
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+export function clipDisplayTitle(customName: string, game: string, filename: string): string {
+  const trimmedCustom = customName.trim()
+  if (trimmedCustom) return trimmedCustom
+  if (game && game !== 'Unknown') return game
+  return filename.replace(/\.[^.]+$/, '')
+}
