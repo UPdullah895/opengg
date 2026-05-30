@@ -5,6 +5,7 @@ use tracing_subscriber::EnvFilter;
 mod audio;
 mod config;
 mod device;
+mod extensions;
 mod ipc;
 mod replay;
 
@@ -49,6 +50,9 @@ async fn main() -> Result<()> {
     // ── Register D-Bus ──────────────────────────────────────────
     let _conn = ipc::serve(audio_module, device_module, replay_module).await?;
     info!("D-Bus service: org.opengg.Daemon — ready");
+
+    // ── Module 4: Extensions ────────────────────────────────────
+    extensions::start().await;
 
     // ── Process watcher for auto-profile ────────────────────────
     if cfg.modules.device_enabled && !cfg.device.game_profiles.is_empty() {

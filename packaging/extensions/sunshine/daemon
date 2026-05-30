@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Sunshine Routing — OpenGG daemon extension
+#
+# Monitors for an active Sunshine streaming session and routes the OpenGG
+# Game/Chat/Media sinks into Sunshine's virtual audio sink so that
+# Moonlight clients receive the correct mixed audio.
+#
+# The OpenGG extension host keeps this script running and restarts it
+# automatically (with exponential backoff) if it exits.
+#
+# Dependencies: pactl, pw-link (PipeWire)
+
+set -euo pipefail
+
+SUNSHINE_SINK="sunshine"   # adjust to match your Sunshine audio sink name
+CHECK_INTERVAL=5           # seconds between polling cycles
+
+log() { echo "[sunshine-ext] $*"; }
+
+# Wait until Sunshine's sink appears, then wire up the OpenGG monitor ports.
+route_to_sunshine() {
+    local sink="$1"
+    for channel in Game Chat Media Aux; do
+        local opengg_monitor="OpenGG_${channel}:monitor_FL"
+        if pactl list sinks short | grep -q "OpenGG_${channel}"; then
+            pw-link "${opengg_monitor}" "${sink}:playback_FL" 2>/dev/null || true
+            pw-link "OpenGG_${channel}:monitor_FR" "${sink}:playback_FR" 2>/dev/null || true
+            log "Linked OpenGG_${channel} → ${sink}"
+        fi
+    done
+}
+
+log "Starting. Polling for Sunshine sink '${SUNSHINE_SINK}' every ${CHECK_INTERVAL}s…"
+
+linked=false
+while true; do
+    if pactl list sinks short 2>/dev/null | grep -q "${SUNSHINE_SINK}"; then
+        if ! $linked; then
+            log "Sunshine sink detected — routing audio"
+            route_to_sunshine "${SUNSHINE_SINK}"
+            linked=true
+        fi
+    else
+        if $linked; then
+            log "Sunshine sink gone — waiting for next session"
+            linked=false
+        fi
+    fi
+    sleep "${CHECK_INTERVAL}"
+done

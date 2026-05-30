@@ -28,6 +28,7 @@ export interface ExtManifest {
   icon?: string | null
   main?: string | null
   ui?: string | null
+  daemon?: string | null
 }
 
 interface ExtIIFEExport {

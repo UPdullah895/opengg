@@ -2210,8 +2210,8 @@ pub async fn open_locales_folder() -> Result<String, String> {
 /// Developer guide written to the extensions folder on first open.
 const EXTENSIONS_GUIDE: &str = r#"# How to Create an OpenGG Extension
 
-Extensions are self-contained directories placed here.
-Each one is an IIFE JavaScript bundle that registers a Vue 3 component on `window.__ext_<id>`.
+An extension is a **directory** placed here. It may have a frontend IIFE bundle,
+a daemon-side executable, or both. The folder name is treated as the extension's `id`.
 
 ---
 
@@ -2220,15 +2220,14 @@ Each one is an IIFE JavaScript bundle that registers a Vue 3 component on `windo
 ```
 ~/.local/share/opengg/extensions/
   my-extension/
-    manifest.json        ← required — metadata + capability declarations
-    index.iife.js        ← IIFE bundle built with Vite/Rollup
-    icon.svg             ← optional — shown in Settings → Extensions
+    manifest.json        ← required
+    daemon               ← optional: backend executable (shell, Python, binary…)
+    dist/index.iife.js   ← optional: frontend IIFE bundle
+    icon.svg             ← optional: shown in Settings → Extensions
     locales/
-      en.json            ← optional — i18n strings for this extension
+      en.json            ← optional: i18n strings
       ar.json
 ```
-
-The folder name is treated as the extension's `id`.
 
 ---
 
@@ -2242,8 +2241,9 @@ The folder name is treated as the extension's `id`.
   "version":     "1.0.0",
   "author":      "Your Name",
   "icon":        "icon.svg",
-  "main":        "index.iife.js",
-  "hasSettings": true
+  "main":        "dist/index.iife.js",
+  "hasSettings": true,
+  "daemon":      "daemon"
 }
 ```
 
@@ -2254,18 +2254,62 @@ The folder name is treated as the extension's `id`.
 | `description`  | ✗        | Short description (≤ 120 chars). |
 | `version`      | ✗        | SemVer string e.g. `"1.0.0"`. |
 | `author`       | ✗        | Author name or handle. |
-| `icon`         | ✗        | Icon filename relative to the extension root (SVG/PNG). |
-| `main`         | ✗        | IIFE bundle filename. Omit for metadata-only extensions. |
+| `icon`         | ✗        | Icon filename relative to the extension directory (SVG/PNG). |
+| `main`         | ✗        | Relative path to the IIFE bundle. Omit for daemon-only extensions. |
 | `hasSettings`  | ✗        | Set `true` to show a gear button that opens your settings panel. |
+| `daemon`       | ✗        | Relative path to a daemon-side executable. OpenGG starts it at launch and restarts it automatically if it exits (exponential backoff, max 60 s). |
 
 ---
 
-## IIFE Bundle Pattern
+## Daemon Extensions
+
+A daemon extension is any executable file — a shell script, Python script, or
+compiled binary. OpenGG's daemon supervises it: if it exits for any reason, it
+is restarted automatically.
+
+### Example: Sunshine Routing
+
+The `sunshine` extension (in `packaging/extensions/sunshine/`) is a working
+example. Its `daemon` script polls for an active Sunshine streaming sink and
+routes OpenGG audio channels into it:
+
+```sh
+#!/usr/bin/env bash
+# Poll for Sunshine's audio sink, then link OpenGG channels into it.
+while true; do
+    if pactl list sinks short | grep -q "sunshine"; then
+        pw-link "OpenGG_Game:monitor_FL" "sunshine:playback_FL" 2>/dev/null || true
+        pw-link "OpenGG_Game:monitor_FR" "sunshine:playback_FR" 2>/dev/null || true
+    fi
+    sleep 5
+done
+```
+
+Install it by copying the directory into your extensions folder:
+
+```sh
+cp -r /path/to/opengg/packaging/extensions/sunshine \
+      ~/.local/share/opengg/extensions/
+```
+
+The file must have its executable bit set (`chmod +x daemon`). The OpenGG daemon
+picks it up the next time it starts.
+
+### What a daemon extension can do
+
+- React to PipeWire/PulseAudio events via `pactl`, `pw-cli`, `pw-dump`
+- Call OpenGG's D-Bus interface (`org.opengg.Daemon.*`)
+- Run any system command — RGB control, network requests, file watchers
+- Communicate with the frontend via D-Bus or a local socket
+
+---
+
+## Frontend Extensions (IIFE Bundle)
 
 Your bundle must set `window.__ext_<id>` (dashes → underscores in the key):
 
 ```js
-// index.iife.js
+// dist/index.iife.js
 (function () {
   const { defineComponent, ref, h } = window.Vue;
 
@@ -2287,41 +2331,40 @@ Your bundle must set `window.__ext_<id>` (dashes → underscores in the key):
 })();
 ```
 
-`window.Vue` is populated by OpenGG before any extension loads and exposes the
-full Vue 3 composition API (`ref`, `computed`, `defineComponent`, `h`, …).
+`window.Vue` exposes the full Vue 3 composition API (`ref`, `computed`,
+`defineComponent`, `h`, …).
 
----
-
-## Extension API — window.opengg
-
-OpenGG exposes a restricted bridge for read-only Tauri commands:
+### Extension API — window.opengg
 
 ```js
 const clips = await window.opengg.invoke('get_clip_list');
 const port  = window.opengg.mediaPort;  // local media-server port
 ```
 
-Only a whitelist of non-destructive commands are allowed. Calling a command
-not on the whitelist returns a rejected promise with an explanatory error.
+Only non-destructive commands are allowed. Calling a command outside the
+whitelist returns a rejected promise.
+
+---
+
+## Extensions with Both Frontend and Daemon
+
+A single extension can declare both `main` and `daemon`. The daemon handles
+system-level work; the frontend settings panel lets the user configure it.
+Both are started/loaded independently — either can be omitted.
 
 ---
 
 ## Locales
 
-Place `locales/<lang>.json` files alongside `manifest.json`.
-OpenGG merges them into the running vue-i18n instance under the namespace
-`ext.<your-extension-id>.*` so strings don't collide with core translations.
+Place `locales/<lang>.json` alongside `manifest.json`. OpenGG merges them into
+vue-i18n under `ext.<id>.*`:
 
 ```json
 // locales/en.json
-{
-  "settingsTitle": "My Extension Settings",
-  "countLabel":    "Count"
-}
+{ "settingsTitle": "My Extension Settings" }
 ```
 
-Inside your component access them via the injected i18n instance or
-`window.Vue.inject('$i18n')`.
+Access via `window.Vue.inject('$i18n')` inside your component.
 
 ---
 
@@ -2338,7 +2381,6 @@ export default {
       fileName: () => 'index.iife.js',
     },
     rollupOptions: {
-      // Exclude Vue from the bundle — OpenGG provides it via window.Vue
       external: ['vue'],
       output: { globals: { vue: 'Vue' } },
     },
@@ -2346,7 +2388,14 @@ export default {
 };
 ```
 
-See `extension-template/` in the OpenGG repository for a complete starter.
+See `extension-template/` in the OpenGG repository for a complete Vue starter.
+
+---
+
+## Quick scaffold
+
+Run `packaging/create-extension.sh` from the OpenGG repository to create a
+new extension directory with the correct structure in one step.
 "#;
 
 fn extensions_dir() -> PathBuf {
@@ -2373,6 +2422,8 @@ pub struct ExtensionInfo {
     pub main: Option<String>,
     #[serde(default)]
     pub ui: Option<String>,
+    #[serde(default)]
+    pub daemon: Option<String>,
 }
 
 /// Creates `~/.local/share/opengg/extensions/` if needed, writes the developer
@@ -2433,6 +2484,7 @@ pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
             icon:         v["icon"].as_str().map(|s| s.to_string()),
             main:         v["main"].as_str().map(|s| s.to_string()),
             ui:           v["ui"].as_str().map(|s| s.to_string()),
+            daemon:       v["daemon"].as_str().map(|s| s.to_string()),
         });
     }
 

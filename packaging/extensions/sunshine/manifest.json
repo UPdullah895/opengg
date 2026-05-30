@@ -1,0 +1,8 @@
+{
+  "id": "sunshine",
+  "name": "Sunshine Routing",
+  "description": "Routes OpenGG audio sinks into Sunshine/Moonlight when streaming starts.",
+  "version": "1.0.0",
+  "author": "OpenGG Community",
+  "daemon": "daemon"
+}
