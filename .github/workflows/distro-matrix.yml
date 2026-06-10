@@ -1,0 +1,69 @@
+name: Distro Matrix Build
+
+# Catch distro-specific build breakage (different glibc, webkit versions, package names).
+# This is a heavier matrix; runs on PR and weekly schedule to avoid CI strain.
+on:
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Weekly on Monday 00:00 UTC
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  distro-matrix:
+    name: Build on ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
+    timeout-minutes: 45
+    fail-fast: false
+    strategy:
+      matrix:
+        include:
+          - distro: Debian Stable
+            container: debian:stable
+            setup-cmd: |
+              apt-get update
+              apt-get install -y curl build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+          - distro: Fedora Latest
+            container: fedora:latest
+            setup-cmd: |
+              dnf install -y curl gcc gcc-c++ make pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel patchelf
+
+          - distro: Arch Linux
+            container: archlinux:latest
+            setup-cmd: |
+              pacman -Syu --noconfirm curl base-devel pkgconf openssl webkit2gtk-4.1 libayatana-appindicator librsvg patchelf
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: ${{ matrix.setup-cmd }}
+
+      - name: Install Rust via rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          source "$HOME/.cargo/env"
+          rustc --version
+          cargo --version
+
+      - name: Verify Rust is in PATH
+        run: |
+          source "$HOME/.cargo/env"
+          which cargo
+
+      - name: Cargo check daemon
+        run: |
+          source "$HOME/.cargo/env"
+          cd daemon && cargo check
+
+      - name: Cargo check Tauri backend
+        run: |
+          source "$HOME/.cargo/env"
+          cd frontend/src-tauri && cargo check
