@@ -40,7 +40,7 @@ pub async fn scan_clips(dir: &Path) -> Result<Vec<Clip>> {
         })
         .collect();
 
-    entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().map(|m| m.modified().ok()).flatten()));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
 
     for entry in entries {
         let path = entry.path();

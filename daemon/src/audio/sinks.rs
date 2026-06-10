@@ -273,7 +273,7 @@ fn setup_mic_loopback() -> Result<()> {
         tracing::info!("Mic loopback active: {hw_source} → OpenGG_Mic");
         Ok(())
     } else {
-        anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim().to_string())
+        anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim())
     }
 }
 

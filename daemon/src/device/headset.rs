@@ -124,8 +124,7 @@ impl HeadsetManager {
         parsed
             .devices
             .into_iter()
-            .enumerate()
-            .map(|(_idx, d)| {
+            .map(|d| {
                 let vid = parse_hex_u16(d.id_vendor.as_deref().unwrap_or(""));
                 let pid = parse_hex_u16(d.id_product.as_deref().unwrap_or(""));
 

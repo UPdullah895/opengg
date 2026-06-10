@@ -1,24 +1,24 @@
 #![allow(dead_code)]
-/// OpenGG DSP Effects Engine — EasyEffects-inspired architecture
-///
-/// Architecture overview:
-/// ──────────────────────────────────────────────────────────────
-/// Each virtual sink gets a FilterGraph that chains PipeWire filter nodes:
-///
-///   [app sink-input] → [pw-loopback passthrough] → [LV2 EQ] → [LV2 Compressor]
-///                                                → [rnnoise] → [output sink]
-///
-/// PipeWire filter chains use `pw-loopback` nodes wired together with the
-/// PipeWire session manager (WirePlumber rules or direct pw-link calls).
-///
-/// LV2 plugins (compressor, EQ, gate) are hosted via the `lilv` crate.
-/// Add to daemon/Cargo.toml under [dependencies]:
-///   lilv = { version = "0.6", optional = true }
-///   [features]
-///   lv2 = ["lilv"]
-///
-/// rnnoise is loaded as a PipeWire module rather than an LV2 plugin:
-///   pactl load-module module-echo-cancel aec_method=rnnoise
+//! OpenGG DSP Effects Engine — EasyEffects-inspired architecture
+//!
+//! Architecture overview:
+//! ──────────────────────────────────────────────────────────────
+//! Each virtual sink gets a FilterGraph that chains PipeWire filter nodes:
+//!
+//!   [app sink-input] → [pw-loopback passthrough] → [LV2 EQ] → [LV2 Compressor]
+//!                                                → [rnnoise] → [output sink]
+//!
+//! PipeWire filter chains use `pw-loopback` nodes wired together with the
+//! PipeWire session manager (WirePlumber rules or direct pw-link calls).
+//!
+//! LV2 plugins (compressor, EQ, gate) are hosted via the `lilv` crate.
+//! Add to daemon/Cargo.toml under [dependencies]:
+//!   lilv = { version = "0.6", optional = true }
+//!   [features]
+//!   lv2 = ["lilv"]
+//!
+//! rnnoise is loaded as a PipeWire module rather than an LV2 plugin:
+//!   pactl load-module module-echo-cancel aec_method=rnnoise
 
 use std::process::Command;
 
