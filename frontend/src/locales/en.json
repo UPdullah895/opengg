@@ -466,6 +466,22 @@
       "discord": "Discord",
       "website": "Website",
       "contributors": "OpenGG is maintained by the community. Contributions are welcome!"
+    },
+    "deps": {
+      "title": "System Dependencies",
+      "loading": "Loading…",
+      "missingGsr": "gpu-screen-recorder not found — recording disabled.",
+      "missingFfmpeg": "ffmpeg not found — export and thumbnails disabled.",
+      "feature": {
+        "recording": "Recording & Replay Buffer",
+        "export": "Export & Thumbnails",
+        "mediaInfo": "Media Analysis",
+        "audioMixer": "Audio Mixer",
+        "audioRouting": "Audio Routing",
+        "equalizer": "10-Band Equalizer",
+        "headset": "Headset Control",
+        "windowTools": "Window Tools (X11)"
+      }
     }
   },
   "clips": {

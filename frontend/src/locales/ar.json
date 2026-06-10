@@ -434,6 +434,22 @@
       "discord": "Discord",
       "website": "الموقع الإلكتروني",
       "contributors": "يُصان OpenGG من قِبل المجتمع. المساهمات مرحب بها!"
+    },
+    "deps": {
+      "title": "تبعيات النظام",
+      "loading": "جاري التحميل…",
+      "missingGsr": "لم يتم العثور على gpu-screen-recorder — التسجيل معطل.",
+      "missingFfmpeg": "لم يتم العثور على ffmpeg — التصدير والصور المصغرة معطلة.",
+      "feature": {
+        "recording": "التسجيل وحفظ المقطع",
+        "export": "التصدير والصور المصغرة",
+        "mediaInfo": "تحليل الوسائط",
+        "audioMixer": "خلاط الصوت",
+        "audioRouting": "توجيه الصوت",
+        "equalizer": "معادل 10 نطاقات",
+        "headset": "التحكم في سماعة الرأس",
+        "windowTools": "أدوات النافذة (X11)"
+      }
     }
   },
   "onboarding": {

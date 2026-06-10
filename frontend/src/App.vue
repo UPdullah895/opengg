@@ -27,6 +27,7 @@ import ToastContainer from './components/ToastContainer.vue'
 import GlobalModal from './components/GlobalModal.vue'
 import TutorialModal from './components/TutorialModal.vue'
 import { useToast } from './composables/useToast'
+import { loadDependencyStatus } from './composables/useDependencyStatus'
 
 const { t, locale } = useI18n()
 
@@ -169,6 +170,7 @@ onMounted(async () => {
   mediaToken.value = await getMediaToken()
   installAudioUnlocker()
   loadUserLocales()
+  await loadDependencyStatus()
   if (persist.state.settings.steamLibraryAccess === 'granted') {
     void useReplayStore().fetchSteamGames()
   }

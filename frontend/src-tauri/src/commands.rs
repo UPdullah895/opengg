@@ -5624,3 +5624,39 @@ pub async fn get_steam_games() -> Result<Vec<SteamGameEntry>, String> {
     Ok(games)
 }
 
+// ══════════════════════════════════════════════════════════════
+//  ★ EPIC 6: Dependency Probing & Graceful Degradation
+// ══════════════════════════════════════════════════════════════
+
+#[derive(Serialize, Clone, Debug)]
+pub struct DependencyStatus {
+    pub binary: String,
+    pub available: bool,
+    pub feature: String,
+}
+
+#[command]
+pub fn get_dependency_status() -> Result<Vec<DependencyStatus>, String> {
+    let deps = vec![
+        ("gpu-screen-recorder", "recording"),
+        ("ffmpeg", "export"),
+        ("ffprobe", "mediaInfo"),
+        ("pactl", "audioMixer"),
+        ("pw-link", "audioRouting"),
+        ("jalv", "equalizer"),
+        ("headsetcontrol", "headset"),
+        ("xdotool", "windowTools"),
+    ];
+
+    let mut results = Vec::new();
+    for (binary, feature) in deps {
+        results.push(DependencyStatus {
+            binary: binary.to_string(),
+            available: subprocess::is_available(binary),
+            feature: feature.to_string(),
+        });
+    }
+
+    Ok(results)
+}
+

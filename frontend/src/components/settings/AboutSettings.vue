@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { deps } from '../../composables/useDependencyStatus'
 
 const { t } = useI18n()
 
@@ -62,10 +63,92 @@ defineEmits<{ navigate: [page: string] }>()
       </div>
     </div>
 
+    <!-- System Dependencies -->
+    <div class="deps-card">
+      <h3 style="margin:0 0 12px;font-size:14px;font-weight:700;color:var(--text)">{{ t('settings.deps.title') }}</h3>
+      <div v-if="deps.length === 0" style="font-size:12px;color:var(--text-secondary);padding:8px 0">
+        {{ t('settings.deps.loading') }}
+      </div>
+      <div v-else class="deps-list">
+        <div v-for="dep in deps" :key="dep.binary" class="dep-row">
+          <div class="dep-check" :class="{ available: dep.available, missing: !dep.available }">
+            {{ dep.available ? '✓' : '✗' }}
+          </div>
+          <div class="dep-info">
+            <div class="dep-binary">{{ dep.binary }}</div>
+            <div class="dep-feature">{{ t(`settings.deps.feature.${dep.feature}`) }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <p class="about-contributors">{{ t('settings.about.credits') }}</p>
   </section>
 </template>
 
 <style scoped>
-/* Inherited from parent */
+.deps-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.deps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dep-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.02));
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.dep-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.dep-check.available {
+  background-color: color-mix(in srgb, var(--success, #10b981) 15%, var(--bg-card));
+  color: var(--success, #10b981);
+}
+
+.dep-check.missing {
+  background-color: color-mix(in srgb, var(--danger, #ef4444) 15%, var(--bg-card));
+  color: var(--danger, #ef4444);
+}
+
+.dep-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dep-binary {
+  font-weight: 500;
+  color: var(--text);
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.dep-feature {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  font-size: 11px;
+}
 </style>

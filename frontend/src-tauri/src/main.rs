@@ -306,6 +306,8 @@ fn main() {
             commands::set_headset_mic_mute_led, commands::set_headset_volume_limiter,
             commands::set_headset_bt_powered_on, commands::set_headset_bt_call_volume,
             commands::set_headset_eq_preset, commands::set_headset_eq_curve,
+            // ★ Dependency probing
+            commands::get_dependency_status,
         ])
         .setup(|app| {
             // ── Managed states ──

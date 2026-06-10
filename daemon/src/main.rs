@@ -24,6 +24,20 @@ async fn main() -> Result<()> {
     let cfg = config::load()?;
     info!("Config loaded from {:?}", config::config_path());
 
+    // ── Probe runtime dependencies ──────────────────────────────
+    let required_bins = vec![
+        ("pactl", "audio mixer"),
+        ("pw-link", "audio routing"),
+        ("gpu-screen-recorder", "replay/clipping"),
+        ("headsetcontrol", "headset control"),
+        ("ffmpeg", "clip export"),
+    ];
+    for (bin, feature) in required_bins {
+        if !subprocess::is_available(bin) {
+            warn!("{} not found — {} disabled", bin, feature);
+        }
+    }
+
     // ── Module 1: Audio Hub ─────────────────────────────────────
     let audio_module = if cfg.modules.audio_enabled {
         info!("Audio Hub module: ENABLED");
