@@ -7,6 +7,7 @@ mod config;
 mod device;
 mod extensions;
 mod ipc;
+mod platform;
 mod replay;
 mod subprocess;
 

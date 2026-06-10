@@ -1,4 +1,4 @@
-mod recorder;
+pub mod recorder;
 mod clips;
 mod hotkey;
 mod dbus;

@@ -29,6 +29,23 @@ impl DeviceInterface {
             ratbag: Arc::new(Mutex::new(ratbag)),
         }
     }
+
+    /// Get all connected devices as JSON string (public method for trait impls).
+    pub async fn get_devices_json(&self) -> String {
+        let mut devices = vec![];
+
+        // Mice via ratbagd
+        if let Some(ref mgr) = *self.ratbag.lock().await {
+            let mut mice = mgr.list_devices().await;
+            devices.append(&mut mice);
+        }
+
+        // Headsets via headsetcontrol CLI
+        let mut headsets = HeadsetManager::list_devices();
+        devices.append(&mut headsets);
+
+        serde_json::to_string(&devices).unwrap_or_else(|_| "[]".into())
+    }
 }
 
 /// Parse a headset device ID of the form "headset:{vid}:{pid}" and return (vid, pid).
@@ -44,19 +61,7 @@ fn parse_headset_id(device_id: &str) -> Option<(u16, u16)> {
 #[interface(name = "org.opengg.Daemon.Device")]
 impl DeviceInterface {
     async fn get_devices(&self) -> String {
-        let mut devices = vec![];
-
-        // Mice via ratbagd
-        if let Some(ref mgr) = *self.ratbag.lock().await {
-            let mut mice = mgr.list_devices().await;
-            devices.append(&mut mice);
-        }
-
-        // Headsets via headsetcontrol CLI
-        let mut headsets = HeadsetManager::list_devices();
-        devices.append(&mut headsets);
-
-        serde_json::to_string(&devices).unwrap_or_else(|_| "[]".into())
+        self.get_devices_json().await
     }
 
     async fn set_dpi(&self, device_id: &str, dpi: u32) -> zbus::fdo::Result<()> {

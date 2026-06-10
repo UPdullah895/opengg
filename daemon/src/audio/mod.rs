@@ -1,6 +1,6 @@
 mod hub;
-mod sinks;
-mod routing;
+pub mod sinks;
+pub mod routing;
 pub mod effects;
 
 pub use hub::AudioHub;
