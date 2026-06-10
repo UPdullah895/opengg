@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
+use crate::subprocess;
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "ts"];
 
@@ -86,7 +86,7 @@ pub async fn generate_thumbnail(video: &Path, thumb_dir: &Path) -> Result<PathBu
         return Ok(thumb_path);
     }
 
-    Command::new("ffmpeg")
+    subprocess::tokio_command("ffmpeg")
         .args([
             "-y", "-i", video.to_str().unwrap_or(""),
             "-ss", "2",
@@ -109,7 +109,7 @@ pub async fn trim_clip(
     start_sec: f64,
     end_sec: f64,
 ) -> Result<()> {
-    let status = Command::new("ffmpeg")
+    let status = subprocess::tokio_command("ffmpeg")
         .args([
             "-y",
             "-i", input.to_str().unwrap_or(""),
@@ -135,7 +135,7 @@ pub async fn trim_clip(
 }
 
 async fn probe_duration(path: &Path) -> Result<f64> {
-    let output = Command::new("ffprobe")
+    let output = subprocess::tokio_command("ffprobe")
         .args([
             "-v", "quiet",
             "-show_entries", "format=duration",
@@ -152,7 +152,7 @@ async fn probe_duration(path: &Path) -> Result<f64> {
 }
 
 async fn probe_dimensions(path: &Path) -> Result<(u32, u32)> {
-    let output = Command::new("ffprobe")
+    let output = subprocess::tokio_command("ffprobe")
         .args([
             "-v", "quiet",
             "-select_streams", "v:0",

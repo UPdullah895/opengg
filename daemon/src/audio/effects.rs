@@ -20,7 +20,7 @@
 //! rnnoise is loaded as a PipeWire module rather than an LV2 plugin:
 //!   pactl load-module module-echo-cancel aec_method=rnnoise
 
-use std::process::Command;
+use crate::subprocess;
 
 // ── LV2 plugin URIs (Linux Studio Plugins) ────────────────────────────────
 pub const LSP_COMPRESSOR_URI: &str = "http://lsp-plug.in/plugins/lv2/compressor_stereo";
@@ -119,7 +119,7 @@ impl FilterGraph {
 /// Returns the pactl module index for later unloading.
 fn load_rnnoise_module(channel: &str) -> Result<u32, String> {
     let sink_name = format!("opengg_{}", channel.to_lowercase());
-    let out = Command::new("pactl")
+    let out = subprocess::command("pactl")
         .args([
             "load-module", "module-echo-cancel",
             &format!("sink_name={sink_name}_rnnoise"),
@@ -145,7 +145,7 @@ fn spawn_lv2_node(_channel: &str, uri: &str) -> Result<u32, String> {
 /// Unload a PipeWire module by its index.
 fn unload_pw_module(index: u32) {
     if index == 0 { return; }
-    let _ = Command::new("pactl").args(["unload-module", &index.to_string()]).status();
+    let _ = subprocess::command("pactl").args(["unload-module", &index.to_string()]).status();
 }
 
 // ── Public API used by D-Bus handlers ─────────────────────────────────────

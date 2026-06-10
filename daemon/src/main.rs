@@ -8,6 +8,7 @@ mod device;
 mod extensions;
 mod ipc;
 mod replay;
+mod subprocess;
 
 #[tokio::main]
 async fn main() -> Result<()> {

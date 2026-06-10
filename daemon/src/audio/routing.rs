@@ -2,9 +2,9 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::process::Command;
 
 use super::sinks::AppInfo;
+use crate::subprocess;
 
 #[derive(Debug, Clone)]
 pub struct StreamInfo {
@@ -19,7 +19,7 @@ pub struct StreamInfo {
 /// Build a sink-index → sink-name map from `pactl list sinks`.
 /// Used to resolve the integer `sink` field in sink-input records.
 fn build_sink_map() -> HashMap<u32, String> {
-    let Ok(out) = Command::new("pactl").args(["-f", "json", "list", "sinks"]).output() else {
+    let Ok(out) = subprocess::command("pactl").args(["-f", "json", "list", "sinks"]).output() else {
         return HashMap::new();
     };
     let Ok(sinks) = serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout) else {
@@ -60,7 +60,7 @@ fn is_internal_stream(app_name: Option<&str>, media_name: Option<&str>, binary_n
 }
 
 pub fn list_streams() -> Result<Vec<StreamInfo>> {
-    let output = Command::new("pactl")
+    let output = subprocess::command("pactl")
         .args(["-f", "json", "list", "sink-inputs"])
         .output()
         .context("pactl not found")?;
@@ -115,7 +115,7 @@ pub fn list_streams() -> Result<Vec<StreamInfo>> {
 }
 
 fn list_streams_text() -> Result<Vec<StreamInfo>> {
-    let output = Command::new("pactl").args(["list", "sink-inputs"]).output()?;
+    let output = subprocess::command("pactl").args(["list", "sink-inputs"]).output()?;
     let text = String::from_utf8_lossy(&output.stdout);
     let mut streams = Vec::new();
     let mut current: Option<StreamInfo> = None;
@@ -161,14 +161,14 @@ fn extract_val(line: &str) -> String {
 
 pub fn route_stream(stream_id: u32, channel: &str) -> Result<()> {
     let target = if channel == "default" {
-        let o = Command::new("pactl").args(["get-default-sink"]).output()?;
+        let o = subprocess::command("pactl").args(["get-default-sink"]).output()?;
         String::from_utf8_lossy(&o.stdout).trim().to_string()
     } else {
         format!("OpenGG_{channel}")
     };
     // ★ FIX: check exit code — pactl returns non-zero on failure (wrong index,
     // sink not found, etc.) but .output() only errors if the binary isn't found.
-    let out = Command::new("pactl")
+    let out = subprocess::command("pactl")
         .args(["move-sink-input", &stream_id.to_string(), &target])
         .output()
         .context(format!("pactl not found while routing {stream_id} → {target}"))?;

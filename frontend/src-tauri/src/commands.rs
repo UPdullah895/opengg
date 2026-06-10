@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Manager};
+use crate::subprocess;
 
 pub(crate) const AU_PATH: &str = "/org/opengg/Daemon/Audio";
 pub(crate) const AU_IFACE: &str = "org.opengg.Daemon.Audio";
@@ -5000,7 +5001,7 @@ pub(crate) async fn call_dbus_void(
 /// Synchronous process runner — safe for sync contexts only.
 /// Async commands MUST use `run_cmd_async` to avoid blocking the Tokio runtime.
 pub(crate) fn run_cmd_sync(c: &str, a: &[&str]) -> Result<String, String> {
-    let o = Command::new(c)
+    let o = subprocess::command(c)
         .args(a)
         .output()
         .map_err(|e| format!("{c}:{e}"))?;
@@ -5035,7 +5036,7 @@ pub(crate) async fn run_command_output_async(
     let cmd = cmd.to_string();
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     tokio::task::spawn_blocking(move || {
-        Command::new(&cmd)
+        subprocess::command(&cmd)
             .args(&args)
             .output()
             .map_err(|e| format!("{cmd}: {e}"))

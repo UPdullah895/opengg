@@ -12,9 +12,9 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use crate::subprocess;
 
 /// Minimum interval between `pactl` spawns for the same channel.
 /// Prevents process storm during slider drags (≤10 spawns/sec instead of 60+).
@@ -144,7 +144,7 @@ impl SinkManager {
         let vol_pct = (volume * 100.0) as u32;
         let pct_str = format!("{vol_pct}%");
         // All channels (including Mic) now have a virtual null-sink — control it uniformly.
-        let _ = Command::new("pactl")
+        let _ = subprocess::command("pactl")
             .args(["set-sink-volume", &format!("OpenGG_{channel}"), &pct_str])
             .output();
         Ok(())
@@ -155,7 +155,7 @@ impl SinkManager {
             info.muted = muted;
         }
         let val = if muted { "1" } else { "0" };
-        let _ = Command::new("pactl")
+        let _ = subprocess::command("pactl")
             .args(["set-sink-mute", &format!("OpenGG_{channel}"), val])
             .output();
         Ok(())
@@ -170,7 +170,7 @@ impl Drop for SinkManager {
     fn drop(&mut self) {
         if let Ok(ids) = self.module_ids.lock() {
             for id in ids.iter() {
-                let _ = Command::new("pactl")
+                let _ = subprocess::command("pactl")
                     .args(["unload-module", &id.to_string()])
                     .status();
             }
@@ -180,7 +180,7 @@ impl Drop for SinkManager {
 
 /// Check if a PipeWire sink with this name already exists.
 fn sink_exists(name: &str) -> bool {
-    if let Ok(output) = Command::new("pactl").args(["list", "sinks", "short"]).output() {
+    if let Ok(output) = subprocess::command("pactl").args(["list", "sinks", "short"]).output() {
         let text = String::from_utf8_lossy(&output.stdout);
         return text.lines().any(|line| line.contains(name));
     }
@@ -204,7 +204,7 @@ fn create_null_sink(sink_name: &str, description: &str) -> Result<u32> {
         sink_prop_value(&display_name),
         sink_prop_value(&display_name)
     );
-    let output = Command::new("pactl")
+    let output = subprocess::command("pactl")
         .args([
             "load-module",
             "module-null-sink",
@@ -236,7 +236,7 @@ fn create_null_sink(sink_name: &str, description: &str) -> Result<u32> {
 ///                                          (future jalv DSP chain: gate → compressor → EQ)
 fn setup_mic_loopback() -> Result<()> {
     // Discover the hardware source (never let it be our own virtual sink)
-    let hw_out = Command::new("pactl")
+    let hw_out = subprocess::command("pactl")
         .args(["get-default-source"])
         .output()
         .context("pactl get-default-source failed")?;
@@ -250,14 +250,14 @@ fn setup_mic_loopback() -> Result<()> {
     }
 
     // Idempotency: check if our loopback already exists
-    let list_out = Command::new("pactl").args(["list", "modules", "short"]).output()?;
+    let list_out = subprocess::command("pactl").args(["list", "modules", "short"]).output()?;
     let list = String::from_utf8_lossy(&list_out.stdout);
     if list.lines().any(|l| l.contains("module-loopback") && l.contains("OpenGG_Mic")) {
         tracing::info!("Mic loopback already active — skipping");
         return Ok(());
     }
 
-    let out = Command::new("pactl")
+    let out = subprocess::command("pactl")
         .args([
             "load-module", "module-loopback",
             &format!("source={hw_source}"),
@@ -279,7 +279,7 @@ fn setup_mic_loopback() -> Result<()> {
 
 /// Link each virtual sink's monitor output to the default audio device.
 pub fn setup_loopbacks() -> Result<()> {
-    let output = Command::new("pactl")
+    let output = subprocess::command("pactl")
         .args(["get-default-sink"])
         .output()
         .context("pactl not found")?;
@@ -297,7 +297,7 @@ pub fn setup_loopbacks() -> Result<()> {
         let sink_name = format!("OpenGG_{ch}");
         for port in ["FL", "FR"] {
             // pw-link is idempotent — linking an already-linked pair does nothing
-            let result = Command::new("pw-link")
+            let result = subprocess::command("pw-link")
                 .args([
                     &format!("{sink_name}:monitor_{port}"),
                     &format!("{default_sink}:playback_{port}"),

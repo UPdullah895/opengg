@@ -3,9 +3,9 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use crate::subprocess;
 
 use super::types::{DeviceInfo, DeviceType, EqMeta};
 
@@ -94,7 +94,7 @@ impl HeadsetManager {
         let path_env = std::env::var("PATH")
             .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
 
-        let output = match Command::new("headsetcontrol")
+        let output = match subprocess::command("headsetcontrol")
             .env("PATH", path_env)
             .args(["--output", "json"])
             .output()
@@ -176,7 +176,7 @@ impl HeadsetManager {
         let device_arg = vid_pid_arg(vid, pid);
         let mut all_args: Vec<&str> = vec!["--device", &device_arg];
         all_args.extend(args);
-        let output = Command::new("headsetcontrol")
+        let output = subprocess::command("headsetcontrol")
             .env("PATH", path_env)
             .args(&all_args)
             .output()
