@@ -1254,7 +1254,14 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
     let master_monitor = run_cmd_async("pactl", &["get-default-sink"]).await
         .map(|s| format!("{s}.monitor"))
         .unwrap_or_default();
-    let mic_source = run_cmd_async("pactl", &["get-default-source"]).await.unwrap_or_default();
+
+    // Mic source: prefer OpenGG_Virtual_Mic when it exists, fall back to hardware default
+    let mut mic_source = run_cmd_async("pactl", &["get-default-source"]).await.unwrap_or_default();
+    if let Ok(sources_list) = run_cmd_async("pactl", &["list", "sources", "short"]).await {
+        if sources_list.lines().any(|l| l.contains("OpenGG_Virtual_Mic")) {
+            mic_source = "OpenGG_Virtual_Mic".to_string();
+        }
+    }
 
     // Guard: only connect to sources that currently exist.
     let known_sources: std::collections::HashSet<String> = {

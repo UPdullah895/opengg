@@ -227,11 +227,15 @@ fn create_null_sink(sink_name: &str, description: &str) -> Result<u32> {
 }
 
 /// Route the hardware microphone into the OpenGG_Mic virtual null-sink via a loopback module.
+/// Also creates a virtual source (OpenGG_Virtual_Mic) that apps can select as an input device.
 ///
 /// Graph after this call:
 ///   [@DEFAULT_SOURCE@] → [module-loopback] → [OpenGG_Mic null-sink]
 ///                                                     ↓
-///                                          OpenGG_Mic.monitor  ← GSR `-a OpenGG_Mic`
+///                                          OpenGG_Mic.monitor
+///                                                     ↓
+///                     [module-remap-source] ← OpenGG_Mic.monitor
+///                     (OpenGG_Virtual_Mic)    ← Apps can select this as input
 ///                                                     ↓
 ///                                          (future jalv DSP chain: gate → compressor → EQ)
 fn setup_mic_loopback() -> Result<()> {
@@ -252,28 +256,68 @@ fn setup_mic_loopback() -> Result<()> {
     // Idempotency: check if our loopback already exists
     let list_out = subprocess::command("pactl").args(["list", "modules", "short"]).output()?;
     let list = String::from_utf8_lossy(&list_out.stdout);
-    if list.lines().any(|l| l.contains("module-loopback") && l.contains("OpenGG_Mic")) {
-        tracing::info!("Mic loopback already active — skipping");
+    let loopback_exists = list.lines().any(|l| l.contains("module-loopback") && l.contains("OpenGG_Mic"));
+
+    if !loopback_exists {
+        let out = subprocess::command("pactl")
+            .args([
+                "load-module", "module-loopback",
+                &format!("source={hw_source}"),
+                "sink=OpenGG_Mic",
+                "latency_msec=10",
+                "source_dont_move=true",
+                "sink_dont_move=true",
+            ])
+            .output()
+            .context("pactl load-module module-loopback failed")?;
+
+        if !out.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim())
+        }
+        tracing::info!("Mic loopback active: {hw_source} → OpenGG_Mic");
+    } else {
+        tracing::info!("Mic loopback already active — skipping loopback creation");
+    }
+
+    // ── Virtual mic source creation (apps can select this as input) ──
+    // Even if loopback was already created, we still need to ensure the virtual source exists
+    // (e.g., daemon restart with lingering sinks — the remap source must be ensured).
+
+    // Idempotency: check if our remap source already exists
+    let sources_out = subprocess::command("pactl")
+        .args(["list", "sources", "short"])
+        .output()?;
+    let sources = String::from_utf8_lossy(&sources_out.stdout);
+    if sources.lines().any(|l| l.contains("OpenGG_Virtual_Mic")) {
+        tracing::info!("Virtual mic source already exists — skipping creation");
         return Ok(());
     }
 
+    // Load remap-source module to expose OpenGG_Mic.monitor as a selectable input device
+    // The description is quoted per POSIX shell rules but we pass it as a single argv element
+    // (pactl arg vectors never go through a shell), so we use the same sink_prop_value quoting helper
+    let mic_prop = sink_prop_value("OpenGG Mic");
     let out = subprocess::command("pactl")
         .args([
-            "load-module", "module-loopback",
-            &format!("source={hw_source}"),
-            "sink=OpenGG_Mic",
-            "latency_msec=10",
-            "source_dont_move=true",
-            "sink_dont_move=true",
+            "load-module",
+            "module-remap-source",
+            "master=OpenGG_Mic.monitor",
+            "source_name=OpenGG_Virtual_Mic",
+            &format!("source_properties=device.description={mic_prop}"),
         ])
         .output()
-        .context("pactl load-module module-loopback failed")?;
+        .context("pactl load-module module-remap-source failed")?;
 
     if out.status.success() {
-        tracing::info!("Mic loopback active: {hw_source} → OpenGG_Mic");
+        tracing::info!("Virtual mic source created: OpenGG_Virtual_Mic (master=OpenGG_Mic.monitor)");
         Ok(())
     } else {
-        anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim())
+        // Non-fatal: the monitor path (GSR, VU) still works without the virtual source
+        tracing::warn!(
+            "Failed to create virtual mic source: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        Ok(())
     }
 }
 
