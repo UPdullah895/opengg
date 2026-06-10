@@ -4,7 +4,7 @@ import { ref, computed, onMounted, onBeforeUnmount, inject, watch, onActivated, 
 import { useI18n } from 'vue-i18n'
 import { refDebounced } from '@vueuse/core'
 import { invoke } from '@tauri-apps/api/core'
-import { ask, open as openDialog } from '@tauri-apps/plugin-dialog'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useReplayStore, type Clip, normalizeGameTitle } from '../stores/replay'
 import { usePersistenceStore } from '../stores/persistence'
@@ -19,7 +19,7 @@ import RecordingDropdown from '../components/RecordingDropdown.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { mediaUrl } from '../utils/assets'
 import { viewMode } from '../composables/useViewMode'
-import { ICON_DELETE } from '../assets/deviceAssets'
+import { ICON_DELETE, ICON_GAMEPAD } from '../assets/deviceAssets'
 import { useModalStore } from '../stores/modal'
 import type { Ref } from 'vue'
 
@@ -109,6 +109,7 @@ const isFilteredEmpty = computed(() => !hasNoClipsAtAll.value && cssVisibleCount
 const editorClip   = ref<Clip | null>(null)
 const editorMode   = ref<'preview' | 'trim'>('preview')
 const advancedClip = ref<Clip | null>(null)
+const ctxMenuRef = ref<HTMLElement | null>(null)
 const renameTarget = ref<Clip | null>(null)
 const renameValue  = ref('')
 const toast        = ref('')
@@ -126,10 +127,11 @@ async function importFolder() {
         persist.state!.settings!.clip_directories.push(s)
       }
       await persist.save()
+      showToast(t('clips.importing'))
       await replay.scanFolderRecursive(s)
       try { await invoke('update_watch_dirs') } catch {}
     }
-  } catch (e) { console.error('importFolder:', e) }
+  } catch (e) { if (import.meta.env.DEV) console.error('importFolder:', e) }
 }
 
 // ── View / sizing / grouping ──
@@ -154,8 +156,8 @@ const groupedClips = computed<DateGroup[]>(() => {
       const d = new Date(dateKey)
       if (!isNaN(d.getTime())) {
         d.setHours(0, 0, 0, 0)
-        if (d.getTime() === today.getTime()) label = 'Today'
-        else if (d.getTime() === yesterday.getTime()) label = 'Yesterday'
+        if (d.getTime() === today.getTime()) label = t('clips.dateGroup.today')
+        else if (d.getTime() === yesterday.getTime()) label = t('clips.dateGroup.yesterday')
         else label = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
       }
     } catch {}
@@ -641,6 +643,131 @@ const bulkGameOptions = computed(() =>
 // Total real (non-skeleton) clip count for display
 const totalClipCount = computed(() => replay.clips.filter((c: Clip) => !c.isSkeleton).length)
 
+// ── Filter state ──
+const hasActiveFilters = computed(() =>
+  searchDebounced.value !== '' ||
+  replay.selectedGames.length > 0 ||
+  replay.filterFav ||
+  replay.durationFilter !== 'all'
+)
+function clearAllFilters() {
+  searchRaw.value = ''
+  replay.selectedGames = []
+  replay.filterFav = false
+  replay.durationFilter = 'all'
+}
+
+// ── Clip statistics ──
+const clipStats = computed(() => {
+  const clips = filteredRealClips.value
+  const count = clips.length
+  const totalDuration = clips.reduce((sum, c) => sum + (c.duration || 0), 0)
+  const totalSize = clips.reduce((sum, c) => sum + (c.filesize || 0), 0)
+  const avgDuration = count > 0 ? totalDuration / count : 0
+  return { count, totalDuration, totalSize, avgDuration }
+})
+function fmtStatDuration(s: number) {
+  const m = Math.floor(s / 60)
+  const h = Math.floor(m / 60)
+  if (h > 0) return `${h}h ${m % 60}m`
+  return `${m}m ${Math.floor(s % 60)}s`
+}
+function fmtStatSize(bytes: number) {
+  const gb = bytes / (1024 ** 3)
+  if (gb >= 1) return `${gb.toFixed(1)} GB`
+  const mb = bytes / (1024 ** 2)
+  if (mb >= 1) return `${mb.toFixed(0)} MB`
+  return `${bytes} B`
+}
+
+// ── Stats bar toggle ──
+const showStatsBar = ref(true)
+watch(showStatsBar, (v) => { localStorage.setItem('opengg:showStatsBar', JSON.stringify(v)) })
+
+// ── Keyboard navigation ──
+const focusedClipId = ref<string | null>(null)
+
+function getClipIndex(id: string | null) {
+  if (!id) return -1
+  return filteredRealClips.value.findIndex(c => c.id === id)
+}
+
+function focusClipById(id: string | null) {
+  focusedClipId.value = id
+  if (!id) return
+  // Scroll into view on next tick
+  nextTick(() => {
+    const host = getActiveScrollHost()
+    if (!host) return
+    const el = host.querySelector(`[data-clip-id="${id}"]`) as HTMLElement | null
+    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  })
+}
+
+function onGridKeydown(e: KeyboardEvent) {
+  // Ignore if user is typing in an input
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+
+  const clips = filteredRealClips.value
+  if (!clips.length) return
+  const idx = getClipIndex(focusedClipId.value)
+
+  if (e.code === 'ArrowRight') {
+    e.preventDefault()
+    const nextIdx = idx >= 0 ? Math.min(clips.length - 1, idx + 1) : 0
+    focusClipById(clips[nextIdx].id)
+  } else if (e.code === 'ArrowLeft') {
+    e.preventDefault()
+    const nextIdx = idx >= 0 ? Math.max(0, idx - 1) : clips.length - 1
+    focusClipById(clips[nextIdx].id)
+  } else if (e.code === 'ArrowDown') {
+    e.preventDefault()
+    if (viewMode.value === 'grid') {
+      const cols = gridCols.value
+      const nextIdx = idx >= 0 ? Math.min(clips.length - 1, idx + cols) : 0
+      focusClipById(clips[nextIdx].id)
+    } else {
+      const nextIdx = idx >= 0 ? Math.min(clips.length - 1, idx + 1) : 0
+      focusClipById(clips[nextIdx].id)
+    }
+  } else if (e.code === 'ArrowUp') {
+    e.preventDefault()
+    if (viewMode.value === 'grid') {
+      const cols = gridCols.value
+      const nextIdx = idx >= 0 ? Math.max(0, idx - cols) : 0
+      focusClipById(clips[nextIdx].id)
+    } else {
+      const nextIdx = idx >= 0 ? Math.max(0, idx - 1) : clips.length - 1
+      focusClipById(clips[nextIdx].id)
+    }
+  } else if (e.code === 'Enter') {
+    e.preventDefault()
+    const clip = idx >= 0 ? clips[idx] : null
+    if (clip) onCardClick(clip)
+  } else if (e.code === 'Space') {
+    e.preventDefault()
+    const clip = idx >= 0 ? clips[idx] : null
+    if (clip) { replay.toggleSelect(clip.id); focusClipById(clip.id) }
+  } else if (e.code === 'Delete') {
+    e.preventDefault()
+    if (replay.selectMode && replay.selectedCount > 0) {
+      deleteSelected()
+    } else if (idx >= 0) {
+      deleteClip(clips[idx])
+    }
+  } else if (e.code === 'Escape') {
+    if (replay.selectMode) {
+      e.preventDefault()
+      replay.clearSelection()
+      focusedClipId.value = null
+    }
+  } else if (e.code === 'KeyA' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault()
+    for (const c of clips) replay.selectedIds.add(c.id)
+    replay.selectMode = true
+  }
+}
+
 // ── Card interactions ──
 function onCardClick(clip: Clip) {
   if (clip.isSkeleton) return
@@ -651,28 +778,36 @@ function onCardClick(clip: Clip) {
 function openPreview(clip: Clip) { editorClip.value = clip; editorMode.value = 'preview' }
 function openAdvanced(clip: Clip) { advancedClip.value = clip }
 
-async function importSteamLibrary(forcePrompt = false) {
-  if (steamImportBusy.value) return
-
-  const access = persist.state.settings.steamLibraryAccess
-  if (access !== 'granted' || forcePrompt) {
-    const confirmed = await ask(t('clips.steamImport.consentMessage'), {
-      title: t('clips.steamImport.consentTitle'),
-      kind: 'info',
-    })
-    persist.state.settings.steamLibraryAccess = confirmed ? 'granted' : 'denied'
-    if (!confirmed) return
-  }
-
+async function doImportSteamGames() {
   steamImportBusy.value = true
   const ok = await replay.fetchSteamGames()
   steamImportBusy.value = false
-
   if (ok) {
     showToast(t('clips.steamImport.imported', { count: replay.steamGames.length }))
   } else {
     showToast(t('clips.steamImport.failed'))
   }
+}
+
+async function importSteamLibrary(forcePrompt = false) {
+  if (steamImportBusy.value) return
+
+  const access = persist.state.settings.steamLibraryAccess
+  if (access !== 'granted' || forcePrompt) {
+    modal.showConfirm({
+      kind: 'info',
+      title: t('clips.steamImport.consentTitle'),
+      message: t('clips.steamImport.consentMessage'),
+      confirmLabel: t('clips.steamImport.allowAndImport'),
+      onConfirm: async () => {
+        persist.state.settings.steamLibraryAccess = 'granted'
+        await doImportSteamGames()
+      },
+    })
+    return
+  }
+
+  await doImportSteamGames()
 }
 
 const steamBannerTitle = computed(() => {
@@ -708,7 +843,7 @@ async function deleteClip(clip: Clip) {
     message: `Delete "${clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename)}"?`,
     kind: 'danger',
     onConfirm: async () => {
-      try { await invoke('delete_clip', { filepath: clip.filepath }); replay.removeClip(clip.filepath); showToast('Clip deleted') } catch (e) { showToast(`Error: ${e}`) }
+      try { await invoke('delete_clip', { filepath: clip.filepath }); replay.removeClip(clip.filepath); showToast(t('clips.toast.clipDeleted')) } catch (e: any) { showToast(t('clips.toast.clipDeleteError', { error: String(e) })) }
     },
   })
 }
@@ -737,7 +872,7 @@ async function deleteSelected() {
     kind: 'danger',
     onConfirm: async () => {
       for (const c of clips) { try { await invoke('delete_clip', { filepath: c.filepath }); replay.removeClip(c.filepath) } catch {} }
-      replay.clearSelection(); showToast(`${clips.length} clip(s) deleted`)
+      replay.clearSelection(); showToast(t('clips.toast.clipsDeleted', { count: clips.length }))
     },
   })
 }
@@ -899,6 +1034,10 @@ onMounted(async () => {
   setupRowMeasure()
   await replay.fetchClips(persist.state?.settings?.clip_directories?.[0] || '')
 
+  // Restore stats-bar visibility preference
+  const savedStats = localStorage.getItem('opengg:showStatsBar')
+  if (savedStats !== null) showStatsBar.value = JSON.parse(savedStats)
+
   // ── Cross-page preview: open modal for clip navigated from Dashboard ──
   if (replay.previewTargetClipId) {
     const id = replay.previewTargetClipId
@@ -973,6 +1112,8 @@ onBeforeUnmount(() => {
   unlistenImportProgress?.()
   unlistenImportItem?.()
   rowMeasureRO?.disconnect()
+  if (prefetchDoneTimer) clearTimeout(prefetchDoneTimer)
+  if (scrollTimer) clearTimeout(scrollTimer)
 })
 
 const allSelectedFavorited = computed(() => {
@@ -996,6 +1137,30 @@ async function bulkFavorite() {
 const bulkGameOpen = ref(false)
 const bulkGameSearch = ref('')
 const bulkGameValue = ref('Unknown')
+
+// ── Batch rename ──
+const bulkRenameOpen = ref(false)
+const bulkRenamePattern = ref('')
+
+function applyBulkRename() {
+  const pattern = bulkRenamePattern.value.trim()
+  if (!pattern) return
+  const ids = Array.from(replay.selectedIds)
+  const clips = replay.clips.filter(c => ids.includes(c.id))
+  clips.forEach((clip, i) => {
+    const baseName = clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename.replace(/\.[^.]+$/, ''))
+    const newName = pattern
+      .replace(/\{n\}/g, String(i + 1))
+      .replace(/\{game\}/g, clip.game || 'Unknown')
+      .replace(/\{filename\}/g, clip.filename.replace(/\.[^.]+$/, ''))
+    if (newName === baseName) return
+    replay.updateClipMeta(clip.filepath, { custom_name: newName })
+    try { invoke('set_clip_meta', { update: { filepath: clip.filepath, custom_name: newName, favorite: clip.favorite } }) } catch {}
+  })
+  bulkRenameOpen.value = false
+  bulkRenamePattern.value = ''
+  showToast(t('clips.toast.renamed', { count: clips.length }))
+}
 const filteredBulkGames = computed(() => {
   const q = bulkGameSearch.value.toLowerCase()
   return bulkGameOptions.value.filter(o => o.label.toLowerCase().includes(q))
@@ -1013,7 +1178,10 @@ async function bulkChangeGame() {
 
 // ── Context menu logic ──
 const contextMenuClip = computed(() => replay.clips.find(c => c.id === replay.activeMenuClipId))
-function ctxAction(act: string) {
+const contextMenuItems = ['preview', 'editor', 'select', 'favorite', 'rename', 'location', 'copyPath', 'delete']
+const activeMenuIndex = ref(-1)
+
+async function ctxAction(act: string) {
   const clip = contextMenuClip.value
   if (!clip) return
   if (act === 'preview') openPreview(clip)
@@ -1021,8 +1189,8 @@ function ctxAction(act: string) {
   else if (act === 'select') replay.toggleSelect(clip.id)
   else if (act === 'favorite') toggleListFav(clip)
   else if (act === 'rename') startRename(clip)
-
   else if (act === 'location') invoke('open_file_location', { filepath: clip.filepath })
+  else if (act === 'copyPath') { try { await invoke('write_clipboard', { text: clip.filepath }); showToast(t('editor.pathCopied')) } catch {} }
   else if (act === 'delete') deleteClip(clip)
   closeContextMenu()
 }
@@ -1033,6 +1201,24 @@ function closeContextMenu(e?: MouseEvent) {
     if ((e.target as HTMLElement).closest('.ctx-menu')) return
   }
   replay.activeMenuClipId = ''
+  activeMenuIndex.value = -1
+}
+
+function onContextMenuKeydown(e: KeyboardEvent) {
+  if (!replay.activeMenuClipId) return
+  if (e.code === 'ArrowDown') {
+    e.preventDefault()
+    activeMenuIndex.value = (activeMenuIndex.value + 1) % contextMenuItems.length
+  } else if (e.code === 'ArrowUp') {
+    e.preventDefault()
+    activeMenuIndex.value = activeMenuIndex.value <= 0 ? contextMenuItems.length - 1 : activeMenuIndex.value - 1
+  } else if (e.code === 'Enter') {
+    e.preventDefault()
+    if (activeMenuIndex.value >= 0) ctxAction(contextMenuItems[activeMenuIndex.value])
+  } else if (e.code === 'Escape') {
+    e.preventDefault()
+    closeContextMenu()
+  }
 }
 
 onActivated(() => {
@@ -1056,31 +1242,31 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 <template>
   <div class="page">
     <!-- Header -->
-    <PageHeader :title="t('nav.clips')">
-      <span v-if="totalClipCount > 0" class="title-count">{{ totalClipCount }}</span>
-    </PageHeader>
+    <PageHeader :title="t('nav.clips')" />
 
-    <!-- Controls — left group + right group so toggle is always far right -->
+    <!-- Controls — left filters + right view controls, dynamic gap via margin-left:auto -->
     <div class="ctrl-bar">
       <div class="ctrl-left">
         <RecordingDropdown />
         <div class="search-wrap">
           <svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <!-- Phase 4b: bound to searchRaw; debounced 150ms before hitting store -->
           <input v-model="searchRaw" :placeholder="t('clips.search')" class="search" />
         </div>
         <SelectField class="ctrl-sort" v-model="replay.sortMode" :options="sortOptions" />
-        <!-- ★ Epic 3: Multiselect game filter dropdown -->
-          <GameFilterDropdown
+        <GameFilterDropdown
           v-model="replay.selectedGames"
           :games="filterGameNames"
           :clipCounts="gameCounts"
           :steam-icons="steamIcons"
         />
         <button class="fav-btn" :class="{ active: replay.filterFav }" @click="replay.filterFav=!replay.filterFav">❤ {{ replay.favCount }}</button>
+        <Transition name="tip-fade">
+          <button v-if="hasActiveFilters" class="clear-filters-btn" @click="clearAllFilters">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            {{ t('clips.gamesFilter.clear') }}
+          </button>
+        </Transition>
       </div>
-
-      <!-- ★ Epic 2: Grid size slider + view toggle pinned to right -->
       <div class="ctrl-right">
         <div class="size-slider-wrap">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="size-ic"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
@@ -1101,7 +1287,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
             </Transition>
           </div>
         </div>
-        <button class="vt-btn" :class="{ active: dateGrouped }" @click="dateGrouped = !dateGrouped" :title="t('clips.groupByDate')" style="border-radius:var(--radius); border:1px solid var(--border); margin-right:4px;">
+        <button class="vt-btn" :class="{ active: showStatsBar }" @click="showStatsBar = !showStatsBar" :title="t('clips.toggleStats')" style="border:1px solid var(--border);border-radius:var(--radius)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        </button>
+        <button class="vt-btn vt-btn-group" :class="{ active: dateGrouped }" @click="dateGrouped = !dateGrouped" :title="t('clips.groupByDate')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         </button>
         <div class="view-toggle">
@@ -1125,12 +1314,35 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
       </button>
     </div>
 
+    <!-- Clip statistics bar -->
+    <div v-if="showStatsBar && totalClipCount > 0" class="stats-bar">
+      <div class="stat-item">
+        <span class="stat-val">{{ clipStats.count }}</span>
+        <span class="stat-label">{{ t('clips.stats.clips') }}</span>
+      </div>
+      <div class="stat-sep"></div>
+      <div class="stat-item">
+        <span class="stat-val">{{ fmtStatDuration(clipStats.totalDuration) }}</span>
+        <span class="stat-label">{{ t('clips.stats.totalDuration') }}</span>
+      </div>
+      <div class="stat-sep"></div>
+      <div class="stat-item">
+        <span class="stat-val">{{ fmtStatSize(clipStats.totalSize) }}</span>
+        <span class="stat-label">{{ t('clips.stats.totalSize') }}</span>
+      </div>
+      <div class="stat-sep"></div>
+      <div class="stat-item">
+        <span class="stat-val">{{ fmtStatDuration(clipStats.avgDuration) }}</span>
+        <span class="stat-label">{{ t('clips.stats.avgDuration') }}</span>
+      </div>
+    </div>
+
     <div class="scroll-area">
       <!-- ★ Job #3: Import Progress Bar -->
       <Transition name="fade">
         <div v-if="replay.importProgress.active" class="import-bar-wrap">
           <div class="import-bar-info">
-            <span>Importing clips…</span>
+            <span>{{ t('clips.importing') }}</span>
             <span>{{ replay.importProgress.current }} / {{ replay.importProgress.total }}</span>
           </div>
           <div class="import-bar-bg">
@@ -1171,7 +1383,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         key="empty-all"
         class="empty-state"
       >
-        <div class="empty-ic">📁</div>
+        <div class="empty-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:48px;height:48px"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></div>
         <p>{{ t('clips.noClipsFound') }}</p>
         <p class="empty-sub">{{ t('clips.noClipsEmptyHint') }}</p>
         <button class="empty-import-btn" @click="importFolder">{{ t('clips.importFolder') }}</button>
@@ -1183,14 +1395,14 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         key="empty-filtered"
         class="empty-state"
       >
-        <div class="empty-ic">🔍</div>
+        <div class="empty-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:48px;height:48px"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
         <p>{{ t('clips.noClipsFound') }}</p>
         <p class="empty-sub">{{ t('clips.noClipsHint') }}</p>
       </div>
 
       <!-- ═══ Date-grouped view ═══ -->
       <div v-else-if="dateGrouped" key="grouped" class="scroll-host">
-        <div class="native-grid-host grouped-host" ref="groupedScrollRef" :class="{ scrolling: isScrolling }" @scroll.passive="onScroll">
+        <div class="native-grid-host grouped-host" ref="groupedScrollRef" :class="{ scrolling: isScrolling }" @scroll.passive="onScroll" @keydown="onGridKeydown" tabindex="0">
           <div 
             class="date-groups"
             :style="{
@@ -1232,7 +1444,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                     v-memo="[clip.id, replay.isSelected(clip.id), clip.duration, clip.thumbnail, clip.custom_name, clip.game, clip.favorite, gridCols]"
                     :clip="clip"
                     :selected="replay.isSelected(clip.id)"
-                    class="clip-stagger"
+                    :class="{ 'clip-stagger': true, 'clip-focused': focusedClipId === clip.id }"
+                    :data-clip-id="clip.id"
                     @click="onCardClick(clip)"
                     @contextmenu="openListMenu"
                     @preview="openPreview"
@@ -1248,6 +1461,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                     v-memo="[clip.id, replay.isSelected(clip.id), clip.duration, clip.thumbnail, clip.custom_name, clip.game, clip.favorite, listStyles.fontSize]"
                     :clip="clip"
                     :selected="replay.isSelected(clip.id)"
+                    :class="{ 'clip-focused': focusedClipId === clip.id }"
+                    :data-clip-id="clip.id"
                     :font-size="listStyles.fontSize"
                     :meta-font-size="listStyles.metaFontSize"
                     :pill-pad-y="listStyles.pillPadY"
@@ -1281,7 +1496,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 
       <!-- ═══ Flat grid view — native CSS Grid ═══ -->
       <div v-else-if="viewMode === 'grid'" key="grid" class="scroll-host">
-        <div class="native-grid-host" ref="gridScrollRef" :class="{ scrolling: isScrolling }" @scroll.passive="onScroll">
+        <div class="native-grid-host" ref="gridScrollRef" :class="{ scrolling: isScrolling }" @scroll.passive="onScroll" @keydown="onGridKeydown" tabindex="0">
           <!-- Scan banner -->
           <div v-if="scanActive" class="scan-banner">
             <div class="scan-spinner"></div>
@@ -1316,7 +1531,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
               v-memo="[clip.id, replay.isSelected(clip.id), clip.duration, clip.thumbnail, clip.custom_name, clip.game, clip.favorite, gridCols]"
               :clip="clip"
               :selected="replay.isSelected(clip.id)"
-              :class="{ 'clip-enter': clip._isNew }"
+              :class="{ 'clip-enter': clip._isNew, 'clip-focused': focusedClipId === clip.id }"
+              :data-clip-id="clip.id"
               @click="onCardClick(clip)"
               @contextmenu="openListMenu"
               @preview="openPreview"
@@ -1340,6 +1556,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
           ref="listScrollRef"
           :class="{ scrolling: isScrolling }"
           @scroll.passive="onScroll"
+          @keydown="onGridKeydown"
+          tabindex="0"
         >
           <div
             class="clip-list"
@@ -1354,6 +1572,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
               v-memo="[clip.id, replay.isSelected(clip.id), clip.duration, clip.thumbnail, clip.custom_name, clip.game, clip.favorite, listStyles.fontSize]"
               :clip="clip"
               :selected="replay.isSelected(clip.id)"
+              :class="{ 'clip-focused': focusedClipId === clip.id }"
+              :data-clip-id="clip.id"
               :font-size="listStyles.fontSize"
               :meta-font-size="listStyles.metaFontSize"
               :pill-pad-y="listStyles.pillPadY"
@@ -1388,7 +1608,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         v-if="!replay.loading && replay.fetchError"
         class="empty-state"
       >
-        <div class="empty-ic">⚠</div>
+        <div class="empty-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:48px;height:48px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
         <p>{{ t('clips.loadError') }}</p>
         <p class="empty-sub error-detail">{{ replay.fetchError }}</p>
         <button class="empty-import-btn" @click="retryFetch">{{ t('clips.retry') }}</button>
@@ -1398,7 +1618,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
     <!-- ★ Epic 1: Multi-select bulk action bar -->
     <Transition name="slide-up">
       <div v-if="replay.selectMode" class="sel-bar">
-        <span>{{ replay.selectedCount }} selected</span>
+        <span>{{ t('clips.bulkActions.selected', { count: replay.selectedCount }) }}</span>
         <div style="flex:1"></div>
 
         <!-- Bug 1: Smart toggle — Unfavorite All when all selected are already favorited -->
@@ -1409,7 +1629,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         <!-- Bug 2: Change Game drop-up with search filter -->
         <div class="bulk-game-wrap">
           <button class="sel-btn" :class="{ active: bulkGameOpen }" @click="bulkGameOpen = !bulkGameOpen">
-            🎮 Change Game
+            <span v-html="ICON_GAMEPAD" class="gamepad-icon" /> {{ t('clips.bulkActions.changeGame') }}
           </button>
           <Transition name="dropup">
             <div v-if="bulkGameOpen" class="bulk-game-drop">
@@ -1442,6 +1662,29 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
           </Transition>
         </div>
 
+        <!-- Batch rename drop-up -->
+        <div class="bulk-rename-wrap">
+          <button class="sel-btn" :class="{ active: bulkRenameOpen }" @click="bulkRenameOpen = !bulkRenameOpen">
+            {{ t('clips.bulkActions.rename') }}
+          </button>
+          <Transition name="dropup">
+            <div v-if="bulkRenameOpen" class="bulk-rename-drop">
+              <input
+                v-model="bulkRenamePattern"
+                class="bulk-rename-input"
+                :placeholder="t('clips.bulkActions.renamePlaceholder')"
+                autofocus
+                @keydown.enter="applyBulkRename"
+                @keydown.escape="bulkRenameOpen = false"
+              />
+              <div class="bulk-rename-hint">{n} = number, {game} = game, {filename} = filename</div>
+              <div class="bulk-rename-footer">
+                <button class="sel-btn sel-btn-p" @click="applyBulkRename">{{ t('clips2.apply') }}</button>
+              </div>
+            </div>
+          </Transition>
+        </div>
+
         <button class="sel-btn" @click="replay.clearSelection()">{{ t('clips.bulkActions.clear') }}</button>
         <button class="sel-btn sel-btn-d" @click="deleteSelected()"><span v-html="ICON_DELETE" class="del-icon" />{{ t('clips.bulkActions.delete') }}</button>
       </div>
@@ -1462,7 +1705,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
     </Teleport>
 
     <Transition name="fade"><div v-if="toast" class="toast">{{ toast }}</div></Transition>
-    <ClipEditor v-if="editorClip && !advancedClip" :clip="editorClip" :mode="editorMode" @close="editorClip=null" @saved="refreshClips" @toast="showToast" />
+    <ClipEditor v-if="editorClip && !advancedClip" :clip="editorClip" :mode="editorMode" @close="editorClip=null" @saved="refreshClips" @toast="showToast" @open-editor="advancedClip = editorClip; editorClip = null" />
     <AdvancedEditor v-if="advancedClip" :clip="advancedClip" @close="advancedClip=null" />
 
     <!-- Single page-level context menu (grid + list views) -->
@@ -1473,36 +1716,43 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
         :style="{ left: replay.activeMenuPos.x + 'px', top: replay.activeMenuPos.y + 'px' }"
         @click.stop
         @contextmenu.prevent
+        @keydown="onContextMenuKeydown"
+        tabindex="0"
+        ref="ctxMenuRef"
       >
         <template v-if="contextMenuClip">
-          <button class="ctx-item" @click="ctxAction('preview')" @contextmenu.prevent>
+          <button class="ctx-item" :class="{ active: activeMenuIndex === 0 }" @click="ctxAction('preview')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             {{ t('clips.contextMenu.preview') }}
           </button>
-          <button class="ctx-item" @click="ctxAction('editor')" @contextmenu.prevent>
+          <button class="ctx-item" :class="{ active: activeMenuIndex === 1 }" @click="ctxAction('editor')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20h-2a2 2 0 01-2-2v-2m0-4V8m0-4V4a2 2 0 012-2h2m4 0h4m4 0h2a2 2 0 012 2v2m0 4v4m0 4v2a2 2 0 01-2 2h-2m-4 0h-4"/><path d="M9 11l2 2 4-4"/></svg>
             {{ t('clips.contextMenu.edit') }}
           </button>
           <div class="ctx-sep" @contextmenu.prevent></div>
-          <button class="ctx-item" @click="ctxAction('select')" @contextmenu.prevent>
+          <button class="ctx-item" :class="{ active: activeMenuIndex === 2 }" @click="ctxAction('select')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="9 11 12 14 20 6"/></svg>
             {{ t('clips.contextMenu.select') }}
           </button>
-          <button class="ctx-item" @click="ctxAction('favorite')" @contextmenu.prevent>
+          <button class="ctx-item" :class="{ active: activeMenuIndex === 3 }" @click="ctxAction('favorite')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
             {{ contextMenuClip.favorite ? t('clips.contextMenu.unfavorite') : t('clips.contextMenu.favorite') }}
           </button>
           <div class="ctx-sep" @contextmenu.prevent></div>
-          <button class="ctx-item" @click="ctxAction('rename')" @contextmenu.prevent>
+          <button class="ctx-item" :class="{ active: activeMenuIndex === 4 }" @click="ctxAction('rename')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
             {{ t('clips.contextMenu.rename') }}
           </button>
-          <button class="ctx-item" @click="ctxAction('location')" @contextmenu.prevent>
+          <button class="ctx-item" :class="{ active: activeMenuIndex === 5 }" @click="ctxAction('location')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
             {{ t('clips.contextMenu.showInFolder') }}
           </button>
+          <button class="ctx-item" :class="{ active: activeMenuIndex === 6 }" @click="ctxAction('copyPath')" @contextmenu.prevent>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            {{ t('clips.contextMenu.copyPath') }}
+          </button>
           <div class="ctx-sep" @contextmenu.prevent></div>
-          <button class="ctx-item ctx-item-d" @click="ctxAction('delete')" @contextmenu.prevent>
+          <button class="ctx-item ctx-item-d" :class="{ active: activeMenuIndex === 7 }" @click="ctxAction('delete')" @contextmenu.prevent>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
             {{ t('clips.contextMenu.delete') }}
           </button>
@@ -1517,18 +1767,16 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .ib { width:30px; height:30px; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); color:var(--text-sec); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:13px; }
 .ib:hover { background:var(--bg-hover); } .ib:disabled { opacity:.4; }
 
-/* ★ Epic 2: Two-group ctrl-bar — left flows, right is pinned */
-.ctrl-bar { display:flex; align-items:center; gap:10px; flex-shrink:0; }
-.ctrl-left { display:flex; align-items:center; gap:8px; flex:1; flex-wrap:wrap; min-width:0; }
-.ctrl-right { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+/* ctrl-bar: two groups with dynamic gap, wrap together */
+.ctrl-bar { display:flex; align-items:center; flex-shrink:0; flex-wrap:wrap; }
+.ctrl-left { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.ctrl-right { display:flex; align-items:center; gap:8px; flex-shrink:0; margin-left:auto; }
 
-.search-wrap { flex:1; min-width:160px; max-width:340px; position:relative; }
+.search-wrap { width:200px; min-width:160px; max-width:220px; position:relative; }
 .search-ic { position:absolute; left:10px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--text-muted); pointer-events:none; }
 .search { width:100%; padding:7px 12px 7px 32px; background:var(--bg-card); border:1px solid var(--border); border-radius:7px; color:var(--text); font-size:13px; outline:none; color-scheme:dark; }
 .search:focus { border-color:var(--accent); } .search::placeholder { color:var(--text-muted); }
-.ctrl-sort { width:120px; }
-.title-count { font-size:14px; font-weight:400; color:var(--text-muted); margin-left:8px; }
-
+.ctrl-sort { width:115px; }
 /* ★ Epic 2: Mixer-style grid size slider */
 .size-slider-wrap { display:flex; align-items:center; gap:6px; padding:0 10px; height:32px; background:var(--bg-card); border:1px solid var(--border); border-radius:7px; }
 .size-ic { width:14px; height:14px; color:var(--text-muted); flex-shrink:0; }
@@ -1576,6 +1824,24 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .fav-btn:hover { background:var(--bg-hover); }
 .fav-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
 
+.clear-filters-btn {
+  display:flex; align-items:center; gap:4px;
+  padding:6px 10px; border:1px dashed var(--danger); border-radius:var(--radius);
+  background:transparent; color:var(--danger); font-size:12px; font-weight:600;
+  cursor:pointer; white-space:nowrap; transition:all .15s;
+}
+.clear-filters-btn:hover { background:rgba(220,38,38,.1); }
+
+.stats-bar {
+  display:flex; align-items:center; gap:12px; flex-shrink:0;
+  padding:6px 14px; background:var(--bg-card); border:1px solid var(--border);
+  border-radius:8px; font-size:12px;
+}
+.stat-item { display:flex; align-items:center; gap:4px; }
+.stat-val { font-weight:700; color:var(--text); }
+.stat-label { color:var(--text-muted); font-size:11px; }
+.stat-sep { width:1px; height:14px; background:var(--border); }
+
 .steam-banner {
   display: flex;
   align-items: center;
@@ -1612,6 +1878,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .vt-btn svg { width:14px; height:14px; }
 .vt-btn:hover { background:var(--color-accent-alpha-10); border:1px solid var(--color-accent-alpha-50); color:var(--accent); }
 .vt-btn.active { background:color-mix(in srgb, var(--accent) 20%, transparent); border:1px solid var(--color-accent-alpha-50); color:var(--accent); }
+.vt-btn-group { border-radius:var(--radius); border:1px solid var(--border); margin-right:4px; }
 
 /* Scroll container */
 .scroll-area { flex:1; min-height:0; overflow:hidden; display:flex; flex-direction:column; position:relative; }
@@ -1631,9 +1898,15 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
   will-change: scroll-position;
+  transform: translateZ(0);
   overflow-anchor: none;
+  outline: none;
 }
+.native-grid-host:focus { outline: none; }
 .native-grid-host::-webkit-scrollbar { display: none; width: 0; }
+
+/* Keyboard focus indicator for clips */
+.clip-focused { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
 
 
 /* Scan banner */
@@ -1645,7 +1918,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 }
 .scan-spinner {
   width: 16px; height: 16px;
-  border: 2px solid rgba(79,140,255,0.3); border-top-color: var(--accent);
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent); border-top-color: var(--accent);
   border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -1705,10 +1978,35 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 .sel-btn-unfav { color:var(--text-sec); }
 .del-icon { width:13px; height:13px; display:inline-flex; align-items:center; margin-right:4px; }
 .del-icon :deep(svg) { width:13px; height:13px; }
+.gamepad-icon { width:13px; height:13px; display:inline-flex; align-items:center; margin-right:4px; }
+.gamepad-icon :deep(svg) { width:13px; height:13px; }
 .slide-up-enter-active,.slide-up-leave-active { transition:transform .2s,opacity .2s; }
 .slide-up-enter-from,.slide-up-leave-to { transform:translateY(100%); opacity:0; }
 
 /* ★ Epic 1 Bug 2: Bulk game drop-up with search */
+.bulk-rename-wrap { position:relative; }
+.bulk-rename-drop {
+  position:absolute;
+  bottom:calc(100% + 8px);
+  left:0;
+  z-index:200;
+  width:260px;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:10px;
+  box-shadow:0 -8px 24px rgba(0,0,0,.5);
+  display:flex; flex-direction:column; overflow:hidden;
+  padding:10px;
+  gap:6px;
+}
+.bulk-rename-input {
+  width:100%; padding:6px 10px; background:var(--bg-input); border:1px solid var(--border);
+  border-radius:6px; color:var(--text); font-size:12px; outline:none; box-sizing:border-box;
+}
+.bulk-rename-input:focus { border-color:var(--accent); }
+.bulk-rename-hint { font-size:10px; color:var(--text-muted); }
+.bulk-rename-footer { display:flex; justify-content:flex-end; margin-top:4px; }
+
 .bulk-game-wrap { position:relative; }
 .bulk-game-drop {
   position:absolute;
@@ -1779,9 +2077,9 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
   cursor:pointer; white-space:nowrap;
 }
 .ctx-item svg { width:15px; height:15px; flex-shrink:0; opacity:.8; }
-.ctx-item:hover { background:var(--bg-hover); color:var(--text); }
+.ctx-item:hover, .ctx-item.active { background:var(--bg-hover); color:var(--text); }
 .ctx-item-d { color:var(--danger); }
-.ctx-item-d:hover { background:rgba(220,38,38,.1); }
+.ctx-item-d:hover, .ctx-item-d.active { background:rgba(220,38,38,.1); }
 .ctx-sep { height:1px; background:var(--border); margin:4px 0; }
 
 /* Empty State */

@@ -111,7 +111,16 @@ async function toggleRecording() {
       }
     }
   } catch (e) {
-    toast.error(t('notification.recordingFailed', { error: String(e) }))
+    const msg = String(e)
+    if (msg.includes('render')) {
+      toast.error(t('settings.captureGsr.errorMissingGroups'))
+    } else if (msg.includes('not found') && msg.includes('sink')) {
+      toast.error(t('settings.captureGsr.errorMissingAudio', { source: msg }))
+    } else if (msg.includes('gpu-screen-recorder not found') || msg.includes('exited immediately')) {
+      toast.error(t('settings.captureGsr.errorBinaryUnhealthy'))
+    } else {
+      toast.error(t('notification.recordingFailed', { error: msg }))
+    }
   }
 }
 

@@ -25,6 +25,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { AudioDevice } from './stores/audio'
 import ToastContainer from './components/ToastContainer.vue'
 import GlobalModal from './components/GlobalModal.vue'
+import TutorialModal from './components/TutorialModal.vue'
 import { useToast } from './composables/useToast'
 
 const { t, locale } = useI18n()
@@ -67,6 +68,13 @@ provide('mediaPort', mediaPort)
 
 function navigate(page: string) { currentPage.value = page }
 
+// ═══ Frameless window resize handles ═══
+async function startResize(dir: string) {
+  try { await getCurrentWindow().startResizeDragging(dir as any) } catch (e) {
+    if (import.meta.env.DEV) console.warn('resize:', e)
+  }
+}
+
 // RAM optimization: notify stores when the Clips page is active/inactive
 watch(currentPage, (v) => {
   const replay = useReplayStore()
@@ -88,6 +96,9 @@ const onboardMsg = ref('')
 const audioDevices = ref<AudioDevice[]>([])
 const selectedHeadphones = ref('')
 const selectedMic = ref('')
+
+// ═══ First-Run Tutorial ═══
+const showTutorial = ref(false)
 
 const outputDevices = () => audioDevices.value.filter(d => d.device_type === 'sink' && !d.name.includes('OpenGG'))
 const inputDevices  = () => audioDevices.value.filter(d => d.device_type === 'source')
@@ -139,6 +150,7 @@ async function registerGlobalShortcuts() {
       saveReplay: sc.saveReplay,
       toggleRecording: sc.toggleRecording,
       screenshot: sc.screenshot,
+      toggleEarBlast: sc.toggleEarBlast,
     })
   } catch (e) { console.warn('global shortcuts:', e) }
 }
@@ -148,6 +160,9 @@ onMounted(async () => {
   locale.value = persist.state.settings.language || 'en'
   document.documentElement.dir = persist.state.settings.rtlMode ? 'rtl' : 'ltr'
   await loadTheme()
+  if (!persist.state.settings.tutorialSeen) {
+    showTutorial.value = true
+  }
   mediaPort.value = await getMediaPort()
   installAudioUnlocker()
   loadUserLocales()
@@ -229,12 +244,40 @@ onMounted(async () => {
   listen('global-shortcut-screenshot', async () => {
     try { await invoke('take_screenshot', { outputDir: persist.state.settings.screenshotDirs?.[0] || '' }) } catch (e) { console.warn('screenshot:', e) }
   })
+  listen('global-shortcut-toggle_ear_blast', async () => {
+    try { useAudioStore().toggleEarBlast() } catch (e) { console.warn('toggle_ear_blast:', e) }
+  })
 
   // ── GSR state sync: keep replay store in sync with backend process state ──
   listen<{ running: boolean }>('gsr-status-changed', async () => {
     const { useReplayStore } = await import('./stores/replay')
     const replay = useReplayStore()
     await replay.fetchStatus()
+  })
+
+  // ── GSR crash detection: warn user and optionally auto-restart ──
+  listen<{ status: number | null; stderr_tail: string }>('gsr-crashed', async (_event) => {
+    const { useReplayStore } = await import('./stores/replay')
+    const replay = useReplayStore()
+    replay.status = 'idle'
+    toast.warning(t('settings.captureGsr.crashWarning'))
+    if (persist.state.settings.gsrAutoRestart) {
+      toast.info(t('settings.captureGsr.crashRestarting'))
+      try {
+        await invoke('start_gsr_replay', {
+          outputDir: persist.state.settings.clip_directories?.[0] ?? '~/Videos/OpenGG',
+          replaySecs: persist.state.settings.gsrReplaySecs,
+          fps: persist.state.settings.gsrFps,
+          quality: persist.state.settings.gsrQuality,
+          bitrateKbps: persist.state.settings.gsrQuality === 'cbr' ? persist.state.settings.gsrCbrBitrate : null,
+          monitorTarget: persist.state.settings.gsrMonitorTarget || 'screen',
+          audioSources: persist.state.settings.captureTracks.map((t: { source: string }) => t.source),
+        })
+        replay.status = 'replay'
+      } catch (e) {
+        toast.error(t('settings.captureGsr.errorGeneric', { message: String(e) }))
+      }
+    }
   })
 
   // ── Clip saved overlay notification ──
@@ -281,7 +324,7 @@ onMounted(async () => {
       if (d.chatmix === undefined) continue
       const prev = prevChatmix.get(d.id)
       if (prev === undefined) { prevChatmix.set(d.id, d.chatmix); continue }
-      if (prev === d.chatmix) continue
+      if (Math.abs(prev - d.chatmix) < 2) continue
       prevChatmix.set(d.id, d.chatmix)
       const n = (d.chatmix - 64) / 64
       const gameVol = n > 0 ? Math.round((1 - n) * 100) : 100
@@ -309,6 +352,11 @@ onMounted(async () => {
     onboardMsg.value = ''
     showOnboarding.value = true
   })
+
+  // Listen for tutorial replay requests from HomePage
+  window.addEventListener('openTutorial', () => {
+    showTutorial.value = true
+  })
 })
 
 watch(() => persist.state.settings.steamLibraryAccess, (access) => {
@@ -323,6 +371,7 @@ watch(
     persist.state.settings.shortcuts.saveReplay,
     persist.state.settings.shortcuts.toggleRecording,
     persist.state.settings.shortcuts.screenshot,
+    persist.state.settings.shortcuts.toggleEarBlast,
   ],
   () => { if (persist.loaded) registerGlobalShortcuts() },
 )
@@ -435,8 +484,21 @@ async function loadUserLocales() {
       </div>
     </Teleport>
 
+    <TutorialModal v-model="showTutorial" @complete="persist.state.settings.tutorialSeen = true" />
     <GlobalModal />
     <ToastContainer />
+
+    <!-- ═══ Frameless window resize handles ═══ -->
+    <template v-if="!isWindowFullscreen">
+      <div class="resize-handle resize-handle-n"  @mousedown.prevent="startResize('North')" />
+      <div class="resize-handle resize-handle-s"  @mousedown.prevent="startResize('South')" />
+      <div class="resize-handle resize-handle-e"  @mousedown.prevent="startResize('East')" />
+      <div class="resize-handle resize-handle-w"  @mousedown.prevent="startResize('West')" />
+      <div class="resize-handle resize-handle-ne" @mousedown.prevent="startResize('NorthEast')" />
+      <div class="resize-handle resize-handle-nw" @mousedown.prevent="startResize('NorthWest')" />
+      <div class="resize-handle resize-handle-se" @mousedown.prevent="startResize('SouthEast')" />
+      <div class="resize-handle resize-handle-sw" @mousedown.prevent="startResize('SouthWest')" />
+    </template>
   </div>
 </template>
 
@@ -500,6 +562,12 @@ body {
   user-drag: none !important;
 }
 
+/* Functional drag-and-drop elements opt back in */
+[draggable="true"] {
+  -webkit-user-drag: element !important;
+  user-drag: element !important;
+}
+
 /* ═══ THE ONLY exceptions — input/textarea/contenteditable ARE selectable ═══ */
 input,
 textarea,
@@ -515,6 +583,20 @@ textarea,
   border-radius: 10px;
   overflow: hidden;
 }
+
+/* ═══ Frameless window resize handles ═══ */
+.resize-handle {
+  position: fixed;
+  z-index: 100;
+}
+.resize-handle-n  { top: 0;    left: 10px; right: 10px; height: 5px;  cursor: ns-resize; }
+.resize-handle-s  { bottom: 0; left: 10px; right: 10px; height: 5px;  cursor: ns-resize; }
+.resize-handle-e  { right: 0;  top: 10px; bottom: 10px; width: 5px;   cursor: ew-resize; }
+.resize-handle-w  { left: 0;   top: 10px; bottom: 10px; width: 5px;   cursor: ew-resize; }
+.resize-handle-ne { top: 0;    right: 0;  width: 10px; height: 10px;  cursor: nesw-resize; }
+.resize-handle-nw { top: 0;    left: 0;   width: 10px; height: 10px;  cursor: nwse-resize; }
+.resize-handle-se { bottom: 0; right: 0;  width: 10px; height: 10px;  cursor: nwse-resize; }
+.resize-handle-sw { bottom: 0; left: 0;   width: 10px; height: 10px;  cursor: nesw-resize; }
 .app-body { display: flex; flex: 1; overflow: hidden; }
 .content { flex: 1; padding: 20px 28px; overflow-y: auto; }
 ::-webkit-scrollbar { width: 6px; }

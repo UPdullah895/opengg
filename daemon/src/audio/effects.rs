@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /// OpenGG DSP Effects Engine — EasyEffects-inspired architecture
 ///
 /// Architecture overview:

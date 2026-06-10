@@ -28,7 +28,7 @@ export interface TrackDef {
 export interface PersistedState {
   /** Internal schema version for automated migrations. */
   _schemaVersion: number
-  mixer: { volumes: Record<string, number>; mutes: Record<string, boolean>; devices: Record<string, string>; appRules: Record<string, string> }
+  mixer: { volumes: Record<string, number>; mutes: Record<string, boolean>; devices: Record<string, string>; appRules: Record<string, string>; earBlast: { enabled: boolean; channels: string[]; threshold: number; target: number } }
   settings: {
     fps: number; quality: string; replayDuration: number
     defaultClickAction: 'preview' | 'editor'
@@ -39,7 +39,7 @@ export interface PersistedState {
     shortcuts: {
       saveReplay: string; toggleRecording: string; screenshot: string
       splitClip: string; exportClip: string; toggleMic: string
-      undo: string; redo: string
+      undo: string; redo: string; toggleEarBlast: string
     }
     videoQuality: 'High' | 'Medium' | 'Low'
     videoResolution: '1080p' | '720p' | '480p'
@@ -62,12 +62,14 @@ export interface PersistedState {
     gsrRestartOnSave: boolean
     gsrMonitorTarget: string     // 'screen' | 'DP-1' | 'HDMI-1' | ...
     gsrAutoStart: boolean        // start replay buffer automatically on app launch
+    gsrAutoRestart: boolean      // auto-restart GSR if it crashes unexpectedly
     steamLibraryAccess: 'unknown' | 'granted' | 'denied'
     enableClipNotifications: boolean  // show overlay toast when a clip is saved
     notificationStyle: 'auto' | 'gsr-notify' | 'x11-overlay' | 'system' | 'disabled'
     notificationPosition: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
     notificationDuration: number  // 1-10 seconds
     rtlMode: boolean
+    tutorialSeen: boolean
   }
   modules: { audio: boolean; device: boolean; replay: boolean }
   /** Keyed by extension id (e.g. 'overlays-system'). true = enabled. */
@@ -76,11 +78,11 @@ export interface PersistedState {
   macros: Record<string, MouseMacro[]>
 }
 
-const CURRENT_SCHEMA_VERSION = 8
+const CURRENT_SCHEMA_VERSION = 9
 
 export const DEFAULTS: PersistedState = {
   _schemaVersion: CURRENT_SCHEMA_VERSION,
-  mixer: { volumes: { Game:100, Chat:100, Media:100, Aux:100, Mic:100 }, mutes:{}, devices:{}, appRules:{} },
+  mixer: { volumes: { Game:100, Chat:100, Media:100, Aux:100, Mic:100 }, mutes:{}, devices:{}, appRules:{}, earBlast: { enabled: false, channels: ['Game'], threshold: 85, target: 60 } },
   settings: {
     fps: 60, quality: 'High', replayDuration: 30,
     defaultClickAction: 'preview', clipsPerRow: 4,
@@ -88,7 +90,7 @@ export const DEFAULTS: PersistedState = {
     shortcuts: {
       saveReplay: 'Alt+F10', toggleRecording: 'Alt+F9', screenshot: 'Alt+F12',
       splitClip: 'S', exportClip: 'Ctrl+E', toggleMic: 'Alt+M',
-      undo: 'Ctrl+Z', redo: 'Ctrl+Shift+Z',
+      undo: 'Ctrl+Z', redo: 'Ctrl+Shift+Z', toggleEarBlast: '',
     },
     videoQuality: 'High', videoResolution: '1080p', language: 'en',
     trackDefs: [
@@ -118,12 +120,14 @@ export const DEFAULTS: PersistedState = {
     gsrRestartOnSave:  false,
     gsrMonitorTarget:  'screen',
     gsrAutoStart:      true,
+    gsrAutoRestart:    true,
     steamLibraryAccess: 'unknown',
     enableClipNotifications: true,
     notificationStyle: 'auto' as 'auto' | 'gsr-notify' | 'x11-overlay' | 'system' | 'disabled',
     notificationPosition: 'top-right' as 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left',
     notificationDuration: 4,
     rtlMode:               false,
+    tutorialSeen:          false,
   },
   modules: { audio: true, device: true, replay: true },
   extensions: {},
@@ -201,6 +205,13 @@ const MIGRATIONS: Record<number, (state: any) => void> = {
     // schema version field introduced — no data changes, just bookkeeping
     s._schemaVersion = CURRENT_SCHEMA_VERSION
   },
+  9: (s) => {
+    // ★ Ear Blast Protection defaults
+    if (!s?.mixer?.earBlast) {
+      s.mixer = s.mixer || {}
+      s.mixer.earBlast = { enabled: false, channels: ['Game'], threshold: 85, target: 60 }
+    }
+  },
 }
 
 export function runMigrations(parsed: any): void {
@@ -251,9 +262,19 @@ export const usePersistenceStore = defineStore('persistence', () => {
   }
   function getAppRule(bin: string) { return state.value.mixer.appRules[bin] }
 
+  function setEarBlastEnabled(v: boolean) { state.value.mixer.earBlast.enabled = v }
+  function setEarBlastChannels(chs: string[]) { state.value.mixer.earBlast.channels = chs }
+  function setEarBlastThreshold(v: number) { state.value.mixer.earBlast.threshold = Math.max(1, Math.min(100, v)) }
+  function setEarBlastTarget(v: number) { state.value.mixer.earBlast.target = Math.max(0, Math.min(100, v)) }
+
   function resetShortcuts() { state.value.settings.shortcuts = structuredClone(DEFAULTS.settings.shortcuts) }
 
-  return { state, loaded, load, save, setChannelVolume, setChannelMute, setChannelDevice, setAppRule, getAppRule, resetShortcuts }
+  function resetAllSettings() {
+    state.value = structuredClone(DEFAULTS)
+    save()
+  }
+
+  return { state, loaded, load, save, setChannelVolume, setChannelMute, setChannelDevice, setAppRule, getAppRule, setEarBlastEnabled, setEarBlastChannels, setEarBlastThreshold, setEarBlastTarget, resetShortcuts, resetAllSettings }
 })
 
 export function deepMerge(a: any, b: any): any {

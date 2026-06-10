@@ -29,6 +29,14 @@ export const useAudioStore = defineStore('audio', () => {
   const channelMutes = reactive<Record<string, boolean>>({ Master: false, Mic: false })
   for (const n of CHANNEL_NAMES) { channelVolumes[n] = 100; channelMutes[n] = false }
 
+  // ★ Ear Blast Protection state
+  const earBlastEnabled = ref(false)
+  const earBlastChannels = ref<string[]>(['Game'])
+  const earBlastThreshold = ref(85)
+  const earBlastTarget = ref(60)
+  const earBlastActiveChannels = ref<Set<string>>(new Set())
+  let earBlastUnlisten: UnlistenFn | null = null
+
   // ★ P7 FIX: Track which channels were manually changed recently.
   // Polling won't overwrite these for 3 seconds, preventing slider snap-back.
   const recentlyChanged: Record<string, number> = {}
@@ -255,14 +263,80 @@ export const useAudioStore = defineStore('audio', () => {
     } finally { routingInProgress.value = false }
   }
 
-  async function startVuStream() { try { await invoke('start_vu_stream'); vuUnlisten = await listen<{ channels: Array<[string, number]> }>('vu-levels', e => { const map: Record<string, number> = {}; for (const [ch, db] of e.payload.channels) { map[ch] = db } vuLevels.value = map }) } catch {} }
-  async function stopVuStream() { try { await invoke('stop_vu_stream'); vuUnlisten?.(); vuUnlisten = null } catch {} }
+  async function startVuStream() {
+    try {
+      await invoke('start_vu_stream')
+      vuUnlisten = await listen<{ channels: Array<[string, number]> }>('vu-levels', e => {
+        const map: Record<string, number> = {}
+        for (const [ch, db] of e.payload.channels) { map[ch] = db }
+        vuLevels.value = map
+      })
+      earBlastUnlisten = await listen<{ channel: string; active: boolean }>('ear-blast-state', e => {
+        const s = new Set(earBlastActiveChannels.value)
+        if (e.payload.active) s.add(e.payload.channel)
+        else s.delete(e.payload.channel)
+        earBlastActiveChannels.value = s
+      })
+    } catch {}
+  }
+  async function stopVuStream() {
+    try {
+      await invoke('stop_vu_stream')
+      vuUnlisten?.(); vuUnlisten = null
+      earBlastUnlisten?.(); earBlastUnlisten = null
+    } catch {}
+  }
+
+  async function syncEarBlastState() {
+    const persist = usePersistenceStore()
+    const eb = persist.state.mixer.earBlast
+    earBlastEnabled.value = eb.enabled
+    earBlastChannels.value = [...eb.channels]
+    earBlastThreshold.value = eb.threshold
+    earBlastTarget.value = eb.target
+    try {
+      await invoke('set_ear_blast_enabled', { enabled: eb.enabled })
+      await invoke('set_ear_blast_channels', { channels: eb.channels })
+      await invoke('set_ear_blast_threshold', { percent: eb.threshold })
+      await invoke('set_ear_blast_target', { percent: eb.target })
+    } catch (e) { console.warn('[opengg] syncEarBlastState:', e) }
+  }
+
+  async function toggleEarBlast() {
+    const persist = usePersistenceStore()
+    const newVal = !persist.state.mixer.earBlast.enabled
+    persist.setEarBlastEnabled(newVal)
+    earBlastEnabled.value = newVal
+    try { await invoke('set_ear_blast_enabled', { enabled: newVal }) } catch {}
+  }
+
+  async function setEarBlastChannels(chs: string[]) {
+    const persist = usePersistenceStore()
+    persist.setEarBlastChannels(chs)
+    earBlastChannels.value = [...chs]
+    try { await invoke('set_ear_blast_channels', { channels: chs }) } catch {}
+  }
+
+  async function setEarBlastThreshold(v: number) {
+    const persist = usePersistenceStore()
+    persist.setEarBlastThreshold(v)
+    earBlastThreshold.value = v
+    try { await invoke('set_ear_blast_threshold', { percent: v }) } catch {}
+  }
+
+  async function setEarBlastTarget(v: number) {
+    const persist = usePersistenceStore()
+    persist.setEarBlastTarget(v)
+    earBlastTarget.value = v
+    try { await invoke('set_ear_blast_target', { percent: v }) } catch {}
+  }
 
   let interval: ReturnType<typeof setInterval> | null = null
   function startPolling(ms = 2000) {
     stopPolling(); restoreFromPersistence()
     // ★ P8: First fetch reads real PipeWire state — apps appear in correct columns
     fetchChannels(); fetchApps(); fetchDevices(); startVuStream()
+    void syncEarBlastState()
     interval = setInterval(() => { fetchChannels(); fetchApps() }, ms)
   }
   function stopPolling() { if (interval) { clearInterval(interval); interval = null }; stopVuStream() }
@@ -272,11 +346,13 @@ export const useAudioStore = defineStore('audio', () => {
     virtualAudioReady, checkingVirtualAudio,
     unassignedApps, channelMap, masterChannel, micChannel, outputDevices, inputDevices,
     loading, error, draggedApp, selectedAppForClickRoute, routingInProgress,
+    earBlastEnabled, earBlastChannels, earBlastThreshold, earBlastTarget, earBlastActiveChannels,
     fetchChannels, fetchApps, fetchDevices,
     refreshVirtualAudioStatus, setVirtualAudioReady,
     setVolume, setMute, setAppVolume, routeApp, unrouteApp,
     setChannelDevice, restoreFromPersistence,
     startDrag, endDrag, selectAppForRoute, deselectApp, dropOnChannel, dropOnChannelById,
     startPolling, stopPolling,
+    toggleEarBlast, setEarBlastChannels, setEarBlastThreshold, setEarBlastTarget, syncEarBlastState,
   }
 })

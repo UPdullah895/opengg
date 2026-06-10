@@ -11,6 +11,7 @@ import type { Ref } from 'vue'
 import { usePersistenceStore } from '../stores/persistence'
 import { resumeAudioContext } from '../utils/audio'
 import CustomVideoPlayer from './CustomVideoPlayer.vue'
+import GameTagDropdown from './GameTagDropdown.vue'
 import { clipDisplayTitle } from '../utils/format'
 
 // ── Types ──
@@ -36,7 +37,6 @@ const dur = ref(props.clip.duration || 30)
 // ★ Epic 2: Local monitor volume (preview only — NOT exported) and hover-mute tracking
 const localVol        = ref(1)
 const hoveredTrackId  = ref<string | null>(null)
-const isFullscreen    = ref(false)
 const ct = ref(0)
 const playing = ref(false)
 const info = ref<MInfo | null>(null)
@@ -48,12 +48,10 @@ const audioTrimS = ref(0)
 const audioTrimE = ref(0)
 const editName = ref(clipDisplayTitle(props.clip.custom_name || '', props.clip.game || '', props.clip.filename))
 const gameTag = ref('')
-const gameOpen = ref(false)
-const gameRef = ref<HTMLElement | null>(null)
-const gameFiltered = computed(() => { const q = gameTag.value.toLowerCase(); return q ? GAMES.filter(g => g.toLowerCase().includes(q)) : GAMES })
 
 // ── Tracks (E6: colors via CSS vars, sourced from persisted Settings) ──
 const tracks = ref<Track[]>([])
+const hasMultipleAudioTracks = computed(() => tracks.value.filter(t => t.type === 'audio').length > 1)
 
 const TRACK_FALLBACKS: Record<string, string> = {
   V1: '#E94560', A1: '#10B981', A2: '#3b82f6', A3: '#f59e0b', A4: '#8b5cf6', A5: '#ec4899',
@@ -127,7 +125,7 @@ async function togglePlay() {
       // Re-seek audio elements immediately so they're aligned when play() fires
       for (const el of Object.values(audioEls.value)) el.currentTime = seekTo
     }
-    videoRef.value.play().catch(e => console.warn('play blocked:', e))
+    videoRef.value.play().catch(e => { if (import.meta.env.DEV) console.warn('play blocked:', e) })
   }
   playing.value = !playing.value
 }
@@ -162,13 +160,12 @@ function initAudioElements() {
 
   const audioTracks = tracks.value.filter(t => t.type === 'audio')
   if (audioTracks.length <= 1) {
-    // Single-track: unmute the <video> so native audio plays
-    if (videoRef.value) { videoRef.value.muted = false; videoRef.value.volume = audioTracks[0] ? (audioTracks[0].muted ? 0 : audioTracks[0].volume / 100) : 1 }
+    // Single-track: native audio plays through the video element
+    if (videoRef.value) { videoRef.value.volume = audioTracks[0] ? (audioTracks[0].muted ? 0 : audioTracks[0].volume / 100) : 1 }
     return
   }
 
-  // Multi-track: keep <video> muted and use separate <audio> elements
-  if (videoRef.value) videoRef.value.muted = true
+  // Multi-track: video is muted via :muted prop; use separate <audio> elements
 
   for (const t of audioTracks) {
     const el = new Audio()
@@ -355,8 +352,8 @@ async function takeScreenshot() {
       timeSec: ct.value,
       outputDir,
     })
-    showToast(`Screenshot saved: ${path.split('/').pop()}`, path)
-  } catch (e) { showToast(`Screenshot failed: ${e}`) }
+    showToast(t('clips.toast.screenshotSaved', { file: path.split('/').pop() }), path)
+  } catch (e: any) { showToast(t('clips.toast.screenshotFailed', { error: String(e) })) }
 }
 
 /** Returns true when a KeyboardEvent matches a shortcut string like "Alt+F12" or "Ctrl+Shift+S". */
@@ -372,16 +369,12 @@ function shortcutMatches(e: KeyboardEvent, combo: string): boolean {
       && (evKey === key || evCode === key)
 }
 
-// Click-outside
+// Click-outside for track volume popovers
 function onDocClick(e: MouseEvent) {
-  if (gameRef.value && !gameRef.value.contains(e.target as Node)) {
-    if (gameOpen.value && gameTag.value) saveMeta() // ★ Bug 3: Save custom tag on close
-    gameOpen.value = false
-  }
   tracks.value.forEach(t => { if (!(e.target as HTMLElement).closest('.vol-zone')) t.volOpen = false })
 }
 onMounted(() => document.addEventListener('mousedown', onDocClick)); onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
-function selectGame(g: string) { gameTag.value = g; gameOpen.value = false; saveMeta() }
+function selectGame(g: string) { gameTag.value = g; saveMeta() }
 
 // Export
 async function openExport() { exportModal.value = true; exportName.value = editName.value || 'export'; exportDir.value = props.clip.filepath.replace(/\/[^/]+$/, ''); exportTarget.value = 0; exportProgress.value = 0; exportSpeed.value = ''; exportStage.value = ''; exportCodec.value = 'libx264'; exportAdvancedOpen.value = false; await updateProj() }
@@ -400,7 +393,7 @@ async function openFolder() {
   try {
     await invoke('open_file_location', { filepath: exportResult.value })
   } catch (e) {
-    showToast(`Open folder failed: ${e}`)
+    showToast(t('clips.toast.openFolderFailed', { error: String(e) }))
   }
 }
 
@@ -437,7 +430,7 @@ async function doExport() {
     exportResult.value = out
     emit('saved', out)
   } catch (e) {
-    showToast(`Export failed: ${e}`)
+    showToast(t('clips.toast.exportFailed', { error: String(e) }))
     exportModal.value = false
   } finally {
     exporting.value = false
@@ -453,7 +446,7 @@ async function cancelExport() {
   exportProgress.value = 0
   exportSpeed.value = ''
   exportStage.value = ''
-  showToast('Export cancelled')
+  showToast(t('clips.toast.exportCancelled'))
 }
 function onToastDrag(e: DragEvent) { if (e.dataTransfer && toastFile.value) { e.dataTransfer.setData('text/uri-list', `file://${toastFile.value}`); e.dataTransfer.effectAllowed = 'copy' } }
 function startFileDrag(e: DragEvent) {
@@ -487,30 +480,21 @@ function onKey(e: KeyboardEvent) {
     if (hoveredTrackId.value) {
       const t = tracks.value.find(t => t.id === hoveredTrackId.value)
       if (t) { t.muted = !t.muted; applyAudioVolumes() }
-    } else if (videoRef.value) {
+    } else if (videoRef.value && !hasMultipleAudioTracks.value) {
       videoRef.value.muted = !videoRef.value.muted
     }
   }
 }
-const onFsChange = () => { isFullscreen.value = !!document.fullscreenElement }
 function togglePreviewFullscreen() { playerComp.value?.toggleFullscreen() }
 onMounted(() => {
   document.addEventListener('keydown', onKey)
-  document.addEventListener('fullscreenchange', onFsChange)
   refreshAudioRouting().catch(() => {})
 })
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKey)
-  document.removeEventListener('fullscreenchange', onFsChange)
 })
 
 function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}.${Math.floor((s % 1) * 10)}` }
-function onPreviewProgressClick(e: MouseEvent) {
-  const el = e.currentTarget as HTMLElement
-  const r = el.getBoundingClientRect()
-  const t = ((e.clientX - r.left) / r.width) * dur.value
-  if (videoRef.value) { videoRef.value.currentTime = t; ct.value = t }
-}
 function setPreviewVol(v: number) { localVol.value = v; applyAudioVolumes() }
 function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !t.peaks.length) return; const ctx = canvas.getContext('2d'); if (!ctx) return; const w = canvas.clientWidth; const h = canvas.clientHeight; canvas.width = w; canvas.height = h; ctx.clearRect(0, 0, w, h); const bw = w / t.peaks.length; const color = t.muted ? '#555' : t.color; const grad = ctx.createLinearGradient(0, 0, 0, h); grad.addColorStop(0, color + '80'); grad.addColorStop(0.5, color + 'DD'); grad.addColorStop(1, color + '80'); ctx.fillStyle = grad; for (let i = 0; i < t.peaks.length; i++) { const bh = Math.max(2, t.peaks[i] * h * 1.6); ctx.fillRect(i * bw, (h - bh) / 2, Math.max(1, bw - 0.5), bh) } }
 
@@ -522,19 +506,19 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
   <div class="bar">
     <button class="btn" @click="emit('close')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ic"><polyline points="15 18 9 12 15 6"/></svg></button>
     <input v-model="editName" class="name-in" spellcheck="false" @blur="saveMeta" @keydown.enter="($event.target as HTMLInputElement).blur()" />
-    <div class="game-wrap" ref="gameRef">
-      <input v-model="gameTag" class="game-in" placeholder="Game..." @focus="gameOpen = true" />
-      <div v-if="gameOpen && gameFiltered.length" class="game-drop">
-        <button v-for="g in gameFiltered.slice(0, 10)" :key="g" @mousedown.prevent="selectGame(g)">{{ g }}</button>
-        <div v-if="gameTag && !GAMES.some(g => g.toLowerCase() === gameTag.toLowerCase())" class="game-custom" @mousedown.prevent="selectGame(gameTag)">+ "{{ gameTag }}"</div>
-      </div>
-    </div>
+    <GameTagDropdown
+      v-model="gameTag"
+      :games="GAMES"
+      :show-custom="true"
+      :max-items="10"
+      @select="selectGame"
+    />
     <div style="flex:1"></div>
     <span v-if="info" class="tag">{{ info.video_codec }}</span>
     <span v-if="info" class="tag">{{ info.width }}×{{ info.height }}</span>
     <span v-if="info" class="tag">{{ info.fps.toFixed(0) }}fps</span>
     <span v-if="undoStack.length" class="tag">↩{{ undoStack.length }}</span>
-    <button class="btn accent" :disabled="exporting" @click="openExport">Export</button>
+    <button class="btn accent" :disabled="exporting" @click="openExport">{{ t('editor.exportClip') }}</button>
   </div>
 
   <!-- ═══ Main: Preview + Sidebar ═══ -->
@@ -543,46 +527,16 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
       <CustomVideoPlayer
         ref="playerComp"
         :src="videoSrc"
-        :show-controls="false"
+        :muted="hasMultipleAudioTracks"
+        :show-controls="true"
         :capture-keyboard="false"
         @loadedmetadata="onMeta"
         @play="onVideoPlay"
         @pause="playing = false"
+        @volume-change="setPreviewVol"
         @ended="playing = false"
       >
-        <div v-if="!playing && !isFullscreen" class="play-ov" @click.stop="togglePlay"><svg viewBox="0 0 24 24" fill="currentColor" style="width:40px;height:40px;color:#fff;opacity:.7"><polygon points="5 3 19 12 5 21"/></svg></div>
-        <!-- Custom ctrl-bar — only visible in fullscreen mode; transport bar handles normal editing -->
-        <div class="prev-ctrl-bar" :class="{ 'prev-ctrl-vis': isFullscreen }">
-          <div class="prev-prog" @click.stop="onPreviewProgressClick">
-            <div class="prev-prog-fill" :style="{ width: dur ? (ct/dur*100)+'%' : '0%' }">
-              <div class="prev-prog-thumb"></div>
-            </div>
-          </div>
-          <div class="prev-ctrl-row">
-            <button class="prev-cb" @click.stop="skip(-5)" title="-5s">
-              <svg viewBox="0 0 24 24" fill="currentColor" style="width:12px;height:12px"><polygon points="11 19 2 12 11 5"/><polygon points="22 19 13 12 22 5"/></svg>
-            </button>
-            <button class="prev-cb" @click.stop="togglePlay">
-              <svg v-if="playing" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-              <svg v-else viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
-            </button>
-            <button class="prev-cb" @click.stop="skip(5)" title="+5s">
-              <svg viewBox="0 0 24 24" fill="currentColor" style="width:12px;height:12px"><polygon points="13 19 22 12 13 5"/><polygon points="2 19 11 12 2 5"/></svg>
-            </button>
-            <span class="prev-time">{{ fmt(ct) }} / {{ fmt(dur) }}</span>
-            <div class="prev-vol">
-              <svg viewBox="0 0 24 24" fill="currentColor" class="prev-vol-ic" style="cursor:pointer" @click.stop="setPreviewVol(localVol > 0 ? 0 : 1)">
-                <path d="M11 5L6 9H2v6h4l5 4V5z"/>
-                <path v-if="localVol > 0" d="M15.54 8.46a5 5 0 010 7.07" stroke="currentColor" fill="none" stroke-width="2"/>
-                <line v-else x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2"/><line v-if="localVol === 0" x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2"/>
-              </svg>
-              <input type="range" min="0" max="1" step="0.05" :value="localVol" @input="setPreviewVol(+($event.target as HTMLInputElement).value)" class="prev-vol-sl" />
-            </div>
-            <button class="prev-cb" @click.stop="togglePreviewFullscreen()" title="Fullscreen">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
-            </button>
-          </div>
-        </div>
+        <div v-if="!playing" class="play-ov" @click.stop="togglePlay"><svg viewBox="0 0 24 24" fill="currentColor" style="width:40px;height:40px;color:#fff;opacity:.7"><polygon points="5 3 19 12 5 21"/></svg></div>
       </CustomVideoPlayer>
     </div>
 
@@ -792,10 +746,10 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
           </div>
         </div>
         <div class="modal-field">
-          <label>Target Size</label>
+          <label>{{ t('editor.targetSize') }}</label>
           <div class="radio-row">
             <label v-for="v in [0, 100, 50, 10]" :key="v" :class="{ active: exportTarget === v }">
-              <input type="radio" v-model.number="exportTarget" :value="v" />{{ v === 0 ? 'Original' : `${v}MB` }}
+              <input type="radio" v-model.number="exportTarget" :value="v" />{{ v === 0 ? t('editor.original') : `${v}MB` }}
             </label>
           </div>
         </div>
@@ -823,9 +777,9 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
           <span class="progress-text">{{ exportStage === 'copying' ? 'Copying...' : `${exportProgress.toFixed(0)}%` }} {{ exportSpeed ? `(${exportSpeed})` : '' }}</span>
         </div>
         <div class="modal-actions">
-          <button v-if="exporting" class="btn btn-cancel" @click="cancelExport">✕ Cancel Export</button>
-          <button v-else class="btn" @click="closeExportModal">Cancel</button>
-          <button class="btn accent" @click="doExport" :disabled="exporting">{{ exporting ? 'Exporting...' : 'Export' }}</button>
+          <button v-if="exporting" class="btn btn-cancel" @click="cancelExport">✕ {{ t('editor.cancelExport') }}</button>
+          <button v-else class="btn" @click="closeExportModal">{{ t('common.cancel') }}</button>
+          <button class="btn accent" @click="doExport" :disabled="exporting">{{ exporting ? t('editor.exporting') : t('editor.exportClip') }}</button>
         </div>
         </template>
       </div>
@@ -856,13 +810,8 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
 .accent { background: var(--accent); border-color: var(--accent); color: #fff; }
 .name-in { flex: 0 1 200px; padding: 3px 8px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 5px; color: var(--text); font-size: 12px; font-weight: 700; outline: none; }
 .name-in:focus { border-color: var(--accent); }
-.game-wrap { position: relative; }
-.game-in { width: 130px; padding: 3px 8px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 5px; color: var(--text-sec); font-size: 10px; outline: none; }
-.game-in:focus { border-color: var(--accent); }
-.game-drop { position: absolute; top: 100%; left: 0; right: 0; margin-top: 2px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 2px; z-index: 20; max-height: 200px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
-.game-drop button { width: 100%; padding: 5px 8px; border: none; background: transparent; color: var(--text-sec); font-size: 10px; text-align: left; cursor: pointer; border-radius: 4px; }
-.game-drop button:hover { background: var(--bg-hover); color: var(--text); }
-.game-custom { padding: 5px 8px; color: var(--accent); font-size: 10px; cursor: pointer; }
+/* Match game tag input height to title input */
+:deep(.gtd-input) { padding: 3px 8px; font-size: 12px; }
 .tag { font-size: 8px; background: var(--bg-deep); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; color: var(--text-muted); }
 
 /* ═══ Main Area ═══ */
@@ -870,33 +819,6 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
 .preview { flex: 1; background: #000; position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer; min-width: 0; min-height: 0; overflow: hidden; }
 .vid { max-width: 100%; max-height: 100%; object-fit: contain; }
 .play-ov { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.15); }
-/* ── Custom preview ctrl-bar ── */
-.prev-ctrl-bar {
-  position:absolute; bottom:0; left:0; right:0;
-  background:linear-gradient(transparent, rgba(0,0,0,.75));
-  padding:12px 8px 6px; opacity:0; transition:opacity .2s; pointer-events:none;
-}
-.prev-ctrl-bar.prev-ctrl-vis { opacity:1; pointer-events:auto; }
-.prev-prog {
-  height:3px; background:rgba(255,255,255,.25); border-radius:2px; cursor:pointer; margin-bottom:6px;
-  transition:height .15s;
-}
-.prev-prog:hover { height:5px; }
-.prev-prog-fill { height:100%; background:var(--accent); border-radius:2px; pointer-events:none; position:relative; }
-.prev-prog-thumb { position:absolute; right:-6px; top:50%; transform:translateY(-50%); width:13px; height:13px; border-radius:50%; background:#fff; box-shadow:0 0 5px rgba(0,0,0,.5); pointer-events:none; opacity:0; transition:opacity .15s; }
-.prev-prog:hover .prev-prog-thumb { opacity:1; }
-.prev-ctrl-row { display:flex; align-items:center; gap:6px; }
-.prev-cb { width:26px; height:26px; border:none; background:transparent; color:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; border-radius:4px; flex-shrink:0; }
-.prev-cb svg { width:14px; height:14px; }
-.prev-cb:hover { background:rgba(255,255,255,.15); }
-.prev-time { font-size:10px; color:rgba(255,255,255,.85); flex:1; white-space:nowrap; }
-.prev-vol { display:flex; align-items:center; gap:4px; }
-.prev-vol-ic { width:14px; height:14px; color:#fff; flex-shrink:0; }
-.prev-vol-sl { width:55px; height:3px; accent-color:var(--accent); cursor:pointer; }
-/* Fullscreen compat */
-.preview:fullscreen .prev-ctrl-bar,
-.preview:-webkit-full-screen .prev-ctrl-bar { position:absolute; }
-
 /* ★ Epic 4: Fullscreen fix — container fills top layer, video letterboxes cleanly */
 .preview:fullscreen,
 .preview:-webkit-full-screen {

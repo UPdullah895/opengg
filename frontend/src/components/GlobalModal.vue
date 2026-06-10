@@ -115,13 +115,22 @@ function label(localeKey: string) {
   border-color: var(--text);
   color: var(--text);
 }
-.btn-danger, .btn-accent {
+.btn-danger {
   background: #FF4B61;
   border-color: #FF4B61;
   color: #fff;
 }
-.btn-danger:hover:not(:disabled), .btn-accent:hover:not(:disabled) {
+.btn-danger:hover:not(:disabled) {
   background: color-mix(in srgb, #FF4B61 85%, #000);
   box-shadow: 0 0 14px color-mix(in srgb, #FF4B61 40%, transparent);
+}
+.btn-accent {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-accent:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 85%, #000);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 </style>

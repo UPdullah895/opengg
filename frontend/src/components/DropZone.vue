@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAudioStore } from '../stores/audio'
+import VolumeSlider from './VolumeSlider.vue'
 
 const { t } = useI18n()
 const props = defineProps<{
@@ -358,13 +359,11 @@ function toggleMute(appId: number, currentVol: number) {
           {{ volumeMenuApp?.volume }}%
         </span>
       </div>
-      <input
-        type="range"
-        class="dz-vol-menu-slider"
-        min="0" max="100"
-        :value="volumeMenuApp?.volume"
-        :style="{ '--vol-pct': (volumeMenuApp?.volume || 0) + '%' }"
-        @input="onVolumeChange(volumeMenuApp!.id, parseInt(($event.target as HTMLInputElement).value))"
+      <VolumeSlider
+        :model-value="volumeMenuApp?.volume || 0"
+        :color="color"
+        :show-value="false"
+        @update:model-value="onVolumeChange(volumeMenuApp!.id, $event)"
       />
       <button
         class="dz-vol-mute"
@@ -475,37 +474,6 @@ function toggleMute(appId: number, currentVol: number) {
 }
 .dz-vol-pct--muted {
   color: #E94560;
-}
-.dz-vol-menu-slider {
-  width: 100%; height: 18px;
-  -webkit-appearance: none; appearance: none;
-  background: transparent; cursor: pointer; margin: 0; padding: 0;
-}
-.dz-vol-menu-slider::-webkit-slider-runnable-track {
-  height: 5px;
-  background: linear-gradient(to right, var(--dz) var(--vol-pct, 0%), var(--border) var(--vol-pct, 0%));
-  border-radius: 3px;
-}
-.dz-vol-menu-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px; height: 14px; border-radius: 50%;
-  background: var(--dz); margin-top: -4.5px;
-  cursor: pointer;
-  box-shadow: 0 0 0 2px var(--bg-deep);
-  transition: transform .1s;
-}
-.dz-vol-menu-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
-}
-.dz-vol-menu-slider::-moz-range-track {
-  height: 5px;
-  background: linear-gradient(to right, var(--dz) var(--vol-pct, 0%), var(--border) var(--vol-pct, 0%));
-  border-radius: 3px;
-}
-.dz-vol-menu-slider::-moz-range-thumb {
-  width: 14px; height: 14px; border-radius: 50%;
-  background: var(--dz); border: 2px solid var(--bg-deep);
-  cursor: pointer;
 }
 .dz-vol-mute {
   display: flex; align-items: center; justify-content: center; gap: 5px;

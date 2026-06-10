@@ -6,15 +6,15 @@ import { onMounted, onBeforeUnmount } from 'vue'
 const win = getCurrentWindow()
 
 async function minimize() {
-  try { await win.minimize() } catch (e) { console.warn('minimize:', e) }
+  try { await win.minimize() } catch (e) { if (import.meta.env.DEV) console.warn('minimize:', e) }
 }
 async function toggleMaximize() {
-  try { await win.toggleMaximize() } catch (e) { console.warn('maximize:', e) }
+  try { await win.toggleMaximize() } catch (e) { if (import.meta.env.DEV) console.warn('maximize:', e) }
 }
 // ★ Epic 4: Close triggers backend CloseRequested handler,
 // which respects the RunInBackground setting (hide to tray vs. quit).
 async function close() {
-  try { await win.close() } catch (e) { console.warn('close:', e) }
+  try { await win.close() } catch (e) { if (import.meta.env.DEV) console.warn('close:', e) }
 }
 // Real quit via Ctrl+Q
 async function quit() {
@@ -31,8 +31,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKey))
   <!--
     RESIZE MARGIN: The outer <header> does NOT have data-tauri-drag-region.
     The inner .titlebar-drag has it, positioned 5px inset from top/left/right.
-    This leaves a 5px non-draggable border at each edge so the OS resize
-    handles can be triggered at the window boundary.
+    This leaves a 5px non-draggable border at each edge for the custom
+    resize handles defined in App.vue (startResizeDragging API).
 
     BUTTONS: .titlebar-btns and .tb-btn have pointer-events: auto so they
     remain clickable while the surrounding drag region is active.
@@ -78,7 +78,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKey))
   height: var(--titlebar-h);
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
-  /* No drag-region here — leaves OS resize handles at window edges */
+  /* No drag-region here — leaves space for custom resize handles */
 }
 
 /* Inner drag area inset 5px from top/left/right, flush at bottom.

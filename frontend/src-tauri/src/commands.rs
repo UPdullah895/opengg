@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Manager};
 
@@ -19,6 +18,8 @@ pub(crate) const RP_PATH: &str = "/org/opengg/Daemon/Replay";
 pub(crate) const RP_IFACE: &str = "org.opengg.Daemon.Replay";
 pub(crate) const DV_PATH: &str = "/org/opengg/Daemon/Device";
 pub(crate) const DV_IFACE: &str = "org.opengg.Daemon.Device";
+pub(crate) const EX_PATH: &str = "/org/opengg/Daemon/Extensions";
+pub(crate) const EX_IFACE: &str = "org.opengg.Daemon.Extensions";
 
 mod audio;
 pub use audio::*;
@@ -925,14 +926,26 @@ pub fn get_recorder_status(app: AppHandle) -> String {
     let gsr = app.state::<GsrProcess>();
     let mut lock = gsr.0.lock().unwrap();
     match lock.as_mut() {
-        Some((child, params)) => match child.try_wait() {
+        Some(state) => match state.child.try_wait() {
             Ok(None) => {
                 // Process still running — return replay:<secs>
-                let secs = params.replay_secs;
+                let secs = state.params.replay_secs;
                 return format!("replay:{secs}");
             }
-            _ => {
-                // Exited or error — clean up state
+            Ok(Some(status)) => {
+                // Exited unexpectedly — log stderr tail and clean up
+                let tail: String = {
+                    let log = state.stderr_log.lock().unwrap();
+                    log.iter().rev().take(10).rev().cloned().collect::<Vec<_>>().join("\n")
+                };
+                log::warn!(
+                    "GSR exited unexpectedly (status={:?}) during get_recorder_status. Last stderr:\n{tail}",
+                    status.code()
+                );
+                lock.take();
+            }
+            Err(e) => {
+                log::warn!("GSR try_wait error: {e}");
                 lock.take();
             }
         },
@@ -1845,12 +1858,19 @@ pub async fn get_trim_state(filepath: String) -> Result<Option<TrimState>, Strin
 }
 #[command]
 pub async fn trim_clip(
+    app: AppHandle,
     input_path: String,
     start_sec: f64,
     end_sec: f64,
     output_path: String,
     _codec: String,
 ) -> Result<String, String> {
+    use tokio::time::{interval, Duration};
+
+    let dur = end_sec - start_sec;
+    if dur <= 0.0 {
+        return Err("Invalid trim range".into());
+    }
     let mut out = if output_path.is_empty() {
         auto_name(&input_path, "_trim")
     } else {
@@ -1859,18 +1879,79 @@ pub async fn trim_clip(
     if out == input_path {
         out = auto_name(&input_path, "_trim")
     }
-    let r = run_command_output_async("ffmpeg", &[
-        "-i", &input_path,
-        "-ss", &format!("{start_sec:.3}"),
-        "-to", &format!("{end_sec:.3}"),
-        "-c", "copy",
-        "-avoid_negative_ts", "make_zero",
-        "-y", &out,
-    ]).await?;
-    if r.status.success() {
-        Ok(out)
+
+    // Estimate output size from input file size × trim ratio
+    let input_meta = std::fs::metadata(&input_path).ok();
+    let input_size = input_meta.map(|m| m.len()).unwrap_or(0);
+    let input_dur = probe_duration(&input_path);
+    let estimated_size = if input_dur > 0.0 && input_size > 0 {
+        (input_size as f64 * (dur / input_dur)).max(1.0)
     } else {
-        Err(format!("{}", String::from_utf8_lossy(&r.stderr)))
+        0.0
+    };
+
+    let _ = app.emit(
+        "export-progress",
+        serde_json::json!({"percent": 0, "stage": "copying", "speed": ""}),
+    );
+
+    // Spawn ffmpeg on a blocking thread so the async thread stays free for events
+    let out_c = out.clone();
+    let mut handle = tokio::task::spawn_blocking(move || {
+        let mut child = Command::new("ffmpeg")
+            .args([
+                "-i", &input_path,
+                "-ss", &format!("{start_sec:.3}"),
+                "-to", &format!("{end_sec:.3}"),
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
+                "-y", &out_c,
+            ])
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("ffmpeg: {e}"))?;
+
+        let status = child.wait().map_err(|e| format!("ffmpeg wait: {e}"))?;
+        Ok::<_, String>(status)
+    });
+
+    // Emit progress from the main async thread while ffmpeg runs
+    let mut tick = interval(Duration::from_millis(200));
+    let mut last_pct = 0.0f64;
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                if estimated_size > 0.0 {
+                    let current_size = std::fs::metadata(&out)
+                        .map(|m| m.len() as f64)
+                        .unwrap_or(0.0);
+                    let pct = ((current_size / estimated_size) * 100.0).min(95.0);
+                    if pct > last_pct {
+                        last_pct = pct;
+                        let _ = app.emit(
+                            "export-progress",
+                            serde_json::json!({"percent": pct, "stage": "copying", "speed": ""}),
+                        );
+                    }
+                }
+            }
+            result = &mut handle => {
+                let status = result.map_err(|e| format!("spawn_blocking: {e}"))??;
+                if status.success() {
+                    let _ = app.emit(
+                        "export-progress",
+                        serde_json::json!({"percent": 100, "stage": "done", "speed": ""}),
+                    );
+                    return Ok(out);
+                } else {
+                    let _ = app.emit(
+                        "export-progress",
+                        serde_json::json!({"percent": -1, "stage": "error", "speed": "failed"}),
+                    );
+                    return Err("FFmpeg trim failed".into());
+                }
+            }
+        }
     }
 }
 /// Export with target size + real-time progress via Tauri events.
@@ -1887,6 +1968,8 @@ pub async fn export_clip_sized(
     _audio_start_sec: Option<f64>,
     _audio_end_sec: Option<f64>,
 ) -> Result<String, String> {
+    use tokio::time::{interval, Duration};
+
     let dur = end_sec - start_sec;
     if dur <= 0.0 {
         return Err("Invalid trim range".into());
@@ -1910,17 +1993,7 @@ pub async fn export_clip_sized(
     }
 
     if target_mb <= 0.0 {
-        // Original quality — stream copy (fast, no progress needed)
-        let _ = app.emit(
-            "export-progress",
-            serde_json::json!({"percent": 50, "stage": "copying"}),
-        );
-        let result = trim_clip(input_path, start_sec, end_sec, out.clone(), "copy".to_string()).await;
-        let _ = app.emit(
-            "export-progress",
-            serde_json::json!({"percent": 100, "stage": "done"}),
-        );
-        return result;
+        return trim_clip(app, input_path, start_sec, end_sec, out, "copy".to_string()).await;
     }
 
     let audio_kbps: f64 = 128.0;
@@ -1928,106 +2001,118 @@ pub async fn export_clip_sized(
     let video_kbps = (total_kbps - audio_kbps).max(100.0);
     let vbr = format!("{}k", video_kbps as u32);
 
-    // Pass 1 (analyze)
+    // ── Pass 1 (analyze) ──
     let _ = app.emit(
         "export-progress",
-        serde_json::json!({"percent": 0, "stage": "pass1"}),
+        serde_json::json!({"percent": 0, "stage": "pass1", "speed": ""}),
     );
-    let mut child1 = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-i",
-            &input_path,
-            "-ss",
-            &format!("{start_sec:.3}"),
-            "-to",
-            &format!("{end_sec:.3}"),
-            "-c:v",
-            &video_codec,
-            "-pix_fmt",
-            "yuv420p",
-            "-b:v",
-            &vbr,
-            "-preset",
-            "fast",
-            "-pass",
-            "1",
-            "-an",
-            "-f",
-            "null",
-            "/dev/null",
-        ])
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("ffmpeg: {e}"))?;
 
-    // Stream progress from pass 1 (0-45%)
-    if let Some(stderr) = child1.stderr.take() {
-        let app_clone = app.clone();
-        let dur_clone = dur;
-        tokio::task::spawn_blocking(move || {
-            parse_ffmpeg_progress(stderr, dur_clone, 0.0, 45.0, &app_clone, None);
-        });
+    let input_path_p1 = input_path.clone();
+    let video_codec_p1 = video_codec;
+    let vbr_p1 = vbr.clone();
+    let mut handle1 = tokio::task::spawn_blocking(move || {
+        let mut child = Command::new("ffmpeg")
+            .args([
+                "-y", "-i", &input_path_p1,
+                "-ss", &format!("{start_sec:.3}"),
+                "-to", &format!("{end_sec:.3}"),
+                "-c:v", &video_codec_p1,
+                "-pix_fmt", "yuv420p",
+                "-b:v", &vbr_p1,
+                "-preset", "fast",
+                "-pass", "1",
+                "-an",
+                "-f", "null", "/dev/null",
+            ])
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("ffmpeg: {e}"))?;
+
+        let status = child.wait().map_err(|e| format!("ffmpeg wait: {e}"))?;
+        Ok::<_, String>(status)
+    });
+
+    // Pulse progress 0% → 45% while pass 1 runs
+    {
+        let mut tick = interval(Duration::from_millis(300));
+        let mut pulse = 0.0f64;
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {
+                    pulse = (pulse + 2.0).min(44.0);
+                    let _ = app.emit(
+                        "export-progress",
+                        serde_json::json!({"percent": pulse, "stage": "pass1", "speed": ""}),
+                    );
+                }
+                result = &mut handle1 => {
+                    result.map_err(|e| format!("spawn_blocking: {e}"))??;
+                    let _ = app.emit(
+                        "export-progress",
+                        serde_json::json!({"percent": 45, "stage": "pass2", "speed": ""}),
+                    );
+                    break;
+                }
+            }
+        }
     }
-    let _status1 = child1.wait().map_err(|e| format!("ffmpeg wait: {e}"))?;
 
-    // Pass 2 (encode)
-    let _ = app.emit(
-        "export-progress",
-        serde_json::json!({"percent": 45, "stage": "pass2"}),
-    );
-    let mut child2 = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-i",
-            &input_path,
-            "-ss",
-            &format!("{start_sec:.3}"),
-            "-to",
-            &format!("{end_sec:.3}"),
-            "-c:v",
-            &video_codec,
-            "-pix_fmt",
-            "yuv420p",
-            "-b:v",
-            &vbr,
-            "-preset",
-            "fast",
-            "-pass",
-            "2",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            &out,
-        ])
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("ffmpeg: {e}"))?;
+    // ── Pass 2 (encode) ──
+    let out_p2 = out.clone();
+    let mut handle2 = tokio::task::spawn_blocking(move || {
+        let mut child = Command::new("ffmpeg")
+            .args([
+                "-y", "-i", &input_path,
+                "-ss", &format!("{start_sec:.3}"),
+                "-to", &format!("{end_sec:.3}"),
+                "-c:v", &video_codec,
+                "-pix_fmt", "yuv420p",
+                "-b:v", &vbr,
+                "-preset", "fast",
+                "-pass", "2",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                &out_p2,
+            ])
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("ffmpeg: {e}"))?;
 
-    // Stream progress from pass 2 (45-100%)
-    if let Some(stderr) = child2.stderr.take() {
-        let app_clone = app.clone();
-        let dur_clone = dur;
-        tokio::task::spawn_blocking(move || {
-            parse_ffmpeg_progress(stderr, dur_clone, 45.0, 100.0, &app_clone, None);
-        });
-    }
-    let status2 = child2.wait().map_err(|e| format!("ffmpeg wait: {e}"))?;
+        let status = child.wait().map_err(|e| format!("ffmpeg wait: {e}"))?;
+        Ok::<_, String>(status)
+    });
 
-    // Cleanup 2-pass log files
-    let _ = std::fs::remove_file("ffmpeg2pass-0.log");
-    let _ = std::fs::remove_file("ffmpeg2pass-0.log.mbtree");
+    // Pulse progress 45% → 100% while pass 2 runs
+    {
+        let mut tick = interval(Duration::from_millis(300));
+        let mut pulse = 45.0f64;
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {
+                    pulse = (pulse + 1.5).min(99.0);
+                    let _ = app.emit(
+                        "export-progress",
+                        serde_json::json!({"percent": pulse, "stage": "pass2", "speed": ""}),
+                    );
+                }
+                result = &mut handle2 => {
+                    let status = result.map_err(|e| format!("spawn_blocking: {e}"))??;
+                    // Cleanup 2-pass log files
+                    let _ = std::fs::remove_file("ffmpeg2pass-0.log");
+                    let _ = std::fs::remove_file("ffmpeg2pass-0.log.mbtree");
 
-    let _ = app.emit(
-        "export-progress",
-        serde_json::json!({"percent": 100, "stage": "done"}),
-    );
-
-    if status2.success() {
-        Ok(out)
-    } else {
-        Err("FFmpeg encoding failed".into())
+                    if status.success() {
+                        let _ = app.emit(
+                            "export-progress",
+                            serde_json::json!({"percent": 100, "stage": "done", "speed": ""}),
+                        );
+                        return Ok(out);
+                    } else {
+                        return Err("FFmpeg encoding failed".into());
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2552,8 +2637,15 @@ pub async fn open_locales_folder() -> Result<String, String> {
 /// Developer guide written to the extensions folder on first open.
 const EXTENSIONS_GUIDE: &str = r#"# How to Create an OpenGG Extension
 
-Extensions are self-contained directories placed here.
-Each one is an IIFE JavaScript bundle that registers a Vue 3 component on `window.__ext_<id>`.
+Each extension is a self-contained folder placed here. An extension can add a
+**UI part** (an IIFE bundle that registers a Vue 3 component on `window.__ext_<id>`),
+a **background part** (an executable the daemon runs and supervises, via the
+`daemon` field), or both.
+
+> The complete, authoritative authoring contract — including the daemon model and
+> the `window.opengg` whitelist — lives in `AGENTS.md` in the OpenGG
+> `extension-template/`. Building with AI? Use `PROMPT.md` from the same template.
+> Quickest start of all: run `make new-extension NAME=my-extension` in the repo.
 
 ---
 
@@ -2583,9 +2675,10 @@ The folder name is treated as the extension's `id`.
   "description": "A one-line description shown in Settings → Extensions.",
   "version":     "1.0.0",
   "author":      "Your Name",
-  "icon":        "icon.svg",
-  "main":        "index.iife.js",
-  "hasSettings": true
+  "icon":        "assets/icon.svg",
+  "main":        "dist/index.iife.js",
+  "hasSettings": true,
+  "daemon":      "bin/my-daemon"
 }
 ```
 
@@ -2596,9 +2689,10 @@ The folder name is treated as the extension's `id`.
 | `description`  | ✗        | Short description (≤ 120 chars). |
 | `version`      | ✗        | SemVer string e.g. `"1.0.0"`. |
 | `author`       | ✗        | Author name or handle. |
-| `icon`         | ✗        | Icon filename relative to the extension root (SVG/PNG). |
-| `main`         | ✗        | IIFE bundle filename. Omit for metadata-only extensions. |
+| `icon`         | ✗        | Icon path relative to the extension root (SVG/PNG). |
+| `main`         | ✗        | UI part — IIFE bundle path. Omit for daemon-only extensions. |
 | `hasSettings`  | ✗        | Set `true` to show a gear button that opens your settings panel. |
+| `daemon`       | ✗        | Background part — path to a `chmod +x` executable the daemon runs & supervises. Omit for UI-only extensions. |
 
 ---
 
@@ -2702,6 +2796,21 @@ pub fn extensions_dir_pub() -> PathBuf {
     extensions_dir()
 }
 
+/// Shared enable-state file (`{ "<id>": bool }`, absent ⇒ enabled). Read and
+/// written by both this Tauri layer and the daemon's `ExtensionManager`.
+fn ext_state_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.config"))
+        .join("opengg/extensions.json")
+}
+
+fn load_ext_enabled_map() -> std::collections::HashMap<String, bool> {
+    std::fs::read_to_string(ext_state_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
 #[derive(Serialize)]
 pub struct ExtensionInfo {
     pub id: String,
@@ -2717,19 +2826,26 @@ pub struct ExtensionInfo {
     pub main: Option<String>,
     #[serde(default)]
     pub ui: Option<String>,
+    /// Whether the extension is enabled (per the shared state file; default true).
+    #[serde(default)]
+    pub enabled: bool,
+    /// True if the manifest declares a `daemon` (background) executable part.
+    #[serde(default)]
+    pub has_daemon: bool,
 }
 
-/// Creates `~/.local/share/opengg/extensions/` if needed, writes the developer
-/// guide on the first visit, then opens the folder in the file manager.
+/// Creates `~/.local/share/opengg/extensions/` if needed, (re)writes the
+/// auto-generated developer guide so it stays current, then opens the folder in
+/// the file manager.
 #[command]
 pub async fn open_extensions_folder() -> Result<String, String> {
     let dir = extensions_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
 
+    // Always refresh the generated guide — it is not meant to be user-edited, and
+    // overwriting ensures existing installs pick up new docs (e.g. the daemon field).
     let guide = dir.join("HOW_TO_CREATE_EXTENSIONS.md");
-    if !guide.exists() {
-        std::fs::write(&guide, EXTENSIONS_GUIDE).map_err(|e| format!("write guide: {e}"))?;
-    }
+    std::fs::write(&guide, EXTENSIONS_GUIDE).map_err(|e| format!("write guide: {e}"))?;
 
     let path_str = dir.to_string_lossy().to_string();
     open::that(&dir).map_err(|e| format!("open folder: {e}"))?;
@@ -2746,6 +2862,7 @@ pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
     }
 
     let mut exts = Vec::new();
+    let enabled_map = load_ext_enabled_map();
     let entries = std::fs::read_dir(&dir).map_err(|e| format!("read dir: {e}"))?;
 
     for entry in entries.flatten() {
@@ -2774,6 +2891,9 @@ pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
             continue;
         }
 
+        let enabled = *enabled_map.get(&id).unwrap_or(&true);
+        let has_daemon = v["daemon"].as_str().map(|s| !s.is_empty()).unwrap_or(false);
+
         exts.push(ExtensionInfo {
             id,
             name,
@@ -2784,11 +2904,35 @@ pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
             icon: v["icon"].as_str().map(|s| s.to_string()),
             main: v["main"].as_str().map(|s| s.to_string()),
             ui: v["ui"].as_str().map(|s| s.to_string()),
+            enabled,
+            has_daemon,
         });
     }
 
     exts.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(exts)
+}
+
+/// Enable or disable an extension. Writes the shared `extensions.json` state file
+/// (the single source of truth, read by both this layer and the daemon) and then
+/// best-effort asks the daemon to start/stop the extension's background part live.
+#[command]
+pub async fn set_extension_enabled(id: String, enabled: bool) -> Result<(), String> {
+    // 1. Persist to the shared state file so the decision survives even if the
+    //    daemon isn't running (the frontend reads `enabled` from `scan_extensions`).
+    let mut map = load_ext_enabled_map();
+    map.insert(id.clone(), enabled);
+    let path = ext_state_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(&map).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(&path, json).map_err(|e| format!("write state: {e}"))?;
+
+    // 2. Tell the daemon to start/stop the daemon part now (no restart). Best-effort:
+    //    a UI-only extension or an absent daemon simply makes this a no-op.
+    let _ = call_dbus_void("SetEnabled", EX_PATH, EX_IFACE, (id.as_str(), enabled)).await;
+    Ok(())
 }
 
 /// Reads every `*.json` file in `~/.config/opengg/locales/` and returns their
@@ -3213,6 +3357,7 @@ pub async fn update_watch_dirs(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// Prepend "OpenGG_" to the filename if it doesn't already start with it.
+#[allow(dead_code)]
 fn smart_prefix(path: &str) -> String {
     let p = Path::new(path);
     let stem = p.file_stem().unwrap_or_default().to_string_lossy();
@@ -3233,8 +3378,43 @@ fn smart_prefix(path: &str) -> String {
 }
 
 /// Write text to the system clipboard.
+/// Tries Wayland (wl-copy) → X11 (xclip) → arboard fallback.
 #[tauri::command]
 pub async fn write_clipboard(text: String) -> Result<(), String> {
+    use std::io::Write;
+
+    // 1. Wayland
+    if let Ok(mut child) = std::process::Command::new("wl-copy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        if let Ok(status) = child.wait() {
+            if status.success() {
+                return Ok(());
+            }
+        }
+    }
+
+    // 2. X11
+    if let Ok(mut child) = std::process::Command::new("xclip")
+        .args(["-selection", "clipboard", "-in"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        if let Ok(status) = child.wait() {
+            if status.success() {
+                return Ok(());
+            }
+        }
+    }
+
+    // 3. arboard fallback
     let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     cb.set_text(&text).map_err(|e| e.to_string())?;
     Ok(())
@@ -3246,6 +3426,7 @@ pub async fn register_global_shortcuts(
     save_replay: String,
     toggle_recording: String,
     screenshot: String,
+    toggle_ear_blast: String,
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
     let gs = app.global_shortcut();
@@ -3254,6 +3435,7 @@ pub async fn register_global_shortcuts(
         (&save_replay, "save_replay"),
         (&toggle_recording, "toggle_recording"),
         (&screenshot, "screenshot"),
+        (&toggle_ear_blast, "toggle_ear_blast"),
     ];
     for (combo, action) in combos {
         if combo.is_empty() {
@@ -3415,6 +3597,7 @@ fn fmt_ts(s: i64) -> String {
     let yr = if mth <= 2 { y + 1 } else { y };
     format!("{yr}-{mth:02}-{d:02} {h:02}:{m:02}")
 }
+#[allow(dead_code)]
 fn get_vol(n: &str) -> Option<f32> {
     let o = Command::new("pactl")
         .args(["get-sink-volume", n])
@@ -3490,17 +3673,21 @@ pub async fn set_autostart(enable: bool) -> Result<(), String> {
 
     if enable {
         let exe = std::env::current_exe().map_err(|e| format!("{e}"))?;
+        let exe_parent = exe.parent().unwrap_or(std::path::Path::new("/"));
         let content = format!(
             "[Desktop Entry]\n\
             Type=Application\n\
             Name=OpenGG\n\
-            Exec=\"{}\"\n\
+            Exec=env OPENGG_AUTOSTART=1 \"{}\"\n\
+            Path={}\n\
             Terminal=false\n\
             Icon=opengg\n\
             Hidden=false\n\
             NoDisplay=false\n\
+            StartupNotify=false\n\
             X-GNOME-Autostart-enabled=true\n",
-            exe.display()
+            exe.display(),
+            exe_parent.display()
         );
         std::fs::write(&desktop, content).map_err(|e| format!("{e}"))?;
     } else if desktop.exists() {
@@ -3713,6 +3900,202 @@ fn get_focused_window_monitor() -> Option<String> {
     best
 }
 
+/// A single actionable fix that the UI can present with a copy button.
+#[derive(Serialize)]
+pub struct DiagnosticFix {
+    pub command: String,
+    pub description: String,
+}
+
+/// A single diagnostic item with optional fix guidance.
+#[derive(Serialize)]
+pub struct DiagnosticItem {
+    pub message: String,
+    pub severity: String,
+    pub fix: Option<DiagnosticFix>,
+}
+
+/// Structured result from the GSR pre-flight diagnostic suite.
+#[derive(Serialize)]
+pub struct GsrDiagnosticResult {
+    pub ok: bool,
+    pub gsr_installed: bool,
+    pub gsr_version: Option<String>,
+    pub in_render_group: bool,
+    pub in_video_group: bool,
+    pub gpu_encoder_available: bool,
+    pub audio_sources_ok: bool,
+    pub missing_audio_sources: Vec<String>,
+    pub items: Vec<DiagnosticItem>,
+}
+
+/// Detect the host Linux distribution by reading /etc/os-release.
+fn detect_distro() -> &'static str {
+    let content = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let id = content
+        .lines()
+        .find(|l| l.starts_with("ID="))
+        .and_then(|l| l.strip_prefix("ID="))
+        .unwrap_or("")
+        .trim_matches('"');
+    match id {
+        "ubuntu" => "ubuntu",
+        "debian" => "debian",
+        "arch" | "manjaro" | "endeavouros" | "garuda" => "arch",
+        "fedora" => "fedora",
+        _ => "unknown",
+    }
+}
+
+/// Run a comprehensive pre-flight check before attempting to start GSR.
+/// Returns a structured report the UI can turn into actionable messages.
+#[command]
+pub fn gsr_diagnostics(audio_sources: Vec<String>) -> GsrDiagnosticResult {
+    let distro = detect_distro();
+
+    let mut result = GsrDiagnosticResult {
+        ok: true,
+        gsr_installed: false,
+        gsr_version: None,
+        in_render_group: false,
+        in_video_group: false,
+        gpu_encoder_available: false,
+        audio_sources_ok: true,
+        missing_audio_sources: Vec::new(),
+        items: Vec::new(),
+    };
+
+    // Distro-specific install commands
+    let gsr_install_cmd = match distro {
+        "arch" => "yay -S gpu-screen-recorder",
+        "fedora" => "sudo dnf install gpu-screen-recorder",
+        _ => "sudo add-apt-repository ppa:dec05eba/gpu-screen-recorder && sudo apt install gpu-screen-recorder",
+    };
+    let driver_hint = match distro {
+        "arch" => "Install proprietary GPU drivers (e.g. sudo pacman -S nvidia-utils or mesa-va-drivers) for hardware encoding.",
+        "fedora" => "Install proprietary GPU drivers (e.g. sudo dnf install mesa-va-drivers) for hardware encoding.",
+        _ => "Install proprietary GPU drivers (e.g. sudo apt install mesa-va-drivers) for hardware encoding.",
+    };
+
+    // 1. Binary presence + version
+    let gsr_help = std::process::Command::new("gpu-screen-recorder")
+        .arg("--help")
+        .output();
+    match gsr_help {
+        Ok(o) if o.status.success() => {
+            result.gsr_installed = true;
+            // Version line usually looks like: "gpu-screen-recorder 5.1.0"
+            let text = String::from_utf8_lossy(&o.stdout);
+            for line in text.lines() {
+                if line.starts_with("gpu-screen-recorder") {
+                    result.gsr_version = line.split_whitespace().nth(1).map(|s| s.to_string());
+                    break;
+                }
+            }
+        }
+        _ => {
+            result.ok = false;
+            result.items.push(DiagnosticItem {
+                message: "gpu-screen-recorder not found in PATH. Install it via your package manager.".into(),
+                severity: "error".into(),
+                fix: Some(DiagnosticFix {
+                    command: gsr_install_cmd.into(),
+                    description: "Install gpu-screen-recorder for your distribution.".into(),
+                }),
+            });
+        }
+    }
+
+    // 2. Group membership
+    #[cfg(unix)]
+    {
+        // Use `id -Gn` for portability
+        if let Ok(o) = std::process::Command::new("id").args(["-Gn"]).output() {
+            let group_str = String::from_utf8_lossy(&o.stdout);
+            result.in_render_group = group_str.contains("render");
+            result.in_video_group = group_str.contains("video");
+        }
+    }
+    if !result.in_render_group {
+        result.ok = false;
+        result.items.push(DiagnosticItem {
+            message: "Your user is not in the 'render' group. Run: sudo usermod -aG render,video $USER — then re-login.".into(),
+            severity: "error".into(),
+            fix: Some(DiagnosticFix {
+                command: "sudo usermod -aG render,video $USER".into(),
+                description: "Add your user to the required groups, then re-login.".into(),
+            }),
+        });
+    }
+    if !result.in_video_group {
+        result.items.push(DiagnosticItem {
+            message: "Your user is not in the 'video' group. Some capture modes may fail. Run: sudo usermod -aG video $USER — then re-login.".into(),
+            severity: "warning".into(),
+            fix: Some(DiagnosticFix {
+                command: "sudo usermod -aG video $USER".into(),
+                description: "Add your user to the video group, then re-login.".into(),
+            }),
+        });
+    }
+
+    // 3. GPU encoder probe (ffmpeg -encoders is the most portable check)
+    if let Ok(o) = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output()
+    {
+        let enc = String::from_utf8_lossy(&o.stdout);
+        result.gpu_encoder_available =
+            enc.contains("h264_vaapi") || enc.contains("h264_nvenc") || enc.contains("h264_amf");
+    }
+    if !result.gpu_encoder_available {
+        result.items.push(DiagnosticItem {
+            message: "No GPU encoder (h264_vaapi / h264_nvenc / h264_amf) detected. GSR may fall back to software encoding or fail.".into(),
+            severity: "warning".into(),
+            fix: Some(DiagnosticFix {
+                command: "".into(),
+                description: driver_hint.into(),
+            }),
+        });
+    }
+
+    // 4. Audio monitor sources
+    let sources_short = std::process::Command::new("pactl")
+        .args(["list", "sources", "short"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    for src in &audio_sources {
+        let sink = if src.contains('_') || src.contains('.') || src.contains('-') {
+            src.clone()
+        } else {
+            format!("OpenGG_{src}")
+        };
+        let monitor = if sink.ends_with(".monitor") {
+            sink.clone()
+        } else {
+            format!("{sink}.monitor")
+        };
+        if !sources_short.contains(&monitor) {
+            result.audio_sources_ok = false;
+            result.missing_audio_sources.push(monitor.clone());
+        }
+    }
+    if !result.audio_sources_ok {
+        result.ok = false;
+        let missing = result.missing_audio_sources.join(", ");
+        result.items.push(DiagnosticItem {
+            message: format!("Missing audio capture sources: {missing}. Open the Audio Mixer and create the Virtual Audio Engine before recording."),
+            severity: "error".into(),
+            fix: Some(DiagnosticFix {
+                command: "".into(),
+                description: "Open the Audio Mixer and create the Virtual Audio Engine first.".into(),
+            }),
+        });
+    }
+
+    result
+}
+
 /// Returns true if the gpu-screen-recorder binary is found in PATH.
 #[command]
 pub fn check_gsr_installed() -> bool {
@@ -3761,11 +4144,6 @@ pub fn start_gsr_replay(
             src.clone()
         } else {
             format!("OpenGG_{src}")
-        };
-        let monitor_name = if sink_name.ends_with(".monitor") {
-            sink_name.clone()
-        } else {
-            format!("{sink_name}.monitor")
         };
         // Check both the sink and its monitor source exist
         if !sinks_short.contains(&sink_name) {
@@ -3858,16 +4236,58 @@ pub fn start_gsr_replay(
         cmd.args(["-a", &monitor]);
     }
 
-    let child = cmd
+    // ★ Pipe stderr so we can diagnose immediate failures (missing groups, bad GPU, etc.)
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to start gpu-screen-recorder: {e}"))?;
+
+    let stderr = child.stderr.take().ok_or("Failed to capture GSR stderr")?;
+    let stderr_log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let stderr_log_clone = Arc::clone(&stderr_log);
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader};
+        for line in BufReader::new(stderr).lines().flatten() {
+            log::warn!("[GSR stderr] {line}");
+            stderr_log_clone.lock().unwrap().push(line);
+        }
+    });
+
+    // ★ Warmup check: give GSR 1 s to crash immediately after spawn.
+    // This catches missing permissions, invalid targets, encoder failures, etc.
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            let tail: String = {
+                let log = stderr_log.lock().unwrap();
+                log.iter().rev().take(12).rev().cloned().collect::<Vec<_>>().join("\n")
+            };
+            let reason = if tail.is_empty() {
+                format!("gpu-screen-recorder exited immediately with status {status:?}.")
+            } else {
+                format!(
+                    "gpu-screen-recorder exited immediately with status {status:?}. Details:\n{tail}",
+                )
+            };
+            log::error!("{reason}");
+            return Err(reason);
+        }
+        Ok(None) => {
+            // Still running — good
+        }
+        Err(e) => {
+            return Err(format!("Failed to check gpu-screen-recorder status after spawn: {e}"));
+        }
+    }
+
     log::info!(
         "GSR started (pid {}) replay={}s fps={fps} quality={quality} bitrate={bitrate_kbps:?}kbps target={target} dir={expanded} audio={:?}",
         child.id(), replay_secs, audio_sources
     );
-    *lock = Some((
+    *lock = Some(crate::GsrState {
         child,
-        GsrSpawnParams {
+        params: GsrSpawnParams {
             output_dir,
             replay_secs,
             fps,
@@ -3876,7 +4296,8 @@ pub fn start_gsr_replay(
             monitor_target,
             audio_sources,
         },
-    ));
+        stderr_log,
+    });
     let _ = app.emit("gsr-status-changed", serde_json::json!({"running": true}));
     Ok(())
 }
@@ -3986,23 +4407,23 @@ pub fn save_gsr_replay(app: AppHandle, restart_on_save: bool) -> Result<(), Stri
     let (output_dir_exp, restart_params): (String, Option<GsrSpawnParams>) = {
         let lock = state.0.lock().unwrap();
         match &*lock {
-            Some((child, params)) => {
-                let pid = child.id();
+            Some(gsr_state) => {
+                let pid = gsr_state.child.id();
                 #[cfg(unix)]
                 unsafe {
                     libc::kill(pid as libc::pid_t, libc::SIGUSR1);
                 }
                 log::info!("GSR SIGUSR1 → pid {pid}");
-                let expanded = shexp(&params.output_dir);
+                let expanded = shexp(&gsr_state.params.output_dir);
                 let rp = if restart_on_save {
                     Some(GsrSpawnParams {
-                        output_dir: params.output_dir.clone(),
-                        replay_secs: params.replay_secs,
-                        fps: params.fps,
-                        quality: params.quality.clone(),
-                        bitrate_kbps: params.bitrate_kbps,
-                        monitor_target: params.monitor_target.clone(),
-                        audio_sources: params.audio_sources.clone(),
+                        output_dir: gsr_state.params.output_dir.clone(),
+                        replay_secs: gsr_state.params.replay_secs,
+                        fps: gsr_state.params.fps,
+                        quality: gsr_state.params.quality.clone(),
+                        bitrate_kbps: gsr_state.params.bitrate_kbps,
+                        monitor_target: gsr_state.params.monitor_target.clone(),
+                        audio_sources: gsr_state.params.audio_sources.clone(),
                     })
                 } else {
                     None
@@ -4077,8 +4498,8 @@ pub fn save_gsr_replay(app: AppHandle, restart_on_save: bool) -> Result<(), Stri
     if let Some(params) = restart_params {
         {
             let mut lock = state.0.lock().unwrap();
-            if let Some((mut child, _)) = lock.take() {
-                gsr_kill_graceful(&mut child);
+            if let Some(mut gsr_state) = lock.take() {
+                gsr_kill_graceful(&mut gsr_state.child);
                 log::info!("GSR stopped for restart-on-save (SIGINT + wait)");
             }
         } // lock dropped before respawn
@@ -4112,8 +4533,8 @@ pub fn restart_gsr_replay(
     {
         let state = app.state::<GsrProcess>();
         let mut lock = state.0.lock().unwrap();
-        if let Some((mut child, _)) = lock.take() {
-            gsr_kill_graceful(&mut child);
+        if let Some(mut gsr_state) = lock.take() {
+            gsr_kill_graceful(&mut gsr_state.child);
             log::info!("GSR stopped for restart (SIGINT + wait)");
         }
     }
@@ -4174,8 +4595,8 @@ fn kill_kms_server() {
 pub fn stop_gsr_replay(app: AppHandle) -> Result<(), String> {
     let state = app.state::<GsrProcess>();
     let mut lock = state.0.lock().unwrap();
-    if let Some((mut child, _)) = lock.take() {
-        gsr_kill_graceful(&mut child);
+    if let Some(mut gsr_state) = lock.take() {
+        gsr_kill_graceful(&mut gsr_state.child);
         log::info!("GSR stopped (SIGINT + wait)");
     }
     drop(lock); // release mutex before emitting
@@ -4184,14 +4605,36 @@ pub fn stop_gsr_replay(app: AppHandle) -> Result<(), String> {
 }
 
 /// Returns true if the GSR process is currently running.
+/// If the process exited unexpectedly, emits a `gsr-crashed` event with the last
+/// stderr lines so the UI can warn the user and optionally auto-restart.
 #[command]
 pub fn is_gsr_running(app: AppHandle) -> bool {
     let state = app.state::<GsrProcess>();
     let mut lock = state.0.lock().unwrap();
     match lock.as_mut() {
-        Some((child, _)) => match child.try_wait() {
+        Some(gsr_state) => match gsr_state.child.try_wait() {
             Ok(None) => true,
-            _ => {
+            Ok(Some(status)) => {
+                let tail: String = {
+                    let log = gsr_state.stderr_log.lock().unwrap();
+                    log.iter().rev().take(12).rev().cloned().collect::<Vec<_>>().join("\n")
+                };
+                log::warn!(
+                    "GSR crashed (status={:?}). Last stderr:\n{tail}",
+                    status.code()
+                );
+                let _ = app.emit(
+                    "gsr-crashed",
+                    serde_json::json!({
+                        "status": status.code(),
+                        "stderr_tail": tail,
+                    }),
+                );
+                lock.take();
+                false
+            }
+            Err(e) => {
+                log::warn!("GSR try_wait error: {e}");
                 lock.take();
                 false
             }

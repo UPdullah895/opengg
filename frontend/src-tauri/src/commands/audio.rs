@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Manager, State};
 use super::{AU_PATH, AU_IFACE, call_dbus, call_dbus_void, run_cmd_async, run_cmd_sync};
 
@@ -25,14 +24,8 @@ pub async fn set_volume(channel: String, volume: u32) -> Result<(), String> {
     }
     // Direct pactl fallback
     let pct = format!("{volume}%");
-    if channel == "Master" {
-        run_cmd_async("pactl", &["set-sink-volume", "@DEFAULT_SINK@", &pct]).await?;
-    } else if channel == "Mic" {
-        run_cmd_async("pactl", &["set-source-volume", "@DEFAULT_SOURCE@", &pct]).await?;
-    } else {
-        let sink = format!("OpenGG_{channel}");
-        run_cmd_async("pactl", &["set-sink-volume", &sink, &pct]).await?;
-    }
+    let sink = format!("OpenGG_{channel}");
+    run_cmd_async("pactl", &["set-sink-volume", &sink, &pct]).await?;
     Ok(())
 }
 
@@ -45,16 +38,7 @@ pub async fn set_mute(channel: String, muted: bool) -> Result<(), String> {
         return Ok(());
     }
     let val = if muted { "1" } else { "0" };
-    if channel == "Master" {
-        run_cmd_async("pactl", &["set-sink-mute", "@DEFAULT_SINK@", val]).await?;
-    } else if channel == "Mic" {
-        run_cmd_async("pactl", &["set-source-mute", "@DEFAULT_SOURCE@", val]).await?;
-    } else {
-        run_cmd_async(
-            "pactl",
-            &["set-sink-mute", &format!("OpenGG_{channel}"), val],
-        ).await?;
-    }
+    run_cmd_async("pactl", &["set-sink-mute", &format!("OpenGG_{channel}"), val]).await?;
     Ok(())
 }
 
@@ -407,6 +391,7 @@ pub async fn route_app(
 }
 
 /// Get default sink's pactl integer index
+#[allow(dead_code)]
 fn get_default_sink_index() -> Result<u32, String> {
     let name = run_cmd_sync("pactl", &["get-default-sink"])?;
     get_sink_index_by_name(&name)
@@ -680,9 +665,14 @@ async fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
     // Increase settling time: 600ms to allow PipeWire to fully enumerate the new sink
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
 
-    // Set up loopback links to default sink
+    // Set up loopback links to default sink (idempotent)
     if let Ok(def) = run_cmd_sync("pactl", &["get-default-sink"]) {
         for p in ["FL", "FR"] {
+            let current = get_linked_device_for_monitor(name, p);
+            if !current.is_empty() {
+                // Already linked to something — skip to avoid duplicates/noise
+                continue;
+            }
             let result = Command::new("pw-link")
                 .args([
                     &format!("{name}:monitor_{p}"),
@@ -712,6 +702,7 @@ fn sink_prop_value(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\\\""))
 }
 
+#[allow(dead_code)]
 fn unload_null_sink_module(sink_name: &str) -> Result<(), String> {
     let modules = run_cmd_sync("pactl", &["list", "short", "modules"])?;
     for line in modules.lines() {
@@ -968,7 +959,7 @@ fn verify_stream_routed(stream_pw_id: u32, sink_idx: u32) -> bool {
         Err(_) => return false,
     };
     for si in &sis {
-        let idx = match si["index"].as_u64() {
+        let _idx = match si["index"].as_u64() {
             Some(i) => i as u32,
             None => continue,
         };
@@ -1055,9 +1046,41 @@ pub async fn get_audio_devices() -> Result<Vec<AudioDevice>, String> {
 //  pw-link -d is a no-op when no link exists, so it's safe to spam.
 // ══════════════════════════════════════════════════════════════
 
+/// Query `pw-link -l` to find which physical sink device a virtual sink's
+/// monitor port is currently linked to. Returns the device name (e.g.
+/// "alsa_output.usb-...") or an empty string if not linked to any playback port.
+fn get_linked_device_for_monitor(sink_name: &str, port: &str) -> String {
+    let output = match run_cmd_sync("pw-link", &["-l"]) {
+        Ok(o) => o,
+        Err(_) => return String::new(),
+    };
+    let target_port = format!("{sink_name}:monitor_{port}");
+    let mut in_section = false;
+    for line in output.lines() {
+        // Section header: port name with no leading whitespace
+        if !line.starts_with(' ') && line.trim() == target_port {
+            in_section = true;
+            continue;
+        }
+        if in_section {
+            if !line.starts_with("  |->") {
+                break; // next port section
+            }
+            if let Some(rest) = line.trim_start().strip_prefix("|-> ") {
+                if let Some((device, _)) = rest.rsplit_once(&format!(":playback_{port}")) {
+                    return device.to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
 /// Destroy every existing pw-link from `{sink_name}:monitor_FL/FR` to
 /// any physical sink that is currently listed by PulseAudio.
-fn unlink_virtual_sink_from_all(sink_name: &str) {
+/// If `preserve_device` is provided, links to that device are left intact.
+#[allow(dead_code)]
+fn unlink_virtual_sink_from_all(sink_name: &str, preserve_device: Option<&str>) {
     let json = match run_cmd_sync("pactl", &["-f", "json", "list", "sinks"]) {
         Ok(j) => j,
         Err(_) => return,
@@ -1066,8 +1089,12 @@ fn unlink_virtual_sink_from_all(sink_name: &str) {
         Ok(v) => v,
         Err(_) => return,
     };
+    let mut unlinked = 0;
     for s in &sinks {
         if let Some(target) = s["name"].as_str() {
+            if preserve_device == Some(target) {
+                continue;
+            }
             for p in ["FL", "FR"] {
                 // pw-link -d silently exits 0 when the link doesn't exist
                 Command::new("pw-link")
@@ -1078,44 +1105,78 @@ fn unlink_virtual_sink_from_all(sink_name: &str) {
                     ])
                     .output()
                     .ok();
+                unlinked += 1;
             }
         }
     }
     eprintln!(
-        "set_channel_device: unlinked {sink_name} from {} sinks",
-        sinks.len()
+        "set_channel_device: unlinked {sink_name} from {} sink(s)",
+        unlinked / 2
     );
 }
 
 #[command]
 pub async fn set_channel_device(channel: String, device_name: String) -> Result<(), String> {
     if channel == "Mic" {
-        let _ = run_cmd_async("pactl", &["set-default-source", &device_name]).await;
+        let current = run_cmd_async("pactl", &["get-default-source"])
+            .await
+            .unwrap_or_default();
+        if current.trim() != device_name {
+            run_cmd_async("pactl", &["set-default-source", &device_name]).await?;
+            eprintln!("set_channel_device: Mic source → {device_name}");
+        }
         return Ok(());
     }
     if channel == "Master" {
-        let _ = run_cmd_async("pactl", &["set-default-sink", &device_name]).await;
+        let current = run_cmd_async("pactl", &["get-default-sink"])
+            .await
+            .unwrap_or_default();
+        if current.trim() != device_name {
+            run_cmd_async("pactl", &["set-default-sink", &device_name]).await?;
+            eprintln!("set_channel_device: Master sink → {device_name}");
+        }
         return Ok(());
     }
 
     let sink = format!("OpenGG_{channel}");
 
-    // ★ Step 1: tear down ALL existing links for this virtual sink.
-    //   This is the core fix for the routing leak / audio duplication bug.
-    unlink_virtual_sink_from_all(&sink);
-
-    // ★ Step 2: create fresh links to the newly selected device.
+    // ★ Idempotent: only modify links that are actually different.
+    //   Query current links, unlink from wrong devices, link to target if missing.
     for p in ["FL", "FR"] {
-        match run_cmd_async("pw-link", &[&format!("{sink}:monitor_{p}"), &format!("{device_name}:playback_{p}")]).await {
+        let current = get_linked_device_for_monitor(&sink, p);
+        if current == device_name {
+            // Already linked to the target device — nothing to do.
+            continue;
+        }
+        // Unlink from the current wrong device if any.
+        if !current.is_empty() {
+            let _ = run_cmd_async(
+                "pw-link",
+                &[
+                    "-d",
+                    &format!("{sink}:monitor_{p}"),
+                    &format!("{current}:playback_{p}"),
+                ],
+            )
+            .await;
+        }
+        // Create the new link.
+        match run_cmd_async(
+            "pw-link",
+            &[
+                &format!("{sink}:monitor_{p}"),
+                &format!("{device_name}:playback_{p}"),
+            ],
+        )
+        .await
+        {
             Ok(_) => {
                 eprintln!(
                     "set_channel_device: linked {sink}:monitor_{p} → {device_name}:playback_{p}"
                 );
             }
             Err(err) => {
-                eprintln!(
-                    "set_channel_device: pw-link failed: {err}"
-                );
+                eprintln!("set_channel_device: pw-link failed: {err}");
             }
         }
     }
@@ -1288,6 +1349,10 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
                     levels_vec.push((ch, db));
                 }
             }
+            // ★ Ear blast protection: check each channel's level
+            for (ch, db) in &levels_vec {
+                let _ = check_ear_blast(&handle, ch, *db).await;
+            }
             let _ = handle.emit("vu-levels", VuLevels { channels: levels_vec.clone() });
             tokio::time::sleep(std::time::Duration::from_millis(32)).await;
         }
@@ -1305,6 +1370,273 @@ pub async fn stop_vu_stream(app: AppHandle) -> Result<(), String> {
         .store(false, Ordering::Relaxed);
     Ok(())
 }
+
+// ══════════════════════════════════════════════════════════════
+//  ★ Ear Blast Protection
+// ══════════════════════════════════════════════════════════════
+
+/// Query the current volume percentage (0-150) of a sink by name.
+fn get_sink_volume_percent(sink_name: &str) -> Option<u32> {
+    // `pactl list sinks short` has only 5 tab-separated fields (index/name/driver/spec/state),
+    // not 6 — use `get-sink-volume` which outputs "... / 100% ..." directly.
+    let out = run_cmd_sync("pactl", &["get-sink-volume", sink_name]).ok()?;
+    // "Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: ..."
+    let pct_str = out.split('%').next()?.split_whitespace().last()?;
+    pct_str.parse::<u32>().ok().map(|v| v.min(150))
+}
+
+/// Query the current volume percentage (0-150) of a source by name.
+fn get_source_volume_percent(source_name: &str) -> Option<u32> {
+    let out = run_cmd_sync("pactl", &["get-source-volume", source_name]).ok()?;
+    let pct_str = out.split('%').next()?.split_whitespace().last()?;
+    pct_str.parse::<u32>().ok().map(|v| v.min(150))
+}
+
+/// Resolve the PulseAudio object name for a channel.
+fn pa_object_name_for_channel(channel: &str) -> Option<String> {
+    match channel {
+        "Master" => run_cmd_sync("pactl", &["get-default-sink"]).ok(),
+        "Mic" => run_cmd_sync("pactl", &["get-default-source"]).ok(),
+        _ => Some(format!("OpenGG_{channel}")),
+    }
+}
+
+/// Volume-limiting check called from the VU emitter task (~30 fps).
+/// Prevents oscillation via dynamic release margin.
+async fn check_ear_blast(app: &AppHandle, channel: &str, db: f32) {
+    let state = app.state::<crate::EarBlastState>();
+
+    if !state.enabled.load(Ordering::Relaxed) {
+        return;
+    }
+
+    {
+        let channels = state.channels.lock().unwrap();
+        if !channels.contains(channel) {
+            return;
+        }
+    }
+
+    let threshold_pct = state.threshold_percent.load(Ordering::Relaxed).max(1) as f32;
+    let target_pct = state.target_percent.load(Ordering::Relaxed).min(100) as f32;
+    let threshold_db = 20.0 * (threshold_pct / 100.0).max(1e-9).log10();
+
+    // Dynamic margin: must exceed the volume-reduction delta + 3 dB buffer
+    let reduction_db: f32 = if target_pct > 0.0 {
+        20.0 * (target_pct / 100.0).max(1e-9).log10()
+    } else {
+        -60.0
+    };
+    let margin_db = reduction_db.abs() + 3.0;
+    let release_db = threshold_db - margin_db;
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    // ── Phase 1: read & mutate state (synchronous, no await) ──
+    enum EarBlastAction {
+        Activate { sink_name: String, target: u32, _orig_vol: u32 },
+        Deactivate { sink_name: String, orig_vol: u32, skip_restore: bool },
+        Nothing,
+    }
+
+    let action = {
+        let mut active_map = state.active.lock().unwrap();
+        let mut orig_map = state.original_volumes.lock().unwrap();
+        let mut trigger_map = state.last_trigger_ms.lock().unwrap();
+
+        let is_active = *active_map.get(channel).unwrap_or(&false);
+        let last_trigger = *trigger_map.get(channel).unwrap_or(&0);
+        let hold_elapsed = now_ms.saturating_sub(last_trigger) >= 500;
+
+        if !is_active && db > threshold_db {
+            if let Some(sink_name) = pa_object_name_for_channel(channel) {
+                let current_vol = if channel == "Mic" {
+                    get_source_volume_percent(&sink_name)
+                } else {
+                    get_sink_volume_percent(&sink_name)
+                };
+                if let Some(vol) = current_vol {
+                    if vol > target_pct as u32 {
+                        orig_map.insert(channel.to_string(), vol);
+                        active_map.insert(channel.to_string(), true);
+                        trigger_map.insert(channel.to_string(), now_ms);
+                        EarBlastAction::Activate {
+                            sink_name,
+                            target: target_pct.round() as u32,
+                            _orig_vol: vol,
+                        }
+                    } else {
+                        EarBlastAction::Nothing
+                    }
+                } else {
+                    EarBlastAction::Nothing
+                }
+            } else {
+                EarBlastAction::Nothing
+            }
+        } else if is_active && db < release_db && hold_elapsed {
+            if let Some(sink_name) = pa_object_name_for_channel(channel) {
+                if let Some(orig_vol) = orig_map.remove(channel) {
+                    let current_vol = if channel == "Mic" {
+                        get_source_volume_percent(&sink_name)
+                    } else {
+                        get_sink_volume_percent(&sink_name)
+                    };
+                    let skip_restore = if let Some(cur) = current_vol {
+                        let diff = if cur > target_pct as u32 {
+                            cur - target_pct as u32
+                        } else {
+                            target_pct as u32 - cur
+                        };
+                        diff > 5 // user manually changed volume
+                    } else {
+                        false
+                    };
+                    active_map.insert(channel.to_string(), false);
+                    EarBlastAction::Deactivate {
+                        sink_name,
+                        orig_vol,
+                        skip_restore,
+                    }
+                } else {
+                    active_map.insert(channel.to_string(), false);
+                    EarBlastAction::Nothing
+                }
+            } else {
+                EarBlastAction::Nothing
+            }
+        } else {
+            EarBlastAction::Nothing
+        }
+    };
+
+    // ── Phase 2: async I/O (all MutexGuards dropped) ──
+    match action {
+        EarBlastAction::Activate { sink_name, target, .. } => {
+            let pactl_target = format!("{}%", target);
+            if channel == "Mic" {
+                let _ = run_cmd_async("pactl", &["set-source-volume", &sink_name, &pactl_target]).await;
+            } else {
+                let _ = run_cmd_async("pactl", &["set-sink-volume", &sink_name, &pactl_target]).await;
+            }
+            let _ = app.emit(
+                "ear-blast-state",
+                serde_json::json!({ "channel": channel, "active": true }),
+            );
+            eprintln!(
+                "ear_blast: activated on {channel} (level={db:.1} dB > threshold={threshold_db:.1} dB) → {target}%"
+            );
+        }
+        EarBlastAction::Deactivate {
+            sink_name,
+            orig_vol,
+            skip_restore,
+        } => {
+            if !skip_restore {
+                let pactl_vol = format!("{}%", orig_vol);
+                if channel == "Mic" {
+                    let _ = run_cmd_async("pactl", &["set-source-volume", &sink_name, &pactl_vol]).await;
+                } else {
+                    let _ = run_cmd_async("pactl", &["set-sink-volume", &sink_name, &pactl_vol]).await;
+                }
+            }
+            let _ = app.emit(
+                "ear-blast-state",
+                serde_json::json!({ "channel": channel, "active": false }),
+            );
+            eprintln!(
+                "ear_blast: deactivated on {channel} (level={db:.1} dB < release={release_db:.1} dB) → restored {orig_vol}%"
+            );
+        }
+        EarBlastAction::Nothing => {}
+    }
+}
+
+#[command]
+pub async fn set_ear_blast_enabled(
+    enabled: bool,
+    state: State<'_, crate::EarBlastState>,
+) -> Result<(), String> {
+    let was_enabled = state.enabled.load(Ordering::Relaxed);
+    state.enabled.store(enabled, Ordering::Relaxed);
+
+    if was_enabled && !enabled {
+        // Restore all active channels — collect data first, then await
+        let restores: Vec<(String, u32)> = {
+            let mut orig_map = state.original_volumes.lock().unwrap();
+            let mut active_map = state.active.lock().unwrap();
+            let active_channels: Vec<String> = active_map
+                .iter()
+                .filter(|(_, v)| **v)
+                .map(|(k, _)| k.clone())
+                .collect();
+            let mut result = Vec::new();
+            for ch in active_channels {
+                if let Some(orig_vol) = orig_map.remove(&ch) {
+                    result.push((ch.clone(), orig_vol));
+                    active_map.insert(ch, false);
+                }
+            }
+            result
+        };
+        for (ch, orig_vol) in restores {
+            if let Some(name) = pa_object_name_for_channel(&ch) {
+                let vol_str = format!("{}%", orig_vol);
+                if ch == "Mic" {
+                    let _ = run_cmd_async("pactl", &["set-source-volume", &name, &vol_str]).await;
+                } else {
+                    let _ = run_cmd_async("pactl", &["set-sink-volume", &name, &vol_str]).await;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[command]
+pub fn set_ear_blast_channels(
+    channels: Vec<String>,
+    state: State<'_, crate::EarBlastState>,
+) {
+    let mut chs = state.channels.lock().unwrap();
+    chs.clear();
+    for c in channels {
+        chs.insert(c);
+    }
+}
+
+#[command]
+pub fn set_ear_blast_threshold(percent: u32, state: State<'_, crate::EarBlastState>) {
+    state
+        .threshold_percent
+        .store(percent.min(100).max(1), Ordering::Relaxed);
+}
+
+#[command]
+pub fn set_ear_blast_target(percent: u32, state: State<'_, crate::EarBlastState>) {
+    state
+        .target_percent
+        .store(percent.min(100), Ordering::Relaxed);
+}
+
+#[command]
+pub fn get_ear_blast_state(state: State<'_, crate::EarBlastState>) -> Result<String, String> {
+    let enabled = state.enabled.load(Ordering::Relaxed);
+    let channels: Vec<String> = state.channels.lock().unwrap().iter().cloned().collect();
+    let threshold = state.threshold_percent.load(Ordering::Relaxed);
+    let target = state.target_percent.load(Ordering::Relaxed);
+    let json = serde_json::json!({
+        "enabled": enabled,
+        "channels": channels,
+        "threshold": threshold,
+        "target": target,
+    });
+    Ok(json.to_string())
+}
+
 // ══════════════════════════════════════════════════════════════
 //  ★ Virtual Audio Onboarding / Factory Reset
 // ══════════════════════════════════════════════════════════════
@@ -1351,22 +1683,49 @@ pub async fn create_virtual_audio() -> Result<(), String> {
 /// Unload only the OpenGG virtual sinks without restarting PipeWire/WirePlumber.
 #[command]
 pub async fn remove_virtual_audio() -> Result<(), String> {
-    let modules_json = run_cmd_async("pactl", &["-f", "json", "list", "modules"]).await.unwrap_or_default();
-    if let Ok(mods) = serde_json::from_str::<Vec<serde_json::Value>>(&modules_json) {
-        for m in &mods {
-            if m["name"].as_str() != Some("module-null-sink") {
-                continue;
+    let output = run_cmd_async("pactl", &["list", "modules"])
+        .await
+        .map_err(|e| format!("Failed to list PulseAudio modules: {e}"))?;
+
+    let mut indices_to_remove: Vec<u64> = Vec::new();
+    let mut current_index: Option<u64> = None;
+    let mut is_null_sink = false;
+    let mut is_opengg = false;
+
+    for line in output.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("Module #") {
+            // Emit previous module if it matched
+            if current_index.is_some() && is_null_sink && is_opengg {
+                indices_to_remove.push(current_index.unwrap());
             }
-            let args = m["argument"].as_str().unwrap_or("");
-            if !args.contains("OpenGG_") {
-                continue;
-            }
-            if let Some(idx) = m["index"].as_u64() {
-                let _ = run_cmd_async("pactl", &["unload-module", &idx.to_string()]).await;
-            }
+            current_index = rest.parse().ok();
+            is_null_sink = false;
+            is_opengg = false;
+        } else if trimmed.starts_with("Name:") {
+            is_null_sink = trimmed.trim() == "Name: module-null-sink";
+        } else if trimmed.starts_with("Argument:") {
+            is_opengg = trimmed.contains("OpenGG_");
         }
     }
-    log::info!("Virtual audio removed (PipeWire/WirePlumber left running)");
+    // Emit the last module
+    if current_index.is_some() && is_null_sink && is_opengg {
+        indices_to_remove.push(current_index.unwrap());
+    }
+
+    if indices_to_remove.is_empty() {
+        return Err("No OpenGG virtual audio modules found. They may have already been removed.".into());
+    }
+
+    let mut removed = 0;
+    for idx in &indices_to_remove {
+        run_cmd_async("pactl", &["unload-module", &idx.to_string()])
+            .await
+            .map_err(|e| format!("Failed to unload module {idx}: {e}"))?;
+        removed += 1;
+    }
+
+    log::info!("Virtual audio removed: {removed} module(s) unloaded");
     Ok(())
 }
 
@@ -1404,11 +1763,14 @@ pub fn hydrate_audio_routing() {
         };
 
         if channel == "Mic" {
-            Command::new("pactl")
-                .args(["set-default-source", &device])
-                .output()
-                .ok();
-            eprintln!("hydrate: Mic source → {device}");
+            let current = run_cmd_sync("pactl", &["get-default-source"]).unwrap_or_default();
+            if current.trim() != device {
+                Command::new("pactl")
+                    .args(["set-default-source", &device])
+                    .output()
+                    .ok();
+                eprintln!("hydrate: Mic source → {device}");
+            }
         } else if channel == "Master" {
             // Setting default sink is intentionally skipped — it changes the
             // system-wide default and surprises the user.  The frontend will
@@ -1416,22 +1778,25 @@ pub fn hydrate_audio_routing() {
         } else if !VIRTUAL_CHANNELS.contains(&channel.as_str()) {
             continue;
         } else {
-            // Virtual sink (Game/Chat/Media/Aux): disconnect old links then
-            // reconnect to the saved physical device.
+            // Virtual sink (Game/Chat/Media/Aux): idempotent reconnection.
+            // Only unlink/link if the current device differs from the saved one.
             let sink = format!("OpenGG_{channel}");
-            if let Ok(def) = run_cmd_sync("pactl", &["get-default-sink"]) {
-                for p in ["FL", "FR"] {
+            let mut changed = false;
+            for p in ["FL", "FR"] {
+                let current = get_linked_device_for_monitor(&sink, p);
+                if current == device {
+                    continue;
+                }
+                if !current.is_empty() {
                     Command::new("pw-link")
                         .args([
                             "-d",
                             &format!("{sink}:monitor_{p}"),
-                            &format!("{def}:playback_{p}"),
+                            &format!("{current}:playback_{p}"),
                         ])
                         .output()
                         .ok();
                 }
-            }
-            for p in ["FL", "FR"] {
                 Command::new("pw-link")
                     .args([
                         &format!("{sink}:monitor_{p}"),
@@ -1439,8 +1804,11 @@ pub fn hydrate_audio_routing() {
                     ])
                     .output()
                     .ok();
+                changed = true;
             }
-            eprintln!("hydrate: {channel} → {device}");
+            if changed {
+                eprintln!("hydrate: {channel} → {device}");
+            }
         }
     }
 }

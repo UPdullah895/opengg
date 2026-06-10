@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Clip Management — scanning, metadata, thumbnails, trimming.
 
 use anyhow::{Context, Result};

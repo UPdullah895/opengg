@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# OpenGG Extension: Sunshine Audio Router (daemon part)
+#
+# Automatically routes all OpenGG audio sinks into Sunshine/Moonlight
+# streaming sinks when they appear, and restores routing when they disappear.
+#
+# This is the `daemon` executable of the "sunshine-audio" extension. It is run
+# and supervised by the OpenGG daemon when the extension is enabled (Settings →
+# Extensions). On SIGTERM it cleanly unloads every loopback module it created.
+#
+# Install (whole folder):
+#   cp -r packaging/extensions/sunshine ~/.local/share/opengg/extensions/
+#
+# Uninstall:
+#   rm -r ~/.local/share/opengg/extensions/sunshine
+
+set -euo pipefail
+
+CHANNELS=(Game Chat Media Aux)
+IDS_FILE=$(mktemp /tmp/opengg-sunshine-XXXXXX)
+trap 'pactl_unload_all; rm -f "$IDS_FILE"' EXIT INT TERM
+
+log() { printf '[sunshine] %s\n' "$*" >&2; }
+
+pactl_unload_all() {
+    [[ -s $IDS_FILE ]] || return
+    log "Detaching loopbacks"
+    while IFS= read -r id; do
+        pactl unload-module "$id" 2>/dev/null || true
+        log "Unloaded module $id"
+    done < "$IDS_FILE"
+    > "$IDS_FILE"
+}
+
+attach() {
+    local sink="$1"
+    # Guard: already attached
+    [[ -s $IDS_FILE ]] && return
+    log "Attaching to $sink"
+    for ch in "${CHANNELS[@]}"; do
+        id=$(pactl load-module module-loopback \
+            "source=OpenGG_${ch}.monitor" \
+            "sink=${sink}" \
+            latency_msec=20 \
+            source_dont_move=true \
+            sink_dont_move=true 2>/dev/null) || continue
+        [[ $id =~ ^[0-9]+$ ]] || continue
+        echo "$id" >> "$IDS_FILE"
+        log "OpenGG_${ch} → ${sink} (module ${id})"
+    done
+}
+
+sunshine_sink() {
+    pactl list sinks short 2>/dev/null \
+        | awk '{print $2}' \
+        | grep '^sink-sunshine' \
+        | { grep -m1 '^sink-sunshine-stereo' 2>/dev/null || head -1; } \
+        || true
+}
+
+sunshine_count() {
+    pactl list sinks short 2>/dev/null \
+        | awk '{print $2}' \
+        | grep -c '^sink-sunshine' \
+        || echo 0
+}
+
+# Startup: Sunshine may already be running
+existing=$(sunshine_sink)
+[[ -n $existing ]] && attach "$existing"
+
+# Event loop — zero CPU when idle (blocks on the pipe read)
+while IFS= read -r event; do
+    if [[ $event == *"'new' on sink #"* ]]; then
+        sink_id="${event##*#}"
+        name=$(pactl list sinks short 2>/dev/null \
+            | awk -v i="$sink_id" '$1==i {print $2; exit}') || continue
+        [[ $name == sink-sunshine* ]] && attach "$name"
+
+    elif [[ $event == *"'remove' on sink"* ]]; then
+        if [[ -s $IDS_FILE ]] && [[ $(sunshine_count) -eq 0 ]]; then
+            pactl_unload_all
+        fi
+    fi
+done < <(exec pactl subscribe 2>/dev/null)

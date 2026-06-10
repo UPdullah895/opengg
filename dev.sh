@@ -107,8 +107,24 @@ do_setup() {
     mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/opengg"
     mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/opengg/thumbnails"
     mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/opengg/waveforms"
+    mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/opengg/extensions"
     mkdir -p "$HOME/Videos/OpenGG"
     logs "Data directories created"
+
+    # Install bundled example extensions (folder layout: manifest.json + bin/…)
+    EXT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/opengg/extensions"
+    if [ -d "$ROOT_DIR/packaging/extensions" ]; then
+        for ext in "$ROOT_DIR/packaging/extensions"/*/; do
+            [ -d "$ext" ] || continue
+            name=$(basename "$ext")
+            if [ ! -d "$EXT_DIR/$name" ]; then
+                cp -r "$ext" "$EXT_DIR/$name"
+                # Ensure any daemon executables stay executable after copy
+                find "$EXT_DIR/$name/bin" -type f -exec chmod +x {} \; 2>/dev/null || true
+                logs "Installed example extension: $name"
+            fi
+        done
+    fi
 
     # Generate opengg.desktop from template
     if [ -f "$ROOT_DIR/opengg.desktop.template" ]; then
@@ -151,6 +167,15 @@ run_frontend() {
     if [ ! -d "node_modules" ]; then
         log "Installing frontend dependencies (first run)..."
         npm install 2>&1 | tail -3
+    fi
+
+    # When running non-interactively (e.g. from a .desktop file or autostart),
+    # tauri dev's internal polling for the Vite server can race with window
+    # creation and show a white "Connection refused" screen. A short delay
+    # gives the Vite dev server headroom before Tauri opens the WebView.
+    if [ ! -t 0 ]; then
+        logw "Non-interactive terminal detected — adding 2 s delay before Tauri dev..."
+        sleep 2
     fi
 
     log "Starting Tauri dev server..."

@@ -15,7 +15,7 @@ ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
 FRONTEND := $(ROOT)/frontend
 
-.PHONY: dev daemon ui build appimage setup clean install install-desktop lint check help
+.PHONY: dev daemon ui build appimage setup clean install install-desktop lint check help new-extension
 
 # ── Default ──────────────────────────────────────────────────────
 help:
@@ -32,6 +32,7 @@ help:
 	@echo "  make install   Install daemon to ~/.local/bin"
 	@echo "  make check     Type-check everything"
 	@echo "  make lint      Clippy + vue-tsc"
+	@echo "  make new-extension NAME=<id>   Scaffold a new extension"
 	@echo ""
 
 # ── Full-stack dev ───────────────────────────────────────────────
@@ -62,6 +63,11 @@ build: daemon-release
 # ── AppImage ──────────────────────────────────────────────────────
 appimage:
 	@chmod +x build-appimage.sh && ./build-appimage.sh
+
+# ── Scaffold a new extension ─────────────────────────────────────
+new-extension:
+	@if [ -z "$(NAME)" ]; then echo "usage: make new-extension NAME=<kebab-case-id>"; exit 1; fi
+	@chmod +x scripts/new-extension.sh && ./scripts/new-extension.sh "$(NAME)"
 
 # ── Setup ────────────────────────────────────────────────────────
 setup:

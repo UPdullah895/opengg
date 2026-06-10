@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Global Hotkey Listener
 //!
 //! Reads keyboard events from /dev/input/eventN via evdev to detect global

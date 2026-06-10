@@ -2,9 +2,12 @@
 [Desktop Entry]
 Type=Application
 Name=OpenGG
+GenericName=Gaming Hub
 Comment=Linux gaming hub — audio mixing, instant replay, device management
-Exec=bash -c "mkdir -p $HOME/.local/share/opengg && setsid OPENGG_DIR/dev.sh >> $HOME/.local/share/opengg/dev.log 2>&1 &"
+Exec=bash -c "mkdir -p $HOME/.local/share/opengg && setsid OPENGG_DIR/opengg-launch.sh >> $HOME/.local/share/opengg/dev.log 2>&1 &"
 Icon=OPENGG_DIR/frontend/src-tauri/icons/256x256.png
 Terminal=false
-Categories=Game;Utility;
+Categories=Game;Utility;AudioVideo;
+Keywords=audio;mixer;replay;gaming;rgb;device;
 StartupNotify=true
+StartupWMClass=opengg

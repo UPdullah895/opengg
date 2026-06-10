@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Profile Management
 //!
 //! Stores and loads per-game profiles that control audio routing, device DPI,

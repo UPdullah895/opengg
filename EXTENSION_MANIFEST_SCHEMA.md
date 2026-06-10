@@ -22,6 +22,8 @@ The folder name is used as the extension `id`. Core extensions take precedence �
   "description": "A short description of what this extension does.",
   "version": "1.0.0",
   "icon": "<base64-encoded PNG>",
+  "daemon": "bin/my-daemon",
+  "main": "dist/index.iife.js",
   "hasSettings": true,
   "locales": {
     "en": {
@@ -46,8 +48,10 @@ The folder name is used as the extension `id`. Core extensions take precedence �
 | `name` | string | yes | Display name shown in the Extensions UI when no matching locale entry exists. |
 | `description` | string | yes | Short description shown below the name. Used as fallback when no locale entry matches. |
 | `version` | string | no | Semver string shown in the UI (e.g. `"1.2.0"`). Defaults to empty string if absent. |
-| `icon` | string | no | Base64-encoded PNG image displayed as the extension's icon (42×42px). If absent, a generic puzzle-piece SVG is shown. |
-| `hasSettings` | bool | no | When `true`, a gear (⚙) button appears on the extension card that opens the extension's settings panel. Defaults to `false`. |
+| `icon` | string | no | Relative path to an icon file inside the extension directory (SVG or PNG, 42×42px). If absent, a generic puzzle-piece SVG is shown. |
+| `daemon` | string | no | Relative path to a `chmod +x` executable inside the extension directory. The OpenGG daemon runs it as a supervised background process — crashes are restarted with exponential backoff; a clean exit (code 0) is left alone. Omit for UI-only extensions. |
+| `main` | string | no | Relative path to a frontend IIFE bundle (built with Vite). Loaded into the OpenGG WebView at startup. Omit for daemon-only extensions. |
+| `hasSettings` | bool | no | When `true`, a gear (⚙) button appears on the extension card that opens the extension's settings panel (exported as `settingsComponent` from the IIFE). Defaults to `false`. |
 | `locales` | object | no | Map of locale code → `{ name, description }`. The app displays the entry matching the user's active language, with `name`/`description` root fields as fallback. |
 
 ---
@@ -74,14 +78,35 @@ The app checks `locales[currentLocale]` first. If the key is missing or `locales
 }
 ```
 
-## Example — Full
+## Example — Daemon only (background script, no UI)
+
+```json
+{
+  "name": "Sunshine Audio Router",
+  "description": "Routes OpenGG audio into Sunshine/Moonlight when streaming starts.",
+  "version": "1.0.0",
+  "daemon": "bin/sunshine"
+}
+```
+
+Extension directory layout:
+```
+sunshine-audio/
+├── manifest.json
+└── bin/
+    └── sunshine    ← chmod +x shell script or binary
+```
+
+## Example — Full (UI + daemon)
 
 ```json
 {
   "name": "TikTok Vertical Export",
   "description": "Export clips as 9:16 vertical video optimized for TikTok.",
   "version": "0.3.1",
-  "icon": "iVBORw0KGgo...",
+  "icon": "assets/icon.svg",
+  "daemon": "bin/exporter",
+  "main": "dist/index.iife.js",
   "hasSettings": true,
   "locales": {
     "en": {

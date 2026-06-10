@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Minimum interval between `pactl` spawns for the same channel.
 /// Prevents process storm during slider drags (≤10 spawns/sec instead of 60+).
@@ -147,12 +147,6 @@ impl SinkManager {
         let _ = Command::new("pactl")
             .args(["set-sink-volume", &format!("OpenGG_{channel}"), &pct_str])
             .output();
-        // Additionally mirror volume to hardware source so recording level tracks the slider.
-        if channel == "Mic" {
-            let _ = Command::new("pactl")
-                .args(["set-source-volume", "@DEFAULT_SOURCE@", &pct_str])
-                .output();
-        }
         Ok(())
     }
 
@@ -164,10 +158,6 @@ impl SinkManager {
         let _ = Command::new("pactl")
             .args(["set-sink-mute", &format!("OpenGG_{channel}"), val])
             .output();
-        if channel == "Mic" {
-            // Mirror mute to hardware source so the loopback input is also silenced.
-            let _ = Command::new("pactl").args(["set-source-mute", "@DEFAULT_SOURCE@", val]).output();
-        }
         Ok(())
     }
 

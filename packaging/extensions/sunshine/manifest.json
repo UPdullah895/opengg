@@ -1,0 +1,9 @@
+{
+  "id":          "sunshine-audio",
+  "name":        "Sunshine Audio Router",
+  "description": "Routes OpenGG audio channels into Sunshine/Moonlight streaming sinks automatically while you stream — and restores them when the stream ends.",
+  "version":     "0.2.0",
+  "author":      "OpenGG",
+  "icon":        "assets/icon.svg",
+  "daemon":      "bin/sunshine"
+}

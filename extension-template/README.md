@@ -2,17 +2,24 @@
 
 A minimal starter for building OpenGG extensions.
 
+> **Building with AI?** See `PROMPT.md` for a ready-to-paste prompt, and
+> `AGENTS.md` for the full machine-readable authoring contract. You don't need to
+> be a developer.
+
 ## What is an OpenGG Extension?
 
-Extensions are self-contained JavaScript IIFE bundles that OpenGG loads at runtime.
-They can:
+An extension is a folder (with a `manifest.json`) that OpenGG loads at runtime.
+It can provide a **UI part**, a **background part**, or both:
 
-- **Render a custom settings panel** shown in Settings → Extensions (gear icon)
-- **Read clip and audio data** via the `window.opengg.invoke()` API
-- **Add i18n strings** by placing locale JSON files next to the bundle
+- **UI part** — a self-contained JavaScript IIFE bundle that renders a custom
+  **settings panel** in Settings → Extensions (gear icon), reads clip/audio data
+  via the read-only `window.opengg.invoke()` API, and can add i18n strings.
+- **Background part** — any executable (`daemon` field) the OpenGG daemon runs
+  and supervises (auto-restart on crash, graceful stop on disable). Great for
+  system integration like audio routing. See the bundled `sunshine-audio` example.
 
-Extensions cannot call destructive Tauri commands — only a read-only whitelist
-is accessible through the API bridge.
+UI extensions cannot call destructive Tauri commands — only a read-only
+whitelist is accessible through the API bridge.
 
 ---
 
@@ -66,8 +73,9 @@ npm run build
 | `version`     | string  | ✗        | SemVer string e.g. `"1.0.0"` |
 | `author`      | string  | ✗        | Your name or handle |
 | `icon`        | string  | ✗        | Path to icon file relative to extension root |
-| `main`        | string  | ✗        | Path to the IIFE bundle relative to extension root |
+| `main`        | string  | ✗        | UI part — path to the IIFE bundle relative to extension root |
 | `hasSettings` | boolean | ✗        | Show gear button → opens `settingsComponent` |
+| `daemon`      | string  | ✗        | Background part — path to a `chmod +x` executable the daemon runs & supervises |
 
 ---
 

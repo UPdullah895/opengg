@@ -8,6 +8,7 @@ import { useReplayStore } from '../stores/replay'
 import { useAudioStore } from '../stores/audio'
 import { getMediaPort, mediaUrl } from '../utils/assets'
 import SelectField from '../components/SelectField.vue'
+import VolumeSlider from '../components/VolumeSlider.vue'
 import { useToast } from '../composables/useToast'
 import { settingsTargetTab } from '../composables/useNavSignal'
 import { viewMode } from '../composables/useViewMode'
@@ -38,6 +39,10 @@ function toggleCard(key: CardKey) {
 }
 
 function closePopovers() { activeCard.value = null }
+
+function openTutorial() {
+  window.dispatchEvent(new CustomEvent('openTutorial'))
+}
 
 function onDocClick(e: MouseEvent) {
   if (rootEl.value && !rootEl.value.contains(e.target as Node)) closePopovers()
@@ -120,20 +125,23 @@ async function toggleRecording() {
       }
     }
   } catch (e) {
-    toast.error(t('notification.recordingFailed', { error: String(e) }))
+    const msg = String(e)
+    if (msg.includes('render')) {
+      toast.error(t('settings.captureGsr.errorMissingGroups'))
+    } else if (msg.includes('not found') && msg.includes('sink')) {
+      toast.error(t('settings.captureGsr.errorMissingAudio', { source: msg }))
+    } else if (msg.includes('gpu-screen-recorder not found') || msg.includes('exited immediately')) {
+      toast.error(t('settings.captureGsr.errorBinaryUnhealthy'))
+    } else {
+      toast.error(t('notification.recordingFailed', { error: msg }))
+    }
   }
 }
 
 // ── Mixer quick strips ──
 const mixerChannels = ['Game', 'Chat', 'Media', 'Aux', 'Mic']
-const draggingVolumes = ref<Record<string, number | null>>({})
-function onStripInput(ch: string, e: Event) {
-  const val = Number((e.target as HTMLInputElement).value)
-  draggingVolumes.value[ch] = val
-  audio.setVolume(ch, val)
-}
-function onStripChange(ch: string) {
-  draggingVolumes.value[ch] = null
+const COLORS: Record<string, string> = {
+  Game: '#E94560', Chat: '#3B82F6', Media: '#10B981', Aux: '#A855F7', Mic: '#F59E0B',
 }
 
 // ── Resource estimation (mirrors SettingsPage formula exactly) ──
@@ -192,7 +200,12 @@ const updates = computed(() => tm('dashboard.changelog') as ChangelogEntry[])
 
 <template>
   <div class="home" ref="rootEl">
-    <h1 class="page-title">{{ t('dashboard.title') }}</h1>
+    <div class="page-title-row">
+      <h1 class="page-title">{{ t('dashboard.title') }}</h1>
+      <button class="tutorial-review-btn" :title="t('dashboard.reviewTutorial')" @click="openTutorial">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12.01" y2="16"/><path d="M12 8v4"/></svg>
+      </button>
+    </div>
 
     <!-- GSR warning banner -->
     <div v-if="gsrWarning" class="gsr-warn">
@@ -218,20 +231,13 @@ const updates = computed(() => tm('dashboard.changelog') as ChangelogEntry[])
           <div class="pop-title">{{ t('dashboard.quickMixer') }}</div>
           <div class="mixer-strips">
             <div v-for="ch in mixerChannels" :key="ch" class="mixer-strip">
-              <div class="strip-label">{{ ch }}</div>
-              <div class="strip-slider-wrap">
-                <span class="strip-vol" :class="{ visible: draggingVolumes[ch] !== null && draggingVolumes[ch] !== undefined }">
-                  {{ draggingVolumes[ch] ?? (audio.channelVolumes[ch] ?? 100) }}%
-                </span>
-                <input
-                  type="range" min="0" max="100" step="1"
-                  :value="audio.channelVolumes[ch] ?? 100"
-                  class="strip-slider"
-                  @input="onStripInput(ch, $event)"
-                  @change="onStripChange(ch)"
-                  @click.stop
-                />
-              </div>
+              <div class="strip-label" :style="{ color: COLORS[ch] }">{{ ch }}</div>
+              <VolumeSlider
+                :model-value="audio.channelVolumes[ch] ?? 100"
+                :color="COLORS[ch]"
+                @update:model-value="audio.setVolume(ch, $event)"
+                @click.stop
+              />
               <button
                 class="strip-mute"
                 :class="{ muted: audio.channelMutes[ch] }"
@@ -422,7 +428,22 @@ const updates = computed(() => tm('dashboard.changelog') as ChangelogEntry[])
 .gsr-warn span { flex: 1; }
 .gsr-warn-dismiss { background: transparent; border: none; color: rgba(245,158,11,.6); cursor: pointer; font-size: 14px; padding: 0 2px; line-height: 1; }
 .gsr-warn-dismiss:hover { color: #f59e0b; }
+.page-title-row { display: flex; align-items: center; gap: 10px; }
 .page-title { font-size: 22px; font-weight: 700; }
+.tutorial-review-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 6px;
+  background: transparent; border: 1px solid transparent;
+  color: var(--text-muted); cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+  padding: 0;
+}
+.tutorial-review-btn svg { width: 16px; height: 16px; }
+.tutorial-review-btn:hover {
+  background: var(--bg-deep);
+  border-color: var(--border);
+  color: var(--text-sec);
+}
 .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
 .card {
   background: var(--bg-card);
@@ -518,33 +539,9 @@ const updates = computed(() => tm('dashboard.changelog') as ChangelogEntry[])
 .pop-nav-btn:hover { background: var(--bg-hover); color: var(--text); }
 
 /* ── Mixer strips ── */
-.mixer-strips { display: flex; flex-direction: column; gap: 8px; }
+.mixer-strips { display: flex; flex-direction: column; gap: 10px; }
 .mixer-strip { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
-.strip-label { font-size: 11px; font-weight: 600; color: var(--text-sec); width: 34px; flex-shrink: 0; white-space: nowrap; }
-.strip-slider-wrap { flex: 1; min-width: 0; overflow: hidden; position: relative; display: flex; align-items: center; }
-.strip-slider {
-  flex: 1; height: 5px; cursor: pointer;
-  -webkit-appearance: none; appearance: none;
-  background: var(--border); border-radius: 3px; outline: none;
-}
-.strip-slider::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none;
-  width: 6px; height: 18px; border-radius: 3px;
-  background: var(--accent); cursor: pointer;
-}
-.strip-slider::-moz-range-thumb {
-  width: 6px; height: 18px; border-radius: 3px;
-  background: var(--accent); cursor: pointer; border: none;
-}
-.strip-vol {
-  position: absolute; top: -24px; left: 50%; transform: translateX(-50%);
-  font-size: 10px; color: var(--text); background: var(--bg-card);
-  border: 1px solid var(--border); border-radius: 4px;
-  padding: 1px 5px; white-space: nowrap; pointer-events: none;
-  opacity: 0; transition: opacity .1s;
-  font-variant-numeric: tabular-nums;
-}
-.strip-vol.visible { opacity: 1; }
+.strip-label { font-size: 11px; font-weight: 700; width: 38px; flex-shrink: 0; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.3px; }
 .strip-mute {
   width: 24px; height: 24px; border-radius: 5px; flex-shrink: 0;
   border: 1px solid var(--border); background: var(--bg-input);

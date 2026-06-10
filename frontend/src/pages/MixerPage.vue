@@ -117,7 +117,7 @@ watch(() => audio.virtualAudioReady, ready => {
 })
 
 watch(overdriveEnabled, enabled => {
-  if (!enabled) clampChannelsTo100().catch(e => console.error('[opengg] overdrive clamp failed:', e))
+  if (!enabled) clampChannelsTo100().catch(() => {})
 })
 </script>
 
@@ -145,6 +145,19 @@ watch(overdriveEnabled, enabled => {
           <!-- Boost/unlock icon -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+          </svg>
+        </button>
+        <!-- ★ Ear Blast Protection toggle -->
+        <button
+          class="rfr"
+          :class="{ 'rfr--active': audio.earBlastEnabled, 'rfr--limiting': audio.earBlastActiveChannels.size > 0 }"
+          :title="audio.earBlastEnabled ? t('dashboard.earBlastOn') : t('dashboard.earBlastOff')"
+          @click="audio.toggleEarBlast()"
+        >
+          <!-- Ear/shield icon -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2C7 2 3 6 3 11v3a3 3 0 003 3h1a2 2 0 002-2v-3a2 2 0 00-2-2H6a5 5 0 015-5 5 5 0 015 5h-1a2 2 0 00-2 2v3a2 2 0 002 2h1a3 3 0 003-3v-3C21 6 17 2 12 2z"/>
+            <circle v-if="audio.earBlastActiveChannels.size > 0" cx="18" cy="6" r="3" fill="var(--accent)" stroke="none"/>
           </svg>
         </button>
       </div>
@@ -269,6 +282,14 @@ watch(overdriveEnabled, enabled => {
   color: var(--accent);
 }
 .rfr--active:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+/* ★ Ear Blast: pulsing border when actively limiting */
+.rfr--limiting {
+  animation: ear-blast-pulse 1.2s ease-in-out infinite;
+}
+@keyframes ear-blast-pulse {
+  0%, 100% { border-color: color-mix(in srgb, var(--accent) 53%, transparent); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 30%, transparent); }
+  50% { border-color: color-mix(in srgb, var(--accent) 80%, transparent); box-shadow: 0 0 6px 0 color-mix(in srgb, var(--accent) 40%, transparent); }
+}
 
 /* ★ FIX 3: strips-row fills vertical space, min 55vh for tall faders */
 .strips-row {

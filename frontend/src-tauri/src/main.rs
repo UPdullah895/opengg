@@ -4,7 +4,7 @@ mod commands;
 mod media_server;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tauri::{
@@ -244,6 +244,7 @@ fn main() {
             commands::open_locales_folder,
             commands::list_user_locales,
             commands::scan_extensions,
+            commands::set_extension_enabled,
             commands::open_extensions_folder,
             // ★ Epic 2: Crash log
             commands::open_crash_logs_folder,
@@ -266,6 +267,7 @@ fn main() {
             commands::register_global_shortcuts,
             // ★ GPU Screen Recorder
             commands::check_gsr_installed,
+            commands::gsr_diagnostics,
             commands::start_gsr_replay,
             commands::save_gsr_replay,
             commands::stop_gsr_replay,
@@ -283,6 +285,12 @@ fn main() {
             commands::apply_noise_reduction,
             commands::start_eq_engine,
             commands::stop_eq_engine,
+            // ★ Ear blast protection
+            commands::set_ear_blast_enabled,
+            commands::set_ear_blast_channels,
+            commands::set_ear_blast_threshold,
+            commands::set_ear_blast_target,
+            commands::get_ear_blast_state,
             // ★ Live watcher directory sync
             commands::update_watch_dirs,
             // ★ Epic 5: Devices
@@ -300,6 +308,7 @@ fn main() {
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(AtomicU64::new(0)),
             ));
+            app.manage(EarBlastState::default());
             app.manage(ExportProcess::default());
             app.manage(GsrProcess(Mutex::new(None)));
             app.manage(JalvProcesses(Mutex::new(std::collections::HashMap::new())));
@@ -340,6 +349,29 @@ fn main() {
                     // Restore run-in-background preference before the first close event
                     if let Some(run_bg) = v["settings"]["runInBackground"].as_bool() {
                         run_bg_flag.store(run_bg, Ordering::Relaxed);
+                    }
+
+                    // ★ Initialize ear-blast protection from saved settings
+                    if let Some(eb) = v.get("mixer").and_then(|m| m.get("earBlast")) {
+                        let ear_blast = app.state::<EarBlastState>();
+                        if let Some(enabled) = eb.get("enabled").and_then(|e| e.as_bool()) {
+                            ear_blast.enabled.store(enabled, Ordering::Relaxed);
+                        }
+                        if let Some(chs) = eb.get("channels").and_then(|c| c.as_array()) {
+                            let mut set = std::collections::HashSet::new();
+                            for c in chs {
+                                if let Some(s) = c.as_str() {
+                                    set.insert(s.to_string());
+                                }
+                            }
+                            *ear_blast.channels.lock().unwrap() = set;
+                        }
+                        if let Some(t) = eb.get("threshold").and_then(|t| t.as_u64()) {
+                            ear_blast.threshold_percent.store(t as u32, Ordering::Relaxed);
+                        }
+                        if let Some(t) = eb.get("target").and_then(|t| t.as_u64()) {
+                            ear_blast.target_percent.store(t as u32, Ordering::Relaxed);
+                        }
                     }
 
                     // ★ Auto-start GSR if enabled and gsrAutoStart is true
@@ -393,7 +425,9 @@ fn main() {
                 commands::hydrate_audio_routing();
             });
 
-            // ★ Auto-start GSR replay buffer (2 s delay lets PipeWire sinks settle)
+            // ★ Auto-start GSR replay buffer — poll until virtual sinks are ready
+            // instead of a blind sleep. Prevents the race where GSR starts before
+            // PipeWire null-sinks exist (common on slower systems).
             if let Some((
                 output_dir,
                 replay_secs,
@@ -406,7 +440,28 @@ fn main() {
             {
                 let gsr_app = app.handle().clone();
                 std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(2000));
+                    let deadline = std::time::Instant::now()
+                        + std::time::Duration::from_secs(10);
+                    loop {
+                        if let Ok(o) = std::process::Command::new("pactl")
+                            .args(["list", "sinks", "short"])
+                            .output()
+                        {
+                            let text = String::from_utf8_lossy(&o.stdout);
+                            if text.contains("OpenGG_Game")
+                                && text.contains("OpenGG_Chat")
+                            {
+                                break;
+                            }
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            log::warn!(
+                                "GSR auto-start aborted: virtual sinks did not appear within 10 s"
+                            );
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
                     match commands::start_gsr_replay(
                         gsr_app,
                         output_dir,
@@ -672,6 +727,34 @@ pub struct VuState(pub Arc<AtomicBool>, pub Arc<AtomicU64>);
 pub struct RunInBackground(pub Arc<AtomicBool>);
 pub struct MediaServerPort(pub u16);
 
+/// Ear-blast protection state: enabled flag, protected channels, threshold/target
+/// percentages, per-channel active limiting state, and cached original volumes.
+pub struct EarBlastState {
+    pub enabled: AtomicBool,
+    pub channels: Mutex<HashSet<String>>,
+    pub threshold_percent: AtomicU32,
+    pub target_percent: AtomicU32,
+    pub active: Mutex<HashMap<String, bool>>,
+    pub original_volumes: Mutex<HashMap<String, u32>>,
+    pub last_trigger_ms: Mutex<HashMap<String, u64>>,
+}
+
+impl Default for EarBlastState {
+    fn default() -> Self {
+        let mut channels = HashSet::new();
+        channels.insert("Game".to_string());
+        Self {
+            enabled: AtomicBool::new(false),
+            channels: Mutex::new(channels),
+            threshold_percent: AtomicU32::new(85),
+            target_percent: AtomicU32::new(60),
+            active: Mutex::new(HashMap::new()),
+            original_volumes: Mutex::new(HashMap::new()),
+            last_trigger_ms: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
 /// Managed state for a cancellable FFmpeg export child process.
 #[derive(Default)]
 pub struct ExportProcess {
@@ -694,8 +777,15 @@ pub struct GsrSpawnParams {
 }
 
 /// Managed state for the GPU Screen Recorder child process.
-/// Stores the child AND the original spawn params so we can restart without re-reading config.
-pub struct GsrProcess(pub Mutex<Option<(std::process::Child, GsrSpawnParams)>>);
+/// Stores the child, original spawn params, and a shared stderr buffer so we can
+/// diagnose crashes and surface actionable errors to the user.
+pub struct GsrState {
+    pub child: std::process::Child,
+    pub params: GsrSpawnParams,
+    pub stderr_log: Arc<Mutex<Vec<String>>>,
+}
+
+pub struct GsrProcess(pub Mutex<Option<GsrState>>);
 
 /// jalv LV2-host subprocesses keyed by channel name (e.g. "Game", "Chat").
 /// Each entry is (Child, ChildStdin) — stdin is kept open for runtime parameter updates.

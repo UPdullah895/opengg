@@ -28,6 +28,10 @@ export interface ExtManifest {
   icon?: string | null
   main?: string | null
   ui?: string | null
+  /** Enabled per the shared state file (default true). */
+  enabled?: boolean
+  /** True if the manifest declares a daemon (background) executable part. */
+  has_daemon?: boolean
 }
 
 interface ExtIIFEExport {
@@ -127,13 +131,11 @@ export const useExtensionStore = defineStore('extensions', () => {
   async function loadAllEnabled(port: number): Promise<void> {
     initializing.value = true
     try {
-      // Lazy import to avoid circular module dependency at load time
-      const { usePersistenceStore } = await import('./persistence')
-      const persist = usePersistenceStore()
+      // `scan_extensions` reports `enabled` from the shared state file
+      // (~/.config/opengg/extensions.json) — the single source of truth.
       const manifests = await invoke<ExtManifest[]>('scan_extensions')
       for (const m of manifests) {
-        const enabled = persist.state.extensions[m.id] ?? true
-        if (enabled && m.main) {
+        if ((m.enabled ?? true) && m.main) {
           await loadExtension(m, port)
         }
       }

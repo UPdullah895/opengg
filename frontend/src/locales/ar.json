@@ -1,5 +1,4 @@
 {
-  "_meta": { "name": "العربية", "dir": "rtl" },
   "nav": {
     "home": "الرئيسية",
     "mixer": "الخلاط",
@@ -10,12 +9,12 @@
   "common": {
     "confirm": "تأكيد",
     "cancel": "إلغاء",
-    "confirmDelete": "تأكيد الحذف"
+    "confirmDelete": "تأكيد الحذف",
+    "close": "إغلاق"
   },
   "editor": {
     "exportClip": "تصدير المقطع",
     "exportComplete": "اكتمل التصدير",
-    "dragIdle": "اضغط واسحب لإرسال الملف إلى مجلد",
     "dragReady": "اسحب هذا الملف إلى Discord أو Telegram أو مجلد",
     "changeFolder": "تغيير المسار",
     "selectExportDir": "اختر مجلد التصدير",
@@ -26,11 +25,11 @@
     "pathCopied": "تم نسخ المسار إلى الحافظة",
     "advancedSettings": "إعدادات متقدمة",
     "codec": "برنامج الترميز",
-    "codecH264": "H.264 — أقصى توافق",
-    "codecH265": "H.265 (HEVC) — جودة أفضل، حجم أصغر",
-    "codecVP9": "VP9 — WebM، جودة جيدة",
-    "codecAV1": "AV1 — الجيل التالي",
-    "codecOriginal": "الأصلي — بدون إعادة ترميز"
+    "codecOriginal": "الأصلي — بدون إعادة ترميز",
+    "exporting": "جارٍ التصدير…",
+    "cancelExport": "إلغاء التصدير",
+    "targetSize": "الحجم المستهدف",
+    "original": "الأصلي"
   },
   "sidebar": {
     "tip": "نصيحة: يمكنك تخصيص اختصاراتك من صفحة الإعدادات."
@@ -50,7 +49,6 @@
     "scan": "فحص",
     "quickMixer": "خلاط سريع",
     "openMixer": "فتح الخلاط",
-    "subtitleVirtualAudioRouter": "موجه الصوت الافتراضي OpenGG",
     "captureSettings": "إعدادات التقاط",
     "recordingSettings": "إعدادات التسجيل",
     "quality": "الجودة",
@@ -67,8 +65,8 @@
     "comingSoon": "قريباً",
     "comingSoonDesc": "إدارة الأجهزة قيد الإنشاء. ستتوفر إعدادات الفأرة ولوحة المفاتيح وRGB في إصدار مستقبلي.",
     "latestUpdates": "آخر تحديثات المحرك",
+    "reviewTutorial": "مراجعة الدليل",
     "showLess": "عرض أقل",
-    "moreUpdates": "لا مزيد | {n} تحديث | {n} تحديثات",
     "gsrWarning": "برنامج GPU Screen Recorder غير مثبّت. ثبّت gpu-screen-recorder لتفعيل ذاكرة الإعادة.",
     "gsrDismiss": "✕",
     "gsr": {
@@ -79,6 +77,8 @@
       "mute": "كتم",
       "unmute": "إلغاء الكتم"
     },
+    "earBlastOn": "حماية الأذن مفعلة — تخفض الصوت العالي تلقائياً",
+    "earBlastOff": "تفعيل حماية الأذن (تخفيض الصوت العالي تلقائياً)",
     "gsrQuality": {
       "cbr": "معدل بت ثابت",
       "medium": "متوسط",
@@ -224,19 +224,16 @@
           "إعداد المشروع وهيكل الهندسة المعمارية"
         ]
       }
-    ]
+    ],
+    "moreUpdates": "لا مزيد | {n} تحديث | {n} تحديثات"
   },
   "settings": {
-    "title": "الإعدادات",
-    "saved": "تم حفظ الإعدادات تلقائياً",
     "sections": {
       "general": "عام",
       "language": "اللغة",
       "shortcuts": "الاختصارات",
-      "mixerRouting": "توجيه الخلاط",
-      "eqAutoFlatten": "تسوية المعادل التلقائية",
+      "mixerRouting": "محرك الصوت",
       "captureSound": "التقاط والصوت",
-      "clipSettings": "إعدادات المقاطع",
       "storage": "التخزين",
       "extensions": "الإضافات",
       "store": "المتجر",
@@ -252,8 +249,6 @@
     },
     "general": {
       "title": "عام",
-      "accentColor": "لون التمييز",
-      "apply": "تطبيق",
       "reloadTheme": "↺ إعادة تحميل theme.json",
       "themeFile": "ملف السمة",
       "themeHint": "تخصيص مظهر الواجهة. يُخزَّن في ~/.config/opengg/theme.json",
@@ -265,24 +260,15 @@
       "deviceManager": "مدير الأجهزة",
       "deviceManagerDesc": "إعداد الفأرة/لوحة المفاتيح، RGB",
       "replayClips": "الإعادة والمقاطع",
-      "replayClipsDesc": "التسجيل وذاكرة الإعادة والمقاطع",
-      "about": "حول",
-      "version": "الإصدار 0.1.2",
-      "openSource": "مركز ألعاب Linux مفتوح المصدر",
-      "github": "GitHub ↗"
+      "replayClipsDesc": "التسجيل وذاكرة الإعادة والمقاطع"
     },
     "language": {
       "title": "اللغة",
       "selectLanguage": "اختر اللغة",
       "hint": "تسري التغييرات فوراً. اللغات من اليمين إلى اليسار مدعومة بالكامل.",
       "addLanguage": "إضافة لغة جديدة",
-      "openFolderHint": "ضع ملف xx.json جديداً في مجلد اللغات لإضافة لغة مخصصة.",
       "reloadLanguages": "إعادة تحميل اللغات من القرص",
-      "rtlMode": "تخطيط RTL",
-      "rtlModeHint": "يقلب واجهة البرنامج بالكامل لتناسب اللغة العربية، بما في ذلك موضع الشريط الجانبي.",
-      "rtlModeLabel": "اتجاه الواجهة",
-      "rtlEnable": "تفعيل RTL",
-      "rtlReset": "إعادة إلى LTR"
+      "rtlModeHint": "يقلب واجهة البرنامج بالكامل لتناسب اللغة العربية، بما في ذلك موضع الشريط الجانبي."
     },
     "shortcuts": {
       "title": "الاختصارات",
@@ -296,12 +282,14 @@
         "exportClip": "تصدير المقطع",
         "toggleMic": "تشغيل/إيقاف الميكروفون",
         "undo": "تراجع",
-        "redo": "إعادة"
+        "redo": "إعادة",
+        "toggleEarBlast": "تبديل حماية الأذن"
       },
       "hints": {
         "saveReplay": "يحفظ ذاكرة الإعادة الحالية كملف مقطع جديد",
         "toggleRecording": "يبدأ أو يوقف جلسة التسجيل اليدوي",
         "screenshot": "يلتقط لقطة شاشة للشاشة النشطة في مجلد الصور",
+        "toggleEarBlast": "تبديل حماية الأذن بين التشغيل والإيقاف",
         "splitClip": "يقسّم المقطع عند موضع رأس التشغيل في المحرر",
         "exportClip": "يفتح نافذة التصدير لحفظ المقطع المقتصّ كملف فيديو",
         "toggleMic": "يكتم أو يرفع كتم الميكروفون عبر جميع مسارات التسجيل",
@@ -310,21 +298,17 @@
       },
       "resetToDefaults": "إعادة تعيين للافتراضيات"
     },
-    "mixerRouting": {
-      "title": "توجيه الخلاط",
-      "hint": "تكوين كيفية توجيه تدفقات الصوت عبر أحواض PipeWire الافتراضية.",
-      "comingSoon": "إعداد توجيه الخلاط — قريباً"
-    },
-    "eqAutoFlatten": {
-      "title": "تسوية المعادل التلقائية",
-      "hint": "تسوية منحنيات المعادل تلقائياً عند تبديل ملفات الصوت."
+    "earBlast": {
+      "title": "حماية الأذن",
+      "enable": "تفعيل حماية الأذن",
+      "disable": "إيقاف حماية الأذن",
+      "channels": "القنوات المحمية",
+      "threshold": "عتبة التفعيل",
+      "target": "مستوى الصوت المستهدف",
+      "desc": "يخفض مستوى الصوت تلقائياً عندما يتجاوز عتبة التفعيل. يستعيد مستوى الصوت الأصلي عندما تعود المستويات إلى طبيعتها."
     },
     "captureSound": {
       "title": "التقاط والصوت",
-      "quality": "جودة الفيديو",
-      "resolution": "الدقة",
-      "fps": "معدل الإطارات",
-      "replayBuffer": "ذاكرة الإعادة",
       "captureDevices": "أجهزة التقاط الصوت",
       "captureHint": "اربط أحواض PipeWire الافتراضية بكل مسار تسجيل (أسلوب OBS).",
       "trackLabel": "مسار",
@@ -338,19 +322,13 @@
       }
     },
     "clipSettings": {
-      "title": "إعدادات المقاطع",
       "defaultClick": "إجراء النقر الافتراضي",
       "defaultClickPreview": "معاينة سريعة",
       "defaultClickEditor": "محرر متقدم",
-      "clipsPerRow": "أعمدة في الصف",
-      "trackColors": "ألوان المسارات",
-      "trackColorsHint": "تُطبَّق الألوان كمتغيرات CSS على محرر الجدول الزمني.",
-      "addTrack": "+ إضافة مسار",
       "thumbnailCache": "ذاكرة الصور المصغرة",
       "thumbnailHint": "مخزنة في ~/.local/share/opengg/thumbnails/",
       "clearCache": "مسح ذاكرة الصور المصغرة",
-      "clearing": "جارٍ المسح...",
-      "cleared": "تم مسح {count} صور مصغرة."
+      "clearing": "جارٍ المسح..."
     },
     "storage": {
       "title": "التخزين",
@@ -361,12 +339,8 @@
       "screenshotDirectories": "مجلدات لقطات الشاشة",
       "addScreenshotPath": "إضافة مجلد",
       "removeDir": "إزالة",
-      "clipsFolder": "مجلد المقاطع",
-      "change": "تغيير الموقع",
       "clips": "مقاطع",
       "used": "مستخدم",
-      "free": "حر",
-      "total": "الإجمالي",
       "diskUsage": "استخدام القرص",
       "loading": "جارٍ التحميل...",
       "readError": "تعذر قراءة معلومات التخزين.",
@@ -375,7 +349,6 @@
       "steamBody": "أضف مكتبة Steam إلى قوائم اختيار الألعاب في OpenGG وأبقِها ظاهرة هنا داخل التخزين. بعد السماح، يقرأ OpenGG بيانات Steam المحلية وقد يطلب بيانات وصفية من متجر Steam للأسماء والصور.",
       "steamDeniedTitle": "تم إيقاف الوصول إلى مكتبة Steam",
       "steamDeniedBody": "اسمح بالوصول لقراءة بيانات Steam المحلية وطلب بيانات وصفية من متجر Steam حتى يتمكن OpenGG من عرض مكتبتك هنا مع الأسماء والصور.",
-      "steamReadyTitle": "{count} لعبة Steam في المكتبة",
       "steamReadyBody": "مكتبة Steam متاحة الآن في قوائم اختيار الألعاب ومُدرجة هنا مع الصور عند توفرها. يستخدم OpenGG بيانات Steam المحلية مع بيانات وصفية من متجر Steam للأسماء والصور."
     },
     "extensions": {
@@ -386,7 +359,8 @@
       "refresh": "تحديث",
       "noExtensions": "لم يتم العثور على إضافات. ضع مجلد الإضافة مع manifest.json في مجلد الإضافات.",
       "scanning": "جارٍ الفحص…",
-      "restartHint": "تُطبَّق التغييرات فوراً — لا حاجة لإعادة التشغيل."
+      "restartHint": "تُطبَّق التغييرات فوراً — لا حاجة لإعادة التشغيل.",
+      "configure": "إعداد"
     },
     "store": {
       "title": "متجر الإضافات",
@@ -414,12 +388,15 @@
       "removeVirtualAudio": "إزالة الصوت الافتراضي واستعادة إعدادات نظام التشغيل",
       "removeVirtualAudioDesc": "يزيل جميع وحدات الصوت الافتراضية في OpenGG دون إعادة تشغيل PipeWire أو WirePlumber. ستتم استعادة مسارات الأجهزة الفيزيائية. سيرشدك معالج الإعداد الأولي عند الفتح التالي.",
       "confirmMsg": "سيزيل هذا جميع وحدات الصوت الافتراضية في OpenGG. سيستمر تشغيل الأصوات الأخرى (المتصفح والألعاب). هل تريد المتابعة؟",
-      "removeVirtualAudioRemoving": "جارٍ الإزالة…"
+      "removeVirtualAudioRemoving": "جارٍ الإزالة…",
+      "createVirtualAudio": "إنشاء محرك الصوت الافتراضي",
+      "createVirtualAudioDesc": "قم بإعداد أحواض الصوت الافتراضية في OpenGG لتوجيه قنوات الألعاب والدردشة والوسائط والمساعد بشكل مستقل.",
+      "createConfirmTitle": "إنشاء صوت افتراضي؟",
+      "createConfirmMsg": "سيؤدي هذا إلى إنشاء أحواض صوت افتراضية لتوجيه القنوات بشكل مستقل. هل تريد المتابعة؟",
+      "creating": "جارٍ الإنشاء…"
     },
     "timelineTracks": {
       "title": "مسارات الخط الزمني",
-      "trackIcons": "رموز المسارات",
-      "showIconsDesc": "عرض رمز صغير بجانب تسمية كل مسار في الخط الزمني للمحرر",
       "trackList": "قائمة المسارات",
       "trackListHint": "تخصيص الاسم واللون والرمز لكل مسار في الخط الزمني للمحرر. تنطبق التغييرات مباشرة — افتح المحرر لترى التأثير على الفور.",
       "livePreview": "معاينة مباشرة",
@@ -430,10 +407,7 @@
     "notificationsPage": {
       "title": "الإشعارات",
       "description": "اضبط كيفية إخطار OpenGG لك عند حفظ المقاطع أو حدوث أحداث التسجيل.",
-      "masterToggle": "تفعيل الإشعارات",
-      "masterToggleDesc": "عرض إشعارات عند حفظ المقاطع.",
       "style": "نمط الإشعار",
-      "styleDesc": "اختر طريقة عرض الإشعارات.",
       "styleAuto": "تلقائي",
       "styleGsrNotify": "GSR-Notify",
       "styleX11Overlay": "نافذة X11 المتراكبة",
@@ -460,10 +434,6 @@
       "discord": "Discord",
       "website": "الموقع الإلكتروني",
       "contributors": "يُصان OpenGG من قِبل المجتمع. المساهمات مرحب بها!"
-    },
-    "storagePage": {
-      "addScreenshotDir": "إضافة مجلد",
-      "removeScreenshotDir": "إزالة"
     }
   },
   "onboarding": {
@@ -488,50 +458,70 @@
     "skip": "تخطي حالياً",
     "skipShort": "تخطي",
     "creating": "جارٍ الإنشاء…",
-    "saving": "جارٍ الحفظ…",
-    "errorCreate": "فشل الإعداد: {error}",
-    "errorComplete": "تعذر إكمال الإعداد: {error}"
+    "saving": "جارٍ الحفظ…"
   },
   "clips2": {
     "scanning": "جارٍ فحص المقاطع الجديدة…",
-    "foundCount": "{n} وجدت",
     "newClipDetected": "تم اكتشاف مقطع جديد…",
     "apply": "تطبيق",
     "cancel": "إلغاء"
   },
   "clips": {
     "contextMenu": {
-      "preview":      "معاينة",
-      "edit":         "تعديل",
-      "select":       "تحديد",
-      "favorite":     "تفضيل",
-      "unfavorite":   "إلغاء التفضيل",
-      "rename":       "إعادة تسمية",
+      "preview": "معاينة",
+      "edit": "تعديل",
+      "select": "تحديد",
+      "favorite": "تفضيل",
+      "unfavorite": "إلغاء التفضيل",
+      "rename": "إعادة تسمية",
       "showInFolder": "إظهار في المجلد",
-      "delete":       "حذف"
+      "copyPath": "نسخ المسار",
+      "delete": "حذف"
     },
     "sortOptions": {
-      "newest":   "الأحدث",
-      "oldest":   "الأقدم",
-      "longest":  "الأطول",
+      "newest": "الأحدث",
+      "oldest": "الأقدم",
+      "longest": "الأطول",
       "shortest": "الأقصر"
     },
     "bulkActions": {
-      "favoriteAll":   "تفضيل الكل",
+      "favoriteAll": "تفضيل الكل",
       "unfavoriteAll": "إلغاء تفضيل الكل",
-      "clear":         "مسح",
-      "delete":        "حذف"
+      "changeGame": "تغيير اللعبة",
+      "rename": "إعادة تسمية",
+      "renamePlaceholder": "نمط مثال: Highlight_{n}",
+      "clear": "مسح",
+      "delete": "حذف"
     },
+    "dateGroup": {
+      "today": "اليوم",
+      "yesterday": "أمس"
+    },
+    "toast": {
+      "clipDeleted": "تم حذف المقطع",
+      "exportCancelled": "تم إلغاء التصدير"
+    },
+    "durationFilter": {
+      "all": "كل المدد",
+      "short": "< 15ث",
+      "medium": "15ث - 1د",
+      "long": "1د - 5د",
+      "verylong": "> 5د"
+    },
+    "stats": {
+      "clips": "مقاطع",
+      "totalDuration": "المدة الإجمالية",
+      "totalSize": "الحجم الإجمالي",
+      "avgDuration": "متوسط المدة"
+    },
+    "importing": "جارٍ استيراد المقاطع…",
     "renameDialog": {
       "title": "إعادة تسمية المقطع",
-      "save":  "حفظ"
+      "save": "حفظ"
     },
     "loadError": "فشل تحميل المقاطع",
     "retry": "إعادة المحاولة",
     "search": "البحث في المقاطع…",
-    "allGames": "كل الألعاب",
-    "noMatches": "لا نتائج",
-    "games": "الألعاب",
     "noClipsFound": "لم يتم العثور على مقاطع",
     "noClipsHint": "جرّب مرة أخرى أو عدّل الفلاتر",
     "noClipsEmptyHint": "ابدأ تسجيل بعض أو استوردها إن وجدت",
@@ -553,7 +543,6 @@
       "body": "أضف مكتبة Steam إلى فلاتر الألعاب وقوائم الوسوم الحالية. بعد موافقتك، يقرأ OpenGG بيانات Steam المحلية وقد يطلب بيانات وصفية من متجر Steam لأسماء الألعاب وصورها.",
       "deniedTitle": "تم إيقاف الوصول إلى مكتبة Steam",
       "deniedBody": "لم يستورد OpenGG مكتبة Steam بعد. اسمح بالوصول لقراءة بيانات Steam المحلية وطلب بيانات وصفية من متجر Steam لأسماء الألعاب وأيقوناتها.",
-      "readyTitle": "{count} لعبة Steam متاحة",
       "readyBody": "مكتبة Steam متاحة الآن داخل فلاتر الألعاب وقوائم اختيار اللعبة، مع الصور حيثما توفرت. يستخدم OpenGG بيانات Steam المحلية مع بيانات وصفية من متجر Steam للأسماء والصور.",
       "consentTitle": "الوصول إلى مكتبة Steam",
       "consentMessage": "هل تسمح لـ OpenGG بقراءة بيانات Steam المحلية وطلب بيانات وصفية من متجر Steam لملء مكتبة Steam وأسماء الألعاب والصور؟",
@@ -561,7 +550,6 @@
       "import": "استيراد ألعاب Steam",
       "refresh": "تحديث مكتبة Steam",
       "loading": "جارٍ الاستيراد…",
-      "imported": "تم استيراد {count} لعبة من Steam",
       "failed": "فشل استيراد مكتبة Steam"
     }
   },
@@ -571,10 +559,7 @@
     "game": "اللعبة",
     "filename": "اسم الملف",
     "filesize": "حجم الملف",
-    "enableClipNotifications": "إشعارات حفظ المقاطع",
-    "enableClipNotificationsDesc": "عرض إشعار عائم عند حفظ المقطع بنجاح أو الفشل",
-    "recordingStarted": "بدء التسجيل",
-    "recordingFailed": "فشل التسجيل: {error}"
+    "recordingStarted": "بدء التسجيل"
   },
   "recording": {
     "stopped": "متوقف",
@@ -592,31 +577,14 @@
     "dropHere": "أسقط هنا",
     "refresh": "تحديث",
     "back": "رجوع",
-    "battery": "البطارية",
-    "charging": "جارٍ الشحن",
     "sidetone": "الصدى الجانبي",
-    "chatmix": "خلط الدردشة",
-    "game": "لعبة",
-    "chat": "دردشة",
     "dpi": "الحساسية",
     "pollingRate": "معدل الاستطلاع",
     "headset": "سماعة",
     "mouse": "فأرة",
     "settings": "الإعدادات",
-    "eqPreset": "ضبط مسبق للمعادل",
-    "eqFlat": "مسطح",
-    "eqBass": "باس",
-    "eqFocus": "تركيز",
-    "eqSmiley": "مبتسم",
     "autoOff": "إيقاف تلقائي",
     "autoOffNever": "أبداً",
-    "autoOffMinutes": "{n} دقيقة",
-    "micVolume": "مستوى الميكروفون",
-    "micMuteLed": "مؤشر الكتم",
-    "micMuteLedOff": "إيقاف",
-    "micMuteLedLow": "منخفض",
-    "micMuteLedMed": "متوسط",
-    "micMuteLedHigh": "مرتفع",
     "volumeLimiter": "محدد مستوى الصوت",
     "btPoweredOn": "البلوتوث عند التشغيل",
     "btCallVolume": "مستوى صوت مكالمة BT",
@@ -624,7 +592,6 @@
     "viewList": "عرض قائمة",
     "defaultDevice": "افتراضي",
     "macros": "وحدات الماكرو",
-    "macroButton": "الزر",
     "macroName": "اسم الماكرو",
     "macroActions": "الإجراءات",
     "macroPlayback": "وضع التشغيل",
@@ -637,5 +604,41 @@
     "macroNoButton": "اختر زراً من مخطط الفأرة",
     "comingSoon": "الأجهزة — قريباً",
     "comingSoonDesc": "نحن نعمل على توفير دعم كامل لأجهزتك المفضلة. ترقبوا التحديثات القادمة."
+  },
+  "tutorial": {
+    "skip": "تخطي",
+    "next": "التالي",
+    "previous": "السابق",
+    "finish": "ابدأ",
+    "steps": {
+      "welcome": {
+        "title": "مرحباً بك في OpenGG",
+        "desc": "مركز الألعاب مفتوح المصدر لنظام Linux. دعنا نأخذ جولة سريعة."
+      },
+      "dashboard": {
+        "title": "لوحة التحكم",
+        "desc": "مركز القيادة لديك. بطاقات الوصول السريع للصوت والتسجيل والمقاطع والأجهزة. انقر على أي بطاقة للوصول السريع."
+      },
+      "mixer": {
+        "title": "خلاط الصوت",
+        "desc": "وجه قنوات الألعاب والدردشة والوسائط والمساعد عبر أحواض افتراضية مستقلة. اسحب التطبيقات بين القنوات وتحكم بصوت كل تطبيق."
+      },
+      "clips": {
+        "title": "المقاطع والتسجيل",
+        "desc": "احفظ لحظات الإعادة الفورية، وتصفح معرض المقاطع، واستورد المجلدات. ذاكرة الإعادة تعمل في الخلفية أثناء اللعب."
+      },
+      "scanning": {
+        "title": "المسح",
+        "desc": "استورد مجلدات كاملة من المقاطع بنقرة واحدة. مسح الأجهزة سيتوفر في تحديث مستقبلي."
+      },
+      "settings": {
+        "title": "الإعدادات",
+        "desc": "خصص السمات والاختصارات وجودة التسجيل. أعد محرك الصوت الافتراضي من تبويب محرك الصوت."
+      },
+      "finish": {
+        "title": "أنت جاهز!",
+        "desc": "إذا لم تُعدّ محرك الصوت الافتراضي بعد، سنرشدك خلاله الآن."
+      }
+    }
   }
 }

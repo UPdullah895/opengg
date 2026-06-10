@@ -47,6 +47,7 @@ struct HscBattery {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct HscEqMeta {
     bands: u32,
     baseline: f32,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, inject, type Ref } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, inject, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -9,6 +9,8 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { usePersistenceStore, DEFAULTS } from '../stores/persistence'
 import { useReplayStore } from '../stores/replay'
 import { useAudioStore } from '../stores/audio'
+import { useModalStore } from '../stores/modal'
+import { useExtensionStore, type ExtManifest, type ExtRuntime } from '../stores/extensions'
 import { loadTheme, saveTheme, getCurrentTheme, applyThemeMode, getThemeMode } from '../utils/theme'
 import { LANGUAGES, registerLocale } from '../i18n'
 import SelectField from '../components/SelectField.vue'
@@ -214,6 +216,7 @@ const shortcutActions = computed<Array<{ key: string; label: string; hint: strin
   { key: 'saveReplay',      label: t('settings.shortcuts.actions.saveReplay'),      hint: t('settings.shortcuts.hints.saveReplay') },
   { key: 'toggleRecording', label: t('settings.shortcuts.actions.toggleRecording'), hint: t('settings.shortcuts.hints.toggleRecording') },
   { key: 'screenshot',      label: t('settings.shortcuts.actions.screenshot'),      hint: t('settings.shortcuts.hints.screenshot') },
+  { key: 'toggleEarBlast',  label: t('settings.shortcuts.actions.toggleEarBlast'),  hint: t('settings.shortcuts.hints.toggleEarBlast') },
   { key: 'splitClip',       label: t('settings.shortcuts.actions.splitClip'),       hint: t('settings.shortcuts.hints.splitClip') },
   { key: 'exportClip',      label: t('settings.shortcuts.actions.exportClip'),      hint: t('settings.shortcuts.hints.exportClip') },
   { key: 'toggleMic',       label: t('settings.shortcuts.actions.toggleMic'),       hint: t('settings.shortcuts.hints.toggleMic') },
@@ -278,7 +281,20 @@ async function toggleGsr() {
       await invoke('start_gsr_replay', gsrInvokeParams())
     }
     settings.value.gsrEnabled = !settings.value.gsrEnabled
-  } catch (e) { console.error('GSR toggle:', e) }
+  } catch (e) {
+    const msg = String(e)
+    console.error('GSR toggle:', msg)
+    // Surface actionable error to the user
+    if (msg.includes('render')) {
+      toast.error(t('settings.captureGsr.errorMissingGroups'))
+    } else if (msg.includes('not found') && msg.includes('sink')) {
+      toast.error(t('settings.captureGsr.errorMissingAudio', { source: msg }))
+    } else if (msg.includes('gpu-screen-recorder not found')) {
+      toast.error(t('settings.captureGsr.errorBinaryUnhealthy'))
+    } else {
+      toast.error(t('settings.captureGsr.errorGeneric', { message: msg }))
+    }
+  }
 }
 
 async function restartGsr() {
@@ -290,6 +306,60 @@ async function restartGsr() {
     console.error('GSR restart:', e)
     toast.error(`Failed to restart recording: ${e}`)
   }
+}
+
+// ─── GSR Diagnostics ───
+interface DiagnosticFix {
+  command: string
+  description: string
+}
+interface DiagnosticItem {
+  message: string
+  severity: 'error' | 'warning'
+  fix?: DiagnosticFix
+}
+interface GsrDiagnosticResult {
+  ok: boolean
+  gsr_installed: boolean
+  gsr_version: string | null
+  in_render_group: boolean
+  in_video_group: boolean
+  gpu_encoder_available: boolean
+  audio_sources_ok: boolean
+  missing_audio_sources: string[]
+  items: DiagnosticItem[]
+}
+const diagLoading = ref(false)
+const diagResult = ref<GsrDiagnosticResult | null>(null)
+const copiedCommand = ref<string | null>(null)
+let copiedTimer: ReturnType<typeof setTimeout> | null = null
+
+async function runDiagnostics() {
+  diagLoading.value = true
+  try {
+    const res = await invoke<GsrDiagnosticResult>('gsr_diagnostics', {
+      audioSources: gsrAudioSources.value,
+    })
+    diagResult.value = res
+  } catch (e) {
+    toast.error(`Diagnostics failed: ${e}`)
+  } finally {
+    diagLoading.value = false
+  }
+}
+
+async function doCopy(text: string) {
+  if (!text) return
+  try {
+    await invoke('write_clipboard', { text })
+  } catch (e2) {
+    toast.error(`Copy failed: ${e2}`)
+    return
+  }
+  copiedCommand.value = text
+  if (copiedTimer) clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => { copiedCommand.value = null }, 1500)
+  toast.success(t('settings.captureGsr.copied'))
 }
 
 // ─── Resource estimation ───
@@ -375,19 +445,69 @@ function removeTrackDef(i: number) {
 }
 
 // ─── Epic 3: Danger Zone ───
-const dangerLoading = ref(false)
+const vaLoading = ref(false)
 const gsrInstallOpen = ref(false)
 const dangerMsg = ref('')
+const modal = useModalStore()
+
 async function removeVirtualAudio() {
-  const confirmed = await ask(t('settings.dangerZone.confirmMsg'), { title: t('settings.dangerZone.title'), kind: 'warning' })
-  if (!confirmed) return
-  dangerLoading.value = true; dangerMsg.value = ''
-  try {
-    await invoke('remove_virtual_audio')
-    audio.setVirtualAudioReady(false)
-    dangerMsg.value = '✓ Virtual audio removed.'
-  } catch (e) { dangerMsg.value = `Error: ${e}` }
-  finally { dangerLoading.value = false }
+  modal.showConfirm({
+    kind: 'danger',
+    title: t('settings.dangerZone.title'),
+    message: t('settings.dangerZone.confirmMsg'),
+    confirmLabel: t('common.confirmDelete'),
+    onConfirm: async () => {
+      vaLoading.value = true; dangerMsg.value = ''
+      try {
+        await invoke('remove_virtual_audio')
+        audio.setVirtualAudioReady(false)
+        toast.success(t('settings.dangerZone.removeVirtualAudio'))
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 1 } }))
+        }, 500)
+      } catch (e: any) {
+        toast.error(String(e))
+      } finally {
+        vaLoading.value = false
+      }
+    }
+  })
+}
+
+async function resetVirtualAudio() {
+  modal.showConfirm({
+    kind: 'danger',
+    title: t('settings.dangerZone.resetVirtualAudio'),
+    message: t('settings.dangerZone.resetVirtualAudioDesc'),
+    confirmLabel: t('common.confirmDelete'),
+    onConfirm: async () => {
+      vaLoading.value = true; dangerMsg.value = ''
+      try {
+        await invoke('remove_virtual_audio')
+        audio.setVirtualAudioReady(false)
+        toast.success(t('settings.dangerZone.removeVirtualAudio'))
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 1 } }))
+        }, 500)
+      } catch (e: any) {
+        toast.error(String(e))
+      } finally {
+        vaLoading.value = false
+      }
+    }
+  })
+}
+
+function createVirtualAudio() {
+  modal.showConfirm({
+    kind: 'info',
+    title: t('settings.dangerZone.createConfirmTitle'),
+    message: t('settings.dangerZone.createConfirmMsg'),
+    confirmLabel: t('common.confirm'),
+    onConfirm: () => {
+      window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 1 } }))
+    }
+  })
 }
 
 // ─── Clip directories ───
@@ -536,6 +656,10 @@ interface ExtensionInfo {
   icon?: string | null
   main?: string | null
   ui?: string | null
+  /** Enabled per the shared state file (default true). */
+  enabled?: boolean
+  /** True if the manifest declares a daemon (background) executable part. */
+  has_daemon?: boolean
   /** True for extensions bundled as built-in hardcoded cards (no path on disk) */
   _builtin?: boolean
   /** Inline SVG markup for built-in extensions */
@@ -544,8 +668,11 @@ interface ExtensionInfo {
   _color?: string
 }
 
+const extStore = useExtensionStore()
 const scannedExtensions = ref<ExtensionInfo[]>([])
 const extensionScanLoading = ref(false)
+/** Runtime whose settings panel is currently shown in the modal (null = closed). */
+const activeExtSettings = ref<ExtRuntime | null>(null)
 
 /** Returns the icon URL for an extension loaded from the extensions directory. */
 function getExtensionIconUrl(p: ExtensionInfo): string | null {
@@ -553,17 +680,43 @@ function getExtensionIconUrl(p: ExtensionInfo): string | null {
   return `http://localhost:${mediaPort.value}/ext/${encodeURIComponent(p.id)}/${encodeURIComponent(p.icon)}`
 }
 
-/** Gear button is only shown if the extension has declared hasSettings: true. */
+/**
+ * Gear is shown only when the extension declared hasSettings, is enabled, and its
+ * IIFE actually loaded a settings component (the runtime exists in the store).
+ */
 function canConfigure(p: ExtensionInfo): boolean {
-  return !!p.has_settings
+  return !!p.has_settings && isExtEnabled(p) && !!extStore.getRuntime(p.id)?.settingsComponent
 }
 
-/** True if extension is currently enabled (keyed by id in persistence). */
-function isExtEnabled(p: ExtensionInfo): boolean {
-  return persist.state.extensions[p.id] ?? true
+/** Open the extension's settings panel in the modal. */
+function openExtSettings(p: ExtensionInfo) {
+  const rt = extStore.getRuntime(p.id)
+  if (rt?.settingsComponent) activeExtSettings.value = rt
 }
-function setExtEnabled(p: ExtensionInfo, val: boolean) {
+
+/** True if extension is currently enabled (per the shared state file). */
+function isExtEnabled(p: ExtensionInfo): boolean {
+  return p.enabled ?? true
+}
+
+/**
+ * Persist the enable state via the daemon-shared command, then load/unload the
+ * extension's UI part live so the change takes effect without an app restart.
+ */
+async function setExtEnabled(p: ExtensionInfo, val: boolean) {
+  p.enabled = val
+  // Mirror in legacy persistence map so existing consumers stay in sync.
   persist.state.extensions[p.id] = val
+  try {
+    await invoke('set_extension_enabled', { id: p.id, enabled: val })
+  } catch (e) {
+    console.error('[extensions] set_extension_enabled failed:', e)
+  }
+  if (val) {
+    if (p.main) await extStore.loadExtension(p as unknown as ExtManifest, mediaPort.value)
+  } else {
+    extStore.unload(p.id)
+  }
 }
 
 async function scanExtensions() {
@@ -590,6 +743,10 @@ onMounted(async () => {
   await listen('plugins-changed', () => {
     if (active.value === 'extensions') scanExtensions()
   })
+})
+onBeforeUnmount(() => {
+  if (_accentTimer) clearTimeout(_accentTimer)
+  if (copiedTimer) clearTimeout(copiedTimer)
 })
 </script>
 
@@ -783,12 +940,6 @@ onMounted(async () => {
       <!-- ════════════════════ MIXER ROUTING ════════════════════ -->
       <section v-if="active === 'mixerRouting'">
         <h2 class="sec-title">{{ t('settings.sections.mixerRouting') }}</h2>
-        <div class="card">
-          <div class="placeholder-box">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z"/></svg>
-            <span>{{ t('settings.mixerRouting.comingSoon') }}</span>
-          </div>
-        </div>
 
         <!-- ★ Epic 3: Danger Zone -->
         <div class="card danger-zone-card">
@@ -796,20 +947,105 @@ onMounted(async () => {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;flex-shrink:0"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
             {{ t('settings.dangerZone.title') }}
           </div>
-          <p class="hint" style="color:color-mix(in srgb,var(--danger) 80%,var(--text-sec))">{{ t('settings.dangerZone.subtitle') }}</p>
+          <!-- Reset Virtual Audio -->
           <div class="danger-action-row">
+            <div class="danger-info">
+              <span class="danger-label">
+                {{ t('settings.dangerZone.resetVirtualAudio') }}
+                <InfoIcon :title="t('settings.dangerZone.resetVirtualAudioDesc')" />
+              </span>
+            </div>
+            <button class="danger-icon-btn" :disabled="vaLoading" @click="resetVirtualAudio">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            </button>
+          </div>
+
+          <!-- Create Virtual Audio (when not ready) -->
+          <div v-if="!audio.virtualAudioReady" class="danger-action-row">
+            <div class="danger-info">
+              <span class="danger-label">
+                {{ t('settings.dangerZone.createVirtualAudio') }}
+                <InfoIcon :title="t('settings.dangerZone.createVirtualAudioDesc')" />
+              </span>
+            </div>
+            <button class="btn btn-accent" :disabled="vaLoading" @click="createVirtualAudio">
+              <svg v-if="!vaLoading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+              <span>{{ vaLoading ? t('settings.dangerZone.creating') : 'Create' }}</span>
+            </button>
+          </div>
+
+          <!-- Remove Virtual Audio (when ready) -->
+          <div v-else class="danger-action-row">
             <div class="danger-info">
               <span class="danger-label">
                 {{ t('settings.dangerZone.removeVirtualAudio') }}
                 <InfoIcon :title="t('settings.dangerZone.removeVirtualAudioDesc')" />
               </span>
             </div>
-            <button class="btn-danger" :disabled="dangerLoading" @click="removeVirtualAudio">
-              <svg v-if="!dangerLoading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
-              <span>{{ dangerLoading ? t('settings.captureGsr.removeVirtualAudioRemoving') : t('settings.dangerZone.removeVirtualAudio') }}</span>
+            <button class="danger-icon-btn danger-icon-btn--delete" :disabled="vaLoading" @click="removeVirtualAudio">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
             </button>
           </div>
+
           <div v-if="dangerMsg" class="danger-msg" :class="{ 'danger-ok': dangerMsg.startsWith('✓') }">{{ dangerMsg }}</div>
+        </div>
+
+        <!-- ★ Ear Blast Protection settings -->
+        <div class="card">
+          <div class="card-head">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px;flex-shrink:0"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+            <span>{{ t('settings.earBlast.title') }}</span>
+            <InfoIcon :title="t('settings.earBlast.desc')" />
+            <div class="card-head-actions">
+              <button
+                class="eb-toggle-btn"
+                :class="{ 'eb-toggle-btn--active': persist.state.mixer.earBlast.enabled }"
+                @click="audio.toggleEarBlast()"
+              >
+                {{ persist.state.mixer.earBlast.enabled ? 'Disable' : 'Enable' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="field" style="margin-top: 10px;">
+            <label>{{ t('settings.earBlast.channels') }}</label>
+            <div class="channel-checks">
+              <button
+                v-for="ch in ['Master', 'Game', 'Chat', 'Media', 'Aux', 'Mic']" :key="ch"
+                class="channel-pill"
+                :class="{ 'channel-pill--active': persist.state.mixer.earBlast.channels.includes(ch) }"
+                @click="() => {
+                  const arr = persist.state.mixer.earBlast.channels.includes(ch)
+                    ? persist.state.mixer.earBlast.channels.filter((c: string) => c !== ch)
+                    : [...persist.state.mixer.earBlast.channels, ch]
+                  audio.setEarBlastChannels(arr)
+                }"
+              >
+                {{ ch }}
+              </button>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="field">
+              <label>{{ t('settings.earBlast.threshold') }} — {{ persist.state.mixer.earBlast.threshold }}%</label>
+              <input
+                class="ear-blast-slider"
+                type="range" min="1" max="100"
+                :value="persist.state.mixer.earBlast.threshold"
+                @input="e => audio.setEarBlastThreshold(Number((e.target as HTMLInputElement).value))"
+              />
+            </div>
+            <div class="field">
+              <label>{{ t('settings.earBlast.target') }} — {{ persist.state.mixer.earBlast.target }}%</label>
+              <input
+                class="ear-blast-slider"
+                type="range" min="0" max="100"
+                :value="persist.state.mixer.earBlast.target"
+                @input="e => audio.setEarBlastTarget(Number((e.target as HTMLInputElement).value))"
+              />
+            </div>
+          </div>
         </div>
       </section>
 
@@ -887,6 +1123,45 @@ onMounted(async () => {
               {{ settings.gsrAutoStart ? 'On' : 'Off' }}
             </button>
           </div>
+          <div v-if="settings.gsrEnabled" class="gsr-toggle-row">
+            <span class="gsr-label">{{ t('settings.captureGsr.autoRestart') }}
+              <InfoIcon :title="t('settings.captureGsr.autoRestartTooltip')" />
+            </span>
+            <button class="toggle-btn" :class="{ on: settings.gsrAutoRestart }"
+                    @click="settings.gsrAutoRestart = !settings.gsrAutoRestart">
+              {{ settings.gsrAutoRestart ? 'On' : 'Off' }}
+            </button>
+          </div>
+
+          <!-- ★ GSR Diagnostics -->
+          <div v-if="settings.gsrEnabled" class="gsr-diagnostics" style="margin-top:12px">
+            <button class="btn btn-sm" :disabled="diagLoading" @click="runDiagnostics">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+              {{ diagLoading ? 'Running…' : t('settings.captureGsr.runDiagnostics') }}
+            </button>
+            <div v-if="diagResult" class="diag-results" :class="{ 'diag-ok': diagResult.ok, 'diag-fail': !diagResult.ok }">
+              <div class="diag-summary">{{ diagResult.ok ? t('settings.captureGsr.diagnosticsOk') : t('settings.captureGsr.diagnosticsFail') }}</div>
+              <div v-for="(item, i) in diagResult.items" :key="i" class="diag-item" :class="`diag-sev-${item.severity}`">
+                <div class="diag-msg">{{ item.severity === 'error' ? '✗' : '⚠' }} {{ item.message }}</div>
+                <div v-if="item.fix" class="diag-fix">
+                  <div class="diag-fix-desc">{{ item.fix.description }}</div>
+                  <div v-if="item.fix.command" class="diag-fix-row">
+                    <code class="diag-fix-cmd">{{ item.fix.command }}</code>
+                    <button
+                      class="copy-btn"
+                      :class="{ copied: copiedCommand === item.fix.command }"
+                      :title="t('settings.captureGsr.copyTooltip')"
+                      @click="doCopy(item.fix.command)"
+                    >
+                      <svg v-if="copiedCommand !== item.fix.command" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                      <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><polyline points="20 6 9 17 4 12"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div v-else class="hint" style="margin-top:8px">{{ t('settings.captureGsr.extensionsHint') }}</div>
         </div>
 
@@ -1113,15 +1388,48 @@ onMounted(async () => {
           <div v-if="gsrInstallOpen" class="gsr-install-guide">
             <div class="install-section">
               <span class="install-distro">Ubuntu / Debian</span>
-              <code class="install-cmd">sudo add-apt-repository ppa:dec05eba/gpu-screen-recorder &amp;&amp; sudo apt install gpu-screen-recorder</code>
+              <div class="install-cmd-wrap">
+                <code class="install-cmd">sudo add-apt-repository ppa:dec05eba/gpu-screen-recorder &amp;&amp; sudo apt install gpu-screen-recorder</code>
+                <button
+                  class="copy-btn"
+                  :class="{ copied: copiedCommand === 'sudo add-apt-repository ppa:dec05eba/gpu-screen-recorder && sudo apt install gpu-screen-recorder' }"
+                  :title="t('settings.captureGsr.copyTooltip')"
+                  @click="doCopy('sudo add-apt-repository ppa:dec05eba/gpu-screen-recorder && sudo apt install gpu-screen-recorder')"
+                >
+                  <svg v-if="copiedCommand !== 'sudo add-apt-repository ppa:dec05eba/gpu-screen-recorder && sudo apt install gpu-screen-recorder'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                  <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+              </div>
             </div>
             <div class="install-section">
               <span class="install-distro">Arch / Manjaro</span>
-              <code class="install-cmd">yay -S gpu-screen-recorder</code>
+              <div class="install-cmd-wrap">
+                <code class="install-cmd">yay -S gpu-screen-recorder</code>
+                <button
+                  class="copy-btn"
+                  :class="{ copied: copiedCommand === 'yay -S gpu-screen-recorder' }"
+                  :title="t('settings.captureGsr.copyTooltip')"
+                  @click="doCopy('yay -S gpu-screen-recorder')"
+                >
+                  <svg v-if="copiedCommand !== 'yay -S gpu-screen-recorder'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                  <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+              </div>
             </div>
             <div class="install-section">
               <span class="install-distro">Fedora</span>
-              <code class="install-cmd">sudo dnf install gpu-screen-recorder</code>
+              <div class="install-cmd-wrap">
+                <code class="install-cmd">sudo dnf install gpu-screen-recorder</code>
+                <button
+                  class="copy-btn"
+                  :class="{ copied: copiedCommand === 'sudo dnf install gpu-screen-recorder' }"
+                  :title="t('settings.captureGsr.copyTooltip')"
+                  @click="doCopy('sudo dnf install gpu-screen-recorder')"
+                >
+                  <svg v-if="copiedCommand !== 'sudo dnf install gpu-screen-recorder'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                  <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+              </div>
             </div>
           </div>
           <div class="gsr-toggle-row">
@@ -1176,7 +1484,7 @@ onMounted(async () => {
                   <span class="ext-name">{{ p.name }}</span>
                   <span class="plugin-ver">v{{ p.version }}</span>
                   <!-- Gear button only if extension declares hasSettings: true in manifest -->
-                  <button v-if="canConfigure(p)" class="ext-gear-btn" :title="t('settings.extensions.title')" @click.stop>
+                  <button v-if="canConfigure(p)" class="ext-gear-btn" :title="t('settings.extensions.configure')" @click.stop="openExtSettings(p)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <circle cx="12" cy="12" r="3"/>
                       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -1198,6 +1506,23 @@ onMounted(async () => {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;vertical-align:middle;margin-right:4px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           {{ t('settings.extensions.restartHint') }}
         </p>
+
+        <!-- ─── Extension settings panel modal ─── -->
+        <Teleport to="body">
+          <div v-if="activeExtSettings" class="ext-modal-overlay" @click.self="activeExtSettings = null">
+            <div class="ext-modal-box">
+              <div class="ext-modal-head">
+                <span class="ext-modal-title">{{ activeExtSettings.manifest.name }}</span>
+                <button class="ext-modal-close" :title="t('common.close')" @click="activeExtSettings = null">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+              <div class="ext-modal-body">
+                <component :is="activeExtSettings.settingsComponent" />
+              </div>
+            </div>
+          </div>
+        </Teleport>
       </section>
 
       <!-- ════════════════════ STORE ════════════════════ -->
@@ -1761,6 +2086,39 @@ onMounted(async () => {
 
 .ext-card-switch { flex-shrink: 0; }
 
+/* ── Extension settings panel modal ── */
+.ext-modal-overlay {
+  position: fixed; inset: 0; z-index: 9000;
+  background: rgba(0,0,0,.78);
+  backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+}
+.ext-modal-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  width: 520px; max-width: 92vw;
+  max-height: 86vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 24px 64px rgba(0,0,0,.6);
+  overflow: hidden;
+}
+.ext-modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.ext-modal-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.ext-modal-close {
+  width: 28px; height: 28px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-muted);
+  border-radius: 6px; cursor: pointer; transition: all .15s;
+}
+.ext-modal-close svg { width: 16px; height: 16px; }
+.ext-modal-close:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+.ext-modal-body { overflow-y: auto; }
+
 .plugin-ver { font-size: 10px; color: var(--text-muted); margin-left: 2px; }
 
 /* ── Plugin list ── */
@@ -1972,5 +2330,111 @@ onMounted(async () => {
 }
 .store-coming-soon-title {
   font-size: 18px; font-weight: 700; color: var(--text); margin: 0;
+}
+
+/* ── GSR Diagnostics ── */
+.gsr-diagnostics .btn-sm {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg-deep);
+  color: var(--text-sec); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all .12s;
+}
+.gsr-diagnostics .btn-sm:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); border-color: var(--accent); }
+.gsr-diagnostics .btn-sm:disabled { opacity: .5; cursor: not-allowed; }
+.diag-results { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius); border: 1px solid var(--border); font-size: 12px; }
+.diag-ok  { background: color-mix(in srgb, var(--success) 8%, transparent); border-color: color-mix(in srgb, var(--success) 25%, transparent); }
+.diag-fail { background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: color-mix(in srgb, var(--danger) 25%, transparent); }
+.diag-summary { font-weight: 700; margin-bottom: 6px; }
+.diag-ok .diag-summary { color: var(--success); }
+.diag-fail .diag-summary { color: var(--danger); }
+.diag-item { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
+.diag-item:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+.diag-sev-error .diag-msg { color: var(--danger); }
+.diag-sev-warning .diag-msg { color: var(--warn, #f59e0b); }
+.diag-msg { font-weight: 600; line-height: 1.4; margin-bottom: 4px; }
+.diag-fix { margin-top: 6px; padding: 8px 10px; background: var(--bg-deep); border-radius: var(--radius); border: 1px solid var(--border); }
+.diag-fix-desc { font-size: 11px; color: var(--text-sec); margin-bottom: 6px; line-height: 1.4; }
+.diag-fix-row { display: flex; align-items: center; gap: 8px; }
+.diag-fix-cmd { flex: 1; font-family: monospace; font-size: 11px; color: var(--text); background: var(--bg-input); padding: 5px 8px; border-radius: 4px; border: 1px solid var(--border); display: block; word-break: break-all; }
+
+/* ── Danger-zone compact icon buttons ── */
+.danger-icon-btn {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-deep); color: var(--text-muted);
+  cursor: pointer; transition: all .12s; flex-shrink: 0;
+}
+.danger-icon-btn svg { width: 14px; height: 14px; }
+.danger-icon-btn:hover { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.danger-icon-btn--delete:hover { border-color: var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.danger-icon-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ── Copyable install commands ── */
+.install-cmd-wrap { display: flex; align-items: stretch; gap: 6px; }
+.install-cmd-wrap .install-cmd { flex: 1; }
+.diag-fix-row { display: flex; align-items: stretch; gap: 8px; }
+.copy-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-deep); color: var(--text-muted);
+  cursor: pointer; transition: all .12s; flex-shrink: 0;
+}
+.copy-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); border-color: var(--accent); }
+.copy-btn.copied { background: color-mix(in srgb, var(--success) 10%, transparent); color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
+
+/* ── Card header action group ── */
+.card-head-actions { display: flex; align-items: center; gap: 8px; margin-inline-start: auto; }
+
+/* ── Ear Blast Protection slider ── */
+.ear-blast-slider {
+  width: 100%; margin-top: 8px;
+  -webkit-appearance: none; appearance: none;
+  height: 4px; background: var(--border); border-radius: 2px; outline: none;
+}
+.ear-blast-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--bg-card);
+}
+.ear-blast-slider::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--bg-card);
+}
+
+/* ── Ear Blast toggle button ── */
+.eb-toggle-btn {
+  padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg-deep); color: var(--text-sec); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all .15s;
+}
+.eb-toggle-btn:hover { border-color: var(--accent); color: var(--accent); }
+.eb-toggle-btn--active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--accent);
+}
+.eb-toggle-btn--active:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+/* ── Ear Blast channel pills ── */
+.channel-checks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; margin-bottom: 10px; }
+.channel-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg-deep); color: var(--text-sec); font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: all .12s; user-select: none;
+}
+.channel-pill:hover { border-color: var(--accent); color: var(--text); }
+.channel-pill--active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.channel-pill--active:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 </style>

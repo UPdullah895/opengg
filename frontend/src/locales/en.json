@@ -1,5 +1,4 @@
 {
-  "_meta": { "name": "English", "dir": "ltr" },
   "nav": {
     "home": "Home",
     "mixer": "Mixer",
@@ -10,12 +9,12 @@
   "common": {
     "confirm": "Confirm",
     "cancel": "Cancel",
-    "confirmDelete": "Confirm Deletion"
+    "confirmDelete": "Confirm Deletion",
+    "close": "Close"
   },
   "editor": {
     "exportClip": "Export Clip",
     "exportComplete": "Export Complete",
-    "dragIdle": "Hold to drag this file to a folder",
     "dragReady": "Drag this file to Discord, Telegram, or a folder",
     "changeFolder": "Change folder",
     "selectExportDir": "Select export directory",
@@ -26,11 +25,11 @@
     "pathCopied": "Path copied to clipboard",
     "advancedSettings": "Advanced Settings",
     "codec": "Codec",
-    "codecH264": "H.264 — Maximum compatibility",
-    "codecH265": "H.265 (HEVC) — Better quality, smaller size",
-    "codecVP9": "VP9 — WebM, good quality",
-    "codecAV1": "AV1 — Next-gen efficiency",
-    "codecOriginal": "Original — No re-encode"
+    "codecOriginal": "Original — No re-encode",
+    "exporting": "Exporting…",
+    "cancelExport": "Cancel Export",
+    "targetSize": "Target Size",
+    "original": "Original"
   },
   "sidebar": {
     "tip": "Tip: You can customize your shortcuts from the settings page."
@@ -50,7 +49,6 @@
     "scan": "Scan",
     "quickMixer": "Quick Mixer",
     "openMixer": "Open Mixer",
-    "subtitleVirtualAudioRouter": "OpenGG Virtual Audio Router",
     "captureSettings": "Capture Settings",
     "recordingSettings": "Recording Settings",
     "quality": "Quality",
@@ -67,8 +65,8 @@
     "comingSoon": "Coming Soon",
     "comingSoonDesc": "Device management is under construction. Mouse, keyboard, and RGB configuration will be available in a future release.",
     "latestUpdates": "Latest Engine Updates",
+    "reviewTutorial": "Review Tutorial",
     "showLess": "Show less",
-    "moreUpdates": "no more updates | {n} more update | {n} more updates",
     "gsrWarning": "GPU Screen Recorder is not installed. Install gpu-screen-recorder to enable replay buffer recording.",
     "gsrDismiss": "✕",
     "gsr": {
@@ -79,6 +77,8 @@
       "mute": "Mute",
       "unmute": "Unmute"
     },
+    "earBlastOn": "Ear Blast Protection ON — auto-lowers loud audio",
+    "earBlastOff": "Enable Ear Blast Protection (auto-lowers loud audio)",
     "gsrQuality": {
       "cbr": "Constant bitrate",
       "medium": "Medium",
@@ -224,19 +224,16 @@
           "Project bootstrap and architecture setup"
         ]
       }
-    ]
+    ],
+    "moreUpdates": "no more updates | {n} more update | {n} more updates"
   },
   "settings": {
-    "title": "Settings",
-    "saved": "Settings auto-saved",
     "sections": {
       "general": "General",
       "language": "Language",
       "shortcuts": "Shortcuts",
-      "mixerRouting": "Mixer Routing",
-      "eqAutoFlatten": "EQ Auto-Flatten",
+      "mixerRouting": "Audio Engine",
       "captureSound": "Capture & Sound",
-      "clipSettings": "Clip Settings",
       "storage": "Storage",
       "extensions": "Extensions",
       "store": "Store",
@@ -252,8 +249,6 @@
     },
     "general": {
       "title": "General",
-      "accentColor": "Accent Color",
-      "apply": "Apply",
       "reloadTheme": "↻ Reload theme.json",
       "themeFile": "Theme File",
       "themeHint": "Customize UI appearance. Stored at ~/.config/opengg/theme.json",
@@ -265,24 +260,15 @@
       "deviceManager": "Device Manager",
       "deviceManagerDesc": "Mouse/keyboard config, RGB",
       "replayClips": "Replay & Clips",
-      "replayClipsDesc": "Recording, replay buffer, clips",
-      "about": "About",
-      "version": "v0.1.2",
-      "openSource": "Open-source Linux gaming hub",
-      "github": "GitHub ↗"
+      "replayClipsDesc": "Recording, replay buffer, clips"
     },
     "language": {
       "title": "Language",
       "selectLanguage": "Select Language",
       "hint": "Changes take effect immediately. RTL languages are fully supported.",
       "addLanguage": "Add New Language",
-      "openFolderHint": "Drop a new xx.json file into the locales folder to add a custom language.",
       "reloadLanguages": "Reload languages from disk",
-      "rtlMode": "RTL Layout",
-      "rtlModeHint": "Switches the entire interface to right-to-left layout, including the sidebar position.",
-      "rtlModeLabel": "Interface direction",
-      "rtlEnable": "Enable RTL",
-      "rtlReset": "Reset to LTR"
+      "rtlModeHint": "Switches the entire interface to right-to-left layout, including the sidebar position."
     },
     "shortcuts": {
       "title": "Shortcuts",
@@ -296,12 +282,14 @@
         "exportClip": "Export Clip",
         "toggleMic": "Toggle Mic",
         "undo": "Undo",
-        "redo": "Redo"
+        "redo": "Redo",
+        "toggleEarBlast": "Toggle Ear Blast Protection"
       },
       "hints": {
         "saveReplay": "Saves the current replay buffer as a new clip file",
         "toggleRecording": "Starts or stops a manual full-length recording session",
         "screenshot": "Captures a screenshot of the active screen to your Pictures folder",
+        "toggleEarBlast": "Toggles Ear Blast Protection on or off",
         "splitClip": "Splits the clip at the current playhead position in the editor",
         "exportClip": "Opens the export dialog to save the trimmed clip as a video file",
         "toggleMic": "Mutes or unmutes your microphone across all recording tracks",
@@ -310,21 +298,17 @@
       },
       "resetToDefaults": "Reset to Defaults"
     },
-    "mixerRouting": {
-      "title": "Mixer Routing",
-      "hint": "Configure how audio streams are routed through virtual PipeWire sinks.",
-      "comingSoon": "Mixer routing config — coming soon"
-    },
-    "eqAutoFlatten": {
-      "title": "EQ Auto-Flatten",
-      "hint": "Automatically flatten EQ curves when switching audio profiles."
+    "earBlast": {
+      "title": "Ear Blast Protection",
+      "enable": "Enable Ear Blast Protection",
+      "disable": "Disable Ear Blast Protection",
+      "channels": "Protected Channels",
+      "threshold": "Trigger Threshold",
+      "target": "Target Volume",
+      "desc": "Automatically reduces volume when audio exceeds the trigger threshold. Restores original volume when levels normalize."
     },
     "captureSound": {
       "title": "Capture & Sound",
-      "quality": "Video Quality",
-      "resolution": "Resolution",
-      "fps": "Frame Rate",
-      "replayBuffer": "Replay Buffer",
       "captureDevices": "Audio Capture Devices",
       "captureHint": "Assign PipeWire virtual sinks to each recording track (OBS-style).",
       "trackLabel": "Track",
@@ -338,19 +322,13 @@
       }
     },
     "clipSettings": {
-      "title": "Clip Settings",
       "defaultClick": "Default Click Action",
       "defaultClickPreview": "Quick Preview",
       "defaultClickEditor": "Advanced Editor",
-      "clipsPerRow": "Columns Per Row",
-      "trackColors": "Track Colors",
-      "trackColorsHint": "Colors are applied as CSS variables to the timeline editor.",
-      "addTrack": "+ Add Track",
       "thumbnailCache": "Thumbnail Cache",
       "thumbnailHint": "Cached at ~/.local/share/opengg/thumbnails/",
       "clearCache": "Clear Thumbnail Cache",
-      "clearing": "Clearing…",
-      "cleared": "Cleared {count} thumbnails. Reload clips to regenerate."
+      "clearing": "Clearing…"
     },
     "storage": {
       "title": "Storage",
@@ -361,12 +339,8 @@
       "screenshotDirectories": "Screenshot Directories",
       "addScreenshotPath": "Add Directory",
       "removeDir": "Remove",
-      "clipsFolder": "Clips Folder",
-      "change": "Change Location",
       "clips": "clips",
       "used": "Used",
-      "free": "Free",
-      "total": "Total",
       "diskUsage": "Disk Usage",
       "loading": "Loading…",
       "readError": "Could not read storage info.",
@@ -375,7 +349,6 @@
       "steamBody": "Add your Steam library to OpenGG's game pickers and keep it visible here in Storage. After you allow access, OpenGG reads local Steam data and may request Steam Store metadata for names and artwork.",
       "steamDeniedTitle": "Steam library access is off",
       "steamDeniedBody": "Allow access to read local Steam data and request Steam Store metadata so OpenGG can list your Steam library here with names and artwork.",
-      "steamReadyTitle": "{count} Steam games in library",
       "steamReadyBody": "Your Steam library is available in game pickers and listed here with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images."
     },
     "extensions": {
@@ -386,7 +359,8 @@
       "refresh": "Refresh",
       "noExtensions": "No extensions found. Drop an extension folder with a manifest.json into the extensions directory.",
       "scanning": "Scanning…",
-      "restartHint": "Changes apply immediately — no restart required."
+      "restartHint": "Changes apply immediately — no restart required.",
+      "configure": "Configure"
     },
     "store": {
       "title": "Extension Store",
@@ -413,12 +387,17 @@
       "subtitle": "These actions are destructive. Use only if your audio routing is broken and needs a full reset.",
       "removeVirtualAudio": "Remove Virtual Audio & Restore OS Defaults",
       "removeVirtualAudioDesc": "Unloads all OpenGG virtual sinks/sources without restarting PipeWire or WirePlumber. Your physical hardware routes will be restored. The onboarding wizard will guide re-setup on next launch.",
-      "confirmMsg": "This will unload all OpenGG virtual audio sinks. Other audio (browser, games) will keep playing. Continue?"
+      "confirmMsg": "This will unload all OpenGG virtual audio sinks. Other audio (browser, games) will keep playing. Continue?",
+      "resetVirtualAudio": "Reset Virtual Audio",
+      "resetVirtualAudioDesc": "Remove and recreate the virtual audio engine.",
+      "createVirtualAudio": "Create Virtual Audio Engine",
+      "createVirtualAudioDesc": "Set up OpenGG's virtual sinks so you can route Game, Chat, Media, and Aux independently.",
+      "createConfirmTitle": "Create Virtual Audio?",
+      "createConfirmMsg": "This will create virtual audio sinks for independent channel routing. Continue?",
+      "creating": "Creating…"
     },
     "timelineTracks": {
       "title": "Timeline Tracks",
-      "trackIcons": "Track Icons",
-      "showIconsDesc": "Show a small icon next to each track label in the editor timeline",
       "trackList": "Track List",
       "trackListHint": "Customize the name, color, and icon for each editor timeline track. Changes apply live — open the editor to see them instantly.",
       "livePreview": "Live Preview",
@@ -445,16 +424,22 @@
       "waylandHint": "Wayland session detected. \"Fullscreen Application\" capture requires X11.",
       "installToggleHide": "▼ Hide install guide",
       "installToggleShow": "▶ How to install?",
-      "removeVirtualAudio": "Remove Virtual Audio & Restore OS Defaults",
-      "removeVirtualAudioRemoving": "Removing…"
+      "runDiagnostics": "Run Diagnostics",
+      "diagnosticsOk": "All checks passed — ready to record.",
+      "diagnosticsFail": "Some checks failed. Fix the issues below before recording.",
+      "copied": "Copied!",
+      "copyTooltip": "Copy",
+      "autoRestart": "Auto-restart on crash",
+      "autoRestartTooltip": "Automatically restart the replay buffer if gpu-screen-recorder crashes unexpectedly.",
+      "errorMissingGroups": "Your user is not in the 'render' group. Run: sudo usermod -aG render,video $USER — then re-login.",
+      "errorBinaryUnhealthy": "gpu-screen-recorder is installed but failed to run. Check that it is a compatible version and your GPU drivers are up to date.",
+      "crashWarning": "Recording stopped unexpectedly. Check logs for details.",
+      "crashRestarting": "Recording crashed — restarting…"
     },
     "notificationsPage": {
       "title": "Notifications",
       "description": "Configure how OpenGG notifies you when clips are saved or recording events occur.",
-      "masterToggle": "Enable Notifications",
-      "masterToggleDesc": "Show overlay notifications for clip save events.",
       "style": "Notification Style",
-      "styleDesc": "Choose how notifications are displayed.",
       "styleAuto": "Automatic",
       "styleGsrNotify": "GSR-Notify",
       "styleX11Overlay": "X11 Overlay Window",
@@ -481,45 +466,64 @@
       "discord": "Discord",
       "website": "Website",
       "contributors": "OpenGG is maintained by the community. Contributions are welcome!"
-    },
-    "storagePage": {
-      "addScreenshotDir": "Add Directory",
-      "removeScreenshotDir": "Remove"
     }
   },
   "clips": {
     "contextMenu": {
-      "preview":      "Preview",
-      "edit":         "Edit",
-      "select":       "Select",
-      "favorite":     "Favorite",
-      "unfavorite":   "Unfavorite",
-      "rename":       "Rename",
+      "preview": "Preview",
+      "edit": "Edit",
+      "select": "Select",
+      "favorite": "Favorite",
+      "unfavorite": "Unfavorite",
+      "rename": "Rename",
       "showInFolder": "Show in Folder",
-      "delete":       "Delete"
+      "copyPath": "Copy Path",
+      "delete": "Delete"
     },
     "sortOptions": {
-      "newest":   "Newest",
-      "oldest":   "Oldest",
-      "longest":  "Longest",
+      "newest": "Newest",
+      "oldest": "Oldest",
+      "longest": "Longest",
       "shortest": "Shortest"
     },
     "bulkActions": {
-      "favoriteAll":   "Favorite All",
+      "favoriteAll": "Favorite All",
       "unfavoriteAll": "Unfavorite All",
-      "clear":         "Clear",
-      "delete":        "Delete"
+      "changeGame": "Change Game",
+      "rename": "Rename",
+      "renamePlaceholder": "Pattern e.g. Highlight_{n}",
+      "clear": "Clear",
+      "delete": "Delete"
     },
+    "dateGroup": {
+      "today": "Today",
+      "yesterday": "Yesterday"
+    },
+    "toast": {
+      "clipDeleted": "Clip deleted",
+      "exportCancelled": "Export cancelled"
+    },
+    "durationFilter": {
+      "all": "All Durations",
+      "short": "< 15s",
+      "medium": "15s - 1min",
+      "long": "1min - 5min",
+      "verylong": "> 5min"
+    },
+    "stats": {
+      "clips": "clips",
+      "totalDuration": "total duration",
+      "totalSize": "total size",
+      "avgDuration": "avg duration"
+    },
+    "importing": "Importing clips…",
     "renameDialog": {
       "title": "Rename Clip",
-      "save":  "Save"
+      "save": "Save"
     },
     "loadError": "Failed to load clips",
     "retry": "Retry",
     "search": "Search clips…",
-    "allGames": "All Games",
-    "noMatches": "No matches",
-    "games": "Games",
     "noClipsFound": "No clips found",
     "noClipsHint": "Try again or adjust your filters",
     "noClipsEmptyHint": "Start recording some or import them if you have any",
@@ -527,6 +531,7 @@
     "groupByDate": "Group by date",
     "viewGrid": "Grid view",
     "viewList": "List view",
+    "toggleStats": "Toggle statistics",
     "gamesFilter": {
       "label": "Games",
       "allGames": "All Games",
@@ -541,7 +546,6 @@
       "body": "Bring your Steam library into the existing game filters and tag pickers. After you allow it, OpenGG reads local Steam data and may request Steam Store metadata for game names and artwork.",
       "deniedTitle": "Steam library access is off",
       "deniedBody": "OpenGG has not imported your Steam library. Allow access to read local Steam data and request Steam Store metadata for game names and icons.",
-      "readyTitle": "{count} Steam games available",
       "readyBody": "Your Steam library is available in the game filters and clip game pickers, with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images.",
       "consentTitle": "Steam Library Access",
       "consentMessage": "Allow OpenGG to read your local Steam data and request Steam Store metadata to populate your Steam library, game names, and artwork?",
@@ -549,7 +553,6 @@
       "import": "Import Steam Games",
       "refresh": "Refresh Steam Library",
       "loading": "Importing…",
-      "imported": "Imported {count} Steam games",
       "failed": "Steam library import failed"
     }
   },
@@ -559,10 +562,7 @@
     "game": "Game",
     "filename": "Filename",
     "filesize": "File Size",
-    "enableClipNotifications": "Clip Save Notifications",
-    "enableClipNotificationsDesc": "Show an overlay toast when a clip is saved successfully or fails",
-    "recordingStarted": "Recording started",
-    "recordingFailed": "Recording failed: {error}"
+    "recordingStarted": "Recording started"
   },
   "recording": {
     "stopped": "Stopped",
@@ -580,31 +580,14 @@
     "dropHere": "Drop here",
     "refresh": "Refresh",
     "back": "Back",
-    "battery": "Battery",
-    "charging": "Charging",
     "sidetone": "Sidetone",
-    "chatmix": "ChatMix",
-    "game": "Game",
-    "chat": "Chat",
     "dpi": "DPI",
     "pollingRate": "Polling Rate",
     "headset": "Headset",
     "mouse": "Mouse",
     "settings": "Settings",
-    "eqPreset": "Equalizer Preset",
-    "eqFlat": "Flat",
-    "eqBass": "Bass",
-    "eqFocus": "Focus",
-    "eqSmiley": "Smiley",
     "autoOff": "Auto-Off",
     "autoOffNever": "Never",
-    "autoOffMinutes": "{n} min",
-    "micVolume": "Mic Volume",
-    "micMuteLed": "Mute LED",
-    "micMuteLedOff": "Off",
-    "micMuteLedLow": "Low",
-    "micMuteLedMed": "Med",
-    "micMuteLedHigh": "High",
     "volumeLimiter": "Volume Limiter",
     "btPoweredOn": "BT When Powered On",
     "btCallVolume": "BT Call Volume",
@@ -612,7 +595,6 @@
     "viewList": "List view",
     "defaultDevice": "Default",
     "macros": "Macros",
-    "macroButton": "Button",
     "macroName": "Macro Name",
     "macroActions": "Actions",
     "macroPlayback": "Playback",
@@ -625,6 +607,42 @@
     "macroNoButton": "Select a button on the mouse diagram",
     "comingSoon": "Devices — Coming Soon",
     "comingSoonDesc": "We are working on providing full support for your favourite devices. Stay tuned for upcoming updates."
+  },
+  "tutorial": {
+    "skip": "Skip",
+    "next": "Next",
+    "previous": "Previous",
+    "finish": "Get Started",
+    "steps": {
+      "welcome": {
+        "title": "Welcome to OpenGG",
+        "desc": "Your open-source Linux gaming hub. Let's take a quick tour of what you can do."
+      },
+      "dashboard": {
+        "title": "Dashboard",
+        "desc": "Your command center. Quick-access cards for Audio, Recording, Clips, and Devices. Click any card for fast actions."
+      },
+      "mixer": {
+        "title": "Audio Mixer",
+        "desc": "Route Game, Chat, Media, and Aux through independent virtual sinks. Drag apps between channels and control per-app volume."
+      },
+      "clips": {
+        "title": "Clips & Recording",
+        "desc": "Save instant replays, browse your clip gallery, and import folders. The replay buffer runs in the background while you play."
+      },
+      "scanning": {
+        "title": "Scanning",
+        "desc": "Import entire folders of clips with one click. Device scanning will be available in a future update."
+      },
+      "settings": {
+        "title": "Settings",
+        "desc": "Customize themes, shortcuts, and recording quality. Set up virtual audio in the Audio Engine tab."
+      },
+      "finish": {
+        "title": "You're Ready!",
+        "desc": "If you haven't set up virtual audio yet, we'll guide you through it now."
+      }
+    }
   },
   "onboarding": {
     "steps": {
@@ -648,13 +666,10 @@
     "skip": "Skip for now",
     "skipShort": "Skip",
     "creating": "Creating…",
-    "saving": "Saving…",
-    "errorCreate": "Setup failed: {error}",
-    "errorComplete": "Could not complete setup: {error}"
+    "saving": "Saving…"
   },
   "clips2": {
     "scanning": "Scanning for new clips…",
-    "foundCount": "{n} found",
     "newClipDetected": "New clip detected…",
     "apply": "Apply",
     "cancel": "Cancel"

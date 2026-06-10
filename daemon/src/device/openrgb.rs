@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! OpenRGB SDK Client
 //!
 //! Connects to the OpenRGB server (default port 6742) via its binary TCP protocol

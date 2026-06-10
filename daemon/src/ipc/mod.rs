@@ -1,19 +1,23 @@
 //! D-Bus IPC layer
 
 pub mod audio_iface;
+pub mod extensions_iface;
 
 use anyhow::{Context, Result};
+use std::sync::Arc;
 use zbus::connection::Builder;
 use zbus::Connection;
 
 use crate::audio::AudioHub;
 use crate::device::DeviceInterface;
+use crate::extensions::ExtensionManager;
 use crate::replay::ReplayInterface;
 
 pub async fn serve(
     audio: Option<AudioHub>,
     device: Option<DeviceInterface>,
     replay: Option<ReplayInterface>,
+    extensions: Arc<ExtensionManager>,
 ) -> Result<Connection> {
     let mut builder = Builder::session()
         .context("Failed to connect to session D-Bus")?
@@ -41,6 +45,14 @@ pub async fn serve(
             .context("Failed to register Replay interface")?;
         tracing::info!("D-Bus: /org/opengg/Daemon/Replay");
     }
+
+    builder = builder
+        .serve_at(
+            "/org/opengg/Daemon/Extensions",
+            extensions_iface::ExtensionsInterface::new(extensions),
+        )
+        .context("Failed to register Extensions interface")?;
+    tracing::info!("D-Bus: /org/opengg/Daemon/Extensions");
 
     let connection = builder.build().await?;
     Ok(connection)

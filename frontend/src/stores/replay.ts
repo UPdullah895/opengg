@@ -140,6 +140,7 @@ export const useReplayStore = defineStore('replay', () => {
   const filterGame = ref('all')
   const selectedGames = ref<string[]>([])
   const filterFav = ref(false)
+  const durationFilter = ref<'all' | 'short' | 'medium' | 'long' | 'verylong'>('all')
 
   const selectedIds = ref<Set<string>>(new Set())
   const selectMode = ref(false)
@@ -178,6 +179,18 @@ export const useReplayStore = defineStore('replay', () => {
       })
     }
     if (filterFav.value) r = r.filter(c => c.favorite)
+    if (durationFilter.value !== 'all') {
+      r = r.filter(c => {
+        const d = c.duration || 0
+        switch (durationFilter.value) {
+          case 'short': return d > 0 && d < 15
+          case 'medium': return d >= 15 && d < 60
+          case 'long': return d >= 60 && d < 300
+          case 'verylong': return d >= 300
+          default: return true
+        }
+      })
+    }
     if (selectedGames.value.length > 0) {
       const selectedNormalized = new Set(selectedGames.value.map(normalizeGameTitle))
       r = r.filter(c => selectedNormalized.has(normalizeGameTitle(c.game)))
@@ -385,7 +398,7 @@ export const useReplayStore = defineStore('replay', () => {
 
   return {
     status, replayDuration, clips, loading, loaded, clipsProbed, isPrefetching, scrolling, pageActive, clipsLoadedAt,
-    search, sortMode, filterGame, selectedGames, filterFav,
+    search, sortMode, filterGame, selectedGames, filterFav, durationFilter,
     games, filteredClips, filteredRealClips, favCount,
     selectedIds, selectMode, selectedCount,
     fetchStatus, startReplay, stopRecorder, saveReplay,

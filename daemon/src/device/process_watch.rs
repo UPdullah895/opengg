@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Process Watcher
 //!
 //! Periodically scans /proc to detect game launches and triggers profile

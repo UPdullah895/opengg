@@ -206,7 +206,7 @@ function cancelEdit() { isEditing.value = false }
   <div ref="cardRef" class="card" :class="{ selected }" @contextmenu.prevent="openMenu">
     <div class="thumb">
       <img v-if="thumbUrl" :src="thumbUrl" class="thumb-img" :class="{ loaded: thumbLoaded }" alt="" decoding="async" loading="lazy" @load="thumbLoaded = true" />
-      <div v-else class="thumb-ph">🎬</div>
+      <div v-else class="thumb-ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg></div>
       <span v-if="displayDuration" class="badge" :class="{ trimmed: isTrimmed }">
         <svg v-if="isTrimmed" viewBox="0 0 24 24" aria-hidden="true">
           <path fill="currentColor" d="M9.64 7.64a2.5 2.5 0 1 1-3.54-3.54 2.5 2.5 0 0 1 3.54 3.54Zm0 8.72a2.5 2.5 0 1 1-3.54 3.54 2.5 2.5 0 0 1 3.54-3.54ZM14.59 12l6.2 6.2-1.41 1.41L12 12.41l-7.38 7.2-1.4-1.42L9.41 12 3.22 5.8l1.4-1.41L12 11.59l7.38-7.2 1.41 1.42z"/>
