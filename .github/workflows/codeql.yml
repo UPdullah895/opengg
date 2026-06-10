@@ -1,0 +1,54 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Weekly CodeQL scan at 03:00 UTC on Mondays
+    - cron: '0 3 * * 1'
+
+jobs:
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['javascript-typescript', 'rust']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Install system dependencies for Rust autobuild of the Tauri crate
+      # (daemon-only scope would be lighter, but Tauri's Tauri UI means both are
+      # relevant security attack surfaces; we scan both)
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      # For JS/TS, CodeQL runs the build context it finds.
+      # For Rust, autobuild will invoke `cargo build` in the workspace.
+      # Both crates have independent Cargo.toml files (not a Cargo workspace),
+      # so autobuild will attempt to build each independently as it discovers them.
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
