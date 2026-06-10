@@ -364,8 +364,24 @@
     },
     "store": {
       "title": "Extension Store",
-      "comingSoon": "Coming Soon",
-      "comingSoonDesc": "Browse and install community extensions directly from OpenGG. This feature is under development."
+      "browse": {
+        "title": "Browse Extensions",
+        "description": "Discover community-contributed extensions for OpenGG.",
+        "loading": "Loading registry…",
+        "offline": "Unable to reach the extension registry",
+        "retry": "Retry",
+        "networkError": "Network error: {error}",
+        "invalidRegistry": "Invalid registry format",
+        "noExtensions": "No extensions available",
+        "installNote": "Install from registry coming soon — see docs/EXTENSION_DEV.md for manual install",
+        "viewRepository": "View Repository",
+        "author": "By {author}",
+        "version": "v{version}",
+        "noDaemon": "UI only",
+        "hasDaemon": "Includes daemon",
+        "noPermissions": "Standard access",
+        "permissions": "Permissions:"
+      }
     },
     "clipPreferences": {
       "title": "Clip Preferences"

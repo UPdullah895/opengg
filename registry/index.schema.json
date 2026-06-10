@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenGG Extension Registry Index",
+  "description": "Schema for the OpenGG extension registry index.json file",
+  "type": "object",
+  "required": ["version", "updated", "extensions"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "number",
+      "description": "Registry format version. Clients reject unsupported versions.",
+      "minimum": 1
+    },
+    "updated": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO 8601 date of last registry update (YYYY-MM-DD)"
+    },
+    "extensions": {
+      "type": "array",
+      "description": "List of available extensions",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "description", "version", "download"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "minLength": 1,
+            "description": "Unique extension identifier in kebab-case"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name shown in the Browse view"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Short description of what the extension does"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+            "description": "Semantic version of this release"
+          },
+          "author": {
+            "type": "string",
+            "description": "Author name or organization (for attribution)"
+          },
+          "repo": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL to source code repository (GitHub, GitLab, etc.)"
+          },
+          "download": {
+            "type": "string",
+            "format": "uri",
+            "description": "Public URL to download the .tar.gz archive"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "clips:read",
+                "audio:read",
+                "recorder:read",
+                "extensions:read",
+                "locales:read"
+              ]
+            },
+            "description": "List of permission tiers declared in the manifest"
+          },
+          "hasDaemon": {
+            "type": "boolean",
+            "description": "true if the manifest contains a daemon field; false otherwise"
+          },
+          "icon": {
+            "type": ["string", "null"],
+            "format": "uri",
+            "description": "Absolute URL to a 42x42px icon image (PNG or SVG), or null if no icon"
+          }
+        }
+      }
+    }
+  }
+}

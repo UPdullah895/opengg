@@ -468,6 +468,106 @@ cp -r my-first-ext ~/.local/share/opengg/extensions/
 
 ---
 
+## Publishing Your Extension
+
+Once your extension is stable and tested, you can share it with the OpenGG community by publishing it to the extension registry. This makes it discoverable in the **Settings → Store → Browse** view, where users can view your extension details and link to your repository.
+
+### Prerequisites
+
+- Your extension is tested and working locally
+- You've validated the manifest: `make validate-extension DIR=~/.local/share/opengg/extensions/my-ext`
+- You have a GitHub (or similar) account and repository for your code
+- You're ready to create a release
+
+### Step 1: Prepare a Release
+
+1. **Tag your code:**
+   ```bash
+   git tag -a v1.0.0 -m "Release v1.0.0"
+   git push origin v1.0.0
+   ```
+
+2. **Create a release archive** (the app packages it as `.tar.gz`):
+   ```bash
+   cd ~/.local/share/opengg/extensions
+   tar -czf my-ext-1.0.0.tar.gz my-ext/
+   ```
+
+3. **Upload to GitHub Releases** (or another public host):
+   - Go to your repository on GitHub
+   - Create a new Release with tag `v1.0.0`
+   - Upload the `.tar.gz` file as a release asset
+   - Copy the download URL (e.g. `https://github.com/.../releases/download/v1.0.0/my-ext-1.0.0.tar.gz`)
+
+### Step 2: Submit to the Registry
+
+The extension registry is a static JSON file in the OpenGG repository. To add your extension:
+
+1. **Fork** https://github.com/UPdullah895/opengg (if you haven't already)
+
+2. **Edit `registry/index.json`** and add an entry to the `extensions` array:
+   ```json
+   {
+     "id": "my-ext",
+     "name": "My Extension",
+     "description": "A short description (max 120 characters) of what it does.",
+     "version": "1.0.0",
+     "author": "Your Name",
+     "repo": "https://github.com/yourname/my-ext",
+     "download": "https://github.com/yourname/my-ext/releases/download/v1.0.0/my-ext-1.0.0.tar.gz",
+     "permissions": ["clips:read"],
+     "hasDaemon": false,
+     "icon": null
+   }
+   ```
+
+   See `registry/README.md` for detailed field descriptions and icon hosting instructions.
+
+3. **Create a Pull Request** to the main OpenGG repository with your changes to `registry/index.json`
+
+4. **CI validation & review:**
+   - The GitHub Actions pipeline validates your manifest against the registry schema
+   - Maintainers review the entry for:
+     - Accurate description and metadata
+     - Valid download URL
+     - No malicious code or security issues (daemon path traversal checks, etc.)
+   - If approved, your PR is merged and live in minutes
+
+### Step 3: Your Extension is Live
+
+Once merged, your extension appears in Settings → Store → Browse. Users can:
+- See your extension card with name, version, author, description, and permissions
+- View your repository link
+- (Manually) install it by downloading and extracting to `~/.local/share/opengg/extensions/`
+
+**Note:** In-app install from the registry is a planned feature (coming soon). For now, users install manually.
+
+### Future: In-App Install & Updates
+
+The roadmap includes:
+- **One-click install** — download and extract `.tar.gz` directly in-app
+- **Update checks** — compare local vs. registry versions
+- **Trust & signing** — GPG signatures for release integrity
+
+Until then, the registry makes your extension discoverable, and the repository link directs users to installation instructions.
+
+### Registry Entry Fields Reference
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | yes | Unique kebab-case identifier (must match folder name) |
+| `name` | yes | Display name in the Browse view |
+| `description` | yes | Short description (max 120 characters) |
+| `version` | yes | Semantic version of this release (e.g. `1.0.0`) |
+| `author` | no | Your name or organization |
+| `repo` | no | URL to your source code (GitHub, GitLab, etc.) |
+| `download` | yes | Public URL to the `.tar.gz` release asset |
+| `permissions` | no | Array of declared permissions (e.g. `["clips:read"]`) |
+| `hasDaemon` | no | `true` if manifest has a `daemon` field |
+| `icon` | no | Absolute URL to a 42×42px PNG/SVG icon, or `null` |
+
+For more details, see `registry/README.md`.
+
 ## Summary
 
 1. **Scaffold** → `make new-extension NAME=my-ext`
@@ -475,6 +575,8 @@ cp -r my-first-ext ~/.local/share/opengg/extensions/
 3. **Build** → `npm run build`
 4. **Test** → OpenGG Settings → Extensions → Reload (dev) or Refresh
 5. **Validate** → `make validate-extension DIR=~/.local/share/opengg/extensions/my-ext`
-6. **Share** → Users copy folder to `~/.local/share/opengg/extensions/`
+6. **Release** → Create a `.tar.gz` and GitHub release
+7. **Publish** → Submit PR to add your extension to `registry/index.json`
+8. **Share** → Users discover your extension in Settings → Store → Browse
 
 Happy extending!

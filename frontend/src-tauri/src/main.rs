@@ -251,6 +251,7 @@ fn main() {
             commands::scan_extensions,
             commands::set_extension_enabled,
             commands::open_extensions_folder,
+            commands::fetch_extension_registry,
             // ★ Epic 2: Crash log
             commands::open_crash_logs_folder,
             // ★ Epic 4: Background daemon + autostart

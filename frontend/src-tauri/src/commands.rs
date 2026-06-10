@@ -2950,6 +2950,97 @@ pub async fn set_extension_enabled(id: String, enabled: bool) -> Result<(), Stri
     Ok(())
 }
 
+/// Fetches the extension registry index from a remote URL.
+/// Validates the JSON structure and returns the parsed index.
+///
+/// # Arguments
+/// - `url` (optional): Custom registry URL. Defaults to the main OpenGG registry.
+///
+/// # Returns
+/// The parsed registry index as a JSON value, or an error (offline, timeout, bad JSON, etc.)
+///
+/// # Security
+/// - Fetches remote JSON for display only (no auto-install)
+/// - Enforces 1 MB size cap to prevent memory exhaustion
+/// - Validates structure before returning to frontend
+#[command]
+pub async fn fetch_extension_registry(url: Option<String>) -> Result<serde_json::Value, String> {
+    const DEFAULT_REGISTRY_URL: &str = "https://raw.githubusercontent.com/UPdullah895/opengg/main/registry/index.json";
+    const SIZE_CAP: u64 = 1024 * 1024; // 1 MB
+    const TIMEOUT_SECS: u64 = 10;
+
+    let fetch_url = url.as_deref().unwrap_or(DEFAULT_REGISTRY_URL);
+
+    // Create an async HTTP client with timeout and size limits
+    let client = reqwest::ClientBuilder::new()
+        .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    // Fetch the registry index
+    let response = client
+        .get(fetch_url)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                "Network timeout: registry server did not respond within 10 seconds".to_string()
+            } else if e.is_connect() {
+                "Network error: unable to reach registry server (offline?)".to_string()
+            } else {
+                format!("Network error: {e}")
+            }
+        })?;
+
+    // Check Content-Length to avoid excessive memory use
+    if let Some(content_length) = response.content_length() {
+        if content_length > SIZE_CAP {
+            return Err(format!(
+                "Registry index too large: {} bytes (max {} MB)",
+                content_length,
+                SIZE_CAP / (1024 * 1024)
+            ));
+        }
+    }
+
+    // Read response body
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+
+    if body.len() > SIZE_CAP as usize {
+        return Err(format!(
+            "Registry index too large: {} bytes (max {} MB)",
+            body.len(),
+            SIZE_CAP / (1024 * 1024)
+        ));
+    }
+
+    // Parse JSON
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| format!("Invalid JSON: {e}"))?;
+
+    // Validate registry version and structure
+    match parsed.get("version").and_then(|v| v.as_number()) {
+        Some(v) if v.is_u64() => {
+            if v.as_u64().unwrap_or(0) != 1 {
+                return Err(format!(
+                    "Unsupported registry version: {} (expected 1)",
+                    v
+                ));
+            }
+        }
+        _ => return Err("Missing or invalid 'version' field in registry".to_string()),
+    }
+
+    if !parsed.get("extensions").map(|e| e.is_array()).unwrap_or(false) {
+        return Err("Missing or invalid 'extensions' array in registry".to_string());
+    }
+
+    Ok(parsed)
+}
+
 /// Reads every `*.json` file in `~/.config/opengg/locales/` and returns their
 /// raw content. The frontend parses each file, extracts `_meta.{name,dir}`,
 /// and registers the locale dynamically via `i18n.global.setLocaleMessage`.

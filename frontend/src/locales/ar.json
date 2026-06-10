@@ -364,8 +364,24 @@
     },
     "store": {
       "title": "متجر الإضافات",
-      "comingSoon": "قريباً",
-      "comingSoonDesc": "تصفّح وثبّت إضافات المجتمع مباشرةً من OpenGG. هذه الميزة قيد التطوير."
+      "browse": {
+        "title": "تصفح الإضافات",
+        "description": "اكتشف الإضافات المساهمة من المجتمع لـ OpenGG.",
+        "loading": "جاري تحميل السجل…",
+        "offline": "تعذر الوصول إلى سجل الإضافات",
+        "retry": "إعادة محاولة",
+        "networkError": "خطأ في الشبكة: {error}",
+        "invalidRegistry": "تنسيق السجل غير صالح",
+        "noExtensions": "لا توجد إضافات متاحة",
+        "installNote": "التثبيت من السجل قريباً — انظر docs/EXTENSION_DEV.md للتثبيت اليدوي",
+        "viewRepository": "عرض المستودع",
+        "author": "بواسطة {author}",
+        "version": "v{version}",
+        "noDaemon": "واجهة مستخدم فقط",
+        "hasDaemon": "يتضمن خيطاً خلفياً",
+        "noPermissions": "وصول قياسي",
+        "permissions": "الأذونات:"
+      }
     },
     "clipPreferences": {
       "title": "تفضيلات المقاطع"

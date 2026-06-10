@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "updated": "2026-06-10",
+  "extensions": [
+    {
+      "id": "sunshine-audio",
+      "name": "Sunshine Audio Router",
+      "description": "Auto-routes OpenGG audio channels into Sunshine/Moonlight when streaming starts.",
+      "version": "0.2.0",
+      "author": "OpenGG",
+      "repo": "https://github.com/UPdullah895/opengg",
+      "download": "https://github.com/UPdullah895/opengg/releases/download/v0.1.2/sunshine-audio.tar.gz",
+      "permissions": [],
+      "hasDaemon": true,
+      "icon": null
+    }
+  ]
+}
