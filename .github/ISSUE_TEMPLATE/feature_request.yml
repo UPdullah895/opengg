@@ -1,0 +1,80 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for OpenGG
+labels: ["enhancement", "needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting a feature! Please describe the problem you're trying to solve and your proposed solution.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem or limitation are you experiencing? Why do you need this feature?
+      placeholder: |
+        Currently, I can only route applications to predefined channels (Game, Chat, Media, Aux).
+        I'd like to create custom channels for specific use cases.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How would you like this feature to work? Be as specific as possible.
+      placeholder: |
+        Add a "Create Channel" button in Settings > Mixer.
+        Allow users to name channels and assign hardware I/O.
+        Custom channels persist to ~/.config/opengg/ui-settings.json.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative Solutions
+      description: Are there other ways to solve this problem?
+      placeholder: |
+        - Use PipeWire directly with pactl (but that's not user-friendly)
+        - Write a custom extension (but users shouldn't need to code)
+    validations:
+      required: false
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of OpenGG would this affect?
+      options:
+        - Audio Mixer
+        - Clips & Replay
+        - Devices & RGB
+        - Extensions
+        - UI / Settings
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other information or references?
+      placeholder: |
+        Similar features exist in:
+        - SteelSeries GG (custom virtual channels)
+        - Elgato Wave Link (custom mixer profiles)
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have checked that this feature request is not a duplicate
+          required: true
+        - label: This feature aligns with OpenGG's scope (gaming audio/devices/clips)
+          required: true

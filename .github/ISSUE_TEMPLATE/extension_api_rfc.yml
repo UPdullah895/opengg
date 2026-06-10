@@ -1,0 +1,116 @@
+name: Extension API RFC
+description: Propose a new extension API or permission tier
+labels: ["extension-api", "rfc", "needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is for requesting new extension APIs or permission tiers.
+
+        Extensions currently have access to read-only commands (`get_clip_list`, `get_audio_devices`, etc.).
+        If you need destructive or privileged access, describe your use case and we'll evaluate the security implications.
+
+  - type: textarea
+    id: api_description
+    attributes:
+      label: Proposed API
+      description: Describe the new command, method, or capability you're requesting.
+      placeholder: |
+        Command: `create_custom_channel`
+        Parameters: { name: string, color: string }
+        Returns: { id: string, name: string, color: string }
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use Case
+      description: Why does an extension need this API? What problem does it solve?
+      placeholder: |
+        A custom extension for streaming setup needs to create temporary mixing channels
+        on-the-fly without exposing settings to the main UI. This lets streamers quickly
+        reconfigure audio for different game titles.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: permission_tier
+    attributes:
+      label: Permission Tier
+      description: What level of privilege is needed?
+      options:
+        - "Read-only (like get_clip_list, get_audio_devices)"
+        - "Audio mixer control (volume, routing, EQ)"
+        - "Device control (RGB, mouse/keyboard settings)"
+        - "File system access (read clips, write configs)"
+        - "Subprocess execution (run external programs)"
+        - "Full system access (equivalent to daemon privileges)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: risk_analysis
+    attributes:
+      label: Security Risk Analysis
+      description: |
+        What could a malicious extension do with this API?
+        How would you mitigate those risks?
+      placeholder: |
+        Risk: A malicious extension with `create_custom_channel` could create thousands
+        of channels to exhaust system resources or confuse the user.
+
+        Mitigation:
+        - Enforce a hard limit (e.g., max 16 custom channels per session)
+        - Require explicit user approval for each channel creation
+        - Validate channel names to prevent injection
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation_sketch
+    attributes:
+      label: Implementation Sketch (Optional)
+      description: How would you implement this on the daemon or Tauri side?
+      placeholder: |
+        Daemon side (`daemon/src/audio/mixer.rs`):
+        - Add `create_custom_channel(name: String, color: String)` to D-Bus interface
+        - Store in `~/.config/opengg/daemon.toml` under `[audio.custom_channels]`
+
+        Tauri side (`frontend/src-tauri/src/commands.rs`):
+        - Add `create_custom_channel` command that invokes the daemon via D-Bus
+    validations:
+      required: false
+
+  - type: textarea
+    id: testing_plan
+    attributes:
+      label: Testing Plan (Optional)
+      description: How would you test this API?
+      placeholder: |
+        - Test creating channels with valid/invalid names
+        - Test the hard limit (attempting to create more than max channels)
+        - Test persistence across daemon restarts
+        - Test with a malicious test extension
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Links, references, or examples?
+      placeholder: "Similar APIs: PipeWire's pw-cli, SteelSeries GG extension system"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have considered the security implications of this API
+          required: true
+        - label: I have checked that a similar API does not already exist
+          required: true
