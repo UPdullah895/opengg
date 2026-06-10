@@ -210,8 +210,12 @@ export const useAudioStore = defineStore('audio', () => {
       const app = allApps.value.find(a => a.id === appId)
       const key = app?.binary || app?.name
       if (key) usePersistenceStore().setAppRule(key, channel)
-    } finally {
-      setRoutingDone(appId)
+      setRoutingDone(appId) // success: start cooldown
+    } catch (e) {
+      // On failure, clear the cooldown so the next user attempt isn't swallowed.
+      // The backend's circuit breaker will rate-limit if there are too many retries.
+      pendingRoutes.delete(appId)
+      throw e
     }
   }
   async function unrouteApp(id: number) { await routeApp(id, 'default') }
@@ -250,6 +254,11 @@ export const useAudioStore = defineStore('audio', () => {
     // Optimistic update: replace array so Vue reactivity is guaranteed
     const targetChannel = (channel === 'Master') ? '' : channel
     allApps.value = allApps.value.map(a => a.id === appId ? { ...a, channel: targetChannel } : a)
+
+    // Store the app's persistence key for potential rollback
+    const appKey = app.binary || app.name
+    const prevRule = appKey ? usePersistenceStore().state.mixer.appRules[appKey] : undefined
+
     try {
       if (channel === 'Master') await unrouteApp(appId)
       else await routeApp(appId, channel, app?.binary)
@@ -257,8 +266,11 @@ export const useAudioStore = defineStore('audio', () => {
       setTimeout(() => fetchApps(), 600)
     } catch (e) {
       console.error('[opengg] routeApp failed, reverting:', e)
-      // Revert on failure
+      // Revert on failure: restore UI state AND persisted routing rule
       allApps.value = allApps.value.map(a => a.id === appId ? { ...a, channel: prev } : a)
+      if (appKey && prevRule) {
+        usePersistenceStore().setAppRule(appKey, prevRule)
+      }
       await fetchApps()
     } finally { routingInProgress.value = false }
   }

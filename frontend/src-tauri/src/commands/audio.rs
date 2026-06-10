@@ -177,15 +177,17 @@ impl Router {
     }
 
     async fn try_dbus(&self) -> Result<(), String> {
-        call_dbus_void("RouteApp", AU_PATH, AU_IFACE, (self.app_id, self.channel.as_str()))
-            .await
-            .map(|()| {
+        match call_dbus_void("RouteApp", AU_PATH, AU_IFACE, (self.app_id, self.channel.as_str())).await {
+            Ok(()) => {
+                eprintln!("route_app[{}→{}]: D-Bus call succeeded, emitting refresh", self.app_id, self.channel);
                 let _ = self.app.emit("audio-mixer-refresh", ());
-            })
-            .map_err(|e| {
-                eprintln!("route_app: D-Bus route failed ({e}), falling back to pactl");
-                e
-            })
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("route_app[{}→{}]: D-Bus route failed ({e}), falling back to pactl", self.app_id, self.channel);
+                Err(e)
+            }
+        }
     }
 
     async fn resolve_sink_name(&self) -> Result<String, String> {
@@ -221,7 +223,22 @@ impl Router {
             ]).await {
                 Ok(_) => {
                     eprintln!(
-                        "route_app: ✓ attempt {}/3: sink-input {} → sink #{sink_idx} ({})",
+                        "route_app: ✓ attempt {}/3 command succeeded: sink-input {} → sink #{sink_idx} ({})",
+                        attempt + 1,
+                        self.app_id,
+                        self.channel
+                    );
+                    // Verify that the stream is actually on the target sink
+                    if !verify_stream_routed(self.app_id, sink_idx) {
+                        eprintln!("route_app: pactl move-sink-input command succeeded but verification failed — stream not on target sink");
+                        if attempt < 2 {
+                            continue; // retry
+                        } else {
+                            return Err("pactl succeeded but verification failed".into());
+                        }
+                    }
+                    eprintln!(
+                        "route_app: ✓ attempt {}/3: sink-input {} → sink #{sink_idx} verified ({})",
                         attempt + 1,
                         self.app_id,
                         self.channel
@@ -261,7 +278,17 @@ impl Router {
         ]).await {
             Ok(_) => {
                 eprintln!(
-                    "route_app: ✓ PW#{} → pactl si#{si_idx} → sink #{sink_idx} ({})",
+                    "route_app: pactl move-sink-input command succeeded: PW#{} → pactl si#{si_idx} → sink #{sink_idx} ({})",
+                    self.app_id,
+                    self.channel
+                );
+                // Verify that the stream is actually on the target sink
+                if !verify_stream_routed(si_idx, sink_idx) {
+                    eprintln!("route_app: pactl move-sink-input (PW cross-ref) succeeded but verification failed — stream not on target sink");
+                    return Err("pactl corrected-index succeeded but verification failed".into());
+                }
+                eprintln!(
+                    "route_app: ✓ PW#{} → pactl si#{si_idx} → sink #{sink_idx} verified ({})",
                     self.app_id,
                     self.channel
                 );
@@ -294,7 +321,7 @@ impl Router {
         );
 
         if let Err(e) = route_via_pw_metadata(self.app_id, sink_pw_id) {
-            eprintln!("route_app: pw-metadata failed: {e}");
+            eprintln!("route_app[{}→{}]: pw-metadata command failed: {e}", self.app_id, self.channel);
             return Err(format!(
                 "route_app: all routing methods failed for id {} → {}. \
                  See logs above for diagnostics.",
@@ -302,12 +329,12 @@ impl Router {
             ));
         }
 
-        eprintln!("route_app: ✓ pw-metadata write succeeded for {} → {}", self.app_id, self.channel);
+        eprintln!("route_app[{}→{}]: pw-metadata command succeeded, verifying stream placement", self.app_id, self.channel);
 
         // Verification: pw-metadata can report success without actually moving the stream
         // if the stream isn't WirePlumber-managed.
         if !verify_stream_routed(self.app_id, sink_idx) {
-            eprintln!("route_app: pw-metadata reported success but stream is not on target sink — marking as failed");
+            eprintln!("route_app[{}→{}]: pw-metadata succeeded but verification FAILED — stream still on wrong sink", self.app_id, self.channel);
             return Err(format!(
                 "route_app: routing to {} appeared to succeed via pw-metadata \
                  but verification showed the stream is still not on the target sink. \
@@ -316,6 +343,7 @@ impl Router {
             ));
         }
 
+        eprintln!("route_app[{}→{}]: ✓ pw-metadata move verified — stream is on target sink", self.app_id, self.channel);
         let _ = self.app.emit("audio-mixer-refresh", ());
         Ok(())
     }

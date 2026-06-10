@@ -51,11 +51,14 @@ function onDragLeave(e: DragEvent) {
 function onDrop(e: DragEvent) {
   e.preventDefault()
   hovering.value = false
-  // ★ FIX: WebKitGTK loses dataTransfer payload during drop. Use the store's
-  // draggedApp as the PRIMARY source. dataTransfer is only a hint for future
-  // cross-window support.
+  // ★ Three-source resolution order (documented):
+  // 1. store.draggedApp (most reliable — store-tracked during drag)
+  // 2. dataTransfer custom MIME 'application/opengg-app-id' (fallback)
+  // 3. dataTransfer text/plain (last resort — WebKitGTK compatibility)
+  // WebKitGTK loses dataTransfer payload during drop, so draggedApp is primary.
   if (audio.draggedApp) {
     audio.dropOnChannel(props.channel)
+    // draggedApp will be cleared by endDrag() on dragend or by dropOnChannelById
     return
   }
   // Fallback: try dataTransfer (works on some browsers / cross-window)
