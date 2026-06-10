@@ -13,10 +13,12 @@ import ClipListRow from '../components/ClipListRow.vue'
 import OverlayScrollbar from '../components/OverlayScrollbar.vue'
 import ClipEditor from '../components/ClipEditor.vue'
 import AdvancedEditor from '../components/AdvancedEditor.vue'
-import SelectField from '../components/SelectField.vue'
-import GameFilterDropdown from '../components/GameFilterDropdown.vue'
-import RecordingDropdown from '../components/RecordingDropdown.vue'
 import PageHeader from '../components/PageHeader.vue'
+import RecordingDropdown from '../components/RecordingDropdown.vue'
+import ClipsToolbar from '../components/clips/ClipsToolbar.vue'
+import ClipsStatsBar from '../components/clips/ClipsStatsBar.vue'
+import SteamAccessBanner from '../components/clips/SteamAccessBanner.vue'
+import ClipsContextMenu from '../components/clips/ClipsContextMenu.vue'
 import { mediaUrl } from '../utils/assets'
 import { viewMode } from '../composables/useViewMode'
 import { ICON_DELETE, ICON_GAMEPAD } from '../assets/deviceAssets'
@@ -673,19 +675,6 @@ const clipStats = computed(() => {
   const avgDuration = count > 0 ? totalDuration / count : 0
   return { count, totalDuration, totalSize, avgDuration }
 })
-function fmtStatDuration(s: number) {
-  const m = Math.floor(s / 60)
-  const h = Math.floor(m / 60)
-  if (h > 0) return `${h}h ${m % 60}m`
-  return `${m}m ${Math.floor(s % 60)}s`
-}
-function fmtStatSize(bytes: number) {
-  const gb = bytes / (1024 ** 3)
-  if (gb >= 1) return `${gb.toFixed(1)} GB`
-  const mb = bytes / (1024 ** 2)
-  if (mb >= 1) return `${mb.toFixed(0)} MB`
-  return `${bytes} B`
-}
 
 // ── Stats bar toggle ──
 const showStatsBar = ref(true)
@@ -817,24 +806,6 @@ async function importSteamLibrary(forcePrompt = false) {
   await doImportSteamGames()
 }
 
-const steamBannerTitle = computed(() => {
-  if (steamGamesLoaded.value) return t('clips.steamImport.readyTitle', { count: replay.steamGames.length })
-  if (steamAccess.value === 'denied') return t('clips.steamImport.deniedTitle')
-  return t('clips.steamImport.title')
-})
-
-const steamBannerBody = computed(() => {
-  if (steamGamesLoaded.value) return t('clips.steamImport.readyBody')
-  if (steamAccess.value === 'denied') return t('clips.steamImport.deniedBody')
-  return t('clips.steamImport.body')
-})
-
-const steamButtonLabel = computed(() => {
-  if (steamImportBusy.value) return t('clips.steamImport.loading')
-  if (steamGamesLoaded.value) return t('clips.steamImport.refresh')
-  if (steamAccess.value === 'granted') return t('clips.steamImport.import')
-  return t('clips.steamImport.allowAndImport')
-})
 
 function startRename(clip: Clip) { renameTarget.value = clip; renameValue.value = clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename.replace(/\.[^.]+$/, '')) }
 async function confirmRename() {
@@ -1184,7 +1155,7 @@ async function bulkChangeGame() {
 }
 
 // ── Context menu logic ──
-const contextMenuClip = computed(() => replay.clips.find(c => c.id === replay.activeMenuClipId))
+const contextMenuClip = computed(() => replay.clips.find(c => c.id === replay.activeMenuClipId) || null)
 const contextMenuItems = ['preview', 'editor', 'select', 'favorite', 'rename', 'location', 'copyPath', 'delete']
 const activeMenuIndex = ref(-1)
 
@@ -1251,98 +1222,59 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
     <!-- Header -->
     <PageHeader :title="t('nav.clips')" />
 
-    <!-- Controls — left filters + right view controls, dynamic gap via margin-left:auto -->
+    <!-- Controls — left filters + right view controls -->
     <div class="ctrl-bar">
-      <div class="ctrl-left">
-        <RecordingDropdown />
-        <div class="search-wrap">
-          <svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input v-model="searchRaw" :placeholder="t('clips.search')" class="search" />
-        </div>
-        <SelectField class="ctrl-sort" v-model="replay.sortMode" :options="sortOptions" />
-        <GameFilterDropdown
-          v-model="replay.selectedGames"
-          :games="filterGameNames"
-          :clipCounts="gameCounts"
-          :steam-icons="steamIcons"
-        />
-        <button class="fav-btn" :class="{ active: replay.filterFav }" @click="replay.filterFav=!replay.filterFav">❤ {{ replay.favCount }}</button>
-        <Transition name="tip-fade">
-          <button v-if="hasActiveFilters" class="clear-filters-btn" @click="clearAllFilters">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            {{ t('clips.gamesFilter.clear') }}
+      <ClipsToolbar
+        :searchValue="searchRaw"
+        @update:searchValue="searchRaw = $event"
+        :sortOptions="sortOptions"
+        :filterGameNames="filterGameNames"
+        :gameCounts="gameCounts"
+        :steamIcons="steamIcons"
+        :hasActiveFilters="hasActiveFilters"
+        :gridSlider="gridSlider"
+        @update:gridSlider="gridSlider = $event"
+        @gridSliderChange="saveGridSlider"
+        :isDragging="isDragging"
+        :sliderLabel="sliderLabel"
+        @clearFilters="clearAllFilters"
+      >
+        <template #recording>
+          <RecordingDropdown />
+        </template>
+        <template #controls>
+          <button class="vt-btn" :class="{ active: showStatsBar }" @click="showStatsBar = !showStatsBar" :title="t('clips.toggleStats')" style="border:1px solid var(--border);border-radius:var(--radius)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
           </button>
-        </Transition>
-      </div>
-      <div class="ctrl-right">
-        <div class="size-slider-wrap">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="size-ic"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-          <div class="size-range-wrap" @wheel.prevent="e => { gridSlider = Math.max(1, Math.min(4, gridSlider + (e.deltaY > 0 ? 1 : -1))); saveGridSlider() }">
-            <input
-              type="range" min="1" max="4" step="1"
-              v-model.number="gridSlider"
-              @change="saveGridSlider"
-              @mousedown="isDragging = true" @touchstart="isDragging = true"
-              @mouseup="isDragging = false" @touchend="isDragging = false"
-              @mouseleave="isDragging = false"
-              class="size-range"
-            />
-            <Transition name="tip-fade">
-              <div v-if="isDragging" class="size-tip" :style="{ left: ((gridSlider - 1) / 3 * 100) + '%' }">
-                {{ sliderLabel }}
-              </div>
-            </Transition>
+          <button class="vt-btn vt-btn-group" :class="{ active: dateGrouped }" @click="dateGrouped = !dateGrouped" :title="t('clips.groupByDate')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          </button>
+          <div class="view-toggle">
+            <button class="vt-btn" :class="{ active: viewMode==='grid' }" @click="viewMode='grid'" :title="t('clips.viewGrid')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+            </button>
+            <button class="vt-btn" :class="{ active: viewMode==='list' }" @click="viewMode='list'" :title="t('clips.viewList')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
           </div>
-        </div>
-        <button class="vt-btn" :class="{ active: showStatsBar }" @click="showStatsBar = !showStatsBar" :title="t('clips.toggleStats')" style="border:1px solid var(--border);border-radius:var(--radius)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-        </button>
-        <button class="vt-btn vt-btn-group" :class="{ active: dateGrouped }" @click="dateGrouped = !dateGrouped" :title="t('clips.groupByDate')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-        </button>
-        <div class="view-toggle">
-          <button class="vt-btn" :class="{ active: viewMode==='grid' }" @click="viewMode='grid'" :title="t('clips.viewGrid')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-          </button>
-          <button class="vt-btn" :class="{ active: viewMode==='list' }" @click="viewMode='list'" :title="t('clips.viewList')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-          </button>
-        </div>
-      </div>
+        </template>
+      </ClipsToolbar>
     </div>
 
-    <div v-if="steamAccess !== 'granted'" class="steam-banner" :class="{ ready: steamGamesLoaded }">
-      <div class="steam-banner-copy">
-        <div class="steam-banner-title">{{ steamBannerTitle }}</div>
-        <div class="steam-banner-body">{{ steamBannerBody }}</div>
-      </div>
-      <button class="steam-banner-btn" :disabled="steamImportBusy" @click="importSteamLibrary(steamAccess === 'denied')">
-        {{ steamButtonLabel }}
-      </button>
-    </div>
+    <SteamAccessBanner
+      :steamAccess="steamAccess"
+      :steamGamesLoaded="steamGamesLoaded"
+      :steamGamesCount="replay.steamGames.length"
+      :busy="steamImportBusy"
+      @import="importSteamLibrary()"
+      @retry="importSteamLibrary(true)"
+    />
 
-    <!-- Clip statistics bar -->
-    <div v-if="showStatsBar && totalClipCount > 0" class="stats-bar">
-      <div class="stat-item">
-        <span class="stat-val">{{ clipStats.count }}</span>
-        <span class="stat-label">{{ t('clips.stats.clips') }}</span>
-      </div>
-      <div class="stat-sep"></div>
-      <div class="stat-item">
-        <span class="stat-val">{{ fmtStatDuration(clipStats.totalDuration) }}</span>
-        <span class="stat-label">{{ t('clips.stats.totalDuration') }}</span>
-      </div>
-      <div class="stat-sep"></div>
-      <div class="stat-item">
-        <span class="stat-val">{{ fmtStatSize(clipStats.totalSize) }}</span>
-        <span class="stat-label">{{ t('clips.stats.totalSize') }}</span>
-      </div>
-      <div class="stat-sep"></div>
-      <div class="stat-item">
-        <span class="stat-val">{{ fmtStatDuration(clipStats.avgDuration) }}</span>
-        <span class="stat-label">{{ t('clips.stats.avgDuration') }}</span>
-      </div>
-    </div>
+    <ClipsStatsBar
+      :clipStats="clipStats"
+      :totalClipCount="totalClipCount"
+      :show="showStatsBar"
+    />
 
     <div class="scroll-area">
       <!-- ★ Job #3: Import Progress Bar -->
@@ -1717,14 +1649,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 
     <!-- Single page-level context menu (grid + list views) -->
     <Teleport to="body">
-      <div
+      <ClipsContextMenu
         v-if="replay.activeMenuClipId"
-        class="ctx-menu"
-        :style="{ left: replay.activeMenuPos.x + 'px', top: replay.activeMenuPos.y + 'px' }"
-        @click.stop
-        @contextmenu.prevent
+        :clip="contextMenuClip"
+        :position="replay.activeMenuPos"
+        :activeIndex="activeMenuIndex"
         @keydown="onContextMenuKeydown"
-        tabindex="0"
         ref="ctxMenuRef"
       >
         <template v-if="contextMenuClip">
@@ -1764,7 +1694,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
             {{ t('clips.contextMenu.delete') }}
           </button>
         </template>
-      </div>
+      </ClipsContextMenu>
     </Teleport>
   </div>
 </template>
@@ -1776,109 +1706,6 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 
 /* ctrl-bar: two groups with dynamic gap, wrap together */
 .ctrl-bar { display:flex; align-items:center; flex-shrink:0; flex-wrap:wrap; }
-.ctrl-left { display:flex; align-items:center; gap:8px; flex-shrink:0; }
-.ctrl-right { display:flex; align-items:center; gap:8px; flex-shrink:0; margin-left:auto; }
-
-.search-wrap { width:200px; min-width:160px; max-width:220px; position:relative; }
-.search-ic { position:absolute; left:10px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--text-muted); pointer-events:none; }
-.search { width:100%; padding:7px 12px 7px 32px; background:var(--bg-card); border:1px solid var(--border); border-radius:7px; color:var(--text); font-size:13px; outline:none; color-scheme:dark; }
-.search:focus { border-color:var(--accent); } .search::placeholder { color:var(--text-muted); }
-.ctrl-sort { width:115px; }
-/* ★ Epic 2: Mixer-style grid size slider */
-.size-slider-wrap { display:flex; align-items:center; gap:6px; padding:0 10px; height:32px; background:var(--bg-card); border:1px solid var(--border); border-radius:7px; }
-.size-ic { width:14px; height:14px; color:var(--text-muted); flex-shrink:0; }
-.size-range-wrap { position:relative; display:flex; align-items:center; }
-
-.size-range {
-  -webkit-appearance: none; appearance: none;
-  width: 72px; height: 6px;
-  background: var(--bg-deep); border: 1px solid var(--border); border-radius: 3px;
-  outline: none; cursor: pointer;
-}
-/* Rectangular thumb — same style as Audio Mixer fader */
-.size-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 12px; height: 24px; border-radius: 4px;
-  background: var(--accent); border: none;
-  cursor: grab; transition: transform .1s;
-}
-.size-range::-webkit-slider-thumb:active { cursor: grabbing; transform: scaleY(1.1); }
-.size-range::-moz-range-thumb {
-  width: 12px; height: 24px; border-radius: 4px;
-  background: var(--accent); border: none;
-  cursor: grab; transition: transform .1s;
-}
-.size-range::-moz-range-thumb:active { cursor: grabbing; transform: scaleY(1.1); }
-.size-range::-moz-range-track { height: 6px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 3px; }
-
-/* Drag tooltip */
-.size-tip {
-  position: absolute; bottom: calc(100% + 10px);
-  transform: translateX(-50%);
-  padding: 4px 10px; background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: 6px; font-size: 11px; font-weight: 600; color: var(--text);
-  white-space: nowrap; pointer-events: none;
-  box-shadow: 0 4px 12px rgba(0,0,0,.4);
-}
-.size-tip::after {
-  content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
-  border: 4px solid transparent; border-top-color: var(--border);
-}
-.tip-fade-enter-active { transition: opacity .1s ease, transform .1s ease; }
-.tip-fade-leave-active { transition: opacity .08s ease, transform .08s ease; }
-.tip-fade-enter-from, .tip-fade-leave-to { opacity: 0; transform: translateX(-50%) translateY(4px); }
-.fav-btn { padding:7px 12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg-input); color:var(--text-sec); font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; }
-.fav-btn:hover { background:var(--bg-hover); }
-.fav-btn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
-
-.clear-filters-btn {
-  display:flex; align-items:center; gap:4px;
-  padding:6px 10px; border:1px dashed var(--danger); border-radius:var(--radius);
-  background:transparent; color:var(--danger); font-size:12px; font-weight:600;
-  cursor:pointer; white-space:nowrap; transition:all .15s;
-}
-.clear-filters-btn:hover { background:rgba(220,38,38,.1); }
-
-.stats-bar {
-  display:flex; align-items:center; gap:12px; flex-shrink:0;
-  padding:6px 14px; background:var(--bg-card); border:1px solid var(--border);
-  border-radius:8px; font-size:12px;
-}
-.stat-item { display:flex; align-items:center; gap:4px; }
-.stat-val { font-weight:700; color:var(--text); }
-.stat-label { color:var(--text-muted); font-size:11px; }
-.stat-sep { width:1px; height:14px; background:var(--border); }
-
-.steam-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin: 10px 0 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--bg-card)), var(--bg-card));
-}
-.steam-banner.ready {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-}
-.steam-banner-copy { min-width: 0; }
-.steam-banner-title { font-size: 13px; font-weight: 700; color: var(--text); }
-.steam-banner-body { margin-top: 3px; font-size: 12px; color: var(--text-sec); }
-.steam-banner-btn {
-  padding: 8px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 16%, var(--bg-surface));
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.steam-banner-btn:hover:not(:disabled) { filter: brightness(1.06); }
-.steam-banner-btn:disabled { opacity: .6; cursor: default; }
 
 .view-toggle { display:flex; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
 .vt-btn { width:32px; height:32px; background:var(--bg-input); border:1px solid transparent; color:var(--text-muted); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 200ms ease-in-out; }
