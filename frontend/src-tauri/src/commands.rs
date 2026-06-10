@@ -2579,7 +2579,10 @@ pub async fn get_media_server_port(app: AppHandle) -> Result<u16, String> {
     Ok(app.state::<crate::MediaServerPort>().0)
 }
 
-
+#[command]
+pub async fn get_media_server_token(app: AppHandle) -> Result<String, String> {
+    Ok(app.state::<crate::MediaServerToken>().0.clone())
+}
 
 // ═══ Settings ═══
 fn settings_path() -> PathBuf {

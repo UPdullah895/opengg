@@ -12,6 +12,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 let _port: number | null = null
+let _token: string | null = null
 
 export async function getMediaPort(): Promise<number> {
   if (_port !== null) return _port
@@ -32,20 +33,39 @@ export async function getMediaPort(): Promise<number> {
   return _port
 }
 
+export async function getMediaToken(): Promise<string> {
+  if (_token !== null) return _token
+  const MAX_ATTEMPTS = 5
+  const DELAY_MS = 500
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      _token = await invoke<string>('get_media_server_token')
+      return _token
+    } catch {
+      if (attempt < MAX_ATTEMPTS - 1) {
+        await new Promise<void>(r => setTimeout(r, DELAY_MS))
+      }
+    }
+  }
+  console.error('media token: could not connect after 5 attempts')
+  _token = ''
+  return _token
+}
+
 /**
  * Convert an absolute file path to an HTTP URL served by our warp server.
  *
  * Example:
- *   mediaUrl('/home/user/Videos/clip.mp4', 33955)
- *   → 'http://localhost:33955/media/home/user/Videos/clip.mp4'
+ *   mediaUrl('/home/user/Videos/clip.mp4', 33955, 'token123')
+ *   → 'http://localhost:33955/media/home/user/Videos/clip.mp4?token=token123'
  */
-export function mediaUrl(absolutePath: string, port: number): string {
-  if (!absolutePath || !port) return ''
+export function mediaUrl(absolutePath: string, port: number, token: string): string {
+  if (!absolutePath || !port || !token) return ''
   // Ensure the path starts with / (absolute)
   const cleanPath = absolutePath.startsWith('/') ? absolutePath : `/${absolutePath}`
-  return `http://localhost:${port}/media${cleanPath}`
+  return `http://localhost:${port}/media${cleanPath}?token=${encodeURIComponent(token)}`
 }
 
 export async function mediaUrlAsync(absolutePath: string): Promise<string> {
-  return mediaUrl(absolutePath, await getMediaPort())
+  return mediaUrl(absolutePath, await getMediaPort(), await getMediaToken())
 }

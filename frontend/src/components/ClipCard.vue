@@ -26,8 +26,9 @@ const liveHeight = ref(props.clip.height)
 const displayDuration = computed(() => trimmedDuration.value ?? liveDuration.value)
 const isTrimmed = computed(() => trimmedDuration.value != null)
 
-// ★ Get media server port from App.vue's provide()
+// ★ Get media server port and token from App.vue's provide()
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
+const mediaToken = inject<Ref<string>>('mediaToken', ref(''))
 
 // ── RAM optimization: resolved thumbnail path (non-reactive) ──
 // Stores the resolved filesystem path so we can clear/restore thumbUrl without
@@ -53,7 +54,7 @@ watch(() => replay.liveThumbs.get(props.clip.id), (path) => {
   if (path && mediaPort.value) {
     resolvedThumbPath = path
     // Only set thumbUrl if card is visible (IO will restore it otherwise)
-    if (!thumbUrl.value) thumbUrl.value = mediaUrl(path, mediaPort.value)
+    if (!thumbUrl.value) thumbUrl.value = mediaUrl(path, mediaPort.value, mediaToken.value)
   }
 })
 
@@ -108,7 +109,7 @@ onMounted(() => {
 
       // Card is intersecting — restore thumbnail if we already have a path
       if (resolvedThumbPath && !thumbUrl.value && mediaPort.value) {
-        thumbUrl.value = mediaUrl(resolvedThumbPath, mediaPort.value)
+        thumbUrl.value = mediaUrl(resolvedThumbPath, mediaPort.value, mediaToken.value)
         return
       }
 
@@ -132,7 +133,7 @@ onMounted(() => {
         )
         resolvedThumbPath = path
         if (mediaPort.value) {
-          thumbUrl.value = mediaUrl(path, mediaPort.value)
+          thumbUrl.value = mediaUrl(path, mediaPort.value, mediaToken.value)
         }
         if (import.meta.env.DEV) {
           console.debug(`[perf] card thumb loaded: ${(performance.now() - mountTime).toFixed(0)}ms (${priority}) ${props.clip.filename}`)
@@ -148,7 +149,7 @@ watch(() => replay.pageActive, (active) => {
     thumbUrl.value = ''
     thumbLoaded.value = false
   } else if (resolvedThumbPath && mediaPort.value) {
-    thumbUrl.value = mediaUrl(resolvedThumbPath, mediaPort.value)
+    thumbUrl.value = mediaUrl(resolvedThumbPath, mediaPort.value, mediaToken.value)
   }
 })
 

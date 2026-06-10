@@ -61,8 +61,8 @@ export const useExtensionStore = defineStore('extensions', () => {
    * Locale files are merged as a side effect. Idempotent — safe to call
    * multiple times for the same extension (overwrites previous runtime).
    */
-  async function loadExtension(manifest: ExtManifest, port: number): Promise<void> {
-    if (!manifest.main || !port) return
+  async function loadExtension(manifest: ExtManifest, port: number, token: string): Promise<void> {
+    if (!manifest.main || !port || !token) return
 
     const extId = manifest.id
     const baseUrl = `http://localhost:${port}/ext/${encodeURIComponent(extId)}`
@@ -70,7 +70,7 @@ export const useExtensionStore = defineStore('extensions', () => {
     // ── 1. Fetch the IIFE bundle ──────────────────────────────────────────────
     let src: string
     try {
-      const res = await fetch(`${baseUrl}/${encodeURIComponent(manifest.main)}`)
+      const res = await fetch(`${baseUrl}/${encodeURIComponent(manifest.main)}?token=${encodeURIComponent(token)}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       src = await res.text()
     } catch (e) {
@@ -94,7 +94,7 @@ export const useExtensionStore = defineStore('extensions', () => {
     // ── 3. Merge extension locales ────────────────────────────────────────────
     for (const lang of LOCALE_CODES) {
       try {
-        const lr = await fetch(`${baseUrl}/locales/${lang}.json`)
+        const lr = await fetch(`${baseUrl}/locales/${lang}.json?token=${encodeURIComponent(token)}`)
         if (!lr.ok) continue
         const locData = await lr.json() as Record<string, unknown>
         const existing = i18n.global.getLocaleMessage(lang) as Record<string, unknown>
@@ -126,9 +126,9 @@ export const useExtensionStore = defineStore('extensions', () => {
   /**
    * Scan the extensions directory and load every enabled extension that
    * declares a `main` IIFE bundle. Called once at app boot after the media
-   * server port is known.
+   * server port and token are known.
    */
-  async function loadAllEnabled(port: number): Promise<void> {
+  async function loadAllEnabled(port: number, token: string): Promise<void> {
     initializing.value = true
     try {
       // `scan_extensions` reports `enabled` from the shared state file
@@ -136,7 +136,7 @@ export const useExtensionStore = defineStore('extensions', () => {
       const manifests = await invoke<ExtManifest[]>('scan_extensions')
       for (const m of manifests) {
         if ((m.enabled ?? true) && m.main) {
-          await loadExtension(m, port)
+          await loadExtension(m, port, token)
         }
       }
     } catch (e) {

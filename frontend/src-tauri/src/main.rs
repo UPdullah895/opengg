@@ -238,6 +238,7 @@ fn main() {
             commands::load_theme,
             commands::save_theme,
             commands::get_media_server_port,
+            commands::get_media_server_token,
             commands::save_ui_settings,
             commands::load_ui_settings,
             commands::get_storage_info,
@@ -323,9 +324,11 @@ fn main() {
                 log::error!("DB init failed: {e}");
             }
 
-            // Media server
-            let port = media_server::spawn_media_server();
+            // Media server — pass clip directories for path containment checks
+            let clip_dirs = get_watch_dirs();
+            let (port, token) = media_server::spawn_media_server(clip_dirs);
             app.manage(MediaServerPort(port));
+            app.manage(MediaServerToken(token.clone()));
             log::info!("Media server on http://localhost:{port}");
 
             // ★ Epic 3 + 4: Read saved settings at startup
@@ -764,6 +767,9 @@ pub struct ExportProcess {
 /// Keeps the notify watcher alive for the full app lifetime.
 /// Wrapped in Mutex<Option<…>> so it can be taken on shutdown if needed.
 pub struct WatcherHandle(pub Mutex<Option<notify::RecommendedWatcher>>);
+
+/// Per-session authentication token for media server requests.
+pub struct MediaServerToken(pub String);
 
 /// Spawn parameters retained so restart-on-save and hot-reload can respawn identically.
 pub struct GsrSpawnParams {

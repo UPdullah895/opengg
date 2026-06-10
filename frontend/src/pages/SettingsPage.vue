@@ -27,6 +27,7 @@ const appVersion = ref('')
 const replay = useReplayStore()
 const audio = useAudioStore()
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
+const mediaToken = inject<Ref<string>>('mediaToken', ref(''))
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
   if (!persist.loaded) await persist.load()
@@ -565,7 +566,7 @@ const steamAccess = computed(() => persist.state.settings.steamLibraryAccess)
 const steamGamesLoaded = computed(() => replay.steamGames.length > 0)
 function steamIconUrl(path: string | null | undefined) {
   if (!path) return ''
-  return path.startsWith('/') ? mediaUrl(path, mediaPort.value) : path
+  return path.startsWith('/') ? mediaUrl(path, mediaPort.value, mediaToken.value) : path
 }
 watch(steamAccess, (access) => {
   if (access === 'granted' && replay.steamGames.length === 0) {
@@ -676,8 +677,8 @@ const activeExtSettings = ref<ExtRuntime | null>(null)
 
 /** Returns the icon URL for an extension loaded from the extensions directory. */
 function getExtensionIconUrl(p: ExtensionInfo): string | null {
-  if (p._builtin || !p.icon || !mediaPort.value) return null
-  return `http://localhost:${mediaPort.value}/ext/${encodeURIComponent(p.id)}/${encodeURIComponent(p.icon)}`
+  if (p._builtin || !p.icon || !mediaPort.value || !mediaToken.value) return null
+  return `http://localhost:${mediaPort.value}/ext/${encodeURIComponent(p.id)}/${encodeURIComponent(p.icon)}?token=${encodeURIComponent(mediaToken.value)}`
 }
 
 /**
@@ -713,7 +714,7 @@ async function setExtEnabled(p: ExtensionInfo, val: boolean) {
     console.error('[extensions] set_extension_enabled failed:', e)
   }
   if (val) {
-    if (p.main) await extStore.loadExtension(p as unknown as ExtManifest, mediaPort.value)
+    if (p.main) await extStore.loadExtension(p as unknown as ExtManifest, mediaPort.value, mediaToken.value)
   } else {
     extStore.unload(p.id)
   }

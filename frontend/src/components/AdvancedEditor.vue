@@ -21,7 +21,8 @@ interface Track { id: string; label: string; type: 'video' | 'audio'; color: str
 const props = defineProps<{ clip: Clip }>()
 const emit = defineEmits<{ 'close': []; 'toast': [string]; 'saved': [string] }>()
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
-const videoSrc = computed(() => mediaUrl(props.clip.filepath, mediaPort.value))
+const mediaToken = inject<Ref<string>>('mediaToken', ref(''))
+const videoSrc = computed(() => mediaUrl(props.clip.filepath, mediaPort.value, mediaToken.value))
 const persist = usePersistenceStore()
 const replay  = useReplayStore()
 const { t }   = useI18n()
@@ -148,9 +149,10 @@ const audioEls = ref<Record<string, HTMLAudioElement>>({})
 
 function buildAudioUrl(streamIndex: number) {
   const port = mediaPort.value
-  if (!port) return ''
+  const token = mediaToken.value
+  if (!port || !token) return ''
   const encoded = encodeURIComponent(props.clip.filepath)
-  return `http://localhost:${port}/audio?file=${encoded}&stream=${streamIndex}`
+  return `http://localhost:${port}/audio?file=${encoded}&stream=${streamIndex}&token=${encodeURIComponent(token)}`
 }
 
 function initAudioElements() {

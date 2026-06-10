@@ -6,7 +6,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { usePersistenceStore } from '../stores/persistence'
 import { useReplayStore } from '../stores/replay'
 import { useAudioStore } from '../stores/audio'
-import { getMediaPort, mediaUrl } from '../utils/assets'
+import { getMediaPort, getMediaToken, mediaUrl } from '../utils/assets'
 import SelectField from '../components/SelectField.vue'
 import VolumeSlider from '../components/VolumeSlider.vue'
 import { useToast } from '../composables/useToast'
@@ -24,6 +24,7 @@ const recorderStatus = computed(() => replay.status)
 const clipCount = ref(0)
 const gsrWarning = ref(false)
 const mediaPort = ref(0)
+const mediaToken = ref('')
 const appVersion = ref('')
 
 // ── Active popover ──
@@ -173,6 +174,7 @@ onMounted(async () => {
   document.addEventListener('mousedown', onDocClick)
   if (!persist.loaded) await persist.load()
   mediaPort.value = await getMediaPort()
+  mediaToken.value = await getMediaToken()
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
   try { await replay.fetchStatus() } catch { /* daemon may not be running */ }
   try {
@@ -332,8 +334,8 @@ const updates = computed(() => tm('dashboard.changelog') as ChangelogEntry[])
               >
                 <div class="clip-mini-thumb">
                   <img
-                    v-if="clip.thumbnail && mediaPort"
-                    :src="mediaUrl(clip.thumbnail, mediaPort)"
+                    v-if="clip.thumbnail && mediaPort && mediaToken"
+                    :src="mediaUrl(clip.thumbnail, mediaPort, mediaToken)"
                     class="clip-thumb-img"
                     loading="lazy"
                   />
@@ -360,8 +362,8 @@ const updates = computed(() => tm('dashboard.changelog') as ChangelogEntry[])
               >
                 <div class="clip-row-thumb">
                   <img
-                    v-if="clip.thumbnail && mediaPort"
-                    :src="mediaUrl(clip.thumbnail, mediaPort)"
+                    v-if="clip.thumbnail && mediaPort && mediaToken"
+                    :src="mediaUrl(clip.thumbnail, mediaPort, mediaToken)"
                     class="clip-thumb-img"
                     loading="lazy"
                   />

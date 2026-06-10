@@ -18,7 +18,8 @@ const replay = useReplayStore()
 const playerComp = ref<InstanceType<typeof CustomVideoPlayer> | null>(null)
 
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
-const videoSrc = computed(() => mediaUrl(props.clip.filepath, mediaPort.value))
+const mediaToken = inject<Ref<string>>('mediaToken', ref(''))
+const videoSrc = computed(() => mediaUrl(props.clip.filepath, mediaPort.value, mediaToken.value))
 
 const duration = ref(props.clip.duration || 0)
 const currentTime = ref(0)
@@ -37,9 +38,10 @@ function onVolumeChange(v: number) { masterVol.value = v }
 
 function buildAudioUrl(streamIndex: number) {
   const port = mediaPort.value
-  if (!port) return ''
+  const token = mediaToken.value
+  if (!port || !token) return ''
   const encoded = encodeURIComponent(props.clip.filepath)
-  return `http://localhost:${port}/audio?file=${encoded}&stream=${streamIndex}`
+  return `http://localhost:${port}/audio?file=${encoded}&stream=${streamIndex}&token=${encodeURIComponent(token)}`
 }
 
 function initAudioElements() {
@@ -139,7 +141,7 @@ function steamIcon(game: string) { return steamGameLookup.value[game.toLowerCase
 function steamIconUrl(game: string) {
   const icon = steamIcon(game)
   if (!icon) return ''
-  return icon.startsWith('/') ? mediaUrl(icon, mediaPort.value) : icon
+  return icon.startsWith('/') ? mediaUrl(icon, mediaPort.value, mediaToken.value) : icon
 }
 
 async function saveTrimState() {

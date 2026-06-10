@@ -28,7 +28,14 @@ const replay = useReplayStore()
 const persist = usePersistenceStore()
 const modal = useModalStore()
 const _mediaPortRef = inject<Ref<number>>('mediaPort', ref(0))
+const _mediaTokenRef = inject<Ref<string>>('mediaToken', ref(''))
 const mediaPortNum  = computed(() => _mediaPortRef.value)
+const mediaTokenStr = computed(() => _mediaTokenRef.value)
+
+// Wrapper for ClipListRow's mediaUrl prop (accepts old 2-arg signature)
+function mediaUrlWrapper(path: string, port: number): string {
+  return mediaUrl(path, port, mediaTokenStr.value)
+}
 
 function compareNewestFirst(a: Clip, b: Clip) {
   return b.created.localeCompare(a.created)
@@ -538,7 +545,7 @@ const steamAccess = computed(() => persist.state.settings.steamLibraryAccess)
 const steamGamesLoaded = computed(() => replay.steamGames.length > 0)
 function resolveSteamIcon(path: string | null | undefined) {
   if (!path) return ''
-  return path.startsWith('/') ? mediaUrl(path, mediaPortNum.value) : path
+  return path.startsWith('/') ? mediaUrl(path, mediaPortNum.value, mediaTokenStr.value) : path
 }
 function gameTitlePenalty(title: string) {
   const marks = (title.match(/[©®™]/g) || []).length
@@ -1476,7 +1483,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
                     :padding="listStyles.padding"
                     :thumb-w="listStyles.thumbW"
                     :thumb-h="listStyles.thumbH"
-                    :media-url="mediaUrl"
+                    :media-url="mediaUrlWrapper"
                     :media-port="mediaPortNum"
                     @click="onCardClick"
                     @contextmenu="openListMenu"
@@ -1587,7 +1594,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
               :padding="listStyles.padding"
               :thumb-w="listStyles.thumbW"
               :thumb-h="listStyles.thumbH"
-              :media-url="mediaUrl"
+              :media-url="mediaUrlWrapper"
               :media-port="mediaPortNum"
               @click="onCardClick"
               @contextmenu="openListMenu"

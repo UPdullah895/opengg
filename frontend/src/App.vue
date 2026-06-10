@@ -16,7 +16,7 @@ import type { DeviceInfo } from './stores/devices'
 import { useReplayStore } from './stores/replay'
 import { useAudioStore } from './stores/audio'
 import { loadTheme } from './utils/theme'
-import { getMediaPort } from './utils/assets'
+import { getMediaPort, getMediaToken } from './utils/assets'
 import { installAudioUnlocker } from './utils/audio'
 import { registerLocale } from './i18n'
 import { invoke } from '@tauri-apps/api/core'
@@ -62,9 +62,11 @@ onBeforeUnmount(() => {
   if (unlistenFs) unlistenFs()
 })
 
-// ★ Global media server port — provided to all components
+// ★ Global media server port and token — provided to all components
 const mediaPort = ref(0)
+const mediaToken = ref('')
 provide('mediaPort', mediaPort)
+provide('mediaToken', mediaToken)
 
 function navigate(page: string) { currentPage.value = page }
 
@@ -164,6 +166,7 @@ onMounted(async () => {
     showTutorial.value = true
   }
   mediaPort.value = await getMediaPort()
+  mediaToken.value = await getMediaToken()
   installAudioUnlocker()
   loadUserLocales()
   if (persist.state.settings.steamLibraryAccess === 'granted') {
@@ -213,14 +216,15 @@ onMounted(async () => {
       return invoke(cmd, args)
     },
     get mediaPort() { return mediaPort.value },
+    get mediaToken() { return mediaToken.value },
   }
   // Expose Vue composition API on window.Vue so extension IIFEs can use it
   import('vue').then(Vue => { (window as unknown as Record<string, unknown>).Vue = Vue })
 
   // ── Load all enabled extensions (non-blocking, errors logged per-ext) ──
-  if (mediaPort.value) {
+  if (mediaPort.value && mediaToken.value) {
     const { useExtensionStore } = await import('./stores/extensions')
-    useExtensionStore().loadAllEnabled(mediaPort.value)
+    useExtensionStore().loadAllEnabled(mediaPort.value, mediaToken.value)
   }
   // Listen for global shortcut events fired from Rust
   listen('global-shortcut-save_replay', async () => {
