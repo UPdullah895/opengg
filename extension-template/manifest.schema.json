@@ -72,6 +72,20 @@
     "author": {
       "type": "string",
       "description": "Author name (informational, not used by the app)."
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "clips:read",
+          "audio:read",
+          "recorder:read",
+          "extensions:read",
+          "locales:read"
+        ]
+      },
+      "description": "Optional list of data-access permissions. If omitted, extensions default to legacy behavior (all read-only commands allowed). Future write-capable tiers will require explicit declaration."
     }
   }
 }

@@ -209,9 +209,22 @@ onMounted(async () => {
 
   // ── Extension API — expose a restricted invoke bridge and Vue helpers ──
   // Extensions evaluate as IIFEs and can use window.opengg.invoke() to call
-  // a whitelist of read-only Tauri commands.  window.Vue gives them access to
-  // Vue 3 composition helpers without bundling Vue themselves.
+  // a whitelist of read-only Tauri commands. Per-extension attribution is not
+  // currently tracked (shared global bridge), so enforcement is at the union level:
+  // all extensions share the same 5 read-only commands. The declared permissions
+  // in each extension's manifest drive the consent UI (deliverable 3) and future
+  // per-extension permission bridges.
   const _extAllowed = new Set(['get_clip_list', 'get_audio_devices', 'get_recorder_status', 'scan_extensions', 'list_user_locales'])
+  // Mapping for future per-extension enforcement (currently union-level only):
+  // cmd → permission tier (e.g., 'get_clip_list' → 'clips:read')
+  // TODO: use this when implementing per-extension permission bridges
+  void (new Map([
+    ['get_clip_list', 'clips:read'],
+    ['get_audio_devices', 'audio:read'],
+    ['get_recorder_status', 'recorder:read'],
+    ['scan_extensions', 'extensions:read'],
+    ['list_user_locales', 'locales:read'],
+  ]))
   ;(window as unknown as Record<string, unknown>).opengg = {
     invoke: (cmd: string, args?: Record<string, unknown>) => {
       if (!_extAllowed.has(cmd)) return Promise.reject(new Error(`opengg: '${cmd}' is not allowed for extensions`))

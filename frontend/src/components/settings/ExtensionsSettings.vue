@@ -5,12 +5,14 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { usePersistenceStore } from '../../stores/persistence'
 import { useExtensionStore, type ExtManifest, type ExtRuntime } from '../../stores/extensions'
+import { useModalStore } from '../../stores/modal'
 import { useToast } from '../../composables/useToast'
 import InfoIcon from '../InfoIcon.vue'
 
 const { t } = useI18n()
 const persist = usePersistenceStore()
 const extStore = useExtensionStore()
+const modal = useModalStore()
 const toast = useToast()
 
 const scannedExtensions = ref<any[]>([])
@@ -20,6 +22,9 @@ const gsrInstallOpen = ref(false)
 const copiedCommand = ref<string | null>(null)
 const reloadingExtId = ref<string | null>(null)
 let copiedTimer: ReturnType<typeof setTimeout> | null = null
+
+// Track which extension is waiting for consent during toggle
+const pendingConsentExtId = ref<string | null>(null)
 
 function getExtensionIconUrl(p: any): string | null {
   if (p._builtin || !p.icon) return null
@@ -39,7 +44,60 @@ function isExtEnabled(p: any): boolean {
   return p.enabled ?? true
 }
 
+/** Check if a daemon extension needs consent (has daemon part and no recorded consent yet) */
+function needsConsent(p: any): boolean {
+  return (p.has_daemon ?? false) && !persist.state.extensionConsents[p.id]
+}
+
+/** Get human-readable permission list for the manifest */
+function getPermissionsLabel(p: any): string {
+  if (!p.permissions || p.permissions.length === 0) {
+    return t('ext.consent.legacyAccess')
+  }
+  const permLabels = p.permissions.map((perm: string) => {
+    const key = `ext.consent.permission.${perm.replace(':', '_')}`
+    return t(key, perm) // fallback to perm itself if key not found
+  })
+  return permLabels.join(', ')
+}
+
+/** Show consent modal for daemon extension */
+function showConsentModal(p: any) {
+  pendingConsentExtId.value = p.id
+  modal.showConfirm({
+    title: t('ext.consent.title'),
+    message: t('ext.consent.message', {
+      name: p.name,
+      version: p.version || 'unknown',
+      permissions: getPermissionsLabel(p),
+    }),
+    confirmLabel: t('ext.consent.allow'),
+    cancelLabel: t('ext.consent.deny'),
+    kind: 'info',
+    onConfirm: async () => {
+      persist.state.extensionConsents[p.id] = true
+      p.enabled = true
+      persist.state.extensions[p.id] = true
+      try {
+        await invoke('set_extension_enabled', { id: p.id, enabled: true })
+      } catch (e) {
+        console.error('[extensions] set_extension_enabled failed:', e)
+      }
+      if (p.main) await extStore.loadExtension(p as unknown as ExtManifest, 0, '')
+      toast.success(t('ext.consent.granted'))
+      pendingConsentExtId.value = null
+    },
+  })
+  // Cancel is handled by modal.cancel() which closes the modal
+}
+
 async function setExtEnabled(p: any, val: boolean) {
+  // If enabling a daemon extension without consent, show modal instead
+  if (val && needsConsent(p)) {
+    showConsentModal(p)
+    return
+  }
+
   p.enabled = val
   persist.state.extensions[p.id] = val
   try {
@@ -224,7 +282,7 @@ defineEmits<{ navigate: [page: string] }>()
       <div v-if="extensionScanLoading" class="hint" style="padding:8px 0">{{ t('settings.extensions.scanning') }}</div>
       <div v-else-if="!scannedExtensions.length" class="hint" style="padding:8px 0">{{ t('settings.extensions.noExtensions') }}</div>
       <div v-else>
-        <div v-for="p in scannedExtensions" :key="p.id" class="ext-card-row">
+        <div v-for="p in scannedExtensions" :key="p.id" class="ext-card-row" :class="{ 'ext-card-row--needs-consent': needsConsent(p) }">
           <div class="ext-card-icon-wrap">
             <img v-if="getExtensionIconUrl(p)" :src="getExtensionIconUrl(p)!" class="plugin-icon" alt="" />
             <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>
@@ -233,6 +291,9 @@ defineEmits<{ navigate: [page: string] }>()
             <div class="ext-card-title-row">
               <span class="ext-name">{{ p.name }}</span>
               <span class="plugin-ver">v{{ p.version }}</span>
+              <span v-if="needsConsent(p)" class="ext-needs-consent-badge" :title="t('ext.consent.badgeTooltip')" @click="showConsentModal(p)">
+                {{ t('ext.consent.badge') }}
+              </span>
               <button v-if="import.meta.env.DEV && p.main && isExtEnabled(p)" class="ext-reload-btn" :title="t('ext.reloadDevMode')" :disabled="reloadingExtId === p.id" @click.stop="reloadExtensionDev(p)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :class="{ spinning: reloadingExtId === p.id }"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
               </button>
@@ -243,7 +304,7 @@ defineEmits<{ navigate: [page: string] }>()
             <p class="ext-desc">{{ p.description }}</p>
           </div>
           <label class="switch ext-card-switch">
-            <input type="checkbox" :checked="isExtEnabled(p)" @change="setExtEnabled(p, ($event.target as HTMLInputElement).checked)" />
+            <input type="checkbox" :checked="isExtEnabled(p)" @change="setExtEnabled(p, ($event.target as HTMLInputElement).checked)" :disabled="needsConsent(p) && !isExtEnabled(p)" />
             <span class="switch-track"></span>
           </label>
         </div>
@@ -278,6 +339,30 @@ defineEmits<{ navigate: [page: string] }>()
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+.ext-card-row--needs-consent {
+  opacity: 0.75;
+}
+
+.ext-needs-consent-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--color-accent-alpha-10);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.ext-needs-consent-badge:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
 }
 
 .ext-reload-btn {

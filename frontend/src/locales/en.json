@@ -739,6 +739,23 @@
     "rmb": "RMB"
   },
   "ext": {
-    "reloadDevMode": "Reload (dev mode only)"
+    "reloadDevMode": "Reload (dev mode only)",
+    "consent": {
+      "badge": "Needs Consent",
+      "badgeTooltip": "Click to review and grant permissions for this extension",
+      "title": "Allow Extension to Run?",
+      "message": "{name} v{version} runs a background process with your user permissions.\\n\\nAccess: {permissions}",
+      "allow": "Allow",
+      "deny": "Deny",
+      "granted": "Permissions granted. Extension will start shortly.",
+      "legacyAccess": "All read-only data (legacy mode)",
+      "permission": {
+        "clips_read": "Clip database access",
+        "audio_read": "Audio device info",
+        "recorder_read": "Recorder status",
+        "extensions_read": "Extension metadata",
+        "locales_read": "Locale files"
+      }
+    }
   }
 }

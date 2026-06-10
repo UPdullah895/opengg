@@ -32,6 +32,8 @@ export interface ExtManifest {
   enabled?: boolean
   /** True if the manifest declares a daemon (background) executable part. */
   has_daemon?: boolean
+  /** Permission tiers declared by the manifest (empty = legacy all-read behavior). */
+  permissions?: string[]
 }
 
 interface ExtIIFEExport {

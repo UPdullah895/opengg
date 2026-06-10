@@ -2833,6 +2833,9 @@ pub struct ExtensionInfo {
     /// True if the manifest declares a `daemon` (background) executable part.
     #[serde(default)]
     pub has_daemon: bool,
+    /// Permission tiers declared by the manifest (empty = legacy all-read behavior).
+    #[serde(default)]
+    pub permissions: Vec<String>,
 }
 
 /// Creates `~/.local/share/opengg/extensions/` if needed, (re)writes the
@@ -2895,6 +2898,16 @@ pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
         let enabled = *enabled_map.get(&id).unwrap_or(&true);
         let has_daemon = v["daemon"].as_str().map(|s| !s.is_empty()).unwrap_or(false);
 
+        // Extract permissions array from manifest (optional field; empty = legacy behavior)
+        let permissions: Vec<String> = v["permissions"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         exts.push(ExtensionInfo {
             id,
             name,
@@ -2907,6 +2920,7 @@ pub async fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
             ui: v["ui"].as_str().map(|s| s.to_string()),
             enabled,
             has_daemon,
+            permissions,
         });
     }
 

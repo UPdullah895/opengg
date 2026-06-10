@@ -74,6 +74,8 @@ export interface PersistedState {
   modules: { audio: boolean; device: boolean; replay: boolean }
   /** Keyed by extension id (e.g. 'overlays-system'). true = enabled. */
   extensions: Record<string, boolean>
+  /** Keyed by extension id. true = user has consented to daemon-part first-run. */
+  extensionConsents: Record<string, boolean>
   /** Mouse macros keyed by device ID. */
   macros: Record<string, MouseMacro[]>
 }
@@ -131,6 +133,7 @@ export const DEFAULTS: PersistedState = {
   },
   modules: { audio: true, device: true, replay: true },
   extensions: {},
+  extensionConsents: {},
   macros: {},
 }
 
