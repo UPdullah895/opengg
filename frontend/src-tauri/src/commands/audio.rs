@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use tauri::{command, AppHandle, Emitter, Manager, State};
 use super::{AU_PATH, AU_IFACE, call_dbus, call_dbus_void, run_cmd_async, run_cmd_sync};
 
@@ -1216,23 +1217,95 @@ struct VuLevels {
     channels: Vec<(String, f32)>,
 }
 
-/// Real-time per-channel VU meters via native libpulse.
+/// Spawns a libpulse reader thread for a single channel (fallback when native PipeWire fails).
+fn spawn_libpulse_reader(
+    spec: &libpulse_binding::sample::Spec,
+    name: &'static str,
+    target: &str,
+    my_gen: u64,
+    tx_clone: tokio::sync::mpsc::UnboundedSender<(String, f32)>,
+    running_clone: Arc<AtomicBool>,
+    gen_clone: Arc<AtomicU64>,
+) {
+    use libpulse_binding::stream::Direction;
+    use libpulse_simple_binding::Simple;
+
+    let target = target.to_string();
+    let spec = *spec;
+
+    tokio::task::spawn_blocking(move || {
+        // Create the PA simple connection inside spawn_blocking — Simple is !Send.
+        let pa = match Simple::new(
+            None,
+            "OpenGG VU",
+            Direction::Record,
+            Some(target.as_str()),
+            name,
+            &spec,
+            None,
+            None,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("libpulse: {name} → failed to open '{target}': {e:?}");
+                return;
+            }
+        };
+        eprintln!("start_vu_stream: {name} → libpulse connected to '{target}' (gen={my_gen})");
+
+        // 512 bytes = 256 i16 samples = 32 ms at 8 kHz mono — fast enough to
+        // check `running` + generation frequently while producing smooth meter values.
+        let mut buf = vec![0u8; 512];
+        let mut prev = 0.0f32;
+
+        // Check BOTH the running flag AND the generation counter so that stale
+        // threads spawned by a previous `start_vu_stream` call stop cleanly even
+        // if the flag was reset to `true` before they exited pa.read().
+        while running_clone.load(Ordering::Relaxed) && gen_clone.load(Ordering::Relaxed) == my_gen {
+            if pa.read(&mut buf).is_err() {
+                break;
+            }
+
+            // RMS for perceptual loudness (vs peak which looks jittery).
+            let sum_sq: f32 = buf
+                .chunks_exact(2)
+                .map(|c| {
+                    let s = i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0;
+                    s * s
+                })
+                .sum();
+            let rms = (sum_sq / (buf.len() / 2) as f32).sqrt().min(1.0);
+
+            // Fast attack, slow decay for natural VU ballistics.
+            let smoothed = if rms > prev {
+                rms * 0.9 + prev * 0.1
+            } else {
+                rms * 0.3 + prev * 0.7
+            };
+            prev = smoothed;
+            let db = (20.0_f32 * smoothed.max(1e-9_f32).log10()).max(-60.0_f32);
+            let _ = tx_clone.send((name.to_string(), db));
+        }
+        // `pa` is dropped here → pa_simple_free() called automatically (RAII).
+    });
+}
+
+/// Real-time per-channel VU meters with native PipeWire fallback to libpulse.
 ///
-/// One `pa_simple` connection per channel reads S16LE PCM from the channel's
-/// monitor source.  Each reader runs in `spawn_blocking` so the async runtime
-/// is never stalled.  Stopping is cooperative: set the AtomicBool to false and
-/// each thread exits on its next 32 ms read; the `Simple` handle is dropped at
-/// thread exit, calling `pa_simple_free()` automatically (RAII).
+/// Attempts to use native PipeWire (pipewire-rs) for low-latency capture streams.
+/// Each channel thread opens a PipeWire context, creates a capture stream (F32 mono),
+/// and reads RMS levels with attack/decay smoothing identical to libpulse.
 ///
-/// Using native libpulse completely eliminates:
-///  • Process spawns (old pw-cat approach spawned 6 OS processes per stream)
-///  • Mic fallback bug (pw-cat silently routed unknown targets to the mic)
-///  • SIGTERM dance on shutdown
+/// If PipeWire initialization fails at runtime (e.g., missing library), falls back to
+/// libpulse with `pa_simple` connections (S16LE PCM 8kHz). Each reader runs in
+/// `spawn_blocking` so the async runtime is never stalled. Stopping is cooperative:
+/// set the AtomicBool to false and threads exit within one read period (~32ms).
+/// Handles are dropped at thread exit, freeing system resources via RAII.
+///
+/// Generation counter (VuState.1) deduplicates stale threads from prior calls.
 #[command]
 pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
     use libpulse_binding::sample::{Format, Spec};
-    use libpulse_binding::stream::Direction;
-    use libpulse_simple_binding::Simple;
 
     let st = app.state::<crate::VuState>();
 
@@ -1311,63 +1384,26 @@ pub async fn start_vu_stream(app: AppHandle) -> Result<(), String> {
         let running_clone = running.clone();
         let gen_clone = gen.clone();
 
-        tokio::task::spawn_blocking(move || {
-            // Create the PA simple connection inside spawn_blocking — Simple is !Send.
-            let pa = match Simple::new(
-                None,
-                "OpenGG VU",
-                Direction::Record,
-                Some(target.as_str()),
-                name,
-                &spec,
-                None,
-                None,
-            ) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("libpulse: {name} → failed to open '{target}': {e:?}");
-                    return;
-                }
-            };
-            eprintln!("start_vu_stream: {name} → libpulse connected to '{target}' (gen={my_gen})");
-
-            // 512 bytes = 256 i16 samples = 32 ms at 8 kHz mono — fast enough to
-            // check `running` + generation frequently while producing smooth meter values.
-            let mut buf = vec![0u8; 512];
-            let mut prev = 0.0f32;
-
-            // Check BOTH the running flag AND the generation counter so that stale
-            // threads spawned by a previous `start_vu_stream` call stop cleanly even
-            // if the flag was reset to `true` before they exited pa.read().
-            while running_clone.load(Ordering::Relaxed)
-                && gen_clone.load(Ordering::Relaxed) == my_gen
-            {
-                if pa.read(&mut buf).is_err() {
-                    break;
-                }
-
-                // RMS for perceptual loudness (vs peak which looks jittery).
-                let sum_sq: f32 = buf
-                    .chunks_exact(2)
-                    .map(|c| {
-                        let s = i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0;
-                        s * s
-                    })
-                    .sum();
-                let rms = (sum_sq / (buf.len() / 2) as f32).sqrt().min(1.0);
-
-                // Fast attack, slow decay for natural VU ballistics.
-                let smoothed = if rms > prev {
-                    rms * 0.9 + prev * 0.1
-                } else {
-                    rms * 0.3 + prev * 0.7
-                };
-                prev = smoothed;
-                let db = (20.0_f32 * smoothed.max(1e-9_f32).log10()).max(-60.0_f32);
-                let _ = tx_clone.send((name.to_string(), db));
+        // Try native PipeWire first
+        let is_source = name == "Mic";
+        match crate::vu_native::spawn_channel_reader(
+            name.to_string(),
+            target.clone(),
+            is_source,
+            tx_clone.clone(),
+            running_clone.clone(),
+            gen_clone.clone(),
+            my_gen,
+        ) {
+            Ok(()) => {
+                eprintln!("start_vu_stream: {name} → native PipeWire reader spawned");
             }
-            // `pa` is dropped here → pa_simple_free() called automatically (RAII).
-        });
+            Err(e) => {
+                eprintln!("native PipeWire init failed for {name}: {e}; falling back to libpulse");
+                // Fallback: spawn libpulse reader
+                spawn_libpulse_reader(&spec, name, &target, my_gen, tx_clone, running_clone, gen_clone);
+            }
+        }
     }
 
     // Emitter: drains channel updates and publishes at ~30 fps.

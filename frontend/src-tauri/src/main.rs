@@ -3,6 +3,7 @@
 mod commands;
 mod media_server;
 mod subprocess;
+mod vu_native;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
