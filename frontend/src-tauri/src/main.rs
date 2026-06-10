@@ -16,6 +16,9 @@ use tauri::{
 
 const VIDEO_WATCH_EXTS: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "ts", "flv"];
 
+/// GSR auto-start parameters: (output_dir, replay_secs, fps, quality, bitrate_kbps, monitor_target, audio_sources)
+type GsrAutoParams = (String, u32, u32, String, Option<u32>, String, Vec<String>);
+
 /// Read all directories to watch from the saved settings JSON.
 fn get_watch_dirs() -> Vec<std::path::PathBuf> {
     let sp = commands::settings_path_pub();
@@ -80,7 +83,7 @@ fn prune_old_logs(dir: &std::path::Path) {
         })
         .collect();
     // Newest first
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|b| std::cmp::Reverse(b.1));
     for (p, _) in files.into_iter().skip(MAX_LOG_FILES.saturating_sub(1)) {
         // Leave (MAX_LOG_FILES - 1) existing files + the one we're about to create
         let _ = std::fs::remove_file(p);
@@ -338,15 +341,7 @@ fn main() {
                 .join("opengg/ui-settings.json");
 
             // Parameters for optional GSR auto-start (read before spawning threads)
-            let mut gsr_auto_params: Option<(
-                String,
-                u32,
-                u32,
-                String,
-                Option<u32>,
-                String,
-                Vec<String>,
-            )> = None;
+            let mut gsr_auto_params: Option<GsrAutoParams> = None;
 
             if let Ok(json) = std::fs::read_to_string(&settings_path) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
@@ -832,6 +827,12 @@ pub struct RouteState {
     pub blacklist: HashSet<&'static str>,
 }
 
+impl Default for RouteState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RouteState {
     pub fn new() -> Self {
         let mut blacklist = HashSet::new();
@@ -852,7 +853,7 @@ impl RouteState {
 
     pub fn is_on_cooldown(&self, pid: u32) -> bool {
         let map = self.cooldown.lock().unwrap();
-        map.get(&pid).map_or(false, |t| {
+        map.get(&pid).is_some_and(|t| {
             SystemTime::now().duration_since(*t).unwrap_or(Duration::MAX)
                 < Duration::from_secs(ROUTE_COOLDOWN_SECS)
         })
@@ -870,7 +871,7 @@ impl RouteState {
 
     pub fn is_already_routed(&self, pid: u32, channel: &str) -> bool {
         let map = self.routed.lock().unwrap();
-        map.get(&pid).map_or(false, |(ch, _)| ch == channel)
+        map.get(&pid).is_some_and(|(ch, _)| ch == channel)
     }
 
     pub fn clear_pid(&self, pid: u32) {
@@ -907,7 +908,7 @@ impl RouteState {
     pub fn is_circuit_open(&self, pid: u32) -> bool {
         let map = self.fail_counts.lock().unwrap();
         let now = SystemTime::now();
-        map.get(&pid).map_or(false, |(count, first)| {
+        map.get(&pid).is_some_and(|(count, first)| {
             *count >= FAIL_THRESHOLD
                 && now.duration_since(*first).unwrap_or(Duration::MAX)
                     <= Duration::from_secs(FAIL_COOLDOWN_SECS)

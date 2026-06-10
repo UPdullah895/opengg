@@ -301,7 +301,7 @@ pub async fn generate_waveform(
     stream_index: u32,
     num_peaks: u32,
 ) -> Result<Vec<f32>, String> {
-    let peaks_count = num_peaks.max(100).min(2000);
+    let peaks_count = num_peaks.clamp(100, 2000);
 
     // Extract raw PCM audio from the specified stream
     let output = run_command_output_async("ffmpeg", &[
@@ -379,6 +379,7 @@ pub struct ExportAudioTrack {
 /// Stderr is captured to `stderr_log` so error details can be surfaced to the
 /// user instead of silently disappearing into the terminal.
 #[command]
+#[allow(clippy::too_many_arguments)]
 pub async fn export_clip_with_filters(
     app: AppHandle,
     input_path: String,
@@ -560,7 +561,7 @@ pub async fn export_clip_with_filters(
         if let Some(stderr) = child.stderr.take() {
             tokio::task::spawn_blocking(move || {
                 use std::io::{BufRead, BufReader};
-                for line in BufReader::new(stderr).lines().flatten() {
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                     eprintln!("ffmpeg: {line}");
                     log_c.lock().unwrap().push(line);
                 }
@@ -723,8 +724,8 @@ pub async fn export_clip_with_filters(
                 ));
                 video_label = next;
             }
-            "image" | "gif" => {
-                if !ov.content.is_empty() && Path::new(&ov.content).exists() {
+            "image" | "gif"
+                if !ov.content.is_empty() && Path::new(&ov.content).exists() => {
                     let is_gif =
                         ov.overlay_type == "gif" || ov.content.to_lowercase().ends_with(".gif");
                     if is_gif {
@@ -756,7 +757,6 @@ pub async fn export_clip_with_filters(
                     ));
                     video_label = next;
                 }
-            }
             _ => {}
         }
     }
@@ -926,32 +926,29 @@ pub fn get_recorder_status(app: AppHandle) -> String {
     // Check live GsrProcess state first — covers the GPU Screen Recorder path.
     let gsr = app.state::<GsrProcess>();
     let mut lock = gsr.0.lock().unwrap();
-    match lock.as_mut() {
-        Some(state) => match state.child.try_wait() {
-            Ok(None) => {
-                // Process still running — return replay:<secs>
-                let secs = state.params.replay_secs;
-                return format!("replay:{secs}");
-            }
-            Ok(Some(status)) => {
-                // Exited unexpectedly — log stderr tail and clean up
-                let tail: String = {
-                    let log = state.stderr_log.lock().unwrap();
-                    log.iter().rev().take(10).rev().cloned().collect::<Vec<_>>().join("\n")
-                };
-                log::warn!(
-                    "GSR exited unexpectedly (status={:?}) during get_recorder_status. Last stderr:\n{tail}",
-                    status.code()
-                );
-                lock.take();
-            }
-            Err(e) => {
-                log::warn!("GSR try_wait error: {e}");
-                lock.take();
-            }
-        },
-        None => {}
-    }
+    if let Some(state) = lock.as_mut() { match state.child.try_wait() {
+        Ok(None) => {
+            // Process still running — return replay:<secs>
+            let secs = state.params.replay_secs;
+            return format!("replay:{secs}");
+        }
+        Ok(Some(status)) => {
+            // Exited unexpectedly — log stderr tail and clean up
+            let tail: String = {
+                let log = state.stderr_log.lock().unwrap();
+                log.iter().rev().take(10).rev().cloned().collect::<Vec<_>>().join("\n")
+            };
+            log::warn!(
+                "GSR exited unexpectedly (status={:?}) during get_recorder_status. Last stderr:\n{tail}",
+                status.code()
+            );
+            lock.take();
+        }
+        Err(e) => {
+            log::warn!("GSR try_wait error: {e}");
+            lock.take();
+        }
+    } }
     drop(lock);
     // Fallback to legacy D-Bus daemon path (non-GSR recorder)
     "idle".into()
@@ -1176,7 +1173,7 @@ pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
             // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ to get full game name.
             // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ to get prefix.
             let game_raw = if let Some(pos) = stem.find("__") {
-                stem[..pos].replace('-', " ").replace('_', " ")
+                stem[..pos].replace(['-', '_'], " ")
             } else {
                 stem.split('_')
                     .next()
@@ -1399,7 +1396,7 @@ pub async fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
             // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ to get full game name.
             // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ to get prefix.
             let game_raw = if let Some(pos) = stem.find("__") {
-                stem[..pos].replace('-', " ").replace('_', " ")
+                stem[..pos].replace(['-', '_'], " ")
             } else {
                 stem.split('_')
                     .next()
@@ -1528,7 +1525,6 @@ pub async fn probe_clips(filepaths: Vec<String>) -> Result<Vec<(String, f64, u32
     );
     Ok(results
         .into_iter()
-        .map(|(fp, dur, w, h)| (fp, dur, w, h))
         .collect())
 }
 
@@ -1958,6 +1954,7 @@ pub async fn trim_clip(
 /// Export with target size + real-time progress via Tauri events.
 /// Parses ffmpeg stderr for "time=HH:MM:SS.xx" to calculate %.
 #[command]
+#[allow(clippy::too_many_arguments)]
 pub async fn export_clip_sized(
     app: AppHandle,
     input_path: String,
@@ -2017,7 +2014,7 @@ pub async fn export_clip_sized(
                 "-y", "-i", &input_path_p1,
                 "-ss", &format!("{start_sec:.3}"),
                 "-to", &format!("{end_sec:.3}"),
-                "-c:v", &video_codec_p1,
+                "-c:v", video_codec_p1,
                 "-pix_fmt", "yuv420p",
                 "-b:v", &vbr_p1,
                 "-preset", "fast",
@@ -2066,7 +2063,7 @@ pub async fn export_clip_sized(
                 "-y", "-i", &input_path,
                 "-ss", &format!("{start_sec:.3}"),
                 "-to", &format!("{end_sec:.3}"),
-                "-c:v", &video_codec,
+                "-c:v", video_codec,
                 "-pix_fmt", "yuv420p",
                 "-b:v", &vbr,
                 "-preset", "fast",
@@ -2157,7 +2154,7 @@ fn parse_ffmpeg_progress(
                         if let Some(pos) = line.find("time=") {
                             let rest = &line[pos + 5..];
                             let ts_end = rest
-                                .find(|c: char| c == ' ' || c == '\t')
+                                .find([' ', '\t'])
                                 .unwrap_or(rest.len());
                             if let Some(secs) = parse_time_to_secs(&rest[..ts_end]) {
                                 let pct =
@@ -2187,7 +2184,7 @@ fn extract_speed(line: &str) -> String {
     if let Some(pos) = line.find("speed=") {
         let rest = &line[pos + 6..];
         let end = rest
-            .find(|c: char| c == ' ' || c == '\r' || c == '\n')
+            .find([' ', '\r', '\n'])
             .unwrap_or(rest.len());
         rest[..end].trim().to_string()
     } else {
@@ -2369,7 +2366,7 @@ pub async fn export_with_progress(
         tokio::spawn(async move {
             use std::io::{BufRead, BufReader};
             let reader = BufReader::new(stdout);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 // ffmpeg -progress outputs: out_time_ms=12345678
                 if let Some(time_us) = line.strip_prefix("out_time_us=") {
                     if let Ok(us) = time_us.parse::<f64>() {
@@ -3042,7 +3039,7 @@ pub async fn get_storage_info(clip_directories: Vec<String>) -> Result<StorageIn
 }
 
 #[cfg(unix)]
-fn get_fs_stats(path: &PathBuf) -> (u64, u64) {
+fn get_fs_stats(path: &Path) -> (u64, u64) {
     use std::os::unix::ffi::OsStrExt;
     let mut stat: libc_statvfs = unsafe { std::mem::zeroed() };
     let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap_or_default();
@@ -3720,7 +3717,7 @@ fn detect_primary_resolution() -> String {
                 for word in line.split_whitespace() {
                     // Resolution tokens look like "1920x1080+0+0"
                     if word.contains('x')
-                        && word.chars().next().map_or(false, |c| c.is_ascii_digit())
+                        && word.chars().next().is_some_and(|c| c.is_ascii_digit())
                     {
                         let res = word.split('+').next().unwrap_or(word).to_string();
                         if res.split('x').count() == 2 {
@@ -4116,6 +4113,7 @@ pub fn check_gsr_installed() -> bool {
 /// `monitor_target` is passed to `-w` (e.g. "screen", "DP-1", "HDMI-1").
 /// Audio sources are PipeWire sink names without the "OpenGG_" prefix (e.g. ["Game","Chat","Mic"]).
 #[command]
+#[allow(clippy::too_many_arguments)]
 pub fn start_gsr_replay(
     app: AppHandle,
     output_dir: String,
@@ -4252,7 +4250,7 @@ pub fn start_gsr_replay(
     let stderr_log_clone = Arc::clone(&stderr_log);
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
-        for line in BufReader::new(stderr).lines().flatten() {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             log::warn!("[GSR stderr] {line}");
             stderr_log_clone.lock().unwrap().push(line);
         }
@@ -4524,6 +4522,7 @@ pub fn save_gsr_replay(app: AppHandle, restart_on_save: bool) -> Result<(), Stri
 
 /// Gracefully kill and immediately respawn GSR with updated settings (hot-reload).
 #[command]
+#[allow(clippy::too_many_arguments)]
 pub fn restart_gsr_replay(
     app: AppHandle,
     output_dir: String,
@@ -4765,6 +4764,7 @@ pub async fn apply_noise_reduction(
 /// `duration_secs` controls how long the window stays visible (1–30s, clamped).
 /// `enabled` is passed from the frontend (reflects the `enableClipNotifications` setting).
 #[command]
+#[allow(clippy::too_many_arguments)]
 pub fn show_clip_notification(
     app: AppHandle,
     game: String,

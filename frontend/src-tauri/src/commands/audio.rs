@@ -758,7 +758,7 @@ fn scan_sink_inputs() -> Result<String, String> {
 
         let sink_idx = si["sink"].as_u64().unwrap_or(0) as u32;
         let channel = lookup_sink_channel(sink_idx);
-        let auto_channel = classify_channel(&p);
+        let auto_channel = classify_channel(p);
 
         // Include volume info (0-100) for per-app volume control
         let vol = si["volume"]
@@ -1486,11 +1486,7 @@ async fn check_ear_blast(app: &AppHandle, channel: &str, db: f32) {
                         get_sink_volume_percent(&sink_name)
                     };
                     let skip_restore = if let Some(cur) = current_vol {
-                        let diff = if cur > target_pct as u32 {
-                            cur - target_pct as u32
-                        } else {
-                            target_pct as u32 - cur
-                        };
+                        let diff = cur.abs_diff(target_pct as u32);
                         diff > 5 // user manually changed volume
                     } else {
                         false
@@ -1612,7 +1608,7 @@ pub fn set_ear_blast_channels(
 pub fn set_ear_blast_threshold(percent: u32, state: State<'_, crate::EarBlastState>) {
     state
         .threshold_percent
-        .store(percent.min(100).max(1), Ordering::Relaxed);
+        .store(percent.clamp(1, 100), Ordering::Relaxed);
 }
 
 #[command]
@@ -1696,8 +1692,10 @@ pub async fn remove_virtual_audio() -> Result<(), String> {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed.strip_prefix("Module #") {
             // Emit previous module if it matched
-            if current_index.is_some() && is_null_sink && is_opengg {
-                indices_to_remove.push(current_index.unwrap());
+            if let Some(idx) = current_index {
+                if is_null_sink && is_opengg {
+                    indices_to_remove.push(idx);
+                }
             }
             current_index = rest.parse().ok();
             is_null_sink = false;
@@ -1709,8 +1707,10 @@ pub async fn remove_virtual_audio() -> Result<(), String> {
         }
     }
     // Emit the last module
-    if current_index.is_some() && is_null_sink && is_opengg {
-        indices_to_remove.push(current_index.unwrap());
+    if let Some(idx) = current_index {
+        if is_null_sink && is_opengg {
+            indices_to_remove.push(idx);
+        }
     }
 
     if indices_to_remove.is_empty() {
