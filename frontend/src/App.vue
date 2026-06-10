@@ -66,6 +66,7 @@ onBeforeUnmount(() => {
 // ★ Global media server port and token — provided to all components
 const mediaPort = ref(0)
 const mediaToken = ref('')
+const mediaReady = ref(false)
 provide('mediaPort', mediaPort)
 provide('mediaToken', mediaToken)
 
@@ -166,8 +167,14 @@ onMounted(async () => {
   if (!persist.state.settings.tutorialSeen) {
     showTutorial.value = true
   }
+
+  // ★ FIX: Fetch media port + token FIRST, then set mediaReady=true before any page mounts.
+  // This prevents the first render of any page with empty port/token.
   mediaPort.value = await getMediaPort()
   mediaToken.value = await getMediaToken()
+  // Always set mediaReady=true even if port/token are 0/'', so the app doesn't deadlock
+  mediaReady.value = true
+
   installAudioUnlocker()
   loadUserLocales()
   await loadDependencyStatus()
@@ -237,6 +244,7 @@ onMounted(async () => {
   import('vue').then(Vue => { (window as unknown as Record<string, unknown>).Vue = Vue })
 
   // ── Load all enabled extensions (non-blocking, errors logged per-ext) ──
+  // Both mediaPort and mediaToken are now guaranteed to be set (even if 0 or '')
   if (mediaPort.value && mediaToken.value) {
     const { useExtensionStore } = await import('./stores/extensions')
     useExtensionStore().loadAllEnabled(mediaPort.value, mediaToken.value)
@@ -415,7 +423,8 @@ async function loadUserLocales() {
 
   <div v-else class="app-layout" :class="{ 'app-layout--rounded': !isWindowFullscreen }" @contextmenu.prevent>
     <Titlebar />
-    <div class="app-body">
+    <!-- ★ Gate: wait for mediaReady before rendering any page to avoid blank thumbnails/videos -->
+    <div v-if="mediaReady" class="app-body">
       <Sidebar :active="currentPage" @navigate="navigate" />
       <main class="content">
         <KeepAlive include="ClipsPage">

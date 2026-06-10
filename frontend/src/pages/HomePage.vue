@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, computed } from 'vue'
+import { onMounted, onBeforeUnmount, ref, computed, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import { usePersistenceStore } from '../stores/persistence'
 import { useReplayStore } from '../stores/replay'
 import { useAudioStore } from '../stores/audio'
-import { getMediaPort, getMediaToken, mediaUrl } from '../utils/assets'
+import { mediaUrl } from '../utils/assets'
 import SelectField from '../components/SelectField.vue'
 import VolumeSlider from '../components/VolumeSlider.vue'
 import { useToast } from '../composables/useToast'
 import { settingsTargetTab } from '../composables/useNavSignal'
 import { viewMode } from '../composables/useViewMode'
+import type { Ref } from 'vue'
 
 const emit = defineEmits<{ navigate: [page: string] }>()
 const { t, tm } = useI18n()
@@ -23,8 +24,10 @@ const toast   = useToast()
 const recorderStatus = computed(() => replay.status)
 const clipCount = ref(0)
 const gsrWarning = ref(false)
-const mediaPort = ref(0)
-const mediaToken = ref('')
+const _mediaPort = inject<Ref<number>>('mediaPort')
+const _mediaToken = inject<Ref<string>>('mediaToken')
+const mediaPort = computed(() => _mediaPort?.value ?? 0)
+const mediaToken = computed(() => _mediaToken?.value ?? '')
 const appVersion = ref('')
 
 // ── Active popover ──
@@ -173,8 +176,7 @@ function openClipContextMenu(clip: { id: string }, e: MouseEvent) {
 onMounted(async () => {
   document.addEventListener('mousedown', onDocClick)
   if (!persist.loaded) await persist.load()
-  mediaPort.value = await getMediaPort()
-  mediaToken.value = await getMediaToken()
+  // mediaPort and mediaToken are already injected from App.vue and are guaranteed to be set
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
   try { await replay.fetchStatus() } catch { /* daemon may not be running */ }
   try {
