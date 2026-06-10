@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useDspStore } from '../stores/dsp'
 
+const { t } = useI18n()
 const props = defineProps<{ channel: string; color: string }>()
 const store = useDspStore()
 
@@ -165,7 +167,7 @@ onUnmounted(() => {
     <!-- Header -->
     <div class="eq-hdr">
       <div class="eq-left">
-        <span class="eq-title">Graphic EQ</span>
+        <span class="eq-title">{{ t('eq.title') }}</span>
         <span class="eq-ch" :style="{ color }">{{ channel }}</span>
       </div>
       <div class="eq-right">
@@ -180,7 +182,7 @@ onUnmounted(() => {
           </select>
           <svg class="preset-arrow" viewBox="0 0 10 6" fill="currentColor"><path d="M0 0l5 6 5-6z"/></svg>
         </div>
-        <button class="eq-reset" :disabled="!eq?.enabled" @click="store.resetEq(channel)">Flat</button>
+        <button class="eq-reset" :disabled="!eq?.enabled" @click="store.resetEq(channel)">{{ t('eq.flat') }}</button>
         <label class="tog-wrap">
           <input type="checkbox" :checked="eq?.enabled" @change="store.setEqEnabled(channel, ($event.target as HTMLInputElement).checked)" />
           <span class="tog-track"><span class="tog-thumb"></span></span>

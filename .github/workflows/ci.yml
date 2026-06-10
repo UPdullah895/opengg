@@ -71,3 +71,5 @@ jobs:
         run: npx vue-tsc --noEmit
       - name: Test
         run: npm run test
+      - name: Check locales
+        run: npm run check:locales

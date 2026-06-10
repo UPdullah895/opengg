@@ -9,13 +9,13 @@ const { t } = useI18n()
 const props = defineProps<{ device: DeviceInfo }>()
 const persistence = usePersistenceStore()
 
-const ZONES = [
-  { id: 'lmb',   label: 'LMB' },
-  { id: 'rmb',   label: 'RMB' },
+const zonesComputed = computed(() => [
+  { id: 'lmb',   label: t('mouse.lmb') },
+  { id: 'rmb',   label: t('mouse.rmb') },
   { id: 'mmb',   label: 'Scroll' },
   { id: 'side1', label: 'Side 1' },
   { id: 'side2', label: 'Side 2' },
-]
+])
 
 const selectedZone = ref<string | null>(null)
 const recording = ref(false)
@@ -156,7 +156,7 @@ function clearMacro() {
       <!-- Zone legend -->
       <div class="legend">
         <button
-          v-for="z in ZONES"
+          v-for="z in zonesComputed"
           :key="z.id"
           class="legend-btn"
           :class="{ active: selectedZone === z.id, assigned: !!macroForZone(z.id) }"
@@ -173,7 +173,7 @@ function clearMacro() {
 
       <template v-else>
         <div class="assign-header">
-          <span class="zone-title">{{ ZONES.find(z => z.id === selectedZone)?.label }}</span>
+          <span class="zone-title">{{ zonesComputed.find(z => z.id === selectedZone)?.label }}</span>
           <span v-if="macroForZone(selectedZone)" class="assigned-badge">{{ t('devices.macros') }}</span>
         </div>
 

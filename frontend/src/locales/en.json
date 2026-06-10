@@ -707,5 +707,35 @@
     "newClipDetected": "New clip detected…",
     "apply": "Apply",
     "cancel": "Cancel"
+  },
+  "dsp": {
+    "title": "DSP Controls",
+    "noiseReduction": "Noise Reduction",
+    "noiseReductionDesc": "Suppresses background hiss and room noise",
+    "intensity": "Intensity",
+    "noiseGate": "Noise Gate",
+    "noiseGateDesc": "Silences signal below a threshold level",
+    "threshold": "Threshold",
+    "autoDetect": "Auto-detect threshold",
+    "compressor": "Compressor",
+    "compressorDesc": "Evens out loud and quiet parts of the signal",
+    "level": "Level"
+  },
+  "eq": {
+    "title": "Graphic EQ",
+    "flat": "Flat"
+  },
+  "chatMix": {
+    "title": "ChatMix",
+    "game": "Game",
+    "chat": "Chat"
+  },
+  "videoPlayer": {
+    "fullscreen": "Fullscreen",
+    "mute": "Mute"
+  },
+  "mouse": {
+    "lmb": "LMB",
+    "rmb": "RMB"
   }
 }

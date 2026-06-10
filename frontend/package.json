@@ -9,7 +9,8 @@
     "preview": "npx vite preview",
     "tauri": "npx tauri",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:locales": "node scripts/check-locales.mjs"
   },
   "dependencies": {
     "@floating-ui/vue": "^1.1.0",

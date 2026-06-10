@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   gameVolume: number
@@ -35,7 +38,7 @@ function resetBalance() {
 <template>
   <div class="chatmix">
     <div class="chatmix-header">
-      <span class="chatmix-title">ChatMix</span>
+      <span class="chatmix-title">{{ t('chatMix.title') }}</span>
       <button class="chatmix-reset" @click="resetBalance" title="Reset to center">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
@@ -50,7 +53,7 @@ function resetBalance() {
           <circle cx="15" cy="13" r="1" fill="currentColor"/><circle cx="18" cy="11" r="1" fill="currentColor"/>
           <path d="M2 6a2 2 0 012-2h16a2 2 0 012 2v10a4 4 0 01-4 4h-2.5L14 18h-4l-1.5 2H6a4 4 0 01-4-4V6z"/>
         </svg>
-        <span>Game</span>
+        <span>{{ t('chatMix.game') }}</span>
         <span class="chatmix-pct">{{ gameLevel }}%</span>
       </div>
 
@@ -65,7 +68,7 @@ function resetBalance() {
 
       <div class="chatmix-label chatmix-label--chat">
         <span class="chatmix-pct">{{ chatLevel }}%</span>
-        <span>Chat</span>
+        <span>{{ t('chatMix.chat') }}</span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 18v-6a9 9 0 0118 0v6"/>
           <path d="M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/>

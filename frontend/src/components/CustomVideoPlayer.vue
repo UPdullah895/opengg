@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { resumeAudioContext } from '../utils/audio'
 import { invoke } from '@tauri-apps/api/core'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   src: string
@@ -203,7 +206,7 @@ defineExpose({ videoRef, playing, currentTime, duration, isFullscreen, seekTo, t
           <input type="range" min="0" max="1" step="0.05" :value="isMuted ? 0 : volume"
             @input="setVolume(+($event.target as HTMLInputElement).value)" class="cvp-vol-sl" />
         </div>
-        <button class="cvp-btn cvp-fs" @click.stop="toggleFullscreen()" title="Fullscreen">
+        <button class="cvp-btn cvp-fs" @click.stop="toggleFullscreen()" :title="t('videoPlayer.fullscreen')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
           </svg>

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useDspStore } from '../stores/dsp'
 
+const { t } = useI18n()
 const props = defineProps<{ channel: string; color: string }>()
 const store = useDspStore()
 const ch = computed(() => store.dsp[props.channel])
@@ -10,7 +12,7 @@ const ch = computed(() => store.dsp[props.channel])
 <template>
   <div class="dsp-wrap">
     <div class="dsp-page-hdr">
-      <span class="dsp-title">DSP Controls</span>
+      <span class="dsp-title">{{ t('dsp.title') }}</span>
       <span class="dsp-ch" :style="{ color }">{{ channel }}</span>
 
       <!-- Preset dropdown -->
@@ -36,8 +38,8 @@ const ch = computed(() => store.dsp[props.channel])
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/></svg>
           </div>
           <div class="card-info">
-            <span class="card-name">Noise Reduction</span>
-            <span class="card-desc">Suppresses background hiss and room noise</span>
+            <span class="card-name">{{ t('dsp.noiseReduction') }}</span>
+            <span class="card-desc">{{ t('dsp.noiseReductionDesc') }}</span>
           </div>
           <label class="tog-wrap">
             <input type="checkbox" :checked="ch?.nr.enabled" @change="store.setNr(channel, { enabled: ($event.target as HTMLInputElement).checked })" />
@@ -47,7 +49,7 @@ const ch = computed(() => store.dsp[props.channel])
         <!-- Always rendered; disabled state via CSS when off -->
         <div class="card-body" :class="{ 'card-body--off': !ch?.nr.enabled }">
           <div class="ctrl-row">
-            <span class="ctrl-lbl">Intensity</span>
+            <span class="ctrl-lbl">{{ t('dsp.intensity') }}</span>
             <span class="ctrl-val" :style="{ color }">{{ ch?.nr.intensity ?? 50 }}%</span>
           </div>
           <input type="range" class="ctrl-sl" min="0" max="100" step="1"
@@ -63,8 +65,8 @@ const ch = computed(() => store.dsp[props.channel])
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
           </div>
           <div class="card-info">
-            <span class="card-name">Noise Gate</span>
-            <span class="card-desc">Silences signal below a threshold level</span>
+            <span class="card-name">{{ t('dsp.noiseGate') }}</span>
+            <span class="card-desc">{{ t('dsp.noiseGateDesc') }}</span>
           </div>
           <label class="tog-wrap">
             <input type="checkbox" :checked="ch?.gate.enabled" @change="store.setGate(channel, { enabled: ($event.target as HTMLInputElement).checked })" />
@@ -73,7 +75,7 @@ const ch = computed(() => store.dsp[props.channel])
         </div>
         <div class="card-body" :class="{ 'card-body--off': !ch?.gate.enabled }">
           <div class="ctrl-row">
-            <span class="ctrl-lbl">Threshold</span>
+            <span class="ctrl-lbl">{{ t('dsp.threshold') }}</span>
             <span class="ctrl-val" :style="{ color }">{{ ch?.gate.threshold ?? -40 }} dB</span>
           </div>
           <input type="range" class="ctrl-sl" min="-80" max="0" step="1"
@@ -81,7 +83,7 @@ const ch = computed(() => store.dsp[props.channel])
             @input="store.setGate(channel, { threshold: parseInt(($event.target as HTMLInputElement).value) })" />
           <label class="check-row">
             <input type="checkbox" :checked="ch?.gate.auto" @change="store.setGate(channel, { auto: ($event.target as HTMLInputElement).checked })" />
-            <span>Auto-detect threshold</span>
+            <span>{{ t('dsp.autoDetect') }}</span>
           </label>
         </div>
       </div>
@@ -93,8 +95,8 @@ const ch = computed(() => store.dsp[props.channel])
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           </div>
           <div class="card-info">
-            <span class="card-name">Compressor</span>
-            <span class="card-desc">Evens out loud and quiet parts of the signal</span>
+            <span class="card-name">{{ t('dsp.compressor') }}</span>
+            <span class="card-desc">{{ t('dsp.compressorDesc') }}</span>
           </div>
           <label class="tog-wrap">
             <input type="checkbox" :checked="ch?.comp.enabled" @change="store.setComp(channel, { enabled: ($event.target as HTMLInputElement).checked })" />
@@ -103,7 +105,7 @@ const ch = computed(() => store.dsp[props.channel])
         </div>
         <div class="card-body" :class="{ 'card-body--off': !ch?.comp.enabled }">
           <div class="ctrl-row">
-            <span class="ctrl-lbl">Level</span>
+            <span class="ctrl-lbl">{{ t('dsp.level') }}</span>
             <span class="ctrl-val" :style="{ color }">{{ ch?.comp.level ?? 50 }}%</span>
           </div>
           <input type="range" class="ctrl-sl" min="0" max="100" step="1"

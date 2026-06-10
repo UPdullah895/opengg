@@ -388,12 +388,13 @@
       "removeVirtualAudio": "إزالة الصوت الافتراضي واستعادة إعدادات نظام التشغيل",
       "removeVirtualAudioDesc": "يزيل جميع وحدات الصوت الافتراضية في OpenGG دون إعادة تشغيل PipeWire أو WirePlumber. ستتم استعادة مسارات الأجهزة الفيزيائية. سيرشدك معالج الإعداد الأولي عند الفتح التالي.",
       "confirmMsg": "سيزيل هذا جميع وحدات الصوت الافتراضية في OpenGG. سيستمر تشغيل الأصوات الأخرى (المتصفح والألعاب). هل تريد المتابعة؟",
-      "removeVirtualAudioRemoving": "جارٍ الإزالة…",
       "createVirtualAudio": "إنشاء محرك الصوت الافتراضي",
       "createVirtualAudioDesc": "قم بإعداد أحواض الصوت الافتراضية في OpenGG لتوجيه قنوات الألعاب والدردشة والوسائط والمساعد بشكل مستقل.",
       "createConfirmTitle": "إنشاء صوت افتراضي؟",
       "createConfirmMsg": "سيؤدي هذا إلى إنشاء أحواض صوت افتراضية لتوجيه القنوات بشكل مستقل. هل تريد المتابعة؟",
-      "creating": "جارٍ الإنشاء…"
+      "creating": "جارٍ الإنشاء…",
+      "resetVirtualAudio": "إعادة تعيين الصوت الافتراضي",
+      "resetVirtualAudioDesc": "إزالة وإعادة إنشاء محرك الصوت الافتراضي."
     },
     "timelineTracks": {
       "title": "مسارات الخط الزمني",
@@ -458,6 +459,37 @@
       "audioGroup": "عضوية مجموعة audio",
       "videoGroup": "عضوية مجموعة video",
       "udevRules": "قواعد udev المثبتة"
+    },
+    "captureGsr": {
+      "title": "مسجل شاشة GPU",
+      "hint": "يستخدم gpu-screen-recorder لمخزن إعادة منخفض زمن الانتظار مع ترميز GPU (NVENC/VAAPI). يجب التثبيت بشكل منفصل.",
+      "extensionsHint": "فعّل GPU Screen Recorder في الإضافات لتكوينه هنا.",
+      "quality": "الجودة",
+      "qualityCbr": "معدل بت ثابت (موصى به)",
+      "qualityMedium": "متوسط",
+      "qualityHigh": "عالي",
+      "qualityVeryHigh": "عالي جداً",
+      "qualityUltra": "فائق",
+      "fps": "إطارات/ثانية",
+      "replayBuffer": "مخزن الإعادة",
+      "replayCustom": "مخصص…",
+      "monitorTarget": "هدف الشاشة",
+      "autoStart": "البدء التلقائي عند الفتح",
+      "autoStartTooltip": "بدء مخزن الإعادة تلقائياً عند فتح OpenGG.",
+      "waylandHint": "تم الكشف عن جلسة Wayland. يتطلب التقاط \"تطبيق ملء الشاشة\" نظام X11.",
+      "installToggleHide": "▼ إخفاء دليل التثبيت",
+      "installToggleShow": "▶ كيف يتم التثبيت؟",
+      "runDiagnostics": "تشغيل التشخيص",
+      "diagnosticsOk": "مرت جميع الفحوصات — جاهز للتسجيل.",
+      "diagnosticsFail": "فشل بعض الفحوصات. أصلح المشاكل أدناه قبل التسجيل.",
+      "copied": "تم النسخ!",
+      "copyTooltip": "نسخ",
+      "autoRestart": "إعادة تشغيل تلقائي عند الانهيار",
+      "autoRestartTooltip": "إعادة تشغيل مخزن الإعادة تلقائياً إذا توقفت gpu-screen-recorder بشكل غير متوقع.",
+      "errorMissingGroups": "لم يتم إضافة المستخدم إلى مجموعة 'render'. شغّل: sudo usermod -aG render,video $USER — ثم أعد تسجيل الدخول.",
+      "errorBinaryUnhealthy": "تم تثبيت gpu-screen-recorder لكنه فشل في التشغيل. تحقق من أنه نسخة متوافقة وأن تعريفات GPU محدثة.",
+      "crashWarning": "توقف التسجيل بشكل غير متوقع. تحقق من السجلات لمزيد من التفاصيل.",
+      "crashRestarting": "انهيار التسجيل — إعادة التشغيل…"
     }
   },
   "onboarding": {
@@ -575,7 +607,8 @@
       "refresh": "تحديث مكتبة Steam",
       "loading": "جارٍ الاستيراد…",
       "failed": "فشل استيراد مكتبة Steam"
-    }
+    },
+    "toggleStats": "تبديل الإحصائيات"
   },
   "notification": {
     "clipSaved": "تم حفظ المقطع",
@@ -674,5 +707,35 @@
         "desc": "إذا لم تُعدّ محرك الصوت الافتراضي بعد، سنرشدك خلاله الآن."
       }
     }
+  },
+  "dsp": {
+    "title": "عناصر التحكم DSP",
+    "noiseReduction": "إلغاء الضوضاء",
+    "noiseReductionDesc": "يقمع صفير الخلفية وضوضاء الغرفة",
+    "intensity": "الشدة",
+    "noiseGate": "بوابة الضوضاء",
+    "noiseGateDesc": "يسكت الإشارة تحت مستوى العتبة",
+    "threshold": "العتبة",
+    "autoDetect": "الكشف التلقائي عن العتبة",
+    "compressor": "ضاغط",
+    "compressorDesc": "توحيد الأجزاء الصاخبة والهادئة من الإشارة",
+    "level": "المستوى"
+  },
+  "eq": {
+    "title": "معادل الرسومات",
+    "flat": "مسطح"
+  },
+  "chatMix": {
+    "title": "ChatMix",
+    "game": "لعبة",
+    "chat": "دردشة"
+  },
+  "videoPlayer": {
+    "fullscreen": "ملء الشاشة",
+    "mute": "كتم"
+  },
+  "mouse": {
+    "lmb": "LMB",
+    "rmb": "RMB"
   }
 }
