@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use warp::http::{Response, StatusCode};
 use warp::Filter;
+use warp::Rejection;
 
 fn find_available_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -62,6 +63,19 @@ pub fn spawn_media_server(clip_dirs: Vec<PathBuf>) -> (u16, String) {
     let token = generate_session_token();
     let token_clone = token.clone();
 
+    // Create all clip directories and thumbnails directory at startup to ensure they exist
+    for dir in &clip_dirs {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            log::warn!("Failed to create clip directory {}: {}", dir.display(), e);
+        }
+    }
+    if let Some(data_dir) = dirs::data_local_dir() {
+        let thumbnail_dir = data_dir.join("opengg").join("thumbnails");
+        if let Err(e) = std::fs::create_dir_all(&thumbnail_dir) {
+            log::warn!("Failed to create thumbnail directory {}: {}", thumbnail_dir.display(), e);
+        }
+    }
+
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -69,68 +83,71 @@ pub fn spawn_media_server(clip_dirs: Vec<PathBuf>) -> (u16, String) {
             .expect("tokio rt");
 
         rt.block_on(async move {
-            // Canonicalize allowed roots: clip directories + thumbnails directory
-            let thumbnail_dir = dirs::data_local_dir()
-                .map(|d| d.join("opengg").join("thumbnails"));
-            let mut allowed_roots: Vec<PathBuf> = clip_dirs
-                .iter()
-                .filter_map(|d| d.canonicalize().ok())
-                .collect();
-            if let Some(td) = thumbnail_dir {
-                if let Ok(canon_td) = td.canonicalize() {
-                    allowed_roots.push(canon_td);
-                } else if let Ok(canon_td) = std::fs::canonicalize(&td) {
-                    allowed_roots.push(canon_td);
-                }
+            // Store allowed roots as raw PathBufs; canonicalize at request time.
+            // This allows directories created after launch to work without restart.
+            let mut allowed_roots: Vec<PathBuf> = clip_dirs.clone();
+            if let Some(data_dir) = dirs::data_local_dir() {
+                allowed_roots.push(data_dir.join("opengg").join("thumbnails"));
             }
             let allowed_roots = Arc::new(allowed_roots);
             let token = Arc::new(token_clone);
 
             // Route 1: /media/... → serve files directly (video playback with Range)
             // Token required in query string. Validates canonical path is within allowed roots.
-            // After validation, delegates to warp's file responder for Range request support.
+            // Uses tolerant query parsing: a request with no ?query=... string is treated as token=None
+            // and gets 401 Unauthorized (not 500 rejected).
             let media_route = warp::path("media")
-                .and(warp::query::<TokenQuery>())
+                .and(warp::query::raw().or(warp::any().map(String::new)).unify())
                 .and(warp::path::tail())
                 .and(warp::header::optional::<String>("range"))
                 .and_then({
                     let allowed_roots = allowed_roots.clone();
                     let token = token.clone();
-                    move |q: TokenQuery, tail: warp::path::Tail, range: Option<String>| {
+                    move |raw_query: String, tail: warp::path::Tail, range: Option<String>| {
                         let allowed_roots = allowed_roots.clone();
                         let token = token.clone();
-                        async move { serve_media_with_auth(&allowed_roots, &token, q, tail, range).await }
+                        async move {
+                            serve_media_with_auth(&allowed_roots, &token, raw_query, tail, range).await
+                        }
                     }
                 });
 
             // Route 2: /audio?file=/path/to/clip.mkv&stream=1
             // Extracts a single audio stream via ffmpeg → serves as audio/wav
+            // Tolerant query parsing: missing query or missing token both → 401 Unauthorized
             let audio_route = warp::path("audio")
-                .and(warp::query::<AudioQuery>())
+                .and(warp::query::raw().or(warp::any().map(String::new)).unify())
                 .and_then({
                     let allowed_roots = allowed_roots.clone();
                     let token = token.clone();
-                    move |q: AudioQuery| {
+                    move |raw_query: String| {
                         let allowed_roots = allowed_roots.clone();
                         let token = token.clone();
-                        async move { serve_audio_stream_with_auth(&allowed_roots, &token, q).await }
+                        async move { serve_audio_stream_with_auth(&allowed_roots, &token, raw_query).await }
                     }
                 });
 
             // Route 3: /ext/<extId>/<rest> → serves static assets from the extensions directory.
             // Only files inside ~/.local/share/opengg/extensions/ are accessible.
+            // Tolerant query parsing: missing query or missing token both → 401 Unauthorized
             let ext_route = warp::path("ext")
-                .and(warp::query::<TokenQuery>())
+                .and(warp::query::raw().or(warp::any().map(String::new)).unify())
                 .and(warp::path::tail())
                 .and_then({
                     let token = token.clone();
-                    move |q: TokenQuery, tail: warp::path::Tail| {
+                    move |raw_query: String, tail: warp::path::Tail| {
                         let token = token.clone();
-                        async move { serve_extension_asset_with_auth(&token, q, tail).await }
+                        async move { serve_extension_asset_with_auth(&token, raw_query, tail).await }
                     }
                 });
 
-            let routes = media_route.or(audio_route).or(ext_route);
+            // recover() must wrap the COMBINED routes, not each route: a per-route
+            // recover would convert a path mismatch (not_found rejection) into a
+            // 404 response, short-circuiting `.or()` so /audio and /ext never match.
+            let routes = media_route
+                .or(audio_route)
+                .or(ext_route)
+                .recover(handle_rejection);
 
             let cors = warp::cors()
                 .allow_any_origin()
@@ -153,25 +170,90 @@ pub fn spawn_media_server(clip_dirs: Vec<PathBuf>) -> (u16, String) {
     (port, token)
 }
 
-// ── Query and auth types ──────────────────────────────────────────────────
-
-#[derive(serde::Deserialize)]
-struct TokenQuery {
-    token: Option<String>,
-}
+// ── Auth types ───────────────────────────────────────────────────────
 
 #[derive(Debug)]
 struct AuthError;
 impl warp::reject::Reject for AuthError {}
 
+/// Extract token from raw query string, tolerating missing query altogether.
+/// Format: ?token=<value> or no ? at all.
+/// Returns the token value (percent-decoded) or None if absent/empty.
+fn extract_token_from_raw_query(raw: &str) -> Option<String> {
+    if raw.is_empty() {
+        return None;
+    }
+    // Split on '&' to find all parameters
+    for param in raw.split('&') {
+        if let Some(value) = param.strip_prefix("token=") {
+            if !value.is_empty() {
+                // Percent-decode the value
+                return Some(percent_decode_str(value).decode_utf8_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extension-to-MIME-type mapping with fallback to application/octet-stream.
+fn mime_type_for_extension(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        // Video
+        "mp4" => "video/mp4",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
+        "mov" => "video/quicktime",
+        "ts" => "video/mp2t",
+        "flv" => "video/x-flv",
+        // Image
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        // Audio
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        // Web
+        "json" => "application/json",
+        "js" | "mjs" => "application/javascript",
+        "css" => "text/css",
+        "html" => "text/html",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Handle warp rejections: AuthError → 401, not_found → 404, others → 500
+async fn handle_rejection(err: Rejection) -> Result<impl warp::Reply, Rejection> {
+    if err.is_not_found() {
+        return Ok(warp::reply::with_status(
+            "Not Found",
+            StatusCode::NOT_FOUND,
+        ));
+    }
+    if let Some(AuthError) = err.find() {
+        log::debug!("Authentication failed: invalid or missing token");
+        return Ok(warp::reply::with_status(
+            "Unauthorized",
+            StatusCode::UNAUTHORIZED,
+        ));
+    }
+    // Log other rejections (unmatched routes, etc.)
+    log::debug!("Request rejected: {:?}", err);
+    Err(err)
+}
+
 async fn serve_media_with_auth(
     allowed_roots: &[PathBuf],
     token: &str,
-    q: TokenQuery,
+    raw_query: String,
     tail: warp::path::Tail,
     range: Option<String>,
 ) -> Result<Response<Vec<u8>>, warp::Rejection> {
-    if q.token.as_ref() != Some(&token.to_string()) {
+    let provided_token = extract_token_from_raw_query(&raw_query);
+    if provided_token.as_ref() != Some(&token.to_string()) {
+        log::debug!("Media auth failed: expected token, got {:?}", provided_token);
         return Err(warp::reject::custom(AuthError));
     }
 
@@ -183,14 +265,25 @@ async fn serve_media_with_auth(
     let decoded = percent_decode_str(tail_str).decode_utf8_lossy().to_string();
     let candidate = PathBuf::from(&decoded);
 
+    // Canonicalize at request time, not startup, so dynamically created dirs work
     let real = match candidate.canonicalize() {
         Ok(p) => p,
         Err(_) => return Err(warp::reject::not_found()),
     };
 
-    // Check if the real path is under one of the allowed roots
-    let is_allowed = allowed_roots.iter().any(|root| real.starts_with(root));
+    // Check if the real path is under one of the allowed roots.
+    // Canonicalize each root at request time (cheap: a few syscalls per request, localhost-only).
+    let is_allowed = allowed_roots.iter().any(|root| {
+        match root.canonicalize() {
+            Ok(canon_root) => real.starts_with(&canon_root),
+            Err(_) => {
+                log::debug!("Could not canonicalize allowed root: {}", root.display());
+                false
+            }
+        }
+    });
     if !is_allowed {
+        log::debug!("Path not in allowed roots: {}", real.display());
         return Err(warp::reject::not_found());
     }
 
@@ -202,6 +295,8 @@ async fn serve_media_with_auth(
         .await
         .map_err(|_| warp::reject::not_found())?;
     let total_size = metadata.len();
+
+    let content_type = mime_type_for_extension(&real);
 
     // Parse Range header if present and valid
     if let Some(range_header) = range {
@@ -215,7 +310,7 @@ async fn serve_media_with_auth(
 
             return Ok(Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
-                .header("Content-Type", "application/octet-stream")
+                .header("Content-Type", content_type)
                 .header("Content-Length", content_length.to_string())
                 .header(
                     "Content-Range",
@@ -234,7 +329,7 @@ async fn serve_media_with_auth(
 
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", "application/octet-stream")
+        .header("Content-Type", content_type)
         .header("Content-Length", bytes.len().to_string())
         .header("Accept-Ranges", "bytes")
         .body(bytes)
@@ -281,33 +376,59 @@ fn parse_range_header(header: &str, total_size: u64) -> Option<(usize, usize)> {
     Some((start as usize, end as usize))
 }
 
-#[derive(serde::Deserialize)]
-struct AudioQuery {
-    token: Option<String>,
-    file: String,
-    stream: u32,
-}
-
 async fn serve_audio_stream_with_auth(
     allowed_roots: &[PathBuf],
     token: &str,
-    q: AudioQuery,
+    raw_query: String,
 ) -> Result<Response<Vec<u8>>, warp::Rejection> {
-    if q.token.as_ref() != Some(&token.to_string()) {
+    // Parse audio query from raw query string: ?file=<path>&stream=<num>&token=<token>
+    let provided_token = extract_token_from_raw_query(&raw_query);
+    if provided_token.as_ref() != Some(&token.to_string()) {
+        log::debug!("Audio auth failed: expected token, got {:?}", provided_token);
         return Err(warp::reject::custom(AuthError));
     }
 
-    let decoded = percent_decode_str(&q.file).decode_utf8_lossy().to_string();
+    // Extract file path and stream number
+    let mut file_path: Option<String> = None;
+    let mut stream_num: Option<u32> = None;
+
+    for param in raw_query.split('&') {
+        if let Some(value) = param.strip_prefix("file=") {
+            if !value.is_empty() {
+                file_path = Some(percent_decode_str(value).decode_utf8_lossy().to_string());
+            }
+        }
+        if let Some(value) = param.strip_prefix("stream=") {
+            if let Ok(num) = value.parse::<u32>() {
+                stream_num = Some(num);
+            }
+        }
+    }
+
+    let file_path = file_path.ok_or_else(warp::reject::not_found)?;
+    let stream_num = stream_num.ok_or_else(warp::reject::not_found)?;
+
+    let decoded = percent_decode_str(&file_path).decode_utf8_lossy().to_string();
     let candidate = PathBuf::from(&decoded);
 
+    // Canonicalize at request time
     let real = match candidate.canonicalize() {
         Ok(p) => p,
         Err(_) => return Err(warp::reject::not_found()),
     };
 
-    // Check if the real path is under one of the allowed roots
-    let is_allowed = allowed_roots.iter().any(|root| real.starts_with(root));
+    // Check if the real path is under one of the allowed roots (canonicalize roots at request time)
+    let is_allowed = allowed_roots.iter().any(|root| {
+        match root.canonicalize() {
+            Ok(canon_root) => real.starts_with(&canon_root),
+            Err(_) => {
+                log::debug!("Could not canonicalize allowed root: {}", root.display());
+                false
+            }
+        }
+    });
     if !is_allowed {
+        log::debug!("Audio path not in allowed roots: {}", real.display());
         return Err(warp::reject::not_found());
     }
 
@@ -322,7 +443,7 @@ async fn serve_audio_stream_with_auth(
             "-i",
             &real_str,
             "-map",
-            &format!("0:{}", q.stream),
+            &format!("0:{}", stream_num),
             "-ac",
             "2", // stereo
             "-ar",
@@ -360,10 +481,12 @@ async fn serve_audio_stream_with_auth(
 /// Requires valid session token as ?token=X query parameter.
 async fn serve_extension_asset_with_auth(
     token: &str,
-    q: TokenQuery,
+    raw_query: String,
     tail: warp::path::Tail,
 ) -> Result<Response<Vec<u8>>, warp::Rejection> {
-    if q.token.as_ref() != Some(&token.to_string()) {
+    let provided_token = extract_token_from_raw_query(&raw_query);
+    if provided_token.as_ref() != Some(&token.to_string()) {
+        log::debug!("Extension auth failed: expected token, got {:?}", provided_token);
         return Err(warp::reject::custom(AuthError));
     }
 
@@ -393,6 +516,7 @@ async fn serve_extension_asset_with_auth(
         Err(_) => base.clone(),
     };
     if !real.starts_with(&real_base) {
+        log::debug!("Extension path not in allowed directory: {}", real.display());
         return Err(warp::reject::not_found());
     }
 
@@ -404,17 +528,7 @@ async fn serve_extension_asset_with_auth(
         .await
         .map_err(|_| warp::reject::not_found())?;
 
-    // Derive Content-Type from extension
-    let ct = match real.extension().and_then(|e| e.to_str()).unwrap_or("") {
-        "js" | "mjs" => "application/javascript; charset=utf-8",
-        "json" => "application/json; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "css" => "text/css; charset=utf-8",
-        _ => "application/octet-stream",
-    };
+    let ct = mime_type_for_extension(&real);
 
     Ok(Response::builder()
         .status(StatusCode::OK)
@@ -423,4 +537,83 @@ async fn serve_extension_asset_with_auth(
         .header("Cache-Control", "no-cache")
         .body(bytes)
         .unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_token_from_raw_query() {
+        // Empty query
+        assert_eq!(extract_token_from_raw_query(""), None);
+
+        // Token present and valid
+        assert_eq!(
+            extract_token_from_raw_query("token=abc123"),
+            Some("abc123".to_string())
+        );
+
+        // Token with other parameters
+        assert_eq!(
+            extract_token_from_raw_query("file=/path&token=xyz789&stream=0"),
+            Some("xyz789".to_string())
+        );
+
+        // Token at start
+        assert_eq!(
+            extract_token_from_raw_query("token=first&other=value"),
+            Some("first".to_string())
+        );
+
+        // Percent-encoded token
+        assert_eq!(
+            extract_token_from_raw_query("token=abc%20123"),
+            Some("abc 123".to_string())
+        );
+
+        // Empty token value
+        assert_eq!(extract_token_from_raw_query("token="), None);
+
+        // Missing token
+        assert_eq!(extract_token_from_raw_query("file=/path&stream=0"), None);
+
+        // Token-like but not matching
+        assert_eq!(extract_token_from_raw_query("mytoken=value"), None);
+    }
+
+    #[test]
+    fn test_mime_type_for_extension() {
+        // Video types
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.mp4")), "video/mp4");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.mkv")), "video/x-matroska");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.webm")), "video/webm");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.avi")), "video/x-msvideo");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.mov")), "video/quicktime");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.ts")), "video/mp2t");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.flv")), "video/x-flv");
+
+        // Image types
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.png")), "image/png");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.jpg")), "image/jpeg");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.jpeg")), "image/jpeg");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.webp")), "image/webp");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.gif")), "image/gif");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.svg")), "image/svg+xml");
+
+        // Audio types
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.wav")), "audio/wav");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.mp3")), "audio/mpeg");
+
+        // Web types
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.json")), "application/json");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.js")), "application/javascript");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.mjs")), "application/javascript");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.css")), "text/css");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.html")), "text/html");
+
+        // Fallback
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file.unknown")), "application/octet-stream");
+        assert_eq!(mime_type_for_extension(std::path::Path::new("file")), "application/octet-stream");
+    }
 }
