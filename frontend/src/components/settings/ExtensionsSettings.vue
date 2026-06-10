@@ -128,8 +128,12 @@ async function refreshExtensions() {
   await scanExtensions()
 }
 
+// Hoisted: the Vue template compiler cannot parse `import.meta` inside
+// template expressions in production builds.
+const isDevMode = import.meta.env.DEV
+
 async function reloadExtensionDev(p: any) {
-  if (!import.meta.env.DEV) return
+  if (!isDevMode) return
 
   reloadingExtId.value = p.id
   try {
@@ -294,7 +298,7 @@ defineEmits<{ navigate: [page: string] }>()
               <span v-if="needsConsent(p)" class="ext-needs-consent-badge" :title="t('ext.consent.badgeTooltip')" @click="showConsentModal(p)">
                 {{ t('ext.consent.badge') }}
               </span>
-              <button v-if="import.meta.env.DEV && p.main && isExtEnabled(p)" class="ext-reload-btn" :title="t('ext.reloadDevMode')" :disabled="reloadingExtId === p.id" @click.stop="reloadExtensionDev(p)">
+              <button v-if="isDevMode && p.main && isExtEnabled(p)" class="ext-reload-btn" :title="t('ext.reloadDevMode')" :disabled="reloadingExtId === p.id" @click.stop="reloadExtensionDev(p)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :class="{ spinning: reloadingExtId === p.id }"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
               </button>
               <button v-if="canConfigure(p)" class="ext-gear-btn" @click.stop="openExtSettings(p)">
