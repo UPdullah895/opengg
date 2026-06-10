@@ -229,11 +229,91 @@ fn parse_daemon_ext(dir: &Path) -> Option<DaemonExt> {
         return None; // UI-only extension — nothing for the daemon to run.
     }
 
+    // SECURITY: Validate daemon_rel to prevent path traversal and absolute path escapes.
+    // Path::join() does NOT sanitize: absolute paths and ".." sequences can escape dir.
+
+    let daemon_path = std::path::Path::new(daemon_rel);
+
+    // Reject absolute paths (e.g., "/usr/bin/rm", "/bin/sh").
+    if daemon_path.is_absolute() {
+        tracing::warn!(
+            extension_id = %id,
+            daemon_path = %daemon_rel,
+            "Extension daemon path is absolute (security risk); ignoring extension"
+        );
+        return None;
+    }
+
+    // Reject paths with parent directory ("..", RootDir, Prefix) components.
+    for component in daemon_path.components() {
+        use std::path::Component;
+        match component {
+            Component::ParentDir => {
+                tracing::warn!(
+                    extension_id = %id,
+                    daemon_path = %daemon_rel,
+                    "Extension daemon path contains '..'; ignoring extension"
+                );
+                return None;
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                tracing::warn!(
+                    extension_id = %id,
+                    daemon_path = %daemon_rel,
+                    "Extension daemon path is absolute or has prefix; ignoring extension"
+                );
+                return None;
+            }
+            _ => {}
+        }
+    }
+
+    // Build the exec path and validate containment via canonicalization.
     let exec = dir.join(daemon_rel);
+
+    // Canonicalize both paths to resolve symlinks and ".." sequences.
+    let canon_dir = match std::fs::canonicalize(dir) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                extension_id = %id,
+                extension_dir = %dir.display(),
+                error = %e,
+                "Cannot canonicalize extension directory; ignoring extension"
+            );
+            return None;
+        }
+    };
+
+    let canon_exec = match std::fs::canonicalize(&exec) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                extension_id = %id,
+                exec_path = %exec.display(),
+                error = %e,
+                "Cannot canonicalize daemon executable; ignoring extension"
+            );
+            return None;
+        }
+    };
+
+    // Enforce that the canonical exec is strictly inside the canonical extension dir.
+    if !canon_exec.starts_with(&canon_dir) {
+        tracing::warn!(
+            extension_id = %id,
+            daemon_path = %daemon_rel,
+            "Extension daemon path escapes extension directory; ignoring extension"
+        );
+        return None;
+    }
+
+    // Final check: must be an executable file.
     if !is_executable(&exec) {
         tracing::warn!("Extension {id}: daemon '{}' is not an executable file", exec.display());
         return None;
     }
+
     let name = v["name"].as_str().unwrap_or(&id).to_string();
     Some(DaemonExt { id, name, exec })
 }
