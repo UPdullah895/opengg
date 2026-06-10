@@ -1,0 +1,13 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Type=Application
+Name=OpenGG
+GenericName=Gaming Hub
+Comment=Linux gaming hub — audio mixing, instant replay, device management
+Exec=opengg
+Icon=org.opengg.OpenGG
+Terminal=false
+Categories=Game;Utility;AudioVideo;
+Keywords=audio;mixer;replay;gaming;rgb;device;
+StartupNotify=true
+StartupWMClass=opengg

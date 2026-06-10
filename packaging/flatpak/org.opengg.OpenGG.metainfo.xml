@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.opengg.OpenGG</id>
+  <name>OpenGG</name>
+  <summary>Linux gaming hub — audio mixing, instant replay, device management</summary>
+  <description>
+    <p>OpenGG is a modular open-source gaming hub for Linux, combining audio mixing, clip capture and replay, and device management.</p>
+    <ul>
+      <li>Audio Hub: 5-channel PipeWire mixer (Game/Chat/Media/Aux/Mic) with per-app routing and parametric EQ</li>
+      <li>Device Manager: Mouse/keyboard configuration via ratbagd, unified RGB lighting control via OpenRGB SDK</li>
+      <li>Clipping &amp; Replay: GPU-accelerated screen recording via gpu-screen-recorder, clip gallery with FFmpeg trimming and export</li>
+    </ul>
+  </description>
+
+  <!-- Project metadata -->
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer_name>OpenGG Contributors</developer_name>
+  <url type="homepage">https://github.com/UPdullah895/opengg</url>
+  <url type="bugtracker">https://github.com/UPdullah895/opengg/issues</url>
+  <url type="help">https://github.com/UPdullah895/opengg</url>
+
+  <!-- Screenshots (placeholder URIs — replace with real Flathub paths after publication) -->
+  <screenshots>
+    <screenshot type="default">
+      <image type="source" width="1280" height="720">https://raw.githubusercontent.com/UPdullah895/opengg/main/docs/screenshot-mixer.png</image>
+      <caption>Audio mixing hub with per-app routing</caption>
+    </screenshot>
+    <screenshot type="default">
+      <image type="source" width="1280" height="720">https://raw.githubusercontent.com/UPdullah895/opengg/main/docs/screenshot-clips.png</image>
+      <caption>Clip gallery with replay buffer management</caption>
+    </screenshot>
+  </screenshots>
+
+  <!-- Release history -->
+  <releases>
+    <release version="0.1.2" date="2025-06-10">
+      <description>
+        <p>Initial Flatpak release scaffolding. Key features:</p>
+        <ul>
+          <li>5-channel audio mixer with DSP effects</li>
+          <li>GPU-accelerated clip recording and replay buffer</li>
+          <li>Device RGB and input configuration (requires host ratbagd/OpenRGB)</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+
+  <!-- Content rating (OARS) — gaming app, no harmful content -->
+  <content_rating type="oars-1.1" />
+
+  <!-- Categories -->
+  <categories>
+    <category>Game</category>
+    <category>Utility</category>
+    <category>AudioVideo</category>
+  </categories>
+
+  <!-- Keywords for search/discoverability -->
+  <keywords>
+    <keyword>audio</keyword>
+    <keyword>mixer</keyword>
+    <keyword>recording</keyword>
+    <keyword>replay</keyword>
+    <keyword>gaming</keyword>
+    <keyword>rgb</keyword>
+    <keyword>device</keyword>
+    <keyword>pipewire</keyword>
+  </keywords>
+</component>

@@ -1,0 +1,125 @@
+app-id: org.opengg.OpenGG
+runtime: org.gnome.Platform
+runtime-version: '46'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+command: opengg
+
+finish-args:
+  # Wayland and X11 sockets for display — OpenGG is a Tauri app
+  - --socket=wayland
+  - --socket=x11
+  - --share=ipc
+
+  # PipeWire/PulseAudio for audio processing (pactl, pw-link subprocess calls)
+  - --socket=pulseaudio
+
+  # Video files and clip storage — user read/write access to ~/Videos/OpenGG
+  - --filesystem=xdg-videos
+
+  # Configuration and state — daemon config (~/.config/opengg), UI settings, theme
+  - --filesystem=xdg-config/opengg:create
+
+  # Clip database, thumbnails, crash logs (~/.local/share/opengg)
+  - --filesystem=xdg-data/opengg:create
+
+  # GPU rendering (for Tauri webview and FFmpeg video processing)
+  - --device=dri
+
+  # D-Bus session bus for org.opengg.Daemon (app owns this service name)
+  - --own-name=org.opengg.Daemon
+
+  # D-Bus system bus access to org.freedesktop.ratbag1 (mouse/keyboard device control)
+  - --system-talk-name=org.freedesktop.ratbag1
+
+  # Desktop portal access — allows xdg-desktop-portal integration
+  # NOTE: portals do not require --talk-name; they are activated by portal filters
+  # gpu-screen-recorder uses ScreenCast portal under -w portal flag for sandbox screen capture
+  - --talk-name=org.freedesktop.portal.Flatpak
+  - --talk-name=org.freedesktop.portal.Desktop
+
+  # D-Bus system bus access to systemd user service management (optional; for future daemon control)
+  - --system-talk-name=org.freedesktop.systemd1
+
+  # Network socket access for OpenRGB device communication (localhost:6742 TCP)
+  # Also required for internal warp media server loopback and future update checks
+  - --share=network
+
+  # Desktop notifications (optional; uses org.freedesktop.Notifications over D-Bus)
+  - --talk-name=org.freedesktop.Notifications
+
+modules:
+  # ── Daemon Module ────────────────────────────────────────────────────────
+  - name: openggd
+    buildsystem: cargo
+    build-options:
+      build-args:
+        - --share=network
+    builddir: daemon
+    sources:
+      # TODO: Generate cargo-sources.json with:
+      #   flatpak-builder-tools/cargo/flatpak-cargo-generator.py ../../daemon/Cargo.lock -o cargo-sources.json
+      # This file must be committed alongside this manifest for offline builds.
+      - type: dir
+        path: ../../daemon
+      - type: file
+        path: cargo-sources.json
+        dest-filename: cargo-sources.json
+    cargo-args:
+      - --offline
+      - --release
+    cargo-build-args:
+      - --release
+    post-install:
+      - install -Dm 755 target/release/openggd $FLATPAK_DEST/bin/openggd
+      # TODO: Install D-Bus service file
+      # - install -Dm 644 ../org.opengg.Daemon.service $FLATPAK_DEST/share/dbus-1/services/org.opengg.Daemon.service
+
+  # ── Tauri Frontend Module ────────────────────────────────────────────────
+  - name: opengg
+    buildsystem: cargo
+    build-options:
+      # Enable network for npm/cargo builds
+      build-args:
+        - --share=network
+    builddir: frontend/src-tauri
+    sources:
+      # Tauri app sources
+      - type: dir
+        path: ../../frontend
+      # TODO: Generate npm-sources.json with:
+      #   flatpak-builder-tools/npm/flatpak-npm-generator.py ../../frontend/package-lock.json -o npm-sources.json
+      - type: file
+        path: npm-sources.json
+        dest-filename: npm-sources.json
+      # TODO: Generate cargo-sources.json for Tauri dependencies
+      - type: file
+        path: tauri-cargo-sources.json
+        dest-filename: cargo-sources.json
+    cargo-args:
+      - --offline
+      - --release
+    cargo-build-args:
+      - --release
+    post-install:
+      # Install the Tauri app binary
+      - install -Dm 755 target/release/opengg $FLATPAK_DEST/bin/opengg
+      # Install desktop entry
+      - install -Dm 644 opengg.desktop $FLATPAK_DEST/share/applications/org.opengg.OpenGG.desktop
+      # Install appdata/metainfo
+      - install -Dm 644 opengg.metainfo.xml $FLATPAK_DEST/share/metainfo/org.opengg.OpenGG.metainfo.xml
+      # Install icon (256x256 as fallback)
+      - install -Dm 644 src-tauri/icons/256x256.png $FLATPAK_DEST/share/icons/hicolor/256x256/apps/org.opengg.OpenGG.png
+      - install -Dm 644 src-tauri/icons/128x128.png $FLATPAK_DEST/share/icons/hicolor/128x128/apps/org.opengg.OpenGG.png
+      - install -Dm 644 src-tauri/icons/512x512.png $FLATPAK_DEST/share/icons/hicolor/512x512/apps/org.opengg.OpenGG.png
+      # Install SVG icon
+      - install -Dm 644 src-tauri/icons/logo.svg $FLATPAK_DEST/share/icons/hicolor/scalable/apps/org.opengg.OpenGG.svg
+
+  # ── System Dependencies ──────────────────────────────────────────────────
+  # TODO: Add optional modules for:
+  # - gpu-screen-recorder (if bundling instead of using host via flatpak-spawn)
+  # - ffmpeg (if not already in runtime)
+  # - libpulse (for PulseAudio API bindings)
+  # - openrgb (optional; only if bundling instead of connecting to host service)
