@@ -308,6 +308,8 @@ fn main() {
             commands::set_headset_eq_preset, commands::set_headset_eq_curve,
             // ★ Dependency probing
             commands::get_dependency_status,
+            // ★ Device access status (groups, ratbagd, udev)
+            commands::get_device_access_status,
         ])
         .setup(|app| {
             // ── Managed states ──

@@ -3,7 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { deps } from '../../composables/useDependencyStatus'
+import { deps, deviceAccess, loadDeviceAccessStatus } from '../../composables/useDependencyStatus'
 
 const { t } = useI18n()
 
@@ -11,6 +11,7 @@ const appVersion = ref('')
 
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
+  await loadDeviceAccessStatus()
 })
 
 async function openExternal(url: string) {
@@ -77,6 +78,58 @@ defineEmits<{ navigate: [page: string] }>()
           <div class="dep-info">
             <div class="dep-binary">{{ dep.binary }}</div>
             <div class="dep-feature">{{ t(`settings.deps.feature.${dep.feature}`) }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Device Access Status -->
+    <div class="deps-card">
+      <h3 style="margin:0 0 12px;font-size:14px;font-weight:700;color:var(--text)">{{ t('settings.deviceAccess.title') }}</h3>
+      <div class="deps-list">
+        <div class="dep-row">
+          <div class="dep-check" :class="{ available: deviceAccess.ratbagd_available, missing: !deviceAccess.ratbagd_available }">
+            {{ deviceAccess.ratbagd_available ? '✓' : '✗' }}
+          </div>
+          <div class="dep-info">
+            <div class="dep-binary">ratbagd</div>
+            <div class="dep-feature">{{ t('settings.deviceAccess.ratbagd') }}</div>
+          </div>
+        </div>
+        <div class="dep-row">
+          <div class="dep-check" :class="{ available: deviceAccess.in_input_group, missing: !deviceAccess.in_input_group }">
+            {{ deviceAccess.in_input_group ? '✓' : '✗' }}
+          </div>
+          <div class="dep-info">
+            <div class="dep-binary">input group</div>
+            <div class="dep-feature">{{ t('settings.deviceAccess.inputGroup') }}</div>
+          </div>
+        </div>
+        <div class="dep-row">
+          <div class="dep-check" :class="{ available: deviceAccess.in_audio_group, missing: !deviceAccess.in_audio_group }">
+            {{ deviceAccess.in_audio_group ? '✓' : '✗' }}
+          </div>
+          <div class="dep-info">
+            <div class="dep-binary">audio group</div>
+            <div class="dep-feature">{{ t('settings.deviceAccess.audioGroup') }}</div>
+          </div>
+        </div>
+        <div class="dep-row">
+          <div class="dep-check" :class="{ available: deviceAccess.in_video_group, missing: !deviceAccess.in_video_group }">
+            {{ deviceAccess.in_video_group ? '✓' : '✗' }}
+          </div>
+          <div class="dep-info">
+            <div class="dep-binary">video group</div>
+            <div class="dep-feature">{{ t('settings.deviceAccess.videoGroup') }}</div>
+          </div>
+        </div>
+        <div class="dep-row">
+          <div class="dep-check" :class="{ available: deviceAccess.udev_rules_present, missing: !deviceAccess.udev_rules_present }">
+            {{ deviceAccess.udev_rules_present ? '✓' : '✗' }}
+          </div>
+          <div class="dep-info">
+            <div class="dep-binary">udev rules</div>
+            <div class="dep-feature">{{ t('settings.deviceAccess.udevRules') }}</div>
           </div>
         </div>
       </div>

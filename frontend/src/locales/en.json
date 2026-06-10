@@ -482,6 +482,14 @@
         "headset": "Headset Control",
         "windowTools": "Window Tools (X11)"
       }
+    },
+    "deviceAccess": {
+      "title": "Device Access Status",
+      "ratbagd": "ratbagd D-Bus service",
+      "inputGroup": "input group membership",
+      "audioGroup": "audio group membership",
+      "videoGroup": "video group membership",
+      "udevRules": "udev rules installed"
     }
   },
   "clips": {
@@ -622,7 +630,17 @@
     "macroClear": "Clear",
     "macroNoButton": "Select a button on the mouse diagram",
     "comingSoon": "Devices — Coming Soon",
-    "comingSoonDesc": "We are working on providing full support for your favourite devices. Stay tuned for upcoming updates."
+    "comingSoonDesc": "We are working on providing full support for your favourite devices. Stay tuned for upcoming updates.",
+    "access": {
+      "title": "Device Access Setup Required",
+      "description": "Some device features need system permissions to work properly. Run the setup command to configure your system.",
+      "ratbagd": "ratbagd service (mouse configuration)",
+      "inputGroup": "input group membership (keyboard & mouse)",
+      "audioGroup": "audio group membership (audio control)",
+      "videoGroup": "video group membership (screen capture)",
+      "udevRules": "udev rules (device detection)",
+      "runSetup": "Run this command in a terminal:"
+    }
   },
   "tutorial": {
     "skip": "Skip",

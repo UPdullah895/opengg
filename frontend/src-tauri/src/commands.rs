@@ -5660,3 +5660,54 @@ pub fn get_dependency_status() -> Result<Vec<DependencyStatus>, String> {
     Ok(results)
 }
 
+#[derive(Serialize, Clone, Debug)]
+pub struct DeviceAccessStatus {
+    pub ratbagd_available: bool,
+    pub in_input_group: bool,
+    pub in_audio_group: bool,
+    pub in_video_group: bool,
+    pub udev_rules_present: bool,
+}
+
+#[command]
+pub fn get_device_access_status() -> Result<DeviceAccessStatus, String> {
+    let mut status = DeviceAccessStatus {
+        ratbagd_available: false,
+        in_input_group: false,
+        in_audio_group: false,
+        in_video_group: false,
+        udev_rules_present: false,
+    };
+
+    // Check if ratbagd service is available on the system bus
+    #[cfg(unix)]
+    {
+        match subprocess::run("busctl", &["--system", "list", "--no-pager"]) {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                status.ratbagd_available = stdout.contains("org.freedesktop.ratbag1");
+            }
+            Err(_) => {
+                status.ratbagd_available = false;
+            }
+        }
+    }
+
+    // Check group membership via `id -Gn`
+    #[cfg(unix)]
+    {
+        if let Ok(output) = std::process::Command::new("id").args(["-Gn"]).output() {
+            let group_str = String::from_utf8_lossy(&output.stdout);
+            status.in_input_group = group_str.contains("input");
+            status.in_audio_group = group_str.contains("audio");
+            status.in_video_group = group_str.contains("video");
+        }
+    }
+
+    // Check if udev rules are installed
+    status.udev_rules_present = std::path::Path::new("/etc/udev/rules.d/99-opengg.rules").exists()
+        || std::path::Path::new("/usr/lib/udev/rules.d/99-opengg.rules").exists();
+
+    Ok(status)
+}
+
