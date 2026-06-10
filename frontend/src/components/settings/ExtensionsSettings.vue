@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, inject, onMounted, onBeforeUnmount, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -15,6 +15,10 @@ const extStore = useExtensionStore()
 const modal = useModalStore()
 const toast = useToast()
 
+// Injected from App.vue — media server port and auth token
+const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
+const mediaToken = inject<Ref<string>>('mediaToken', ref(''))
+
 const scannedExtensions = ref<any[]>([])
 const extensionScanLoading = ref(false)
 const activeExtSettings = ref<ExtRuntime | null>(null)
@@ -28,7 +32,7 @@ const pendingConsentExtId = ref<string | null>(null)
 
 function getExtensionIconUrl(p: any): string | null {
   if (p._builtin || !p.icon) return null
-  return `http://localhost:8080/ext/${encodeURIComponent(p.id)}/${encodeURIComponent(p.icon)}`
+  return `http://localhost:${mediaPort.value}/ext/${encodeURIComponent(p.id)}/${encodeURIComponent(p.icon)}?token=${encodeURIComponent(mediaToken.value)}`
 }
 
 function canConfigure(p: any): boolean {
@@ -67,7 +71,7 @@ function showConsentModal(p: any) {
   modal.showConfirm({
     title: t('ext.consent.title'),
     message: t('ext.consent.message', {
-      name: p.name,
+      name: p.name || p.id,
       version: p.version || 'unknown',
       permissions: getPermissionsLabel(p),
     }),
@@ -83,7 +87,7 @@ function showConsentModal(p: any) {
       } catch (e) {
         console.error('[extensions] set_extension_enabled failed:', e)
       }
-      if (p.main) await extStore.loadExtension(p as unknown as ExtManifest, 0, '')
+      if (p.main) await extStore.loadExtension(p as unknown as ExtManifest, mediaPort.value, mediaToken.value)
       toast.success(t('ext.consent.granted'))
       pendingConsentExtId.value = null
     },
@@ -106,7 +110,7 @@ async function setExtEnabled(p: any, val: boolean) {
     console.error('[extensions] set_extension_enabled failed:', e)
   }
   if (val) {
-    if (p.main) await extStore.loadExtension(p as unknown as ExtManifest, 0, '')
+    if (p.main) await extStore.loadExtension(p as unknown as ExtManifest, mediaPort.value, mediaToken.value)
   } else {
     extStore.unload(p.id)
   }
@@ -137,15 +141,9 @@ async function reloadExtensionDev(p: any) {
 
   reloadingExtId.value = p.id
   try {
-    // Reload requires the media server port and token from the app state
-    // For now, pass port 0 and empty token since we're in dev mode
-    // The store will handle loading from the appropriate URL
     const rt = extStore.runtimes[p.id]
     if (rt?.manifest.main) {
-      // Get port from window location or use default dev port
-      const port = window.location.port ? parseInt(window.location.port) : 1420
-      const token = '' // Empty in dev
-      await extStore.reloadExtension(p.id, port, token)
+      await extStore.reloadExtension(p.id, mediaPort.value, mediaToken.value)
       toast.success(`Reloaded ${p.name}`)
     }
   } catch (e) {

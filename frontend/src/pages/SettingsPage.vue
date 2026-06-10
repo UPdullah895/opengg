@@ -84,6 +84,8 @@ const navGroups = computed(() => [
   },
 ])
 
+defineEmits<{ navigate: [page: string] }>()
+
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
   syncLocale()
