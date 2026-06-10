@@ -15,7 +15,7 @@ ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
 FRONTEND := $(ROOT)/frontend
 
-.PHONY: dev daemon ui build appimage setup clean install install-desktop lint check help new-extension
+.PHONY: dev daemon ui build appimage setup clean install install-desktop lint check help new-extension validate-extension
 
 # ── Default ──────────────────────────────────────────────────────
 help:
@@ -32,7 +32,8 @@ help:
 	@echo "  make install   Install daemon to ~/.local/bin"
 	@echo "  make check     Type-check everything"
 	@echo "  make lint      Clippy + vue-tsc"
-	@echo "  make new-extension NAME=<id>   Scaffold a new extension"
+	@echo "  make new-extension NAME=<id>          Scaffold a new extension"
+	@echo "  make validate-extension DIR=<path>   Validate extension manifest & files"
 	@echo ""
 
 # ── Full-stack dev ───────────────────────────────────────────────
@@ -68,6 +69,11 @@ appimage:
 new-extension:
 	@if [ -z "$(NAME)" ]; then echo "usage: make new-extension NAME=<kebab-case-id>"; exit 1; fi
 	@chmod +x scripts/new-extension.sh && ./scripts/new-extension.sh "$(NAME)"
+
+# ── Validate an extension ────────────────────────────────────────────
+validate-extension:
+	@if [ -z "$(DIR)" ]; then echo "usage: make validate-extension DIR=<path/to/extension>"; exit 1; fi
+	@chmod +x scripts/validate-extension.sh && ./scripts/validate-extension.sh "$(DIR)"
 
 # ── Setup ────────────────────────────────────────────────────────
 setup:

@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenGG Extension Manifest",
+  "description": "Schema for OpenGG extension manifest.json files. Ensures extensions declare required fields and follow security constraints.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["name", "description"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference (optional, for editor autocomplete support)"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "minLength": 1,
+      "description": "Unique extension identifier in kebab-case. Automatically derived from folder name; this field is informational."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Display name shown in the Extensions UI. Used as fallback when no locale entry matches."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "Short description shown below the name. Used as fallback when no locale entry matches."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+      "description": "Semantic version string shown in the UI (e.g. '1.2.0'). Defaults to empty string if absent."
+    },
+    "icon": {
+      "type": "string",
+      "description": "Relative path to an icon file inside the extension directory (SVG or PNG, 42×42px). If absent, a generic puzzle-piece SVG is shown."
+    },
+    "main": {
+      "type": "string",
+      "description": "Relative path to a frontend IIFE bundle (built with Vite). Loaded into the OpenGG WebView at startup. Omit for daemon-only extensions."
+    },
+    "daemon": {
+      "type": "string",
+      "not": {
+        "pattern": "^(/|.*\\.\\.)"
+      },
+      "description": "Relative path to a chmod +x executable inside the extension directory. Must not start with '/' or contain '..' segments (security: path traversal prevention). Omit for UI-only extensions."
+    },
+    "hasSettings": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, a gear (⚙) button appears on the extension card that opens the extension's settings panel (exported as 'settingsComponent' from the IIFE)."
+    },
+    "locales": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Localized display name"
+          },
+          "description": {
+            "type": "string",
+            "description": "Localized description"
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Map of BCP 47 language codes to locale objects with 'name' and 'description'. The app uses the entry matching the user's active language, falling back to root 'name' and 'description' if not found."
+    },
+    "author": {
+      "type": "string",
+      "description": "Author name (informational, not used by the app)."
+    }
+  }
+}

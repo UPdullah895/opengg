@@ -146,6 +146,29 @@ export const useExtensionStore = defineStore('extensions', () => {
     }
   }
 
+  /**
+   * Hot-reload an already-loaded extension's IIFE bundle and locales.
+   * Re-fetches, re-evaluates, and replaces the runtime.
+   * Useful during development to avoid full app restart when modifying UI.
+   * Only available in dev mode (import.meta.env.DEV).
+   */
+  async function reloadExtension(id: string, port: number, token: string): Promise<void> {
+    if (!import.meta.env.DEV) return
+
+    // Get the manifest from the currently loaded runtime, or return if not loaded
+    const currentRuntime = runtimes.value[id]
+    if (!currentRuntime) return
+
+    const manifest = currentRuntime.manifest
+
+    // Clear the old window global before re-evaluating
+    const globalKey = `__ext_${id.replace(/-/g, '_')}`
+    delete (window as unknown as Record<string, unknown>)[globalKey]
+
+    // Re-use the standard loadExtension pipeline
+    await loadExtension(manifest, port, token)
+  }
+
   /** Remove a runtime from the loaded map and clean its window global. */
   function unload(id: string): void {
     const next = { ...runtimes.value }
@@ -159,5 +182,5 @@ export const useExtensionStore = defineStore('extensions', () => {
     return runtimes.value[id] ?? null
   }
 
-  return { runtimes, initializing, loadErrors, loadExtension, loadAllEnabled, unload, getRuntime }
+  return { runtimes, initializing, loadErrors, loadExtension, loadAllEnabled, reloadExtension, unload, getRuntime }
 })

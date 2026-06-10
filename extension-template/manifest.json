@@ -1,4 +1,5 @@
 {
+  "$schema":     "./manifest.schema.json",
   "id":          "my-extension",
   "name":        "My Extension",
   "description": "A short description of what this extension does.",

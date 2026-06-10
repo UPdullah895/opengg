@@ -737,5 +737,8 @@
   "mouse": {
     "lmb": "LMB",
     "rmb": "RMB"
+  },
+  "ext": {
+    "reloadDevMode": "Reload (dev mode only)"
   }
 }

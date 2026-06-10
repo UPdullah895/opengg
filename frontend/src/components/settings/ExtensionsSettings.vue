@@ -18,6 +18,7 @@ const extensionScanLoading = ref(false)
 const activeExtSettings = ref<ExtRuntime | null>(null)
 const gsrInstallOpen = ref(false)
 const copiedCommand = ref<string | null>(null)
+const reloadingExtId = ref<string | null>(null)
 let copiedTimer: ReturnType<typeof setTimeout> | null = null
 
 function getExtensionIconUrl(p: any): string | null {
@@ -67,6 +68,30 @@ async function openExtensionsFolder() {
 
 async function refreshExtensions() {
   await scanExtensions()
+}
+
+async function reloadExtensionDev(p: any) {
+  if (!import.meta.env.DEV) return
+
+  reloadingExtId.value = p.id
+  try {
+    // Reload requires the media server port and token from the app state
+    // For now, pass port 0 and empty token since we're in dev mode
+    // The store will handle loading from the appropriate URL
+    const rt = extStore.runtimes[p.id]
+    if (rt?.manifest.main) {
+      // Get port from window location or use default dev port
+      const port = window.location.port ? parseInt(window.location.port) : 1420
+      const token = '' // Empty in dev
+      await extStore.reloadExtension(p.id, port, token)
+      toast.success(`Reloaded ${p.name}`)
+    }
+  } catch (e) {
+    toast.error(`Reload failed: ${e}`)
+    console.error('[extensions] reload failed:', e)
+  } finally {
+    reloadingExtId.value = null
+  }
 }
 
 async function toggleGsr() {
@@ -208,6 +233,9 @@ defineEmits<{ navigate: [page: string] }>()
             <div class="ext-card-title-row">
               <span class="ext-name">{{ p.name }}</span>
               <span class="plugin-ver">v{{ p.version }}</span>
+              <button v-if="import.meta.env.DEV && p.main && isExtEnabled(p)" class="ext-reload-btn" :title="t('ext.reloadDevMode')" :disabled="reloadingExtId === p.id" @click.stop="reloadExtensionDev(p)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :class="{ spinning: reloadingExtId === p.id }"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              </button>
               <button v-if="canConfigure(p)" class="ext-gear-btn" @click.stop="openExtSettings(p)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               </button>
@@ -247,5 +275,40 @@ defineEmits<{ navigate: [page: string] }>()
 </template>
 
 <style scoped>
-/* Inherited from parent */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.ext-reload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.2s, opacity 0.2s;
+}
+
+.ext-reload-btn:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.ext-reload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ext-reload-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ext-reload-btn svg.spinning {
+  animation: spin 1s linear infinite;
+}
 </style>
