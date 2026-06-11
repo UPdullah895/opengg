@@ -69,11 +69,14 @@ fn run_native_vu_reader(
     // Common format args
     cmd.args(["--format", "f32"])
         .args(["--channels", "1"]) // mono
-        .args(["--rate", "48000"]); // 48kHz
+        .args(["--rate", "48000"]) // 48kHz
+        .args(["--latency", "256"]); // small quantum for live metering
 
     // For capturing (both sinks and sources), use --record mode
-    // and read from stdout via pipes
-    cmd.arg("--record");
+    // and read from stdout via pipes. pw-cat REQUIRES a file argument;
+    // "-" streams the PCM to stdout (without it pw-cat exits immediately
+    // with a usage error and readers see instant EOF).
+    cmd.arg("--record").arg("-");
 
     // Set target object and properties based on type
     cmd.args(["--target", target]);
@@ -114,21 +117,38 @@ fn run_native_vu_reader(
             break;
         }
 
-        // Read samples from pw-cat stdout
-        match stdout.read_exact(&mut buf) {
-            Ok(()) => {
+        // Read samples from pw-cat stdout. Use read() and tolerate partial
+        // chunks: the quantum doesn't have to align with our buffer size, and
+        // a short read is normal — only EOF (Ok(0)) or hard errors count
+        // against the error budget.
+        match stdout.read(&mut buf) {
+            Ok(0) => {
+                read_error_count += 1;
+                eprintln!("native VU reader {name} EOF #{read_error_count} (pw-cat exited?)");
+                if read_error_count >= MAX_READ_ERRORS {
+                    eprintln!("native VU reader {name} stream ended, exiting");
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(n) => {
                 // Reset read error counter on successful read
                 read_error_count = 0;
 
-                // Interpret bytes as f32LE samples and compute RMS
+                // Interpret the bytes we actually got as f32LE samples (drop
+                // any trailing partial sample) and compute RMS
+                let whole = n - (n % 4);
+                if whole == 0 {
+                    continue;
+                }
                 let mut sum_sq: f32 = 0.0;
-                for chunk in buf.chunks_exact(4) {
+                for chunk in buf[..whole].chunks_exact(4) {
                     let sample_bytes = [chunk[0], chunk[1], chunk[2], chunk[3]];
                     let sample = f32::from_le_bytes(sample_bytes);
                     sum_sq += sample * sample;
                 }
 
-                let rms = (sum_sq / (buf.len() / 4) as f32).sqrt().min(1.0);
+                let rms = (sum_sq / (whole / 4) as f32).sqrt().min(1.0);
 
                 // Apply attack/decay smoothing (same as libpulse version)
                 let smoothed = if rms > prev {
