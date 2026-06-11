@@ -20,7 +20,20 @@ const contextApp = ref<{ id: number; name: string; binary: string; locked?: bool
 const menuRef = ref<HTMLElement | null>(null)
 const menuSize = ref({ w: 0, h: 0 })
 
+// ★ Pointer-based custom drag state
+interface DragState {
+  appId: number
+  appName: string
+  startX: number
+  startY: number
+  isDragging: boolean
+  ghostElement: HTMLElement | null
+}
+const dragState = ref<DragState | null>(null)
+const dragOverChannel = ref<string | null>(null)
+
 const ROUTE_TARGETS = ['Master', 'Game', 'Chat', 'Media', 'Aux']
+const DRAG_THRESHOLD_PX = 6
 
 // ── Boundary-aware menu positioning ──
 const menuStyle = computed(() => {
@@ -35,90 +48,162 @@ const menuStyle = computed(() => {
   return { left: x + 'px', top: y + 'px' }
 })
 
-function onDragOver(e: DragEvent) {
-  e.preventDefault()
-  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
-  hovering.value = true
+// ★ Create ghost element as a Vue-friendly HTML div (styled pill)
+function createGhost(appName: string): HTMLElement {
+  const ghost = document.createElement('div')
+  ghost.className = 'dz-ghost'
+  ghost.style.cssText = `
+    position: fixed;
+    z-index: 10000;
+    pointer-events: none;
+    background: rgba(30, 30, 40, 0.92);
+    border: 1px solid ${props.color}60;
+    border-radius: 6px;
+    padding: 6px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: #e2e8f0;
+    white-space: nowrap;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    opacity: 0.95;
+    transform: scale(1.05);
+  `
+
+  const dot = document.createElement('span')
+  dot.style.cssText = `
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: ${props.color};
+    flex-shrink: 0;
+  `
+
+  const name = document.createElement('span')
+  name.textContent = appName
+  name.style.cssText = 'overflow: hidden; text-overflow: ellipsis; max-width: 140px;'
+
+  ghost.appendChild(dot)
+  ghost.appendChild(name)
+  document.body.appendChild(ghost)
+
+  return ghost
 }
 
-function onDragLeave(e: DragEvent) {
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
-    hovering.value = false
+// ★ Cleanup ghost and drag state
+function cleanupDrag() {
+  if (dragState.value?.ghostElement) {
+    dragState.value.ghostElement.remove()
+  }
+  dragState.value = null
+  dragOverChannel.value = null
+  // Ensure store is also cleared (safety belt)
+  if (audio.draggedApp) {
+    audio.endDrag()
   }
 }
 
-function onDrop(e: DragEvent) {
-  e.preventDefault()
-  hovering.value = false
-  // ★ Three-source resolution order (documented):
-  // 1. store.draggedApp (most reliable — store-tracked during drag)
-  // 2. dataTransfer custom MIME 'application/opengg-app-id' (fallback)
-  // 3. dataTransfer text/plain (last resort — WebKitGTK compatibility)
-  // WebKitGTK loses dataTransfer payload during drop, so draggedApp is primary.
-  if (audio.draggedApp) {
-    audio.dropOnChannel(props.channel)
-    // draggedApp will be cleared by endDrag() on dragend or by dropOnChannelById
+// ★ Hit-test to find channel container under pointer
+function findChannelAtPoint(x: number, y: number): string | null {
+  const elements = document.elementsFromPoint(x, y)
+  for (const el of elements) {
+    const channel = (el as HTMLElement).getAttribute('data-channel')
+    if (channel) return channel
+  }
+  return null
+}
+
+// ★ Pointer down: record candidate drag (threshold-gated to allow clicks)
+function onChipPointerDown(e: PointerEvent, app: { id: number; name: string; binary: string; locked?: boolean }) {
+  if (app.locked) return
+
+  // Don't start drag if interacting with volume button
+  if ((e.target as HTMLElement).closest('.dz-vol-btn')) return
+
+  closeVolumeMenu()
+  dragState.value = {
+    appId: app.id,
+    appName: app.name,
+    startX: e.clientX,
+    startY: e.clientY,
+    isDragging: false,
+    ghostElement: null as HTMLElement | null,
+  } as DragState
+
+  // Capture pointer to track moves even outside the element
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+}
+
+// ★ Pointer move: check threshold, initiate drag if crossed
+function onChipPointerMove(e: PointerEvent) {
+  if (!dragState.value || dragState.value.isDragging) {
+    // Already dragging — move ghost
+    if (dragState.value?.ghostElement) {
+      dragState.value.ghostElement.style.left = (e.clientX + 8) + 'px'
+      dragState.value.ghostElement.style.top = (e.clientY + 8) + 'px'
+    }
+
+    // Hit-test for hover target
+    const targetChannel = findChannelAtPoint(e.clientX, e.clientY)
+    dragOverChannel.value = targetChannel
     return
   }
-  // Fallback: try dataTransfer (works on some browsers / cross-window)
-  const raw = e.dataTransfer?.getData('application/opengg-app-id')
-           || e.dataTransfer?.getData('text/plain')
-           || ''
-  const parsedId = parseInt(raw, 10)
-  if (!isNaN(parsedId)) {
-    audio.dropOnChannelById(parsedId, props.channel)
+
+  // Not yet dragging — check if threshold crossed
+  const dx = e.clientX - dragState.value.startX
+  const dy = e.clientY - dragState.value.startY
+  const dist = Math.sqrt(dx * dx + dy * dy)
+
+  if (dist < DRAG_THRESHOLD_PX) return
+
+  // ★ Threshold crossed — initiate drag
+  dragState.value.isDragging = true
+  audio.startDrag({
+    id: dragState.value.appId,
+    name: dragState.value.appName,
+    binary: '',
+    channel: props.channel,
+    icon: '',
+  })
+
+  // Create and position ghost
+  const ghost = createGhost(dragState.value.appName)
+  dragState.value.ghostElement = ghost
+  ghost.style.left = (e.clientX + 8) + 'px'
+  ghost.style.top = (e.clientY + 8) + 'px'
+}
+
+// ★ Pointer up: finalize drop or cancel
+function onChipPointerUp(e: PointerEvent) {
+  if (!dragState.value?.isDragging) {
+    // Never started dragging — allow click fallback
+    cleanupDrag()
+    return
   }
+
+  // Was dragging — check if over a drop target
+  const targetChannel = findChannelAtPoint(e.clientX, e.clientY)
+  if (targetChannel && targetChannel !== props.channel) {
+    audio.dropOnChannelById(dragState.value.appId, targetChannel)
+  }
+
+  cleanupDrag()
+
+  // Release capture
+  try {
+    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+  } catch {}
 }
 
-// ── Drag ghost: styled canvas that follows the cursor ──
-function makeDragImage(appName: string, color: string): HTMLCanvasElement {
-  const c = document.createElement('canvas')
-  const ctx = c.getContext('2d')!
-  const pad = 10
-  ctx.font = '500 13px system-ui, sans-serif'
-  const textW = ctx.measureText(appName).width
-  const w = Math.min(textW + pad * 2 + 18, 220)
-  const h = 32
-  c.width = w; c.height = h
-
-  // background pill
-  ctx.fillStyle = 'rgba(30,30,40,0.92)'
-  ctx.beginPath()
-  ctx.roundRect(0, 0, w, h, 6)
-  ctx.fill()
-
-  // border
-  ctx.strokeStyle = color + '60'
-  ctx.lineWidth = 1
-  ctx.stroke()
-
-  // dot
-  ctx.fillStyle = color
-  ctx.beginPath(); ctx.arc(pad + 5, h / 2, 4, 0, Math.PI * 2); ctx.fill()
-
-  // text
-  ctx.fillStyle = '#e2e8f0'
-  ctx.textBaseline = 'middle'
-  ctx.fillText(appName, pad + 14, h / 2 + 1)
-
-  return c
+// ★ Pointer cancel: cleanup without routing
+function onChipPointerCancel() {
+  cleanupDrag()
 }
 
-function startDragApp(e: DragEvent, app: { id: number; name: string; binary: string; locked?: boolean }) {
-  if (!e.dataTransfer || app.locked) return
-  closeVolumeMenu()
-  e.dataTransfer.setData('application/opengg-app-id', String(app.id))
-  e.dataTransfer.setData('text/plain', String(app.id))
-  e.dataTransfer.effectAllowed = 'move'
-  const img = makeDragImage(app.name, props.color)
-  e.dataTransfer.setDragImage(img, img.width / 2, img.height / 2)
-  audio.startDrag({ id: app.id, name: app.name, binary: app.binary, channel: props.channel, icon: '' })
-}
-
-// ── Click-to-route fallback ──
+// ── Click-to-route fallback (preserved; works if pointer move threshold not crossed) ──
 function onChipClick(app: { id: number; name: string; binary: string; locked?: boolean }) {
-  if (app.locked) return // locked apps cannot be routed
+  if (app.locked || dragState.value?.isDragging) return // locked apps cannot be routed; don't click while dragging
   // If this app is already selected, deselect it
   if (audio.selectedAppForClickRoute?.id === app.id) {
     audio.deselectApp()
@@ -189,6 +274,8 @@ onBeforeUnmount(() => {
   if (autoHideTimer) clearTimeout(autoHideTimer)
   window.removeEventListener('click', onWindowClick)
   window.removeEventListener('keydown', onKeyDown)
+  // Clean up any active drag ghost
+  cleanupDrag()
 })
 
 // ── Per-app volume ──
@@ -283,21 +370,25 @@ function toggleMute(appId: number, currentVol: number) {
 </script>
 
 <template>
-  <div class="dropzone" :class="{ hovering, 'show-target': isDragging || audio.selectedAppForClickRoute, 'click-target': audio.selectedAppForClickRoute }" :style="{ '--dz': color }"
-    @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop"
+  <div class="dropzone" :class="{ hovering: hovering || dragOverChannel === props.channel, 'show-target': isDragging || audio.selectedAppForClickRoute, 'click-target': audio.selectedAppForClickRoute }" :style="{ '--dz': color }"
+    :data-channel="props.channel"
     @click="onZoneClick">
     <div v-if="apps.length > 0" class="dz-apps">
       <div v-for="app in apps" :key="app.id" class="dz-chip"
-        :draggable="!app.locked"
         :class="{
           'dz-chip--selected': audio.selectedAppForClickRoute?.id === app.id,
           'dz-chip--locked': app.locked,
-          'dz-chip--muted': !app.locked && app.volume === 0
+          'dz-chip--muted': !app.locked && app.volume === 0,
+          'dz-chip--dragging': dragState?.appId === app.id && dragState?.isDragging
         }"
-        @dragstart="startDragApp($event, app)" @dragend="audio.endDrag()"
+        @pointerdown="onChipPointerDown($event, app)"
+        @pointermove="onChipPointerMove($event)"
+        @pointerup="onChipPointerUp($event)"
+        @pointercancel="onChipPointerCancel"
         @click.stop="onChipClick(app)"
         @contextmenu="onChipContextMenu($event, app)"
-        @mouseenter="onChipMouseEnter(app.id)" @mouseleave="onChipMouseLeave()">
+        @mouseenter="onChipMouseEnter(app.id)" @mouseleave="onChipMouseLeave()"
+        style="touch-action: none;">
         <template v-if="!app.locked && typeof app.volume === 'number'">
           <button
             v-if="hoverAppId === app.id"
@@ -406,13 +497,18 @@ function toggleMute(appId: number, currentVol: number) {
 }
 .dz-apps { display: flex; flex-direction: column; gap: 2px; }
 .dz-chip {
-  display: flex; align-items: center; gap: 5px; padding: 6px 8px; background: var(--bg-deep); border-radius: 4px; font-size: 11px; color: var(--text-sec); cursor: grab; overflow: hidden; transition: background .1s, box-shadow .15s;
+  display: flex; align-items: center; gap: 5px; padding: 6px 8px; background: var(--bg-deep); border-radius: 4px; font-size: 11px; color: var(--text-sec); cursor: grab; overflow: hidden; transition: background .1s, box-shadow .15s, opacity .1s;
   /* ★ FIX: prevent text selection from hijacking drag gesture */
   user-select: none; -webkit-user-select: none;
   pointer-events: auto;
 }
 .dz-chip:hover { background: var(--bg-hover); }
 .dz-chip:active { cursor: grabbing; opacity: .6; }
+/* ★ Dragging state: dim the source chip */
+.dz-chip--dragging {
+  opacity: 0.4;
+  background: var(--bg-deep);
+}
 .dz-chip--selected {
   box-shadow: 0 0 0 1.5px var(--dz), inset 0 0 0 1px var(--dz);
   background: color-mix(in srgb, var(--dz) 12%, var(--bg-deep));
