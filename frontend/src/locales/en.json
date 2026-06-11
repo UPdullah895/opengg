@@ -10,7 +10,8 @@
     "confirm": "Confirm",
     "cancel": "Cancel",
     "confirmDelete": "Confirm Deletion",
-    "close": "Close"
+    "close": "Close",
+    "copy": "Copy"
   },
   "editor": {
     "exportClip": "Export Clip",
@@ -499,6 +500,10 @@
       "loading": "Loading…",
       "missingGsr": "gpu-screen-recorder not found — recording disabled.",
       "missingFfmpeg": "ffmpeg not found — export and thumbnails disabled.",
+      "allSatisfied": "All dependencies satisfied",
+      "showAll": "show all",
+      "hideAll": "hide all",
+      "installHint": "Click to see installation instructions",
       "feature": {
         "recording": "Recording & Replay Buffer",
         "export": "Export & Thumbnails",
@@ -509,6 +514,11 @@
         "headset": "Headset Control",
         "windowTools": "Window Tools (X11)"
       }
+    },
+    "installHint": {
+      "gsrNote": "gpu-screen-recorder is not in most distro repos. Flatpak is the recommended installation method.",
+      "ffmpegNote": "ffprobe is included with ffmpeg.",
+      "ffprobeNote": "ffprobe is included with ffmpeg."
     },
     "deviceAccess": {
       "title": "Device Access Status",

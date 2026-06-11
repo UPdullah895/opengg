@@ -1,22 +1,43 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { deps, deviceAccess, loadDeviceAccessStatus } from '../../composables/useDependencyStatus'
+import { deps, deviceAccess, distroInfo, loadDependencyStatus, loadDeviceAccessStatus, loadDistroInfo, getInstallCommand } from '../../composables/useDependencyStatus'
 import './settings-shared.css'
 
 const { t } = useI18n()
 
 const appVersion = ref('')
+const showAllDeps = ref(false)
+const expandedDep = ref<string | null>(null)
 
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
+  await loadDependencyStatus()
   await loadDeviceAccessStatus()
+  await loadDistroInfo()
 })
 
 async function openExternal(url: string) {
   try { await openUrl(url) } catch { window.open(url, '_blank') }
+}
+
+const missingDeps = computed(() => deps.value.filter(d => !d.available))
+const allSatisfied = computed(() => deps.value.length > 0 && missingDeps.value.length === 0)
+
+async function copyInstallCommand(cmd: string) {
+  try {
+    await invoke('write_clipboard', { text: cmd })
+    // Brief visual feedback — in a real app, could use toast
+  } catch (e) {
+    console.error('Failed to copy:', e)
+  }
+}
+
+function toggleExpanded(binary: string) {
+  expandedDep.value = expandedDep.value === binary ? null : binary
 }
 
 defineEmits<{ navigate: [page: string] }>()
@@ -67,18 +88,59 @@ defineEmits<{ navigate: [page: string] }>()
 
     <!-- System Dependencies -->
     <div class="deps-card">
-      <h3 style="margin:0 0 12px;font-size:14px;font-weight:700;color:var(--text)">{{ t('settings.deps.title') }}</h3>
-      <div v-if="deps.length === 0" style="font-size:12px;color:var(--text-secondary);padding:8px 0">
+      <div class="deps-header">
+        <h3 style="margin:0;font-size:14px;font-weight:700;color:var(--text)">{{ t('settings.deps.title') }}</h3>
+        <button v-if="deps.length > 0 && !allSatisfied" class="show-all-btn" @click="showAllDeps = !showAllDeps">
+          {{ showAllDeps ? t('settings.deps.hideAll') : t('settings.deps.showAll') }}
+        </button>
+      </div>
+
+      <div v-if="deps.length === 0" style="font-size:12px;color:var(--text-secondary);padding:8px 0;margin-top:12px">
         {{ t('settings.deps.loading') }}
       </div>
-      <div v-else class="deps-list">
-        <div v-for="dep in deps" :key="dep.binary" class="dep-row">
-          <div class="dep-check" :class="{ available: dep.available, missing: !dep.available }">
-            {{ dep.available ? '✓' : '✗' }}
-          </div>
+
+      <!-- All dependencies satisfied -->
+      <div v-else-if="allSatisfied" class="deps-list" style="margin-top:12px">
+        <div class="dep-row">
+          <div class="dep-check available">✓</div>
           <div class="dep-info">
-            <div class="dep-binary">{{ dep.binary }}</div>
-            <div class="dep-feature">{{ t(`settings.deps.feature.${dep.feature}`) }}</div>
+            <div class="dep-binary">{{ t('settings.deps.allSatisfied') }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Missing deps (or all if toggled) -->
+      <div v-else class="deps-list" style="margin-top:12px">
+        <div v-for="dep in showAllDeps ? deps : missingDeps" :key="dep.binary" class="dep-row-wrapper">
+          <div class="dep-row">
+            <div class="dep-check" :class="{ available: dep.available, missing: !dep.available }">
+              {{ dep.available ? '✓' : '✗' }}
+            </div>
+            <div class="dep-info">
+              <div class="dep-binary">{{ dep.binary }}</div>
+              <div class="dep-feature">{{ t(`settings.deps.feature.${dep.feature}`) }}</div>
+            </div>
+            <button
+              v-if="!dep.available"
+              class="help-btn"
+              :title="t('settings.deps.installHint')"
+              @click="toggleExpanded(dep.binary)"
+            >
+              ?
+            </button>
+          </div>
+
+          <!-- Inline install help expansion -->
+          <div v-if="!dep.available && expandedDep === dep.binary" class="install-help">
+            <div class="install-command-wrapper">
+              <code>{{ getInstallCommand(dep.binary, distroInfo.id, distroInfo.id_like).command }}</code>
+              <button class="copy-btn" @click="copyInstallCommand(getInstallCommand(dep.binary, distroInfo.id, distroInfo.id_like).command)">
+                {{ t('common.copy') || '📋' }}
+              </button>
+            </div>
+            <div v-if="getInstallCommand(dep.binary, distroInfo.id, distroInfo.id_like).note" class="install-note">
+              {{ t(getInstallCommand(dep.binary, distroInfo.id, distroInfo.id_like).note || '') }}
+            </div>
           </div>
         </div>
       </div>
@@ -149,10 +211,42 @@ defineEmits<{ navigate: [page: string] }>()
   margin-bottom: 16px;
 }
 
+.deps-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.deps-header h3 {
+  margin: 0;
+}
+
+.show-all-btn {
+  background: none;
+  border: none;
+  color: var(--accent, #3b82f6);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 3px;
+  transition: background-color 0.2s;
+}
+
+.show-all-btn:hover {
+  background-color: color-mix(in srgb, var(--accent, #3b82f6) 15%, var(--bg-card));
+}
+
 .deps-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.dep-row-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .dep-row {
@@ -204,5 +298,84 @@ defineEmits<{ navigate: [page: string] }>()
 .dep-feature {
   color: var(--text-secondary, rgba(255, 255, 255, 0.6));
   font-size: 11px;
+}
+
+.help-btn {
+  background: color-mix(in srgb, var(--danger, #ef4444) 20%, var(--bg-card));
+  color: var(--danger, #ef4444);
+  border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 30%, transparent);
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 12px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.help-btn:hover {
+  background-color: color-mix(in srgb, var(--danger, #ef4444) 35%, var(--bg-card));
+  border-color: color-mix(in srgb, var(--danger, #ef4444) 50%, transparent);
+}
+
+.install-help {
+  background: color-mix(in srgb, var(--danger, #ef4444) 8%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 20%, transparent);
+  border-radius: 4px;
+  padding: 8px;
+  margin: 0 28px 0 28px;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.install-command-wrapper {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.install-command-wrapper code {
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.1));
+  padding: 6px 8px;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 10px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  flex: 1;
+  line-height: 1.4;
+}
+
+.copy-btn {
+  background: color-mix(in srgb, var(--accent, #3b82f6) 20%, var(--bg-card));
+  color: var(--accent, #3b82f6);
+  border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 30%, transparent);
+  border-radius: 3px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 500;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.copy-btn:hover {
+  background-color: color-mix(in srgb, var(--accent, #3b82f6) 35%, var(--bg-card));
+  border-color: color-mix(in srgb, var(--accent, #3b82f6) 50%, transparent);
+}
+
+.install-note {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  font-style: italic;
+  font-size: 10px;
+  line-height: 1.4;
 }
 </style>

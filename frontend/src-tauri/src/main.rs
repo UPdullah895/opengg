@@ -310,6 +310,7 @@ fn main() {
             commands::set_headset_eq_preset, commands::set_headset_eq_curve,
             // ★ Dependency probing
             commands::get_dependency_status,
+            commands::get_distro_info,
             // ★ Device access status (groups, ratbagd, udev)
             commands::get_device_access_status,
         ])

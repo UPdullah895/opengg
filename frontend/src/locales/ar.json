@@ -10,7 +10,8 @@
     "confirm": "تأكيد",
     "cancel": "إلغاء",
     "confirmDelete": "تأكيد الحذف",
-    "close": "إغلاق"
+    "close": "إغلاق",
+    "copy": "نسخ"
   },
   "editor": {
     "exportClip": "تصدير المقطع",
@@ -468,6 +469,10 @@
       "loading": "جاري التحميل…",
       "missingGsr": "لم يتم العثور على gpu-screen-recorder — التسجيل معطل.",
       "missingFfmpeg": "لم يتم العثور على ffmpeg — التصدير والصور المصغرة معطلة.",
+      "allSatisfied": "تم استيفاء جميع التبعيات",
+      "showAll": "عرض الكل",
+      "hideAll": "إخفاء الكل",
+      "installHint": "انقر لرؤية تعليمات التثبيت",
       "feature": {
         "recording": "التسجيل وحفظ المقطع",
         "export": "التصدير والصور المصغرة",
@@ -478,6 +483,11 @@
         "headset": "التحكم في سماعة الرأس",
         "windowTools": "أدوات النافذة (X11)"
       }
+    },
+    "installHint": {
+      "gsrNote": "gpu-screen-recorder غير موجود في معظم مستودعات التوزيعات. Flatpak هو طريقة التثبيت الموصى بها.",
+      "ffmpegNote": "ffprobe مضمن مع ffmpeg.",
+      "ffprobeNote": "ffprobe مضمن مع ffmpeg."
     },
     "deviceAccess": {
       "title": "حالة الوصول إلى الأجهزة",

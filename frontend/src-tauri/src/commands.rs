@@ -5766,6 +5766,42 @@ pub fn get_dependency_status() -> Result<Vec<DependencyStatus>, String> {
 }
 
 #[derive(Serialize, Clone, Debug)]
+pub struct DistroInfo {
+    pub id: String,
+    pub id_like: String,
+}
+
+#[command]
+pub fn get_distro_info() -> Result<DistroInfo, String> {
+    let os_release_paths = ["/etc/os-release", "/usr/lib/os-release"];
+    let mut content = String::new();
+
+    for path in &os_release_paths {
+        match std::fs::read_to_string(path) {
+            Ok(data) => {
+                content = data;
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+
+    let mut id = String::new();
+    let mut id_like = String::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("ID=") {
+            id = value.trim_matches('"').trim_matches('\'').to_string();
+        } else if let Some(value) = line.strip_prefix("ID_LIKE=") {
+            id_like = value.trim_matches('"').trim_matches('\'').to_string();
+        }
+    }
+
+    Ok(DistroInfo { id, id_like })
+}
+
+#[derive(Serialize, Clone, Debug)]
 pub struct DeviceAccessStatus {
     pub ratbagd_available: bool,
     pub in_input_group: bool,
