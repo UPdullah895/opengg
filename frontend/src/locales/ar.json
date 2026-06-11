@@ -522,6 +522,7 @@
       "replayBuffer": "مخزن الإعادة",
       "replayCustom": "مخصص…",
       "monitorTarget": "هدف الشاشة",
+      "portalOption": "الشاشة (Portal)",
       "autoStart": "البدء التلقائي عند الفتح",
       "autoStartTooltip": "بدء مخزن الإعادة تلقائياً عند فتح OpenGG.",
       "waylandHint": "تم الكشف عن جلسة Wayland. يتطلب التقاط \"تطبيق ملء الشاشة\" نظام X11.",

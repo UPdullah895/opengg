@@ -438,6 +438,7 @@
       "replayBuffer": "Replay Buffer",
       "replayCustom": "Custom…",
       "monitorTarget": "Monitor Target",
+      "portalOption": "Screen (Portal)",
       "autoStart": "Auto-start on launch",
       "autoStartTooltip": "Automatically start the replay buffer when OpenGG opens.",
       "waylandHint": "Wayland session detected. \"Fullscreen Application\" capture requires X11.",

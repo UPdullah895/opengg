@@ -173,7 +173,19 @@ onMounted(async () => {
   try {
     const monitors = await invoke<Array<{ name: string; label: string }>>('list_monitors')
     const opts = monitors.map(m => ({ value: m.name, label: m.label }))
-    if (!isWayland.value) {
+    if (isWayland.value) {
+      // Wayland: relabel "screen" to "portal" for UI clarity.
+      // ★ Connector names (DP-1, HDMI-A-1, etc.) remain selectable for direct KMS capture.
+      // The label change does NOT affect the persisted value — "screen" stays "screen".
+      // Mapping to "portal" happens only for X11-only values (screen/focused/empty) at spawn time.
+      opts.forEach((opt) => {
+        if (opt.value === 'screen') {
+          opt.label = t('settings.captureGsr.portalOption')
+          opt.value = 'screen' // persisted value; GSR mapping happens at command spawn time
+        }
+      })
+    } else {
+      // X11: add "Fullscreen Application" option
       opts.push({ value: 'focused', label: 'Fullscreen Application' })
     }
     monitorOptions.value = opts
