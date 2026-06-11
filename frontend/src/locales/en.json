@@ -351,6 +351,7 @@
       "steamBody": "Add your Steam library to OpenGG's game pickers and keep it visible here in Storage. After you allow access, OpenGG reads local Steam data and may request Steam Store metadata for names and artwork.",
       "steamDeniedTitle": "Steam library access is off",
       "steamDeniedBody": "Allow access to read local Steam data and request Steam Store metadata so OpenGG can list your Steam library here with names and artwork.",
+      "steamReadyTitle": "Steam library connected — {count} games",
       "steamReadyBody": "Your Steam library is available in game pickers and listed here with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images."
     },
     "extensions": {

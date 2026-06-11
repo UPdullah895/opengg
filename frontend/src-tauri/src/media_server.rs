@@ -61,12 +61,18 @@ fn generate_session_token() -> String {
     format!("{:016x}{:016x}", h1, h2)
 }
 
+#[allow(dead_code)]
 pub fn spawn_media_server(clip_dirs: Vec<PathBuf>) -> (u16, String) {
+    spawn_media_server_with_extra_roots(clip_dirs, Vec::new())
+}
+
+pub fn spawn_media_server_with_extra_roots(clip_dirs: Vec<PathBuf>, extra_readonly_roots: Vec<PathBuf>) -> (u16, String) {
     let port = find_available_port();
     let token = generate_session_token();
     let token_clone = token.clone();
 
     // Create all clip directories and thumbnails directory at startup to ensure they exist
+    // (extra_readonly_roots are NOT ours to create — skip the create loop for them)
     for dir in &clip_dirs {
         if let Err(e) = std::fs::create_dir_all(dir) {
             log::warn!("Failed to create clip directory {}: {}", dir.display(), e);
@@ -92,6 +98,8 @@ pub fn spawn_media_server(clip_dirs: Vec<PathBuf>) -> (u16, String) {
             if let Some(data_dir) = dirs::data_local_dir() {
                 allowed_roots.push(data_dir.join("opengg").join("thumbnails"));
             }
+            // Add extra read-only roots (e.g., Steam artwork directories)
+            allowed_roots.extend(extra_readonly_roots);
             let allowed_roots = Arc::new(allowed_roots);
             let token = Arc::new(token_clone);
 

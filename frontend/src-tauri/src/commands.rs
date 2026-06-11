@@ -5396,6 +5396,39 @@ fn steam_root_candidates(home: &Path) -> Vec<PathBuf> {
     ]
 }
 
+/// Public function to return all Steam artwork root directories that exist on this machine.
+/// Returns directories that the media server should be allowed to serve from:
+/// - ~/.local/share/Steam/appcache/librarycache (native Steam)
+/// - ~/.local/share/Steam/userdata/*/config/librarycache (user-specific cache)
+/// - Equivalent paths for alternate Steam root locations (symlinks, flatpak, etc.)
+///
+/// Only includes directories that actually exist.
+pub fn steam_artwork_roots() -> Vec<PathBuf> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return Vec::new(),
+    };
+
+    let mut roots = Vec::new();
+
+    // Add appcache/librarycache for each root candidate that exists
+    for steam_root in steam_root_candidates(&home) {
+        let appcache_dir = steam_root.join("appcache").join("librarycache");
+        if appcache_dir.exists() && !roots.contains(&appcache_dir) {
+            roots.push(appcache_dir);
+        }
+    }
+
+    // Add userdata config/librarycache directories
+    for user_cache_dir in steam_user_librarycache_dirs(&home) {
+        if !roots.contains(&user_cache_dir) {
+            roots.push(user_cache_dir);
+        }
+    }
+
+    roots
+}
+
 fn parse_loginusers_most_recent_steamid(loginusers_path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(loginusers_path).ok()?;
     let mut current_user: Option<String> = None;

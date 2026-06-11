@@ -337,7 +337,14 @@ fn main() {
 
             // Media server — pass clip directories for path containment checks
             let clip_dirs = get_watch_dirs();
-            let (port, token) = media_server::spawn_media_server(clip_dirs);
+            let steam_roots = commands::steam_artwork_roots();
+            if !steam_roots.is_empty() {
+                log::info!("Steam artwork roots available: {}", steam_roots.len());
+                for root in &steam_roots {
+                    log::debug!("  → {}", root.display());
+                }
+            }
+            let (port, token) = media_server::spawn_media_server_with_extra_roots(clip_dirs, steam_roots);
             app.manage(MediaServerPort(port));
             app.manage(MediaServerToken(token.clone()));
             log::info!("Media server on http://localhost:{port}");
