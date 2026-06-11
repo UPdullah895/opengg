@@ -1997,36 +1997,62 @@ pub async fn create_virtual_audio() -> Result<(), String> {
 /// Unload only the OpenGG virtual sinks without restarting PipeWire/WirePlumber.
 #[command]
 pub async fn remove_virtual_audio() -> Result<(), String> {
+    // Step 1: Try daemon-side teardown via D-Bus
+    // This is the preferred path — the daemon owns the module_ids vec
+    // and has full knowledge of what it created.
+    match call_dbus_void("RemoveVirtualAudio", AU_PATH, AU_IFACE, ()).await {
+        Ok(()) => {
+            log::info!("Virtual audio teardown completed via daemon");
+            return Ok(());
+        }
+        Err(e) => {
+            log::warn!("Daemon teardown failed ({}), falling back to local scan", e);
+        }
+    }
+
+    // Step 2: Fallback — daemon unreachable; do local scan and unload
+    // This handles cases where the daemon crashed or isn't running.
+    // We unload null-sink, loopback, and remap-source modules, then restore defaults.
+
     let output = run_cmd_async("pactl", &["list", "modules"])
         .await
         .map_err(|e| format!("Failed to list PulseAudio modules: {e}"))?;
 
     let mut indices_to_remove: Vec<u64> = Vec::new();
     let mut current_index: Option<u64> = None;
-    let mut is_null_sink = false;
-    let mut is_opengg = false;
+    let mut module_name = String::new();
+    let mut module_args = String::new();
 
     for line in output.lines() {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed.strip_prefix("Module #") {
             // Emit previous module if it matched
             if let Some(idx) = current_index {
-                if is_null_sink && is_opengg {
+                let is_null_sink = module_name == "module-null-sink" && module_args.contains("OpenGG_");
+                let is_loopback = module_name == "module-loopback" && module_args.contains("OpenGG_Mic");
+                let is_remap = module_name == "module-remap-source"
+                    && module_args.contains("OpenGG_Virtual_Mic");
+
+                if is_null_sink || is_loopback || is_remap {
                     indices_to_remove.push(idx);
                 }
             }
             current_index = rest.parse().ok();
-            is_null_sink = false;
-            is_opengg = false;
+            module_name.clear();
+            module_args.clear();
         } else if trimmed.starts_with("Name:") {
-            is_null_sink = trimmed.trim() == "Name: module-null-sink";
+            module_name = trimmed.strip_prefix("Name:").unwrap_or("").trim().to_string();
         } else if trimmed.starts_with("Argument:") {
-            is_opengg = trimmed.contains("OpenGG_");
+            module_args = trimmed.strip_prefix("Argument:").unwrap_or("").trim().to_string();
         }
     }
     // Emit the last module
     if let Some(idx) = current_index {
-        if is_null_sink && is_opengg {
+        let is_null_sink = module_name == "module-null-sink" && module_args.contains("OpenGG_");
+        let is_loopback = module_name == "module-loopback" && module_args.contains("OpenGG_Mic");
+        let is_remap = module_name == "module-remap-source" && module_args.contains("OpenGG_Virtual_Mic");
+
+        if is_null_sink || is_loopback || is_remap {
             indices_to_remove.push(idx);
         }
     }
@@ -2035,15 +2061,74 @@ pub async fn remove_virtual_audio() -> Result<(), String> {
         return Err("No OpenGG virtual audio modules found. They may have already been removed.".into());
     }
 
-    let mut removed = 0;
+    // Unload all matched modules
     for idx in &indices_to_remove {
         run_cmd_async("pactl", &["unload-module", &idx.to_string()])
             .await
             .map_err(|e| format!("Failed to unload module {idx}: {e}"))?;
-        removed += 1;
     }
 
-    log::info!("Virtual audio removed: {removed} module(s) unloaded");
+    // Restore OS defaults
+    // Pick first non-OpenGG sink
+    let sinks = run_cmd_async("pactl", &["list", "sinks", "short"])
+        .await
+        .map_err(|e| format!("Failed to list sinks: {e}"))?;
+
+    if let Some(first_real_sink) = sinks
+        .lines()
+        .find(|line| !line.contains("OpenGG_"))
+        .and_then(|line| line.split_whitespace().nth(1))
+    {
+        run_cmd_async("pactl", &["set-default-sink", first_real_sink])
+            .await
+            .ok(); // Non-fatal if this fails
+        log::info!("Restored default sink: {first_real_sink}");
+    } else {
+        log::warn!("No non-OpenGG sinks found to restore as default");
+    }
+
+    // Pick first non-OpenGG non-monitor source
+    let sources = run_cmd_async("pactl", &["list", "sources", "short"])
+        .await
+        .map_err(|e| format!("Failed to list sources: {e}"))?;
+
+    if let Some(first_real_source) = sources
+        .lines()
+        .find(|line| !line.contains("OpenGG_") && !line.contains(".monitor"))
+        .and_then(|line| line.split_whitespace().nth(1))
+    {
+        run_cmd_async("pactl", &["set-default-source", first_real_source])
+            .await
+            .ok(); // Non-fatal if this fails
+        log::info!("Restored default source: {first_real_source}");
+    } else {
+        log::warn!("No non-OpenGG non-monitor sources found to restore as default");
+    }
+
+    // Verify: re-list sinks and check for stragglers
+    let final_sinks = run_cmd_async("pactl", &["list", "sinks", "short"])
+        .await
+        .map_err(|e| format!("Failed to verify sinks: {e}"))?;
+
+    let stragglers: Vec<&str> = final_sinks
+        .lines()
+        .filter(|line| line.contains("OpenGG_"))
+        .collect();
+
+    if !stragglers.is_empty() {
+        let straggler_list = stragglers.join("; ");
+        log::error!(
+            "Teardown verification failed: {} OpenGG sink(s) still present",
+            stragglers.len()
+        );
+        return Err(format!(
+            "Teardown incomplete — {} sink(s) still present: {}",
+            stragglers.len(),
+            straggler_list
+        ));
+    }
+
+    log::info!("Virtual audio teardown completed via fallback (daemon unreachable)");
     Ok(())
 }
 

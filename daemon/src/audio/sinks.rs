@@ -166,6 +166,125 @@ impl SinkManager {
     }
 }
 
+impl SinkManager {
+    /// Teardown all virtual audio sinks and sources.
+    ///
+    /// This method:
+    /// 1. Unloads all tracked module IDs from create_all()
+    /// 2. Performs a straggler scan to unload any OpenGG modules not tracked
+    ///    (e.g., from previous daemon runs, or mic chain components)
+    /// 3. Restores OS defaults: picks the first non-OpenGG sink as default sink,
+    ///    and the first non-OpenGG non-monitor source as default source
+    /// 4. Verifies no OpenGG sinks remain; returns Err if any are detected
+    pub fn teardown_all(&self) -> anyhow::Result<()> {
+        // Step 1: Unload all tracked module IDs
+        if let Ok(mut ids) = self.module_ids.lock() {
+            for id in ids.drain(..) {
+                let _ = subprocess::command("pactl")
+                    .args(["unload-module", &id.to_string()])
+                    .status();
+            }
+        }
+
+        // Step 2: Straggler scan — unload any remaining OpenGG modules
+        let modules_out = subprocess::command("pactl")
+            .args(["list", "modules", "short"])
+            .output()
+            .context("pactl list modules short failed")?;
+
+        let modules = String::from_utf8_lossy(&modules_out.stdout);
+        for line in modules.lines() {
+            if line.contains("module-null-sink") && line.contains("OpenGG_") {
+                if let Some(id) = line.split_whitespace().next() {
+                    let _ = subprocess::command("pactl")
+                        .args(["unload-module", id])
+                        .status();
+                    tracing::info!("Unloaded straggler null-sink module {id}");
+                }
+            } else if line.contains("module-loopback") && line.contains("OpenGG_Mic") {
+                if let Some(id) = line.split_whitespace().next() {
+                    let _ = subprocess::command("pactl")
+                        .args(["unload-module", id])
+                        .status();
+                    tracing::info!("Unloaded straggler loopback module {id}");
+                }
+            } else if line.contains("module-remap-source") && line.contains("OpenGG_Virtual_Mic") {
+                if let Some(id) = line.split_whitespace().next() {
+                    let _ = subprocess::command("pactl")
+                        .args(["unload-module", id])
+                        .status();
+                    tracing::info!("Unloaded straggler remap-source module {id}");
+                }
+            }
+        }
+
+        // Step 3: Restore OS defaults
+        // Pick first non-OpenGG sink as default
+        let sinks_out = subprocess::command("pactl")
+            .args(["list", "sinks", "short"])
+            .output()
+            .context("pactl list sinks short failed")?;
+
+        let sinks = String::from_utf8_lossy(&sinks_out.stdout);
+        if let Some(first_real_sink) = sinks
+            .lines()
+            .find(|line| !line.contains("OpenGG_"))
+            .and_then(|line| line.split_whitespace().nth(1))
+        {
+            let _ = subprocess::command("pactl")
+                .args(["set-default-sink", first_real_sink])
+                .output();
+            tracing::info!("Restored default sink: {first_real_sink}");
+        } else {
+            tracing::warn!("No non-OpenGG sinks found to restore as default");
+        }
+
+        // Pick first non-OpenGG non-monitor source as default
+        let sources_out = subprocess::command("pactl")
+            .args(["list", "sources", "short"])
+            .output()
+            .context("pactl list sources short failed")?;
+
+        let sources = String::from_utf8_lossy(&sources_out.stdout);
+        if let Some(first_real_source) = sources
+            .lines()
+            .find(|line| !line.contains("OpenGG_") && !line.contains(".monitor"))
+            .and_then(|line| line.split_whitespace().nth(1))
+        {
+            let _ = subprocess::command("pactl")
+                .args(["set-default-source", first_real_source])
+                .output();
+            tracing::info!("Restored default source: {first_real_source}");
+        } else {
+            tracing::warn!("No non-OpenGG non-monitor sources found to restore as default");
+        }
+
+        // Step 4: Verify no OpenGG sinks remain
+        let final_sinks_out = subprocess::command("pactl")
+            .args(["list", "sinks", "short"])
+            .output()
+            .context("pactl list sinks short (verification) failed")?;
+
+        let final_sinks = String::from_utf8_lossy(&final_sinks_out.stdout);
+        let stragglers: Vec<&str> = final_sinks
+            .lines()
+            .filter(|line| line.contains("OpenGG_"))
+            .collect();
+
+        if !stragglers.is_empty() {
+            let straggler_list = stragglers.join("; ");
+            tracing::error!("Verification failed: OpenGG sinks still present: {straggler_list}");
+            return Err(anyhow::anyhow!(
+                "Teardown incomplete — {} sink(s) still present",
+                stragglers.len()
+            ));
+        }
+
+        tracing::info!("Virtual audio teardown complete — all OpenGG sinks removed");
+        Ok(())
+    }
+}
+
 impl Drop for SinkManager {
     fn drop(&mut self) {
         if let Ok(ids) = self.module_ids.lock() {

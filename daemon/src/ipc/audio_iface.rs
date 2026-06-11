@@ -71,4 +71,8 @@ impl AudioInterface {
     async fn route_app(&self, app_id: u32, channel: &str) -> zbus::fdo::Result<()> {
         self.hub.route_app(app_id, channel).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
+
+    async fn remove_virtual_audio(&self) -> zbus::fdo::Result<()> {
+        self.hub.remove_virtual_audio().await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
 }

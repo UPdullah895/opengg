@@ -59,6 +59,13 @@ impl AudioHub {
         routing::route_stream(stream_id, channel)
     }
 
+    pub async fn remove_virtual_audio(&self) -> Result<()> {
+        let sink_mgr = Arc::clone(&self.sink_mgr);
+        tokio::task::spawn_blocking(move || sink_mgr.teardown_all())
+            .await
+            .expect("teardown panicked")
+    }
+
     fn start_stream_watcher(&self) {
         let streams = Arc::clone(&self.streams);
         tokio::spawn(async move {
