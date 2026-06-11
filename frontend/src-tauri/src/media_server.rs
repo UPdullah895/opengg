@@ -12,9 +12,12 @@ use percent_encoding::percent_decode_str;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::fs::File;
+use tokio::io::AsyncSeekExt;
 use warp::http::{Response, StatusCode};
 use warp::Filter;
 use warp::Rejection;
+use warp::hyper::Body;
 
 fn find_available_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -96,18 +99,20 @@ pub fn spawn_media_server(clip_dirs: Vec<PathBuf>) -> (u16, String) {
             // Token required in query string. Validates canonical path is within allowed roots.
             // Uses tolerant query parsing: a request with no ?query=... string is treated as token=None
             // and gets 401 Unauthorized (not 500 rejected).
+            // Supports both GET and HEAD requests.
             let media_route = warp::path("media")
+                .and(warp::method())
                 .and(warp::query::raw().or(warp::any().map(String::new)).unify())
                 .and(warp::path::tail())
                 .and(warp::header::optional::<String>("range"))
                 .and_then({
                     let allowed_roots = allowed_roots.clone();
                     let token = token.clone();
-                    move |raw_query: String, tail: warp::path::Tail, range: Option<String>| {
+                    move |method: warp::http::Method, raw_query: String, tail: warp::path::Tail, range: Option<String>| {
                         let allowed_roots = allowed_roots.clone();
                         let token = token.clone();
                         async move {
-                            serve_media_with_auth(&allowed_roots, &token, raw_query, tail, range).await
+                            serve_media_with_auth(&allowed_roots, &token, raw_query, tail, range, method).await
                         }
                     }
                 });
@@ -250,7 +255,8 @@ async fn serve_media_with_auth(
     raw_query: String,
     tail: warp::path::Tail,
     range: Option<String>,
-) -> Result<Response<Vec<u8>>, warp::Rejection> {
+    method: warp::http::Method,
+) -> Result<Response<Body>, warp::Rejection> {
     let provided_token = extract_token_from_raw_query(&raw_query);
     if provided_token.as_ref() != Some(&token.to_string()) {
         log::debug!("Media auth failed: expected token, got {:?}", provided_token);
@@ -302,55 +308,91 @@ async fn serve_media_with_auth(
 
     let content_type = mime_type_for_extension(&real);
 
-    // Parse Range header if present and valid
+    // Handle HEAD requests: return headers with empty body
+    if method == warp::http::Method::HEAD {
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", content_type)
+            .header("Content-Length", total_size.to_string())
+            .header("Accept-Ranges", "bytes")
+            .body(Body::empty())
+            .unwrap());
+    }
+
+    // Parse Range header if present and valid (GET requests only)
     if let Some(range_header) = range {
         if let Some((start, end)) = parse_range_header(&range_header, total_size) {
-            let bytes = tokio::fs::read(&real)
+            // Valid range request: seek and read exactly (end - start + 1) bytes
+            let mut file = File::open(&real)
                 .await
                 .map_err(|_| warp::reject::not_found())?;
 
-            let range_bytes = bytes[start..=end].to_vec();
-            let content_length = range_bytes.len();
+            file.seek(std::io::SeekFrom::Start(start))
+                .await
+                .map_err(|_| warp::reject::not_found())?;
+
+            let range_size = (end - start + 1) as usize;
+            let mut buf = vec![0u8; range_size];
+
+            use tokio::io::AsyncReadExt;
+            file.read_exact(&mut buf)
+                .await
+                .map_err(|_| warp::reject::not_found())?;
 
             return Ok(Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header("Content-Type", content_type)
-                .header("Content-Length", content_length.to_string())
+                .header("Content-Length", range_size.to_string())
                 .header(
                     "Content-Range",
                     format!("bytes {}-{}/{}", start, end, total_size),
                 )
                 .header("Accept-Ranges", "bytes")
-                .body(range_bytes)
+                .body(Body::from(buf))
                 .unwrap());
         }
     }
 
-    // No Range header or invalid Range — serve full file
-    let bytes = tokio::fs::read(&real)
+    // No Range header or invalid Range — serve full file with streaming
+    // to avoid loading entire clip into memory (301MB+ clips)
+    let file = File::open(&real)
         .await
         .map_err(|_| warp::reject::not_found())?;
+
+    let reader_stream = tokio_util::io::ReaderStream::new(file);
+    let body = Body::wrap_stream(reader_stream);
 
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", content_type)
-        .header("Content-Length", bytes.len().to_string())
+        .header("Content-Length", total_size.to_string())
         .header("Accept-Ranges", "bytes")
-        .body(bytes)
+        .body(body)
         .unwrap())
 }
 
-/// Parse a Range header value (e.g., "bytes=0-1023") and return (start, end) indices.
-/// Returns None if the header is malformed or out of bounds.
-fn parse_range_header(header: &str, total_size: u64) -> Option<(usize, usize)> {
-    // Expected format: "bytes=start-end"
+/// Parse a Range header value and return (start, end) byte indices.
+/// Supports three single-range forms per RFC 7233:
+/// - `bytes=S-E`   → (S, min(E, total-1)); invalid if S > E or S >= total
+/// - `bytes=S-`    → (S, total-1); invalid if S >= total
+/// - `bytes=-N`    → (total.saturating_sub(N), total-1); invalid if N == 0
+///
+/// Multi-range (e.g., `bytes=a-b,c-d`) returns None → serve 200 (players don't need multi-range).
+/// Returns None if the header is malformed, multi-range, or out of bounds.
+fn parse_range_header(header: &str, total_size: u64) -> Option<(u64, u64)> {
     if !header.starts_with("bytes=") {
         return None;
     }
 
     let range_part = &header[6..]; // skip "bytes="
-    let parts: Vec<&str> = range_part.split('-').collect();
 
+    // Reject multi-range (contains comma)
+    if range_part.contains(',') {
+        return None;
+    }
+
+    // Split on '-' to get at most 2 parts
+    let parts: Vec<&str> = range_part.split('-').collect();
     if parts.len() != 2 {
         return None;
     }
@@ -358,26 +400,48 @@ fn parse_range_header(header: &str, total_size: u64) -> Option<(usize, usize)> {
     let start_str = parts[0].trim();
     let end_str = parts[1].trim();
 
-    // Parse start
-    let start = if let Ok(s) = start_str.parse::<u64>() {
-        s
-    } else {
-        return None;
-    };
+    // Case 1: bytes=S-E (both bounds present)
+    if !start_str.is_empty() && !end_str.is_empty() {
+        let start = start_str.parse::<u64>().ok()?;
+        let end = end_str.parse::<u64>().ok()?;
 
-    // Parse end
-    let end = if let Ok(e) = end_str.parse::<u64>() {
-        e
-    } else {
-        return None;
-    };
+        // S must be < total and S <= E
+        if start >= total_size || start > end {
+            return None;
+        }
 
-    // Validate ranges
-    if start >= total_size || end >= total_size || start > end {
-        return None;
+        // Clamp E to total-1
+        let end = std::cmp::min(end, total_size - 1);
+        return Some((start, end));
     }
 
-    Some((start as usize, end as usize))
+    // Case 2: bytes=S- (open-ended; end is empty)
+    if !start_str.is_empty() && end_str.is_empty() {
+        let start = start_str.parse::<u64>().ok()?;
+
+        // S must be < total
+        if start >= total_size {
+            return None;
+        }
+
+        return Some((start, total_size - 1));
+    }
+
+    // Case 3: bytes=-N (suffix; start is empty)
+    if start_str.is_empty() && !end_str.is_empty() {
+        let n = end_str.parse::<u64>().ok()?;
+
+        // N must be > 0
+        if n == 0 {
+            return None;
+        }
+
+        let start = total_size.saturating_sub(n);
+        return Some((start, total_size - 1));
+    }
+
+    // Invalid: both empty or other malformed patterns
+    None
 }
 
 async fn serve_audio_stream_with_auth(
@@ -619,5 +683,99 @@ mod tests {
         // Fallback
         assert_eq!(mime_type_for_extension(std::path::Path::new("file.unknown")), "application/octet-stream");
         assert_eq!(mime_type_for_extension(std::path::Path::new("file")), "application/octet-stream");
+    }
+
+    #[test]
+    fn test_parse_range_header_bounded() {
+        let total_size = 1000u64;
+
+        // bytes=0-99 (first 100 bytes)
+        assert_eq!(parse_range_header("bytes=0-99", total_size), Some((0, 99)));
+
+        // bytes=100-199
+        assert_eq!(parse_range_header("bytes=100-199", total_size), Some((100, 199)));
+
+        // bytes=500-999 (last 500 bytes)
+        assert_eq!(parse_range_header("bytes=500-999", total_size), Some((500, 999)));
+
+        // End clamped to total-1
+        assert_eq!(parse_range_header("bytes=0-5000", total_size), Some((0, 999)));
+
+        // Start at end-1
+        assert_eq!(parse_range_header("bytes=999-999", total_size), Some((999, 999)));
+
+        // Invalid: start >= total
+        assert_eq!(parse_range_header("bytes=1000-1099", total_size), None);
+        assert_eq!(parse_range_header("bytes=1001-1099", total_size), None);
+
+        // Invalid: start > end
+        assert_eq!(parse_range_header("bytes=100-50", total_size), None);
+
+        // Invalid: wrong prefix
+        assert_eq!(parse_range_header("units=0-99", total_size), None);
+
+        // Invalid: missing bytes=
+        assert_eq!(parse_range_header("0-99", total_size), None);
+    }
+
+    #[test]
+    fn test_parse_range_header_open_ended() {
+        let total_size = 1000u64;
+
+        // bytes=S- (from byte S to end)
+        assert_eq!(parse_range_header("bytes=0-", total_size), Some((0, 999)));
+        assert_eq!(parse_range_header("bytes=500-", total_size), Some((500, 999)));
+        assert_eq!(parse_range_header("bytes=999-", total_size), Some((999, 999)));
+
+        // Invalid: start >= total
+        assert_eq!(parse_range_header("bytes=1000-", total_size), None);
+        assert_eq!(parse_range_header("bytes=1001-", total_size), None);
+
+        // Invalid: non-numeric start
+        assert_eq!(parse_range_header("bytes=abc-", total_size), None);
+    }
+
+    #[test]
+    fn test_parse_range_header_suffix() {
+        let total_size = 1000u64;
+
+        // bytes=-N (last N bytes)
+        assert_eq!(parse_range_header("bytes=-1", total_size), Some((999, 999)));
+        assert_eq!(parse_range_header("bytes=-500", total_size), Some((500, 999)));
+        assert_eq!(parse_range_header("bytes=-1000", total_size), Some((0, 999)));
+
+        // Suffix larger than file (saturating_sub)
+        assert_eq!(parse_range_header("bytes=-2000", total_size), Some((0, 999)));
+
+        // Invalid: N == 0
+        assert_eq!(parse_range_header("bytes=-0", total_size), None);
+
+        // Invalid: N is non-numeric
+        assert_eq!(parse_range_header("bytes=-abc", total_size), None);
+    }
+
+    #[test]
+    fn test_parse_range_header_multi_range() {
+        let total_size = 1000u64;
+
+        // Multi-range rejected (no support)
+        assert_eq!(parse_range_header("bytes=0-99,200-299", total_size), None);
+        assert_eq!(parse_range_header("bytes=0-50,51-100,200-250", total_size), None);
+    }
+
+    #[test]
+    fn test_parse_range_header_edge_cases() {
+        // Empty parts
+        assert_eq!(parse_range_header("bytes=", 1000), None);
+        assert_eq!(parse_range_header("bytes=-", 1000), None);
+
+        // Whitespace tolerance (trim is applied)
+        assert_eq!(parse_range_header("bytes= 0 - 99 ", 1000), Some((0, 99)));
+
+        // file size = 1
+        assert_eq!(parse_range_header("bytes=0-0", 1), Some((0, 0)));
+        assert_eq!(parse_range_header("bytes=-1", 1), Some((0, 0)));
+        assert_eq!(parse_range_header("bytes=0-", 1), Some((0, 0)));
+        assert_eq!(parse_range_header("bytes=1-", 1), None); // start >= total
     }
 }
