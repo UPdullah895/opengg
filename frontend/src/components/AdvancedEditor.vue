@@ -317,7 +317,8 @@ onMounted(async () => {
   initTracks()
   await loadMeta()
   await loadWaveforms()
-  await refreshAudioRouting()
+  await refreshAudioRouting()  // This calls initAudioElements() and applyAudioVolumes()
+  applyAudioVolumes()  // Ensure master volume is applied to all elements at mount
 })
 
 // Persistence
@@ -497,7 +498,10 @@ onBeforeUnmount(() => {
 })
 
 function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}.${Math.floor((s % 1) * 10)}` }
-function setPreviewVol(v: number) { localVol.value = v; applyAudioVolumes() }
+function setPreviewVol(v: number) {
+  localVol.value = Math.max(0, Math.min(1, v))  // Clamp 0..1
+  applyAudioVolumes()
+}
 function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !t.peaks.length) return; const ctx = canvas.getContext('2d'); if (!ctx) return; const w = canvas.clientWidth; const h = canvas.clientHeight; canvas.width = w; canvas.height = h; ctx.clearRect(0, 0, w, h); const bw = w / t.peaks.length; const color = t.muted ? '#555' : t.color; const grad = ctx.createLinearGradient(0, 0, 0, h); grad.addColorStop(0, color + '80'); grad.addColorStop(0.5, color + 'DD'); grad.addColorStop(1, color + '80'); ctx.fillStyle = grad; for (let i = 0; i < t.peaks.length; i++) { const bh = Math.max(2, t.peaks[i] * h * 1.6); ctx.fillRect(i * bw, (h - bh) / 2, Math.max(1, bw - 0.5), bh) } }
 
 </script>
@@ -530,6 +534,7 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
         ref="playerComp"
         :src="videoSrc"
         :muted="hasMultipleAudioTracks"
+        :master-volume="localVol"
         :show-controls="true"
         :capture-keyboard="false"
         @loadedmetadata="onMeta"

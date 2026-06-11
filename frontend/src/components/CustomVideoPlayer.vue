@@ -9,6 +9,7 @@ const { t } = useI18n()
 const props = defineProps<{
   src: string
   muted?: boolean
+  masterVolume?: number // Multi-track master volume (0..1); when defined, slider is master-aware
   captureKeyboard?: boolean
   showControls?: boolean  // default true; set false to hide built-in ctrl-bar
   alwaysShowControls?: boolean
@@ -31,13 +32,17 @@ const playing     = ref(false)
 const currentTime = ref(0)
 const duration    = ref(0)
 const volume      = ref(1)
+const lastNonZeroVol = ref(1) // Remember the last non-zero volume for mute toggle
 const isMuted     = ref(props.muted ?? false)
 const isFullscreen = ref(false)
 const isHovering   = ref(false)
 
-// Sync with parent muted prop — parent override takes precedence
+// Multi-track mode: controlled by masterVolume prop; single-track: use internal volume
+const multiTrack = computed(() => props.masterVolume !== undefined)
+
+// Sync with parent muted prop — parent override takes precedence (single-track only)
 watch(() => props.muted, (v) => {
-  if (v !== undefined) {
+  if (v !== undefined && !multiTrack.value) {
     isMuted.value = v
     if (videoRef.value) videoRef.value.muted = v
   }
@@ -82,11 +87,15 @@ function skip(d: number) { seekTo(currentTime.value + d) }
 
 function setVolume(v: number) {
   volume.value = v
-  if (props.muted) {
-    // Parent controls mute — just emit preference, don't change DOM mute state
+  if (v > 0) lastNonZeroVol.value = v
+
+  // Multi-track mode: parent controls all audio; just emit without touching videoRef
+  if (multiTrack.value) {
     emit('volume-change', v)
     return
   }
+
+  // Single-track mode: control video element directly
   isMuted.value = v === 0
   if (videoRef.value) {
     videoRef.value.volume = v
@@ -96,7 +105,16 @@ function setVolume(v: number) {
 }
 
 function toggleMute() {
-  if (props.muted) return  // Parent controls mute, don't allow override
+  if (props.muted && !multiTrack.value) return  // Single-track: parent controls mute, don't override
+
+  // Multi-track mode: toggle by emitting 0 (mute) or lastNonZeroVol (unmute)
+  if (multiTrack.value) {
+    const isCurrentlyMuted = (props.masterVolume ?? 1) === 0
+    emit('volume-change', isCurrentlyMuted ? lastNonZeroVol.value : 0)
+    return
+  }
+
+  // Single-track mode: toggle internal mute
   if (isMuted.value) {
     const restore = volume.value > 0 ? volume.value : 1
     isMuted.value = false
@@ -199,11 +217,11 @@ defineExpose({ videoRef, playing, currentTime, duration, isFullscreen, seekTo, t
         <div class="cvp-vol">
           <svg viewBox="0 0 24 24" fill="currentColor" class="cvp-vol-ic" style="cursor:pointer" @click.stop="toggleMute">
             <path d="M11 5L6 9H2v6h4l5 4V5z"/>
-            <path v-if="!isMuted && volume > 0" d="M15.54 8.46a5 5 0 010 7.07" stroke="currentColor" fill="none" stroke-width="2"/>
-            <line v-if="isMuted || volume === 0" x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2"/>
-            <line v-if="isMuted || volume === 0" x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2"/>
+            <path v-if="multiTrack ? (props.masterVolume ?? 1) > 0 : !isMuted && volume > 0" d="M15.54 8.46a5 5 0 010 7.07" stroke="currentColor" fill="none" stroke-width="2"/>
+            <line v-if="multiTrack ? (props.masterVolume ?? 1) === 0 : isMuted || volume === 0" x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2"/>
+            <line v-if="multiTrack ? (props.masterVolume ?? 1) === 0 : isMuted || volume === 0" x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2"/>
           </svg>
-          <input type="range" min="0" max="1" step="0.05" :value="isMuted ? 0 : volume"
+          <input type="range" min="0" max="1" step="0.05" :value="multiTrack ? (props.masterVolume ?? 1) : (isMuted ? 0 : volume)"
             @input="setVolume(+($event.target as HTMLInputElement).value)" class="cvp-vol-sl" />
         </div>
         <button class="cvp-btn cvp-fs" @click.stop="toggleFullscreen()" :title="t('videoPlayer.fullscreen')">

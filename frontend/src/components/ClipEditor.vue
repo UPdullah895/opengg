@@ -51,7 +51,8 @@ function initAudioElements() {
     const el = new Audio()
     el.src = buildAudioUrl(t.streamIndex)
     el.preload = 'auto'
-    el.volume = t.muted ? 0 : t.volume / 100
+    // Start at track volume * master volume (masterVol defaults to 1)
+    el.volume = (t.muted || t.volume <= 0) ? 0 : Math.min(1, (t.volume / 100) * masterVol.value)
     audioEls.value[t.id] = el
   }
 }
@@ -164,7 +165,10 @@ onMounted(async () => {
       muted: false,
     }))
     await nextTick()
-    if (audioTracks.value.length > 1) initAudioElements()
+    if (audioTracks.value.length > 1) {
+      initAudioElements()
+      applyAudioVolumes()  // Ensure initial master volume is applied
+    }
     syncAudioToVideo()
   } catch {}
 })
@@ -271,6 +275,7 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
         ref="playerComp"
         :src="videoSrc"
         :muted="hasMultipleAudioTracks"
+        :master-volume="masterVol"
         :capture-keyboard="true"
         :native-controls="false"
         :show-controls="true"
