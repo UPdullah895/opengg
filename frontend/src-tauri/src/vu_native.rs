@@ -73,18 +73,28 @@ fn run_native_vu_reader(
         .args(["--latency", "256"]); // small quantum for live metering
 
     // For capturing (both sinks and sources), use --record mode
-    // and read from stdout via pipes. pw-cat REQUIRES a file argument;
-    // "-" streams the PCM to stdout (without it pw-cat exits immediately
-    // with a usage error and readers see instant EOF).
-    cmd.arg("--record").arg("-");
+    // and read from stdout via pipes.
+    cmd.arg("--record");
 
-    // Set target object and properties based on type
-    cmd.args(["--target", target]);
-
-    // For sink monitors: set stream.capture.sink property
-    if !is_source {
+    // Targeting. The caller passes PA source names (".monitor" for sink
+    // monitors — that namespace is what the existence guard and the
+    // libpulse fallback need), but pw-cat's `stream.capture.sink = true`
+    // wants the SINK node name: ".monitor" is not a PipeWire node, and a
+    // failed target lookup silently falls back to the DEFAULT device —
+    // which made every channel meter the master output.
+    if is_source {
+        cmd.args(["--target", target]);
+    } else {
+        let sink_name = target.strip_suffix(".monitor").unwrap_or(target);
+        cmd.args(["--target", sink_name]);
         cmd.args(["-P", "{ stream.capture.sink = true }"]);
     }
+
+    // pw-cat REQUIRES a file argument; "-" streams PCM to stdout (without
+    // it pw-cat exits immediately with a usage error and readers see
+    // instant EOF). It must come LAST: options placed after the positional
+    // can be dropped by argument parsing, silently losing --target.
+    cmd.arg("-");
 
     // Set up pipes: stdout gets the audio data, stderr is suppressed
     cmd.stdout(Stdio::piped())
