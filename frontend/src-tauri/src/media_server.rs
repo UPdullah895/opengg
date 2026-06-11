@@ -263,7 +263,11 @@ async fn serve_media_with_auth(
     }
 
     let decoded = percent_decode_str(tail_str).decode_utf8_lossy().to_string();
-    let candidate = PathBuf::from(&decoded);
+    // The warp tail has no leading slash ("home/user/Videos/…"), so building a
+    // PathBuf from it yields a RELATIVE path that canonicalizes against the
+    // process CWD and 404s every file. Re-root it onto / (the old
+    // warp::fs::dir("/") did this implicitly).
+    let candidate = std::path::Path::new("/").join(&decoded);
 
     // Canonicalize at request time, not startup, so dynamically created dirs work
     let real = match candidate.canonicalize() {
