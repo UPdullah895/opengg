@@ -225,7 +225,8 @@
         ]
       }
     ],
-    "moreUpdates": "no more updates | {n} more update | {n} more updates"
+    "moreUpdates": "no more updates | {n} more update | {n} more updates",
+    "recording": "Recording"
   },
   "settings": {
     "sections": {
@@ -470,6 +471,16 @@
       "duration": "Duration",
       "durationDesc": "How long the notification stays visible (in seconds)."
     },
+    "about": {
+      "tagline": "Your ultimate open-source Linux gaming companion.",
+      "description": "OpenGG is a modular hub designed to bring professional-grade gaming tools to the Linux ecosystem.",
+      "goals": "Project Goals",
+      "goal1": "Provide a lightweight, dependency-free alternative to SteelSeries GG on Linux",
+      "goal2": "Deliver professional-grade audio routing with PipeWire and per-app volume control",
+      "goal3": "Enable seamless clip capture with gpu-screen-recorder integration and instant replay",
+      "connect": "Connect With Us",
+      "credits": "OpenGG is maintained by the community. Contributions are welcome!"
+    },
     "aboutPage": {
       "tagline": "Your ultimate open-source Linux gaming companion.",
       "description": "OpenGG is a modular hub designed to bring professional-grade gaming tools to the Linux ecosystem.",
@@ -541,6 +552,7 @@
     },
     "toast": {
       "clipDeleted": "Clip deleted",
+      "clipDeleteError": "Failed to delete clip",
       "exportCancelled": "Export cancelled"
     },
     "durationFilter": {
@@ -610,7 +622,8 @@
     "replay": "Replay",
     "gsrRunning": "GSR Replay Buffer Running",
     "quickSettings": "Quick Settings",
-    "saveClip": "Save Clip"
+    "saveClip": "Save Clip",
+    "restartSuccess": "Recording restarted successfully"
   },
   "devices": {
     "title": "Devices",
@@ -628,6 +641,7 @@
     "settings": "Settings",
     "autoOff": "Auto-Off",
     "autoOffNever": "Never",
+    "autoOffMinutes": "minutes",
     "volumeLimiter": "Volume Limiter",
     "btPoweredOn": "BT When Powered On",
     "btCallVolume": "BT Call Volume",

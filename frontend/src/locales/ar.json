@@ -225,7 +225,8 @@
         ]
       }
     ],
-    "moreUpdates": "لا مزيد | {n} تحديث | {n} تحديثات"
+    "moreUpdates": "لا مزيد | {n} تحديث | {n} تحديثات",
+    "recording": "جارٍ التسجيل"
   },
   "settings": {
     "sections": {
@@ -439,6 +440,16 @@
       "duration": "المدة",
       "durationDesc": "المدة التي يبقى فيها الإشعار مرئياً (بالثواني)."
     },
+    "about": {
+      "tagline": "رفيقك المفتوح المصدر لألعاب Linux.",
+      "description": "OpenGG مركز معياري مصمم لإتاحة أدوات الألعاب الاحترافية لمنظومة Linux.",
+      "goals": "أهداف المشروع",
+      "goal1": "توفير بديل خفيف الوزن وخالٍ من التبعيات لـ SteelSeries GG على Linux",
+      "goal2": "تقديم توجيه صوتي احترافي مع PipeWire والتحكم في مستوى الصوت لكل تطبيق",
+      "goal3": "تمكين تسجيل المقاطع بسلاسة مع تكامل gpu-screen-recorder والإعادة الفورية",
+      "connect": "تواصل معنا",
+      "credits": "يُصان OpenGG من قِبل المجتمع. المساهمات مرحب بها!"
+    },
     "aboutPage": {
       "tagline": "رفيقك المفتوح المصدر لألعاب Linux.",
       "description": "OpenGG مركز معياري مصمم لإتاحة أدوات الألعاب الاحترافية لمنظومة Linux.",
@@ -571,6 +582,7 @@
     },
     "toast": {
       "clipDeleted": "تم حذف المقطع",
+      "clipDeleteError": "فشل حذف المقطع",
       "exportCancelled": "تم إلغاء التصدير"
     },
     "durationFilter": {
@@ -640,7 +652,8 @@
     "replay": "إعادة",
     "gsrRunning": "ذاكرة الإعادة GSR قيد التشغيل",
     "quickSettings": "إعدادات سريعة",
-    "saveClip": "حفظ المقطع"
+    "saveClip": "حفظ المقطع",
+    "restartSuccess": "تمت إعادة تشغيل التسجيل بنجاح"
   },
   "devices": {
     "title": "الأجهزة",
@@ -658,6 +671,7 @@
     "settings": "الإعدادات",
     "autoOff": "إيقاف تلقائي",
     "autoOffNever": "أبداً",
+    "autoOffMinutes": "دقائق",
     "volumeLimiter": "محدد مستوى الصوت",
     "btPoweredOn": "البلوتوث عند التشغيل",
     "btCallVolume": "مستوى صوت مكالمة BT",
