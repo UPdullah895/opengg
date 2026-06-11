@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { deps, deviceAccess, distroInfo, loadDependencyStatus, loadDeviceAccessStatus, loadDistroInfo, getInstallCommand } from '../../composables/useDependencyStatus'
+import { deps, deviceAccess, distroInfo, loadDependencyStatus, loadDeviceAccessStatus, loadDistroInfo, getInstallCommand, getAccessFixCommand, getNormalizedAccessItems } from '../../composables/useDependencyStatus'
 import './settings-shared.css'
 
 const { t } = useI18n()
@@ -12,6 +12,8 @@ const { t } = useI18n()
 const appVersion = ref('')
 const showAllDeps = ref(false)
 const expandedDep = ref<string | null>(null)
+const showAllAccess = ref(false)
+const expandedAccessItem = ref<string | null>(null)
 
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
@@ -27,6 +29,10 @@ async function openExternal(url: string) {
 const missingDeps = computed(() => deps.value.filter(d => !d.available))
 const allSatisfied = computed(() => deps.value.length > 0 && missingDeps.value.length === 0)
 
+const normalizedAccessItems = computed(() => getNormalizedAccessItems(deviceAccess.value))
+const missingAccessItems = computed(() => normalizedAccessItems.value.filter(item => !item.status))
+const allAccessGranted = computed(() => normalizedAccessItems.value.length > 0 && missingAccessItems.value.length === 0)
+
 async function copyInstallCommand(cmd: string) {
   try {
     await invoke('write_clipboard', { text: cmd })
@@ -38,6 +44,10 @@ async function copyInstallCommand(cmd: string) {
 
 function toggleExpanded(binary: string) {
   expandedDep.value = expandedDep.value === binary ? null : binary
+}
+
+function toggleExpandedAccess(itemId: string) {
+  expandedAccessItem.value = expandedAccessItem.value === itemId ? null : itemId
 }
 
 defineEmits<{ navigate: [page: string] }>()
@@ -148,51 +158,59 @@ defineEmits<{ navigate: [page: string] }>()
 
     <!-- Device Access Status -->
     <div class="deps-card">
-      <h3 style="margin:0 0 12px;font-size:14px;font-weight:700;color:var(--text)">{{ t('settings.deviceAccess.title') }}</h3>
-      <div class="deps-list">
+      <div class="deps-header">
+        <h3 style="margin:0;font-size:14px;font-weight:700;color:var(--text)">{{ t('settings.deviceAccess.title') }}</h3>
+        <button v-if="normalizedAccessItems.length > 0 && !allAccessGranted" class="show-all-btn" @click="showAllAccess = !showAllAccess">
+          {{ showAllAccess ? t('settings.deviceAccess.hideAll') : t('settings.deviceAccess.showAll') }}
+        </button>
+      </div>
+
+      <div v-if="normalizedAccessItems.length === 0" style="font-size:12px;color:var(--text-secondary);padding:8px 0;margin-top:12px">
+        {{ t('settings.deviceAccess.loading') }}
+      </div>
+
+      <!-- All access granted -->
+      <div v-else-if="allAccessGranted" class="deps-list" style="margin-top:12px">
         <div class="dep-row">
-          <div class="dep-check" :class="{ available: deviceAccess.ratbagd_available, missing: !deviceAccess.ratbagd_available }">
-            {{ deviceAccess.ratbagd_available ? '✓' : '✗' }}
-          </div>
+          <div class="dep-check available">✓</div>
           <div class="dep-info">
-            <div class="dep-binary">ratbagd</div>
-            <div class="dep-feature">{{ t('settings.deviceAccess.ratbagd') }}</div>
+            <div class="dep-binary">{{ t('settings.deviceAccess.allGranted') }}</div>
           </div>
         </div>
-        <div class="dep-row">
-          <div class="dep-check" :class="{ available: deviceAccess.in_input_group, missing: !deviceAccess.in_input_group }">
-            {{ deviceAccess.in_input_group ? '✓' : '✗' }}
+      </div>
+
+      <!-- Missing access items (or all if toggled) -->
+      <div v-else class="deps-list" style="margin-top:12px">
+        <div v-for="item in showAllAccess ? normalizedAccessItems : missingAccessItems" :key="item.id" class="dep-row-wrapper">
+          <div class="dep-row">
+            <div class="dep-check" :class="{ available: item.status, missing: !item.status }">
+              {{ item.status ? '✓' : '✗' }}
+            </div>
+            <div class="dep-info">
+              <div class="dep-binary">{{ item.label }}</div>
+              <div class="dep-feature">{{ t(`settings.deviceAccess.${item.id}`) }}</div>
+            </div>
+            <button
+              v-if="!item.status"
+              class="help-btn"
+              :title="t('settings.deviceAccess.fixHint')"
+              @click="toggleExpandedAccess(item.id)"
+            >
+              ?
+            </button>
           </div>
-          <div class="dep-info">
-            <div class="dep-binary">input group</div>
-            <div class="dep-feature">{{ t('settings.deviceAccess.inputGroup') }}</div>
-          </div>
-        </div>
-        <div class="dep-row">
-          <div class="dep-check" :class="{ available: deviceAccess.in_audio_group, missing: !deviceAccess.in_audio_group }">
-            {{ deviceAccess.in_audio_group ? '✓' : '✗' }}
-          </div>
-          <div class="dep-info">
-            <div class="dep-binary">audio group</div>
-            <div class="dep-feature">{{ t('settings.deviceAccess.audioGroup') }}</div>
-          </div>
-        </div>
-        <div class="dep-row">
-          <div class="dep-check" :class="{ available: deviceAccess.in_video_group, missing: !deviceAccess.in_video_group }">
-            {{ deviceAccess.in_video_group ? '✓' : '✗' }}
-          </div>
-          <div class="dep-info">
-            <div class="dep-binary">video group</div>
-            <div class="dep-feature">{{ t('settings.deviceAccess.videoGroup') }}</div>
-          </div>
-        </div>
-        <div class="dep-row">
-          <div class="dep-check" :class="{ available: deviceAccess.udev_rules_present, missing: !deviceAccess.udev_rules_present }">
-            {{ deviceAccess.udev_rules_present ? '✓' : '✗' }}
-          </div>
-          <div class="dep-info">
-            <div class="dep-binary">udev rules</div>
-            <div class="dep-feature">{{ t('settings.deviceAccess.udevRules') }}</div>
+
+          <!-- Inline fix help expansion -->
+          <div v-if="!item.status && expandedAccessItem === item.id" class="install-help">
+            <div v-for="(cmd, idx) in getAccessFixCommand(item.id, distroInfo.id, distroInfo.id_like).commands" :key="idx" class="install-command-wrapper">
+              <code>{{ cmd }}</code>
+              <button class="copy-btn" @click="copyInstallCommand(cmd)">
+                {{ t('common.copy') || '📋' }}
+              </button>
+            </div>
+            <div v-if="getAccessFixCommand(item.id, distroInfo.id, distroInfo.id_like).note" class="install-note">
+              {{ t(getAccessFixCommand(item.id, distroInfo.id, distroInfo.id_like).note || '') }}
+            </div>
           </div>
         </div>
       </div>

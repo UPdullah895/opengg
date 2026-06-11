@@ -27,6 +27,11 @@ export interface PackageMap {
   note?: string
 }
 
+export interface AccessFixMap {
+  commands: string[]
+  note: string
+}
+
 // Package installation commands per binary and distro
 export const PACKAGE_MAPS: Record<string, PackageMap> = {
   'gpu-screen-recorder': {
@@ -74,6 +79,107 @@ export const PACKAGE_MAPS: Record<string, PackageMap> = {
   },
 }
 
+// Device access fixes per item and distro family
+export const ACCESS_FIX_MAPS: Record<string, { arch?: AccessFixMap; debian?: AccessFixMap; fedora?: AccessFixMap; unknown?: AccessFixMap }> = {
+  'ratbagd': {
+    arch: {
+      commands: ['sudo pacman -S libratbag', 'sudo systemctl enable --now ratbagd'],
+      note: 'accessFixHint.ratbagdNote',
+    },
+    debian: {
+      commands: ['sudo apt install ratbagd', 'sudo systemctl enable --now ratbagd'],
+      note: 'accessFixHint.ratbagdNote',
+    },
+    fedora: {
+      commands: ['sudo dnf install libratbag-ratbagd', 'sudo systemctl enable --now ratbagd'],
+      note: 'accessFixHint.ratbagdNote',
+    },
+    unknown: {
+      commands: [
+        '# Arch: sudo pacman -S libratbag && sudo systemctl enable --now ratbagd',
+        '# Debian/Ubuntu: sudo apt install ratbagd && sudo systemctl enable --now ratbagd',
+        '# Fedora: sudo dnf install libratbag-ratbagd && sudo systemctl enable --now ratbagd',
+      ],
+      note: 'accessFixHint.ratbagdNote',
+    },
+  },
+  'inputGroup': {
+    arch: {
+      commands: ['sudo usermod -aG input $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+    debian: {
+      commands: ['sudo usermod -aG input $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+    fedora: {
+      commands: ['sudo usermod -aG input $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+    unknown: {
+      commands: ['sudo usermod -aG input $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+  },
+  'audioGroup': {
+    arch: {
+      commands: ['sudo usermod -aG audio $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+    debian: {
+      commands: ['sudo usermod -aG audio $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+    fedora: {
+      commands: ['sudo usermod -aG audio $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+    unknown: {
+      commands: ['sudo usermod -aG audio $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+  },
+  'videoGroup': {
+    arch: {
+      commands: ['sudo usermod -aG video $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+    debian: {
+      commands: ['sudo usermod -aG video $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+    fedora: {
+      commands: ['sudo usermod -aG video $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+    unknown: {
+      commands: ['sudo usermod -aG video $USER'],
+      note: 'accessFixHint.reloginNote',
+    },
+  },
+  'udevRules': {
+    arch: {
+      commands: ['./dev.sh setup  # From the OpenGG repository root'],
+      note: 'accessFixHint.udevNote',
+    },
+    debian: {
+      commands: ['./dev.sh setup  # From the OpenGG repository root'],
+      note: 'accessFixHint.udevNote',
+    },
+    fedora: {
+      commands: ['./dev.sh setup  # From the OpenGG repository root'],
+      note: 'accessFixHint.udevNote',
+    },
+    unknown: {
+      commands: [
+        './dev.sh setup  # From the OpenGG repository root',
+        '# Or manually: sudo cp packaging/udev-rules/*.rules /etc/udev/rules.d/',
+      ],
+      note: 'accessFixHint.udevNote',
+    },
+  },
+}
+
 // Resolve distro family from ID and ID_LIKE
 function resolveDistroFamily(id: string, idLike: string): 'arch' | 'debian' | 'fedora' | 'unknown' {
   const searchStr = `${id} ${idLike}`.toLowerCase()
@@ -100,6 +206,21 @@ export function getInstallCommand(binary: string, distroId: string, distroIdLike
   return {
     command: pkgMap[family],
     note: pkgMap.note,
+  }
+}
+
+export function getAccessFixCommand(item: string, distroId: string, distroIdLike: string): { commands: string[]; note?: string } {
+  const fixMap = ACCESS_FIX_MAPS[item]
+  if (!fixMap) return { commands: [] }
+
+  const family = resolveDistroFamily(distroId, distroIdLike)
+  const fix = fixMap[family] || fixMap.unknown
+
+  if (!fix) return { commands: [] }
+
+  return {
+    commands: fix.commands,
+    note: fix.note,
   }
 }
 
@@ -169,6 +290,22 @@ export async function loadDeviceAccessStatus() {
     }
   }
   _deviceLoaded = true
+}
+
+export interface NormalizedAccessItem {
+  id: 'ratbagd' | 'inputGroup' | 'audioGroup' | 'videoGroup' | 'udevRules'
+  label: string
+  status: boolean
+}
+
+export function getNormalizedAccessItems(access: DeviceAccessStatus): NormalizedAccessItem[] {
+  return [
+    { id: 'ratbagd', label: 'ratbagd', status: access.ratbagd_available },
+    { id: 'inputGroup', label: 'input group', status: access.in_input_group },
+    { id: 'audioGroup', label: 'audio group', status: access.in_audio_group },
+    { id: 'videoGroup', label: 'video group', status: access.in_video_group },
+    { id: 'udevRules', label: 'udev rules', status: access.udev_rules_present },
+  ]
 }
 
 export { deps, deviceAccess, distroInfo }

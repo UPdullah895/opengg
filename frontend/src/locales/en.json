@@ -523,11 +523,21 @@
     },
     "deviceAccess": {
       "title": "Device Access Status",
-      "ratbagd": "ratbagd D-Bus service",
-      "inputGroup": "input group membership",
-      "audioGroup": "audio group membership",
-      "videoGroup": "video group membership",
-      "udevRules": "udev rules installed"
+      "loading": "Loading…",
+      "allGranted": "All device access granted",
+      "showAll": "show all",
+      "hideAll": "hide all",
+      "fixHint": "Click to see setup instructions",
+      "ratbagd": "Mouse/Keyboard config (ratbagd)",
+      "inputGroup": "Input device access",
+      "audioGroup": "Audio device access",
+      "videoGroup": "Video device access",
+      "udevRules": "Headset/RGB device access"
+    },
+    "accessFixHint": {
+      "ratbagdNote": "After install, you can configure mouse settings in the Devices page.",
+      "reloginNote": "Log out and log back in for the group changes to take effect.",
+      "udevNote": "udev rules allow direct hardware access for headsets and RGB devices without sudo."
     }
   },
   "clips": {
