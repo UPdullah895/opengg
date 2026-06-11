@@ -283,14 +283,39 @@ fn setup_mic_loopback() -> Result<()> {
     // Even if loopback was already created, we still need to ensure the virtual source exists
     // (e.g., daemon restart with lingering sinks — the remap source must be ensured).
 
-    // Idempotency: check if our remap source already exists
+    // The remap source is only meaningful when its master exists. Loading
+    // module-remap-source with a missing master "succeeds" but silently
+    // binds to the DEFAULT device while keeping the declared args — the
+    // virtual mic then carries desktop audio. Hard requirement check:
     let sources_out = subprocess::command("pactl")
         .args(["list", "sources", "short"])
         .output()?;
     let sources = String::from_utf8_lossy(&sources_out.stdout);
+    if !sources.lines().any(|l| l.contains("OpenGG_Mic.monitor")) {
+        anyhow::bail!("OpenGG_Mic.monitor source missing — not creating virtual mic (would bind to default)");
+    }
+
+    // Idempotency + self-healing: if the remap source already exists, verify
+    // it is actually FED by OpenGG_Mic:monitor_*. The declared module args
+    // cannot be trusted (see above) — only the live link topology can. A
+    // stale remap (e.g. it outlived its master across a daemon restart and
+    // re-bound to the default sink monitor) is unloaded and recreated.
     if sources.lines().any(|l| l.contains("OpenGG_Virtual_Mic")) {
-        tracing::info!("Virtual mic source already exists — skipping creation");
-        return Ok(());
+        if virtual_mic_wired_correctly() {
+            tracing::info!("Virtual mic source already exists and is wired to OpenGG_Mic — skipping");
+            return Ok(());
+        }
+        tracing::warn!("Virtual mic source exists but is wired to the wrong master — rebuilding");
+        let modules_out = subprocess::command("pactl").args(["list", "modules", "short"]).output()?;
+        let modules = String::from_utf8_lossy(&modules_out.stdout);
+        for line in modules.lines() {
+            if line.contains("module-remap-source") && line.contains("OpenGG_Virtual_Mic") {
+                if let Some(id) = line.split_whitespace().next() {
+                    let _ = subprocess::command("pactl").args(["unload-module", id]).status();
+                    tracing::info!("Unloaded stale virtual mic remap module {id}");
+                }
+            }
+        }
     }
 
     // Load remap-source module to expose OpenGG_Mic.monitor as a selectable input device
@@ -318,6 +343,22 @@ fn setup_mic_loopback() -> Result<()> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
         Ok(())
+    }
+}
+
+/// True when the OpenGG_Virtual_Mic remap node is fed by OpenGG_Mic's
+/// monitor ports in the live graph. The remap module's declared args can't
+/// be trusted (a missing master at load time silently re-binds to the
+/// default device), so only the link topology is authoritative.
+fn virtual_mic_wired_correctly() -> bool {
+    match parse_pw_links() {
+        Ok(links) => links.iter().any(|(src, dst)| {
+            dst.contains("OpenGG_Virtual_Mic") && src.starts_with("OpenGG_Mic:monitor")
+        }),
+        Err(e) => {
+            tracing::warn!("Could not verify virtual mic wiring ({e}) — assuming correct");
+            true
+        }
     }
 }
 
