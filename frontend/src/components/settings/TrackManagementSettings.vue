@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePersistenceStore } from '../../stores/persistence'
 import IconPicker from '../IconPicker.vue'
 import InfoIcon from '../InfoIcon.vue'
+import './settings-shared.css'
 
 const { t } = useI18n()
 const persist = usePersistenceStore()
@@ -25,12 +26,10 @@ function removeTrackDef(i: number) {
 }
 
 defineEmits<{ navigate: [page: string] }>()
-
-import { computed } from 'vue'
 </script>
 
 <template>
-  <section>
+  <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.timelineTracks.title') }}</h2>
 
     <div class="card">

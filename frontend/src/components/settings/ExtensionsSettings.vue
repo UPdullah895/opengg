@@ -8,6 +8,7 @@ import { useExtensionStore, type ExtManifest, type ExtRuntime } from '../../stor
 import { useModalStore } from '../../stores/modal'
 import { useToast } from '../../composables/useToast'
 import InfoIcon from '../InfoIcon.vue'
+import './settings-shared.css'
 
 const { t } = useI18n()
 const persist = usePersistenceStore()
@@ -205,7 +206,7 @@ defineEmits<{ navigate: [page: string] }>()
 </script>
 
 <template>
-  <section>
+  <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.extensions.title') }}</h2>
 
     <!-- Core Modules -->

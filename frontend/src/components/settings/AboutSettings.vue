@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { deps, deviceAccess, loadDeviceAccessStatus } from '../../composables/useDependencyStatus'
+import './settings-shared.css'
 
 const { t } = useI18n()
 
@@ -22,7 +23,7 @@ defineEmits<{ navigate: [page: string] }>()
 </script>
 
 <template>
-  <section>
+  <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.sections.about') }}</h2>
 
     <!-- Hero card -->

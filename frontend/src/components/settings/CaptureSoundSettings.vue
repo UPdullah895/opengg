@@ -7,6 +7,7 @@ import { useToast } from '../../composables/useToast'
 import { missing } from '../../composables/useDependencyStatus'
 import SelectField from '../SelectField.vue'
 import InfoIcon from '../InfoIcon.vue'
+import './settings-shared.css'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -192,7 +193,7 @@ defineEmits<{ navigate: [page: string] }>()
 </script>
 
 <template>
-  <section>
+  <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.captureSound.title') }}</h2>
 
     <!-- GPU Screen Recorder panel (top) -->

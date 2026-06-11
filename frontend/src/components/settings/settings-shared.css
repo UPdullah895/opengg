@@ -1,0 +1,752 @@
+/**
+ * Settings Shared Styles
+ *
+ * This file contains all shared chrome styles for the SettingsPage decomposed components.
+ * These styles were extracted from the original SettingsPage.vue <style scoped> block.
+ *
+ * The styles are namespaced under a `.settings-section` wrapper class to avoid collisions
+ * with other parts of the app (e.g., HomePage.vue also uses .card but with different styling).
+ *
+ * Each settings child component imports this file and wraps its root <section> with
+ * class="settings-section" to inherit all shared rules.
+ *
+ * This is an intentional exception to the scoped CSS rule documented in CLAUDE.md —
+ * shared decomposition patterns are expected and acceptable.
+ */
+
+.settings-section .sec-title {
+  font-size: 18px; font-weight: 700; margin-bottom: 20px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--border);
+}
+
+/* ── Card ── */
+.settings-section .card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 20px; margin-bottom: 16px;
+}
+.settings-section .card-head {
+  display: flex; align-items: center;
+  font-size: 13px; font-weight: 700; margin-bottom: 14px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.settings-section .card-head-row {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; font-weight: 700; margin-bottom: 14px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.settings-section .card-head-label { font-size: 13px; font-weight: 700; color: var(--text); }
+.settings-section .hint { font-size: 12px; color: var(--text-sec); margin-bottom: 14px; line-height: 1.5; }
+
+/* ── Row setting (label + toggle) ── */
+.settings-section .row-setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 0; }
+.settings-section .row-label { display: flex; flex-direction: column; gap: 3px; }
+.settings-section .row-title { font-size: 13px; font-weight: 600; }
+.settings-section .row-sub { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+
+/* iOS-style toggle */
+.settings-section .tog { position: relative; display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0; }
+.settings-section .tog input { position: absolute; opacity: 0; width: 0; height: 0; }
+.settings-section .tog-track { display: block; width: 40px; height: 22px; border-radius: 11px; background: var(--border); transition: background .2s; }
+.settings-section .tog input:checked ~ .tog-track { background: var(--accent); }
+.settings-section .tog-thumb { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: left .2s; }
+.settings-section .tog input:checked ~ .tog-track .tog-thumb { left: 21px; }
+
+/* ── Fields ── */
+.settings-section .field-row { display: flex; gap: 20px; flex-wrap: wrap; }
+.settings-section .field { flex: 1; min-width: 180px; }
+.settings-section .field label {
+  display: block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--text-sec); margin-bottom: 6px;
+}
+.settings-section .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
+.settings-section .gsr-grid { margin-top: 14px; }
+.settings-section .gsr-custom-secs {
+  margin-top: 6px; width: 100%; padding: 5px 8px;
+  border-radius: 5px; border: 1px solid var(--border);
+  background: var(--bg-input); color: var(--text);
+  font-size: 12px; outline: none;
+}
+.settings-section .gsr-custom-secs:focus { border-color: var(--accent); }
+.settings-section .gsr-head { display: flex; align-items: center; gap: 8px; }
+.settings-section .gsr-est { margin-inline-start: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.settings-section .gsr-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; }
+.settings-section .gsr-label { font-size: 13px; color: var(--text-sec); }
+.settings-section .gsr-install-toggle { display: block; margin: 6px 0; padding: 0; border: none; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; text-align: left; font-weight: 600; }
+.settings-section .gsr-install-toggle:hover { text-decoration: underline; }
+.settings-section .gsr-install-guide { margin: 8px 0 12px; padding: 12px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius, 6px); display: flex; flex-direction: column; gap: 10px; }
+.settings-section .install-section { display: flex; flex-direction: column; gap: 4px; }
+.settings-section .install-distro { font-size: 10px; font-weight: 700; color: var(--text-sec); text-transform: uppercase; letter-spacing: .5px; }
+.settings-section .install-cmd { font-family: monospace; font-size: 11px; color: var(--text); background: var(--bg-input); padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border); display: block; word-break: break-all; }
+.settings-section .badge-beta { font-size: 10px; font-weight: 700; background: var(--accent); color: #fff; padding: 2px 6px; border-radius: 4px; letter-spacing: .4px; }
+.settings-section .toggle-btn {
+  width: 40px; height: 22px; border-radius: 11px; border: none; cursor: pointer;
+  background: var(--bg-deep); border: 1px solid var(--border); position: relative;
+  transition: background .2s, border-color .2s; flex-shrink: 0;
+}
+.settings-section .toggle-btn.on { background: var(--accent); border-color: var(--accent); }
+.settings-section .toggle-knob {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  background: #fff; border-radius: 50%; transition: left .2s;
+}
+.settings-section .toggle-btn.on .toggle-knob { left: 20px; }
+
+/* ── Buttons ── */
+.settings-section .btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-card); color: var(--text-sec); font-size: 12px; cursor: pointer;
+  white-space: nowrap; transition: background .12s, color .12s, border-color .12s;
+}
+.settings-section .btn svg { width: 14px; height: 14px; }
+.settings-section .btn:hover { background: var(--bg-hover); color: var(--text); }
+.settings-section .btn:disabled { opacity: .45; cursor: not-allowed; }
+.settings-section .btn-accent { border-color: var(--accent); color: var(--accent); }
+.settings-section .btn-accent:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.settings-section .btn-warn { border-color: var(--danger); color: var(--danger); }
+.settings-section .btn-warn:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.settings-section .btn-ghost { border-color: transparent; color: var(--accent); font-size: 12px; padding: 5px 0; }
+.settings-section .btn-ghost:hover { background: transparent; color: color-mix(in srgb, var(--accent) 70%, white); }
+
+.settings-section .btn-icon {
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; border-radius: var(--radius);
+  cursor: pointer; color: var(--text-muted); transition: all .12s;
+}
+.settings-section .btn-icon svg { width: 13px; height: 13px; }
+.settings-section .btn-remove:hover { border-color: var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+
+/* ── Color row (accent) ── */
+.settings-section .color-row { display: flex; gap: 8px; align-items: center; }
+.settings-section .color-picker { width: 38px; height: 34px; border: 1px solid var(--border); border-radius: var(--radius); background: none; cursor: pointer; padding: 2px; }
+.settings-section .color-hex { width: 88px; padding: 7px 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-size: 12px; font-family: monospace; outline: none; color-scheme: dark; }
+
+/* ── Toggles ── */
+.settings-section .toggle-row {
+  display: flex; align-items: center; gap: 12px; padding: 9px 12px; margin-bottom: 5px;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; font-size: 13px;
+}
+.settings-section .toggle-row input { accent-color: var(--accent); width: 15px; height: 15px; flex-shrink: 0; }
+.settings-section .tname { font-weight: 600; min-width: 140px; }
+.settings-section .tdesc { color: var(--text-sec); flex: 1; font-size: 12px; }
+
+/* ── Daemon toggle rows (On/Off switch style) ── */
+.settings-section .daemon-toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.settings-section .daemon-toggle-row:last-child { border-bottom: none; padding-bottom: 0; }
+.settings-section .daemon-toggle-info { display: flex; flex-direction: column; gap: 3px; flex: 1; margin-right: 16px; }
+.settings-section .daemon-toggle-info .tname { font-weight: 600; font-size: 13px; color: var(--text); min-width: unset; }
+.settings-section .daemon-toggle-info .tdesc { color: var(--text-sec); font-size: 12px; line-height: 1.4; }
+.settings-section .mode-toggle-row {
+  display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; font-size: 13px; font-weight: 600;
+}
+.settings-section .mode-toggle-row input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+/* ── About ── */
+.settings-section .about-row { font-size: 13px; color: var(--text-sec); margin-bottom: 4px; line-height: 1.8; }
+.settings-section .about-row strong { color: var(--text); }
+.settings-section .about-row.muted { color: var(--text-muted); }
+.settings-section .about-row.saved { font-size: 11px; color: var(--success); }
+.settings-section .link { color: var(--accent); text-decoration: none; }
+.settings-section .link:hover { text-decoration: underline; }
+
+/* ── Language ── */
+.settings-section .lang-list { display: flex; flex-direction: column; gap: 6px; }
+.settings-section .lang-btn {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; width: 100%;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius); cursor: pointer; color: var(--text-sec);
+  transition: all .12s; text-align: start;
+}
+.settings-section .lang-btn:hover { border-color: var(--accent); color: var(--text); }
+.settings-section .lang-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--text); }
+.settings-section .lang-left { display: flex; align-items: center; gap: 10px; }
+.settings-section .lang-code { font-size: 11px; font-weight: 800; color: var(--accent); min-width: 26px; }
+.settings-section .lang-label { font-size: 14px; font-weight: 600; }
+.settings-section .lang-dir-badge { font-size: 10px; color: var(--text-muted); background: var(--bg-deep); padding: 2px 6px; border-radius: 3px; flex-shrink: 0; }
+.settings-section .lang-rtl-btn { padding: 6px 16px; border-radius: 20px; border: 1px solid var(--border); background: var(--bg-surface); color: var(--text-sec); font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s; }
+.settings-section .lang-rtl-btn:hover { color: var(--text); border-color: var(--accent); }
+.settings-section .lang-rtl-btn.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); border-color: var(--accent); }
+.settings-section .path-hint { font-size: 11px; color: var(--text-muted); font-family: monospace; margin-inline-start: 8px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-section .lang-actions { display: flex; align-items: center; gap: 4px; margin-inline-start: auto; }
+
+/* Icon button tooltip (for lang-actions buttons) */
+.settings-section .theme-icon-btn { position: relative; }
+.settings-section .info-tooltip-wrap { pointer-events: none; }
+.settings-section .btn-tooltip {
+  position: absolute; bottom: calc(100% + 6px); left: 50%;
+  transform: translateX(-50%);
+  white-space: normal; max-width: 220px; text-align: center;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 8px; font-size: 11px; color: var(--text-sec);
+  box-shadow: 0 4px 12px rgba(0,0,0,.4);
+  opacity: 0; transition: opacity .15s; z-index: 9999;
+  font-weight: 400;
+}
+.settings-section .theme-icon-btn:hover .btn-tooltip { opacity: 1; }
+.settings-section .lang-actions .btn-tooltip { left: auto; right: 0; transform: none; text-align: end; }
+[data-tooltip-pos="below"] .settings-section .btn-tooltip { bottom: auto; top: calc(100% + 6px); }
+.settings-section .spinning { animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Shortcuts ── */
+.settings-section .shortcut-hdr { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
+.settings-section .btn-reset-sc {
+  padding:5px 12px; border-radius:6px; border:1px solid var(--border);
+  background:var(--bg-deep); color:var(--text-sec); font-size:12px; cursor:pointer; white-space:nowrap;
+  transition:all .15s;
+}
+.settings-section .btn-reset-sc:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+.settings-section .btn-reset-sc:disabled { opacity:.4; cursor:default; }
+.settings-section .shortcut-list { display: flex; flex-direction: column; }
+.settings-section .shortcut-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.settings-section .shortcut-row:last-child { border-bottom: none; }
+.settings-section .shortcut-action { flex: 1; color: var(--text-sec); display: flex; align-items: center; gap: 6px; }
+.settings-section .sc-info {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0;
+  background: var(--bg-deep); border: 1px solid var(--border);
+  color: var(--text-muted); font-size: 9px; font-weight: 800;
+  cursor: help; transition: border-color .12s, color .12s;
+}
+.settings-section .sc-info:hover { border-color: var(--accent); color: var(--accent); }
+.settings-section .shortcut-key {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 14px; min-width: 130px; justify-content: center;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius); font-size: 12px; font-weight: 600;
+  color: var(--text-sec); cursor: pointer; font-family: monospace;
+  transition: border-color .12s, color .12s, background .12s;
+}
+.settings-section .shortcut-key:hover { border-color: var(--accent); color: var(--accent); }
+.settings-section .shortcut-key.recording {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-family: inherit; font-size: 11px;
+}
+.settings-section .rec-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); flex-shrink: 0;
+  animation: blink 1s infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+
+/* ── Capture tracks ── */
+.settings-section .capture-tracks { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.settings-section .capture-row { display: flex; align-items: center; gap: 10px; }
+.settings-section .capture-track-name {
+  width: 65px; flex-shrink: 0; font-size: 12px; font-weight: 700;
+  color: var(--text-sec); text-transform: uppercase; letter-spacing: .5px;
+}
+.settings-section .capture-select-wrap { flex: 1; }
+.settings-section .add-row { margin-top: 4px; }
+
+/* ── Track colors ── */
+.settings-section .color-tracks { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+/* Strict 5-column grid: swatch | name | color-picker | hex | remove-or-placeholder
+   Every row has exactly 5 cells so columns stay vertically aligned. */
+.settings-section .color-track-row {
+  display: grid;
+  grid-template-columns: 20px 1fr 36px 64px 26px;
+  align-items: center;
+  gap: 10px;
+}
+.settings-section .track-swatch { width: 20px; height: 20px; border-radius: 4px; border: 1px solid rgba(255,255,255,.1); }
+.settings-section .track-name-lbl { font-size: 13px; color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-section .track-color-input {
+  width: 36px; height: 32px; padding: 2px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: transparent; cursor: pointer;
+}
+.settings-section .track-hex { font-size: 11px; font-family: monospace; color: var(--text-muted); }
+/* Invisible placeholder — same dimensions as .btn-icon — keeps grid aligned */
+.settings-section .btn-placeholder { width: 26px; height: 26px; }
+
+/* ── Action row ── */
+.settings-section .action-row { display: flex; align-items: center; gap: 10px; }
+.settings-section .cache-msg { font-size: 11px; color: var(--text-muted); }
+
+/* ── Folder row ── */
+.settings-section .folder-row { display: flex; gap: 8px; align-items: center; }
+.settings-section .source-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--bg-deep); border-radius: 6px; margin-bottom: 6px; }
+.settings-section .source-path { flex: 1; font-size: 12px; color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-section .btn-icon-sm { width: 22px; height: 22px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--text-muted); font-size: 11px; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; } .settings-section .btn-icon-sm:hover { background: rgba(220,38,38,.15); color: var(--danger); border-color: var(--danger); }
+.settings-section .badge-count { display: inline-block; background: var(--accent); color: #fff; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 10px; margin-left: 6px; vertical-align: middle; }
+.settings-section .folder-input {
+  flex: 1; padding: 8px 12px; background: var(--bg-input);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); outline: none; font-size: 13px; color-scheme: dark;
+}
+.settings-section .folder-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-input); color: var(--text-sec); font-size: 13px; cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+  text-align: left; flex: 1; font-family: inherit;
+}
+.settings-section .folder-btn:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--text); }
+.settings-section .folder-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; -webkit-user-select: text; }
+.settings-section .folder-chevron { width: 14px; height: 14px; flex-shrink: 0; opacity: .5; }
+
+/* ── Media Directories card ── */
+.settings-section .media-dir-row { display: flex; flex-direction: column; gap: 6px; }
+.settings-section .media-dir-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); }
+.settings-section .media-dir-extra { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.settings-section .media-dir-divider { height: 1px; background: var(--border); margin: 10px 0; }
+.settings-section .btn-sm { font-size: 11px; padding: 4px 10px; }
+
+/* ── Storage stats ── */
+.settings-section .storage-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.settings-section .stat-pill {
+  display: flex; flex-direction: column; gap: 3px; padding: 10px 16px;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); min-width: 90px;
+}
+.settings-section .stat-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--text-muted); }
+.settings-section .stat-val { font-size: 18px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.settings-section .stat-val.accent { color: var(--accent); }
+.settings-section .progress-bar-wrap { height: 8px; background: var(--bg-deep); border-radius: 4px; overflow: hidden; border: 1px solid var(--border); margin-bottom: 8px; }
+.settings-section .progress-bar { height: 100%; border-radius: 4px; transition: width .4s ease; }
+.settings-section .progress-label { font-size: 11px; color: var(--text-muted); }
+
+/* ── Placeholder ── */
+.settings-section .placeholder-box {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; padding: 40px; color: var(--text-muted); font-size: 13px;
+}
+.settings-section .placeholder-box svg { width: 40px; height: 40px; opacity: .3; }
+
+/* ── Extensions ── */
+.settings-section .ext-toggle-row {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 0; border-bottom: 1px solid var(--border); cursor: default;
+}
+.settings-section .ext-toggle-row:last-child { border-bottom: none; padding-bottom: 0; }
+.settings-section .ext-toggle-info { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.settings-section .ext-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.settings-section .ext-desc { font-size: 12px; color: var(--text-sec); line-height: 1.4; }
+.settings-section .ext-switch-wrap { flex-shrink: 0; }
+.settings-section .ext-restart-hint { margin-top: 4px; font-size: 11px; color: var(--text-muted); }
+
+/* iOS-style toggle switch */
+.settings-section .switch { position: relative; display: inline-block; width: 40px; height: 22px; cursor: pointer; }
+.settings-section .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.settings-section .switch-track {
+  position: absolute; inset: 0; border-radius: 11px;
+  background: var(--bg-deep); border: 1px solid var(--border);
+  transition: background .18s, border-color .18s;
+}
+.settings-section .switch-track::after {
+  content: ''; position: absolute; left: 3px; top: 50%; transform: translateY(-50%);
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--text-muted); transition: left .18s, background .18s;
+}
+.settings-section .switch input:checked + .switch-track {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
+}
+.settings-section .switch input:checked + .switch-track::after {
+  left: calc(100% - 17px); background: var(--accent);
+}
+
+/* ── Extension card rows (professional card layout) ── */
+.settings-section .ext-card-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.settings-section .ext-card-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+.settings-section .ext-card-icon-wrap {
+  flex-shrink: 0;
+  width: 42px; height: 42px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ext-clr, var(--accent)) 18%, var(--bg-deep));
+  border: 1px solid color-mix(in srgb, var(--ext-clr, var(--accent)) 35%, transparent);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ext-clr, var(--accent));
+}
+.settings-section .ext-card-icon-wrap svg { width: 20px; height: 20px; }
+.settings-section .plugin-icon { width: 24px; height: 24px; object-fit: contain; }
+
+.settings-section .ext-card-info {
+  flex: 1;
+  display: flex; flex-direction: column; gap: 3px;
+  min-width: 0;
+}
+
+.settings-section .ext-card-title-row {
+  display: flex; align-items: center; gap: 6px;
+}
+
+.settings-section .ext-gear-btn {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent;
+  color: var(--text-muted); border-radius: 4px;
+  cursor: pointer; transition: all .15s;
+  padding: 0;
+}
+.settings-section .ext-gear-btn svg { width: 13px; height: 13px; }
+.settings-section .ext-gear-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+
+.settings-section .ext-card-switch { flex-shrink: 0; }
+
+/* ── Extension settings panel modal ── */
+.settings-section .ext-modal-overlay {
+  position: fixed; inset: 0; z-index: 9000;
+  background: rgba(0,0,0,.78);
+  backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+}
+.settings-section .ext-modal-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  width: 520px; max-width: 92vw;
+  max-height: 86vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 24px 64px rgba(0,0,0,.6);
+  overflow: hidden;
+}
+.settings-section .ext-modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-section .ext-modal-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.settings-section .ext-modal-close {
+  width: 28px; height: 28px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-muted);
+  border-radius: 6px; cursor: pointer; transition: all .15s;
+}
+.settings-section .ext-modal-close svg { width: 16px; height: 16px; }
+.settings-section .ext-modal-close:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+.settings-section .ext-modal-body { overflow-y: auto; }
+
+.settings-section .plugin-ver { font-size: 10px; color: var(--text-muted); margin-left: 2px; }
+
+/* ── Plugin list ── */
+.settings-section .plugin-row { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.settings-section .plugin-row:last-child { border-bottom: none; padding-bottom: 0; }
+.settings-section .plugin-info { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+.settings-section .plugin-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.settings-section .plugin-ver { font-size: 10px; color: var(--text-muted); }
+.settings-section .plugin-desc { font-size: 11px; color: var(--text-sec); margin: 0; line-height: 1.4; }
+.settings-section .btn-sm { padding: 4px 10px; font-size: 11px; }
+
+/* ── Timeline Tracks ── */
+.settings-section .tdef-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.settings-section .tdef-row {
+  display: grid;
+  grid-template-columns: 28px 20px 1fr auto 28px;
+  align-items: center;
+  gap: 8px;
+}
+.settings-section .tdef-swatch {
+  width: 20px; height: 20px; border-radius: 4px; border: 1px solid rgba(255,255,255,.1);
+  flex-shrink: 0; cursor: pointer; transition: transform .1s;
+}
+.settings-section .tdef-swatch:hover { transform: scale(1.15); }
+.settings-section .tdef-color-hidden { position: absolute; left: -9999px; opacity: 0; width: 0; height: 0; pointer-events: none; }
+.settings-section .tdef-name-input {
+  padding: 6px 10px; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius); color: var(--text); font-size: 12px;
+  outline: none; width: 100%; color-scheme: dark;
+}
+.settings-section .tdef-name-input:focus { border-color: var(--accent); }
+
+/* ── Live Timeline Preview ── */
+.settings-section .tl-preview {
+  background: var(--bg-deep); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+}
+.settings-section .tl-preview-row {
+  display: flex; align-items: center; gap: 8px;
+  height: 32px; padding: 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  transition: background .1s;
+}
+.settings-section .tl-preview-row:last-child { border-bottom: none; }
+.settings-section .tl-preview-row:hover { background: var(--bg-hover); }
+.settings-section .tl-pv-accent { width: 3px; height: 18px; border-radius: 2px; background: var(--pv); flex-shrink: 0; }
+.settings-section .tl-pv-id { font-size: 9px; font-weight: 800; color: var(--text-muted); letter-spacing: .5px; min-width: 22px; font-family: monospace; }
+.settings-section .tl-pv-icon { width: 12px; height: 12px; color: var(--pv); opacity: .8; flex-shrink: 0; }
+.settings-section .tl-pv-name { font-size: 11px; font-weight: 600; min-width: 80px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.settings-section .tl-pv-track-body { flex: 1; height: 14px; background: color-mix(in srgb, var(--pv) 10%, transparent); border-radius: 3px; overflow: hidden; position: relative; }
+.settings-section .tl-pv-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 70%; background: color-mix(in srgb, var(--pv) 28%, transparent); border-radius: 3px; }
+
+/* ── Danger Zone ── */
+.settings-section .danger-zone-card { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.settings-section .danger-head { color: var(--danger) !important; display: flex; align-items: center; gap: 8px; }
+.settings-section .danger-action-row { display: flex; align-items: flex-start; gap: 16px; }
+.settings-section .danger-info { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.settings-section .danger-label { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; }
+.settings-section .btn-danger {
+  display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+  padding: 8px 16px; border: 1px solid var(--danger);
+  border-radius: var(--radius); background: transparent;
+  color: var(--danger); font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: background .12s; white-space: nowrap;
+}
+.settings-section .btn-danger svg { width: 13px; height: 13px; }
+.settings-section .btn-danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.settings-section .btn-danger:disabled { opacity: .45; cursor: not-allowed; }
+.settings-section .danger-msg { margin-top: 12px; font-size: 12px; color: var(--danger); padding: 8px 12px; background: color-mix(in srgb, var(--danger) 8%, transparent); border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent); }
+.settings-section .danger-ok { color: var(--success); background: color-mix(in srgb, var(--success) 8%, transparent); border-color: color-mix(in srgb, var(--success) 25%, transparent); }
+
+/* ── Theme icon buttons ── */
+.settings-section .theme-actions { display: flex; align-items: center; gap: 4px; margin-inline-start: auto; }
+.settings-section .theme-icon-btn {
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-deep);
+  color: var(--text-muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .15s;
+}
+.settings-section .theme-icon-btn svg { width: 14px; height: 14px; }
+.settings-section .theme-icon-btn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.settings-section .theme-icon-btn.active { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.settings-section .theme-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── Storage side-by-side grid ── */
+.settings-section .storage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.settings-section .steam-storage-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.settings-section .steam-storage-copy { min-width:0; }
+.settings-section .steam-storage-title { font-size:13px; font-weight:700; color:var(--text); }
+.settings-section .steam-storage-body { margin-top:4px; font-size:12px; color:var(--text-sec); line-height:1.45; }
+.settings-section .steam-storage-btn { flex-shrink:0; }
+.settings-section .steam-storage-list { display:flex; flex-direction:column; gap:8px; max-height:280px; overflow:auto; padding-right:4px; }
+.settings-section .steam-storage-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-deep); }
+.settings-section .steam-storage-icon { width:24px; height:24px; border-radius:6px; object-fit:cover; flex-shrink:0; }
+.settings-section .steam-storage-icon--fallback { display:flex; align-items:center; justify-content:center; background:color-mix(in srgb, var(--accent) 18%, var(--bg-card)); color:var(--accent); font-size:11px; font-weight:800; }
+.settings-section .steam-storage-name { font-size:12px; color:var(--text); }
+
+/* ── Disabled track delete button ── */
+.settings-section .btn-icon:disabled { opacity: .35; cursor: not-allowed; }
+
+/* ── Shortcut header label ── */
+.settings-section .shortcut-hdr-label { font-size: 12px; color: var(--text-sec); display: flex; align-items: center; }
+
+/* ── About page ── */
+.settings-section .hero-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 32px 28px;
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px;
+}
+.settings-section .logo-svg { margin-bottom: 4px; }
+.settings-section .about-app-name { font-size: 28px; font-weight: 800; color: var(--text); letter-spacing: -0.5px; margin: 0; }
+.settings-section .version-badge {
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  padding: 3px 12px; border-radius: 20px; margin: 0;
+}
+.settings-section .about-tagline { font-size: 14px; font-weight: 600; color: var(--text-sec); margin: 4px 0 0; }
+.settings-section .about-desc { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin: 0; max-width: 420px; }
+.settings-section .goals-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; }
+.settings-section .goals-list { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 12px; }
+.settings-section .goals-list li { font-size: 13px; color: var(--text-sec); line-height: 1.5; padding-left: 18px; position: relative; }
+.settings-section .goals-list li::before { content: '▸'; position: absolute; left: 0; color: var(--accent); font-size: 12px; top: 2px; }
+.settings-section .connect-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; }
+.settings-section .social-links { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.settings-section .social-btn {
+  display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text-sec); font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; text-align: left;
+}
+.settings-section .social-btn:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); border-color: var(--accent); }
+.settings-section .social-btn svg { flex-shrink: 0; opacity: .8; }
+.settings-section .social-btn:hover svg { opacity: 1; color: var(--accent); }
+.settings-section .about-contributors { font-size: 12px; color: var(--text-muted); text-align: center; margin: 0; padding: 8px 0 16px; }
+
+/* ── Notifications page ── */
+.settings-section .section-desc { font-size: 13px; color: var(--text-sec); margin: -8px 0 16px; line-height: 1.5; }
+.settings-section .notif-duration-field { margin-top: 16px; }
+.settings-section .notif-style-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 4px; }
+.settings-section .notif-option {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; transition: all .15s;
+}
+.settings-section .notif-option:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: var(--accent); }
+.settings-section .notif-option.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.settings-section .notif-option-icon { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: var(--text-sec); flex-shrink: 0; }
+.settings-section .notif-option.active .notif-option-icon { color: var(--accent); }
+.settings-section .notif-option-icon svg { width: 18px; height: 18px; }
+.settings-section .notif-option-label { font-size: 12px; font-weight: 600; color: var(--text-sec); }
+.settings-section .notif-option.active .notif-option-label { color: var(--accent); }
+.settings-section .notif-duration-slider {
+  width: 100%; margin-top: 8px;
+  -webkit-appearance: none; appearance: none;
+  height: 4px; background: var(--border); border-radius: 2px; outline: none;
+}
+.settings-section .notif-duration-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--bg-card);
+}
+.settings-section .notif-duration-slider::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--bg-card);
+}
+
+/* ── Track visibility button ── */
+.settings-section .track-vis-btn {
+  width: 26px; height: 26px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--text-muted); transition: color .12s; border-radius: 4px;
+}
+.settings-section .track-vis-btn:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.settings-section .track-vis-btn svg { width: 14px; height: 14px; }
+.settings-section .track-vis-btn.active { color: var(--accent); }
+
+/* ── Screenshot dirs list ── */
+.settings-section .media-dirs-list { display: flex; flex-direction: column; gap: 6px; }
+.settings-section .dir-icon { width: 16px; height: 16px; color: var(--text-muted); flex-shrink: 0; }
+.settings-section .folder-add-btn { align-self: flex-start; margin-top: 4px; }
+
+/* ── Extensions unified header ── */
+.settings-section .ext-section-head {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.settings-section .ext-head-actions {
+  display: flex; align-items: center; gap: 4px; margin-inline-start: auto;
+}
+.settings-section .ext-icon-btn {
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-deep);
+  color: var(--text-muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .15s; flex-shrink: 0;
+}
+.settings-section .ext-icon-btn svg { width: 14px; height: 14px; }
+.settings-section .ext-icon-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); border-color: var(--accent); }
+.settings-section .ext-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── Store placeholder ── */
+.settings-section .store-coming-soon {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; padding: 48px 28px; text-align: center;
+}
+.settings-section .store-icon {
+  width: 56px; height: 56px; opacity: .3; color: var(--text-sec);
+}
+.settings-section .store-coming-soon-title {
+  font-size: 18px; font-weight: 700; color: var(--text); margin: 0;
+}
+
+/* ── GSR Diagnostics ── */
+.settings-section .gsr-diagnostics .btn-sm {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg-deep);
+  color: var(--text-sec); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all .12s;
+}
+.settings-section .gsr-diagnostics .btn-sm:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); border-color: var(--accent); }
+.settings-section .gsr-diagnostics .btn-sm:disabled { opacity: .5; cursor: not-allowed; }
+.settings-section .diag-results { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius); border: 1px solid var(--border); font-size: 12px; }
+.settings-section .diag-ok { background: color-mix(in srgb, var(--success) 8%, transparent); border-color: color-mix(in srgb, var(--success) 25%, transparent); }
+.settings-section .diag-fail { background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: color-mix(in srgb, var(--danger) 25%, transparent); }
+.settings-section .diag-summary { font-weight: 700; margin-bottom: 6px; }
+.settings-section .diag-ok .diag-summary { color: var(--success); }
+.settings-section .diag-fail .diag-summary { color: var(--danger); }
+.settings-section .diag-item { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
+.settings-section .diag-item:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+.settings-section .diag-sev-error .diag-msg { color: var(--danger); }
+.settings-section .diag-sev-warning .diag-msg { color: var(--warn, #f59e0b); }
+.settings-section .diag-msg { font-weight: 600; line-height: 1.4; margin-bottom: 4px; }
+.settings-section .diag-fix { margin-top: 6px; padding: 8px 10px; background: var(--bg-deep); border-radius: var(--radius); border: 1px solid var(--border); }
+.settings-section .diag-fix-desc { font-size: 11px; color: var(--text-sec); margin-bottom: 6px; line-height: 1.4; }
+.settings-section .diag-fix-row { display: flex; align-items: center; gap: 8px; }
+.settings-section .diag-fix-cmd { flex: 1; font-family: monospace; font-size: 11px; color: var(--text); background: var(--bg-input); padding: 5px 8px; border-radius: 4px; border: 1px solid var(--border); display: block; word-break: break-all; }
+
+/* ── Danger-zone compact icon buttons ── */
+.settings-section .danger-icon-btn {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-deep); color: var(--text-muted);
+  cursor: pointer; transition: all .12s; flex-shrink: 0;
+}
+.settings-section .danger-icon-btn svg { width: 14px; height: 14px; }
+.settings-section .danger-icon-btn:hover { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.settings-section .danger-icon-btn--delete:hover { border-color: var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.settings-section .danger-icon-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ── Copyable install commands ── */
+.settings-section .install-cmd-wrap { display: flex; align-items: stretch; gap: 6px; }
+.settings-section .install-cmd-wrap .install-cmd { flex: 1; }
+.settings-section .diag-fix-row { display: flex; align-items: stretch; gap: 8px; }
+.settings-section .copy-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-deep); color: var(--text-muted);
+  cursor: pointer; transition: all .12s; flex-shrink: 0;
+}
+.settings-section .copy-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); border-color: var(--accent); }
+.settings-section .copy-btn.copied { background: color-mix(in srgb, var(--success) 10%, transparent); color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
+
+/* ── Card header action group ── */
+.settings-section .card-head-actions { display: flex; align-items: center; gap: 8px; margin-inline-start: auto; }
+
+/* ── Ear Blast Protection slider ── */
+.settings-section .ear-blast-slider {
+  width: 100%; margin-top: 8px;
+  -webkit-appearance: none; appearance: none;
+  height: 4px; background: var(--border); border-radius: 2px; outline: none;
+}
+.settings-section .ear-blast-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--bg-card);
+}
+.settings-section .ear-blast-slider::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--bg-card);
+}
+
+/* ── Ear Blast toggle button ── */
+.settings-section .eb-toggle-btn {
+  padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg-deep); color: var(--text-sec); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all .15s;
+}
+.settings-section .eb-toggle-btn:hover { border-color: var(--accent); color: var(--accent); }
+.settings-section .eb-toggle-btn--active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--accent);
+}
+.settings-section .eb-toggle-btn--active:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+/* ── Ear Blast channel pills ── */
+.settings-section .channel-checks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; margin-bottom: 10px; }
+.settings-section .channel-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg-deep); color: var(--text-sec); font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: all .12s; user-select: none;
+}
+.settings-section .channel-pill:hover { border-color: var(--accent); color: var(--text); }
+.settings-section .channel-pill--active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.settings-section .channel-pill--active:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}

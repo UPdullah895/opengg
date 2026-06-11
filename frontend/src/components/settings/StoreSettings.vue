@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import './settings-shared.css'
 
 const { t } = useI18n()
 
@@ -57,7 +58,7 @@ defineEmits<{ navigate: [page: string] }>()
 </script>
 
 <template>
-  <section>
+  <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.store.title') }}</h2>
 
     <div class="card browse-card">

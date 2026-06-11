@@ -6,6 +6,7 @@ import { usePersistenceStore } from '../../stores/persistence'
 import { loadTheme, saveTheme, getCurrentTheme, applyThemeMode, getThemeMode } from '../../utils/theme'
 import SelectField from '../SelectField.vue'
 import InfoIcon from '../InfoIcon.vue'
+import './settings-shared.css'
 
 const { t } = useI18n()
 const persist = usePersistenceStore()
@@ -78,7 +79,7 @@ defineEmits<{ navigate: [page: string] }>()
 </script>
 
 <template>
-  <section>
+  <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.general.title') }}</h2>
 
     <div class="card">

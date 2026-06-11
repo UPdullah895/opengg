@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePersistenceStore, DEFAULTS } from '../../stores/persistence'
 import InfoIcon from '../InfoIcon.vue'
+import './settings-shared.css'
 
 const { t } = useI18n()
 const persist = usePersistenceStore()
@@ -59,7 +60,7 @@ defineExpose({ onShortcutKeydown, recordingKey })
 </script>
 
 <template>
-  <section @keydown="onShortcutKeydown" tabindex="-1">
+  <section class="settings-section" @keydown="onShortcutKeydown" tabindex="-1">
     <h2 class="sec-title">{{ t('settings.shortcuts.title') }}</h2>
     <div class="card">
       <div class="shortcut-hdr">

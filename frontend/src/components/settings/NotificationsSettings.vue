@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { usePersistenceStore } from '../../stores/persistence'
 import SelectField from '../SelectField.vue'
 import InfoIcon from '../InfoIcon.vue'
+import './settings-shared.css'
 
 const { t } = useI18n()
 const persist = usePersistenceStore()
@@ -21,7 +22,7 @@ defineEmits<{ navigate: [page: string] }>()
 </script>
 
 <template>
-  <section>
+  <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.notificationsPage.title') }}</h2>
 
     <!-- Notification Style card -->

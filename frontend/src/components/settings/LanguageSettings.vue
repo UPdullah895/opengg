@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { usePersistenceStore } from '../../stores/persistence'
 import { LANGUAGES, registerLocale } from '../../i18n'
 import InfoIcon from '../InfoIcon.vue'
+import './settings-shared.css'
 
 const { t, locale } = useI18n()
 const persist = usePersistenceStore()
@@ -69,7 +70,7 @@ defineEmits<{ navigate: [page: string] }>()
 </script>
 
 <template>
-  <section>
+  <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.language.title') }}</h2>
     <div class="card">
       <div class="card-head">

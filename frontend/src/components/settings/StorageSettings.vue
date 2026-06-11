@@ -7,6 +7,7 @@ import { usePersistenceStore } from '../../stores/persistence'
 import { useReplayStore } from '../../stores/replay'
 import { mediaUrl } from '../../utils/assets'
 import InfoIcon from '../InfoIcon.vue'
+import './settings-shared.css'
 
 const { t } = useI18n()
 const persist = usePersistenceStore()
@@ -140,7 +141,7 @@ defineEmits<{ navigate: [page: string] }>()
 </script>
 
 <template>
-  <section>
+  <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.storage.title') }}</h2>
 
     <!-- Media directories -->
