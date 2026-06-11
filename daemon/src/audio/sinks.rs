@@ -321,7 +321,55 @@ fn setup_mic_loopback() -> Result<()> {
     }
 }
 
+/// Helper: Parse `pw-link -l` output to extract all existing links.
+/// Returns a set of (source_port, dest_port) tuples as they appear in the listing.
+/// Format:
+///   SourcePort
+///     |-> DestPort
+///     |-> DestPort2
+fn parse_pw_links() -> Result<std::collections::HashSet<(String, String)>> {
+    use std::collections::HashSet;
+
+    let output = subprocess::command("pw-link")
+        .args(["-l"])
+        .output()
+        .context("pw-link -l failed")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "pw-link -l exited non-zero: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let mut links = HashSet::new();
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut current_source: Option<String> = None;
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("|-> ") {
+            // Destination port line (arrow format)
+            if let Some(ref source) = current_source {
+                let dest = trimmed.strip_prefix("|-> ").unwrap_or("").trim().to_string();
+                if !dest.is_empty() {
+                    links.insert((source.clone(), dest));
+                }
+            }
+        } else if !trimmed.is_empty() && !trimmed.starts_with('|') {
+            // Likely a source port (port name at start of logical group)
+            // Only update if this line looks like a port (contains ':' and no arrows)
+            if trimmed.contains(':') && !trimmed.starts_with('|') {
+                current_source = Some(trimmed.to_string());
+            }
+        }
+    }
+
+    Ok(links)
+}
+
 /// Link each virtual sink's monitor output to the default audio device.
+/// With post-link verification and retry logic to handle WirePlumber startup races.
 pub fn setup_loopbacks() -> Result<()> {
     let output = subprocess::command("pactl")
         .args(["get-default-sink"])
@@ -337,29 +385,106 @@ pub fn setup_loopbacks() -> Result<()> {
     // Output channels only — Mic is a capture sink, not a playback sink.
     const OUTPUT_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
     tracing::info!("Linking virtual sinks → {default_sink}");
+
+    // Collect intended links for verification
+    let mut intended_links: Vec<(String, String, &str)> = Vec::new();
+
     for &ch in OUTPUT_CHANNELS {
         let sink_name = format!("OpenGG_{ch}");
         for port in ["FL", "FR"] {
-            // pw-link is idempotent — linking an already-linked pair does nothing
+            let source = format!("{sink_name}:monitor_{port}");
+            let dest = format!("{default_sink}:playback_{port}");
+            intended_links.push((source.clone(), dest.clone(), ch));
+
+            // Attempt initial link
             let result = subprocess::command("pw-link")
-                .args([
-                    &format!("{sink_name}:monitor_{port}"),
-                    &format!("{default_sink}:playback_{port}"),
-                ])
+                .args([&source, &dest])
                 .output();
 
             match result {
                 Ok(o) if !o.status.success() => {
                     let err = String::from_utf8_lossy(&o.stderr);
-                    // "already linked" is fine, anything else is a warning
-                    if !err.contains("already") {
-                        tracing::debug!("pw-link {sink_name}:{port} → {default_sink}: {err}");
+                    let err_str = err.trim();
+                    // "already linked" or "File exists" is fine, anything else is logged
+                    if !err_str.contains("already") && !err_str.contains("File exists") {
+                        tracing::debug!("pw-link {source} → {dest}: {err_str}");
                     }
                 }
-                Err(e) => tracing::warn!("pw-link failed: {e}"),
+                Err(e) => tracing::debug!("pw-link spawn failed: {e}"),
                 _ => {}
             }
         }
     }
+
+    // Post-link verification: retry missing links up to 3 times with backoff
+    const MAX_RETRIES: u32 = 3;
+    const RETRY_DELAY_MS: u64 = 500;
+
+    for attempt in 1..=MAX_RETRIES {
+        // Small delay before checking (allow WirePlumber/PipeWire to settle)
+        if attempt > 1 {
+            std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+        }
+
+        match parse_pw_links() {
+            Ok(existing_links) => {
+                let missing: Vec<(String, String, &str)> = intended_links
+                    .iter()
+                    .filter(|(src, dst, _)| !existing_links.contains(&(src.clone(), dst.clone())))
+                    .cloned()
+                    .collect();
+
+                if missing.is_empty() {
+                    tracing::debug!("Loopback verification passed (attempt {MAX_RETRIES}/{MAX_RETRIES})");
+                    return Ok(());
+                }
+
+                // Retry missing links
+                if attempt < MAX_RETRIES {
+                    tracing::debug!(
+                        "Loopback verification found {} missing links (attempt {}/{}), retrying...",
+                        missing.len(),
+                        attempt,
+                        MAX_RETRIES
+                    );
+
+                    for (source, dest, _) in missing.iter() {
+                        let _result = subprocess::command("pw-link")
+                            .args([source, dest])
+                            .output();
+                    }
+                } else {
+                    // Final attempt: log as error (non-fatal, but unmissable)
+                    for (source, dest, channel) in missing.iter() {
+                        tracing::error!(
+                            "Failed to link after {} retries: {} → {} (channel {}) — this channel may be silent",
+                            MAX_RETRIES,
+                            source,
+                            dest,
+                            channel
+                        );
+                    }
+                    tracing::error!(
+                        "Some loopback links could not be established. Check WirePlumber logs: systemctl --user status wireplumber"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to verify loopback links on attempt {}/{}: {}",
+                    attempt,
+                    MAX_RETRIES,
+                    e
+                );
+                if attempt == MAX_RETRIES {
+                    tracing::error!(
+                        "Could not verify loopback setup after {} attempts — continuing anyway",
+                        MAX_RETRIES
+                    );
+                }
+            }
+        }
+    }
+
     Ok(())
 }
