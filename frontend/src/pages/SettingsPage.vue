@@ -182,16 +182,11 @@ onMounted(async () => {
 }
 
 /* ── Content area ── */
+/* Gutter lives here so every sub-page gets it. Do NOT pad via
+   `.settings-content > *` with `section { display: contents }` — a
+   display:contents element generates no box, so its padding is discarded
+   (that combination glued the cards to the nav). */
 .settings-content {
-  flex: 1; overflow-y: auto; padding: 0;
-}
-.settings-content > * {
-  max-width: 100%;
-  padding: 20px 28px;
-}
-
-/* ── Shared card styles ── */
-section {
-  display: contents;
+  flex: 1; overflow-y: auto; padding: 24px 28px; min-width: 0;
 }
 </style>
