@@ -61,12 +61,7 @@ fn generate_session_token() -> String {
     format!("{:016x}{:016x}", h1, h2)
 }
 
-#[allow(dead_code)]
-pub fn spawn_media_server(clip_dirs: Vec<PathBuf>) -> (u16, String) {
-    spawn_media_server_with_extra_roots(clip_dirs, Vec::new())
-}
-
-pub fn spawn_media_server_with_extra_roots(clip_dirs: Vec<PathBuf>, extra_readonly_roots: Vec<PathBuf>) -> (u16, String) {
+pub fn spawn_media_server(clip_dirs: Vec<PathBuf>, extra_readonly_roots: Vec<PathBuf>) -> (u16, String) {
     let port = find_available_port();
     let token = generate_session_token();
     let token_clone = token.clone();

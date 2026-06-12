@@ -222,7 +222,11 @@ function applyAudioVolumes() {
   if (hasMulti) {
     for (const t of audioTracks) {
       const el = audioEls.value[t.id]
-      if (el) el.volume = (t.muted || t.volume <= 0) ? 0 : Math.min(1, (t.volume / 100) * localVol.value)
+      if (el) {
+        el.volume = (t.muted || t.volume <= 0) ? 0 : Math.min(1, (t.volume / 100) * localVol.value)
+        // True mute: volume 0 alone can be undone by element/UA quirks — set muted too.
+        el.muted = localVol.value <= 0 || t.muted
+      }
     }
   } else if (videoRef.value) {
     const t = audioTracks[0]

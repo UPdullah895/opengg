@@ -344,7 +344,7 @@ fn main() {
                     log::debug!("  → {}", root.display());
                 }
             }
-            let (port, token) = media_server::spawn_media_server_with_extra_roots(clip_dirs, steam_roots);
+            let (port, token) = media_server::spawn_media_server(clip_dirs, steam_roots);
             app.manage(MediaServerPort(port));
             app.manage(MediaServerToken(token.clone()));
             log::info!("Media server on http://localhost:{port}");

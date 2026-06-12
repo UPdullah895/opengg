@@ -178,7 +178,7 @@ defineExpose({ videoRef, playing, currentTime, duration, isFullscreen, seekTo, t
     <video
       ref="videoRef"
       :src="src"
-      :muted="isMuted"
+      :muted="multiTrack || isMuted"
       :controls="nativeControls ?? false"
       preload="metadata"
       class="cvp-video"
