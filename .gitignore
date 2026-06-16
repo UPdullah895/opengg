@@ -31,7 +31,7 @@ GEMINI.md
 *.rpm
 
 # Generated from opengg.desktop.template by dev.sh setup — path is machine-specific
-opengg.desktop
+/opengg.desktop
 
 # Runtime per-session logs
 Logs/
