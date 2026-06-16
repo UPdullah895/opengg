@@ -1,6 +1,10 @@
 [advisories]
 version = 2
-ignore = []
+ignore = [
+    # unic-ucd-version is unmaintained (RUSTSEC-2025-0098).
+    # Pulled in transitively by tauri-utils → tauri v2.x; no fix available upstream.
+    { id = "RUSTSEC-2025-0098" },
+]
 
 [bans]
 multiple-versions = "warn"
