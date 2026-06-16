@@ -45,7 +45,7 @@ name = "base64"
 version = "=0.21.7"
 
 [licenses]
-default = "allow"
+unlicensed = "allow"
 
 [sources]
 unknown-registry = "warn"
