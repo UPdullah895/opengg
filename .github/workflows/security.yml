@@ -1,0 +1,89 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Weekly security scan at 02:00 UTC on Mondays
+    - cron: '0 2 * * 1'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo-audit-daemon:
+    name: Cargo Audit (Daemon)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: daemon
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: cargo audit
+        working-directory: ./daemon
+
+  cargo-audit-tauri:
+    name: Cargo Audit (Tauri)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: cargo audit
+        working-directory: ./frontend/src-tauri
+
+  cargo-deny-daemon:
+    name: Cargo Deny (Daemon)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2.0.20
+        with:
+          log-level: warn
+          manifest-path: ./daemon/Cargo.toml
+          command: check advisories bans
+
+  cargo-deny-tauri:
+    name: Cargo Deny (Tauri)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2.0.20
+        with:
+          log-level: warn
+          manifest-path: ./frontend/src-tauri/Cargo.toml
+          command: check advisories bans
+
+  npm-audit:
+    name: npm Audit (Frontend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    # Set continue-on-error: true so moderate/low don't block PRs.
+    # The audit-level: high flag surfaces high+ vulnerabilities.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ./frontend/package-lock.json
+      - name: Run npm audit
+        run: npm audit --audit-level=high
