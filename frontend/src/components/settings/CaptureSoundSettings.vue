@@ -7,6 +7,7 @@ import { useToast } from '../../composables/useToast'
 import { missing } from '../../composables/useDependencyStatus'
 import SelectField from '../SelectField.vue'
 import InfoIcon from '../InfoIcon.vue'
+import ToggleSwitch from '../ToggleSwitch.vue'
 import './settings-shared.css'
 
 const { t } = useI18n()
@@ -149,8 +150,11 @@ watch(
 
 // ─── Capture tracks ───
 const CAPTURE_SOURCES = ['Game', 'Chat', 'Media', 'Aux', 'Mic']
-const captureSourceOptions = computed(() =>
-  CAPTURE_SOURCES.map(s => ({ value: s, label: t(`settings.captureSound.sources.${s}`) }))
+// Live, curated capture sources (OpenGG channel monitors + real hardware inputs /
+// output monitors), populated from the backend in onMounted. The fallback uses the
+// real OpenGG channel monitor node names so values stay valid before enumeration runs.
+const captureSourceOptions = ref<Array<{ value: string; label: string }>>(
+  CAPTURE_SOURCES.map(s => ({ value: `OpenGG_${s}.monitor`, label: s })),
 )
 
 const audioSinkOptions = ref<Array<{ value: string; label: string }>>([])
@@ -167,6 +171,10 @@ onMounted(async () => {
   } catch {
     audioSinkOptions.value = CAPTURE_SOURCES.map(s => ({ value: `OpenGG_${s}`, label: `OpenGG_${s}` }))
   }
+  try {
+    const sources = await invoke<Array<{ value: string; label: string }>>('list_capture_sources')
+    if (sources.length) captureSourceOptions.value = sources
+  } catch { /* keep fallback */ }
   try {
     sessionType.value = (await invoke<string>('get_session_type')) as typeof sessionType.value
   } catch { /* ignore */ }
@@ -194,8 +202,29 @@ onMounted(async () => {
 
 function addCaptureTrack() {
   const n = settings.value.captureTracks.length + 1
-  settings.value.captureTracks.push({ name: `Track ${n}`, source: 'Game' })
+  const def = captureSourceOptions.value[0]?.value ?? 'OpenGG_Game.monitor'
+  settings.value.captureTracks.push({ name: `Track ${n}`, source: def })
 }
+
+// ── Drag-to-reorder track rows (drag index held in a ref, NOT dataTransfer —
+// dataTransfer.getData returns '' on WebKitGTK per CLAUDE.md) ──
+const dragFrom = ref<number | null>(null)
+const dragOver = ref<number | null>(null)
+function onTrackDragStart(i: number, e: DragEvent) {
+  dragFrom.value = i
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+function onTrackDragOver(i: number) { dragOver.value = i }
+function onTrackDrop(i: number) {
+  const from = dragFrom.value
+  dragFrom.value = null
+  dragOver.value = null
+  if (from === null || from === i) return
+  const arr = settings.value.captureTracks
+  const [moved] = arr.splice(from, 1)
+  arr.splice(i, 0, moved)
+}
+function onTrackDragEnd() { dragFrom.value = null; dragOver.value = null }
 
 function removeCaptureTrack(i: number) {
   settings.value.captureTracks.splice(i, 1)
@@ -272,7 +301,10 @@ defineEmits<{ navigate: [page: string] }>()
             :options="monitorOptions"
             @update:modelValue="restartGsr"
           />
-          <span v-if="isWayland" class="hint" style="color:var(--warn,#f59e0b);margin-top:4px;font-size:11px">
+          <!-- Only warn about the X11-only "Fullscreen Application" mode when it is actually
+               offered in the dropdown. On Wayland that option is never added, so this stays
+               hidden instead of describing an unavailable choice. -->
+          <span v-if="isWayland && monitorOptions.some(o => o.value === 'focused')" class="hint" style="color:var(--warn,#f59e0b);margin-top:4px;font-size:11px">
             {{ t('settings.captureGsr.waylandHint') }}
           </span>
         </div>
@@ -281,19 +313,13 @@ defineEmits<{ navigate: [page: string] }>()
         <span class="gsr-label">{{ t('settings.captureGsr.autoStart') }}
           <InfoIcon :title="t('settings.captureGsr.autoStartTooltip')" />
         </span>
-        <button class="toggle-btn" :class="{ on: settings.gsrAutoStart }"
-                @click="settings.gsrAutoStart = !settings.gsrAutoStart">
-          {{ settings.gsrAutoStart ? 'On' : 'Off' }}
-        </button>
+        <ToggleSwitch v-model="settings.gsrAutoStart" />
       </div>
       <div v-if="settings.gsrEnabled" class="gsr-toggle-row">
         <span class="gsr-label">{{ t('settings.captureGsr.autoRestart') }}
           <InfoIcon :title="t('settings.captureGsr.autoRestartTooltip')" />
         </span>
-        <button class="toggle-btn" :class="{ on: settings.gsrAutoRestart }"
-                @click="settings.gsrAutoRestart = !settings.gsrAutoRestart">
-          {{ settings.gsrAutoRestart ? 'On' : 'Off' }}
-        </button>
+        <ToggleSwitch v-model="settings.gsrAutoRestart" />
       </div>
 
       <!-- ★ GSR Diagnostics -->
@@ -344,7 +370,21 @@ defineEmits<{ navigate: [page: string] }>()
           v-for="(track, i) in settings.captureTracks"
           :key="i"
           class="capture-row"
+          :class="{ 'drag-over': dragOver === i && dragFrom !== null && dragFrom !== i }"
+          @dragover.prevent="onTrackDragOver(i)"
+          @drop.prevent="onTrackDrop(i)"
         >
+          <button
+            class="capture-grip"
+            draggable="true"
+            :title="t('settings.captureSound.reorderTrack')"
+            @dragstart="onTrackDragStart(i, $event)"
+            @dragend="onTrackDragEnd"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="17" x2="16" y2="17"/>
+            </svg>
+          </button>
           <span class="capture-track-name">{{ t('settings.captureSound.trackLabel') }} {{ i + 1 }}</span>
           <div class="capture-select-wrap">
             <SelectField

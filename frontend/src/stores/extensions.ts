@@ -4,7 +4,7 @@
  *
  * Extensions are discovered on disk via the `scan_extensions` Tauri command.
  * Enabled extensions that declare a `main` bundle are fetched at app boot
- * from `http://localhost:<port>/ext/<id>/<main>` and evaluated as IIFEs.
+ * from `http://127.0.0.1:<port>/ext/<id>/<main>` and evaluated as IIFEs.
  *
  * Each IIFE registers itself on the window global `window.__ext_<id>`:
  *   window.__ext_overlays_system = { settingsComponent: <VueComponent> }
@@ -67,7 +67,7 @@ export const useExtensionStore = defineStore('extensions', () => {
     if (!manifest.main || !port || !token) return
 
     const extId = manifest.id
-    const baseUrl = `http://localhost:${port}/ext/${encodeURIComponent(extId)}`
+    const baseUrl = `http://127.0.0.1:${port}/ext/${encodeURIComponent(extId)}`
 
     // ── 1. Fetch the IIFE bundle ──────────────────────────────────────────────
     let src: string

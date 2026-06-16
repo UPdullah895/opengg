@@ -440,6 +440,38 @@ fn get_sink_index_by_name(sink_name: &str) -> Result<u32, String> {
     Err(format!("sink '{sink_name}' not found"))
 }
 
+/// List all OpenGG PipeWire node IDs (from pactl list sinks/sources short)
+fn list_opengg_node_ids_async(sinks: &str, sources: &str) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for line in sinks.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let name = parts[1];
+            if name.starts_with("OpenGG_") && !name.contains(".monitor") {
+                if let Ok(id) = parts[0].parse::<u32>() {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+    }
+    for line in sources.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let name = parts[1];
+            if name.starts_with("OpenGG_") && !name.contains(".monitor") {
+                if let Ok(id) = parts[0].parse::<u32>() {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+    }
+    ids
+}
+
 /// Extended sink-input info for cross-referencing PipeWire IDs
 #[derive(Debug)]
 struct SiInfo {
@@ -1053,6 +1085,11 @@ fn is_internal_stream(
                     || raw.contains("pipewire")
                     || raw.contains("peak detect")
                     || raw.contains("monitor")
+                    // OpenGG-internal helpers that must never show as user apps:
+                    || raw.contains("pw-cat")          // native VU-meter readers
+                    || raw.contains("gsr-")            // gpu-screen-recorder captures
+                    || raw.contains("gpu-screen-recorder")
+                    || raw.contains("loopback")        // mic loopback helper streams
             })
             .unwrap_or(false)
     };
@@ -1957,14 +1994,13 @@ pub fn get_ear_blast_state(state: State<'_, crate::EarBlastState>) -> Result<Str
 
 const VIRTUAL_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
 
-/// Returns true if all 4 OpenGG virtual sinks are present in PipeWire.
+/// Returns true if any OpenGG virtual sink or source is present in PipeWire.
 #[command]
 pub async fn check_virtual_audio_status() -> Result<bool, String> {
-    let out = run_cmd_async("pactl", &["list", "sinks", "short"]).await.unwrap_or_default();
-    let all_present = VIRTUAL_CHANNELS
-        .iter()
-        .all(|ch| out.contains(&format!("OpenGG_{ch}")));
-    Ok(all_present)
+    let sinks = run_cmd_async("pactl", &["list", "sinks", "short"]).await.unwrap_or_default();
+    let sources = run_cmd_async("pactl", &["list", "sources", "short"]).await.unwrap_or_default();
+    let any_present = sinks.contains("OpenGG_") || sources.contains("OpenGG_");
+    Ok(any_present)
 }
 
 /// Create all OpenGG virtual null sinks via pactl (idempotent — skips existing).
@@ -2010,66 +2046,106 @@ pub async fn remove_virtual_audio() -> Result<(), String> {
         }
     }
 
-    // Step 2: Fallback — daemon unreachable; do local scan and unload
-    // This handles cases where the daemon crashed or isn't running.
-    // We unload null-sink, loopback, and remap-source modules, then restore defaults.
+    // Step 2: Fallback — daemon unreachable; enumerate and destroy mechanism-agnostically
+    // Delete legacy config, unload OpenGG modules, destroy nodes, retry bounded
 
-    let output = run_cmd_async("pactl", &["list", "modules"])
-        .await
-        .map_err(|e| format!("Failed to list PulseAudio modules: {e}"))?;
-
-    let mut indices_to_remove: Vec<u64> = Vec::new();
-    let mut current_index: Option<u64> = None;
-    let mut module_name = String::new();
-    let mut module_args = String::new();
-
-    for line in output.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("Module #") {
-            // Emit previous module if it matched
-            if let Some(idx) = current_index {
-                let is_null_sink = module_name == "module-null-sink" && module_args.contains("OpenGG_");
-                let is_loopback = module_name == "module-loopback" && module_args.contains("OpenGG_Mic");
-                let is_remap = module_name == "module-remap-source"
-                    && module_args.contains("OpenGG_Virtual_Mic");
-
-                if is_null_sink || is_loopback || is_remap {
-                    indices_to_remove.push(idx);
+    // Delete legacy config (same logic as daemon)
+    if let Ok(cfg_home) = std::env::var("XDG_CONFIG_HOME") {
+        let pw_dir = std::path::PathBuf::from(&cfg_home).join("pipewire/pipewire.conf.d");
+        if let Ok(entries) = std::fs::read_dir(&pw_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name == "opengg-sinks.conf" || (name.starts_with("opengg-") && name.ends_with(".conf")) {
+                        let _ = std::fs::remove_file(&path);
+                    }
                 }
             }
-            current_index = rest.parse().ok();
-            module_name.clear();
-            module_args.clear();
-        } else if trimmed.starts_with("Name:") {
-            module_name = trimmed.strip_prefix("Name:").unwrap_or("").trim().to_string();
-        } else if trimmed.starts_with("Argument:") {
-            module_args = trimmed.strip_prefix("Argument:").unwrap_or("").trim().to_string();
         }
-    }
-    // Emit the last module
-    if let Some(idx) = current_index {
-        let is_null_sink = module_name == "module-null-sink" && module_args.contains("OpenGG_");
-        let is_loopback = module_name == "module-loopback" && module_args.contains("OpenGG_Mic");
-        let is_remap = module_name == "module-remap-source" && module_args.contains("OpenGG_Virtual_Mic");
-
-        if is_null_sink || is_loopback || is_remap {
-            indices_to_remove.push(idx);
+    } else if let Some(home) = dirs::home_dir() {
+        let pw_dir = home.join(".config/pipewire/pipewire.conf.d");
+        if let Ok(entries) = std::fs::read_dir(&pw_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name == "opengg-sinks.conf" || (name.starts_with("opengg-") && name.ends_with(".conf")) {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
         }
     }
 
-    if indices_to_remove.is_empty() {
-        return Err("No OpenGG virtual audio modules found. They may have already been removed.".into());
-    }
+    const MAX_PASSES: u32 = 4;
+    const RETRY_DELAY_MS: u64 = 150;
 
-    // Unload all matched modules
-    for idx in &indices_to_remove {
-        run_cmd_async("pactl", &["unload-module", &idx.to_string()])
+    for pass in 1..=MAX_PASSES {
+        // Unload all OpenGG pactl modules (generalized: any module with OpenGG_ in args)
+        let modules_output = run_cmd_async("pactl", &["list", "modules"])
             .await
-            .map_err(|e| format!("Failed to unload module {idx}: {e}"))?;
+            .unwrap_or_default();
+
+        let mut current_index: Option<u64> = None;
+        let mut module_args = String::new();
+
+        for line in modules_output.lines() {
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("Module #") {
+                if let Some(idx) = current_index {
+                    if module_args.contains("OpenGG_") {
+                        let _ = run_cmd_async("pactl", &["unload-module", &idx.to_string()]).await;
+                    }
+                }
+                current_index = rest.parse().ok();
+                module_args.clear();
+            } else if trimmed.starts_with("Argument:") {
+                module_args = trimmed.strip_prefix("Argument:").unwrap_or("").trim().to_string();
+            }
+        }
+        // Emit the last module
+        if let Some(idx) = current_index {
+            if module_args.contains("OpenGG_") {
+                let _ = run_cmd_async("pactl", &["unload-module", &idx.to_string()]).await;
+            }
+        }
+
+        // Enumerate live OpenGG nodes and destroy them
+        let sinks = run_cmd_async("pactl", &["list", "sinks", "short"])
+            .await
+            .unwrap_or_default();
+        let sources = run_cmd_async("pactl", &["list", "sources", "short"])
+            .await
+            .unwrap_or_default();
+
+        let node_ids = list_opengg_node_ids_async(&sinks, &sources);
+        for id in node_ids {
+            let _ = run_cmd_async("pw-cli", &["destroy", &id.to_string()]).await;
+        }
+
+        // Check if clean
+        let sinks = run_cmd_async("pactl", &["list", "sinks", "short"])
+            .await
+            .unwrap_or_default();
+        let sources = run_cmd_async("pactl", &["list", "sources", "short"])
+            .await
+            .unwrap_or_default();
+
+        let remaining = list_opengg_node_ids_async(&sinks, &sources);
+        let modules = run_cmd_async("pactl", &["list", "modules", "short"])
+            .await
+            .unwrap_or_default();
+        let has_opengg_modules = modules.lines().any(|l| l.contains("OpenGG_"));
+
+        if remaining.is_empty() && !has_opengg_modules {
+            break;
+        }
+
+        if pass < MAX_PASSES {
+            tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+        }
     }
 
     // Restore OS defaults
-    // Pick first non-OpenGG sink
     let sinks = run_cmd_async("pactl", &["list", "sinks", "short"])
         .await
         .map_err(|e| format!("Failed to list sinks: {e}"))?;
@@ -2079,15 +2155,12 @@ pub async fn remove_virtual_audio() -> Result<(), String> {
         .find(|line| !line.contains("OpenGG_"))
         .and_then(|line| line.split_whitespace().nth(1))
     {
-        run_cmd_async("pactl", &["set-default-sink", first_real_sink])
-            .await
-            .ok(); // Non-fatal if this fails
+        let _ = run_cmd_async("pactl", &["set-default-sink", first_real_sink]).await;
         log::info!("Restored default sink: {first_real_sink}");
     } else {
         log::warn!("No non-OpenGG sinks found to restore as default");
     }
 
-    // Pick first non-OpenGG non-monitor source
     let sources = run_cmd_async("pactl", &["list", "sources", "short"])
         .await
         .map_err(|e| format!("Failed to list sources: {e}"))?;
@@ -2097,15 +2170,13 @@ pub async fn remove_virtual_audio() -> Result<(), String> {
         .find(|line| !line.contains("OpenGG_") && !line.contains(".monitor"))
         .and_then(|line| line.split_whitespace().nth(1))
     {
-        run_cmd_async("pactl", &["set-default-source", first_real_source])
-            .await
-            .ok(); // Non-fatal if this fails
+        let _ = run_cmd_async("pactl", &["set-default-source", first_real_source]).await;
         log::info!("Restored default source: {first_real_source}");
     } else {
         log::warn!("No non-OpenGG non-monitor sources found to restore as default");
     }
 
-    // Verify: re-list sinks and check for stragglers
+    // Verify
     let final_sinks = run_cmd_async("pactl", &["list", "sinks", "short"])
         .await
         .map_err(|e| format!("Failed to verify sinks: {e}"))?;
@@ -2235,6 +2306,75 @@ pub fn list_audio_sinks() -> Result<Vec<String>, String> {
         Err("No audio sinks found via pactl".into())
     } else {
         Ok(sinks)
+    }
+}
+
+/// A real, selectable capture source for the "Audio Capture Devices" dropdown.
+/// `value` is the real PipeWire node.name (what GSR records from); `label` is friendly.
+#[derive(Serialize)]
+pub struct CaptureSource {
+    pub value: String,
+    pub label: String,
+}
+
+/// Enumerate the live, curated list of capture sources for the recorder track dropdown:
+/// the OpenGG channel monitors (friendly channel names), real hardware capture inputs,
+/// and hardware output monitors. OpenGG-internal helpers (gsr-, pw-cat, loopback) and the
+/// duplicate OpenGG_Virtual_Mic remap are excluded. Replaces the old hardcoded five labels.
+#[command]
+pub fn list_capture_sources() -> Result<Vec<CaptureSource>, String> {
+    let output = std::process::Command::new("pactl")
+        .args(["list", "sources"])
+        .output()
+        .map_err(|e| format!("pactl not found: {e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    // Collect (node.name, friendly description) for every source. In `pactl list sources`,
+    // each block has a top-level "Name:" then "Description:" line (properties use the
+    // lowercase "device.description" form, which we deliberately don't match).
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut cur_name: Option<String> = None;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("Name: ") {
+            cur_name = Some(rest.trim().to_string());
+        } else if let Some(rest) = t.strip_prefix("Description: ") {
+            if let Some(n) = cur_name.take() {
+                pairs.push((n, rest.trim().to_string()));
+            }
+        }
+    }
+
+    let (mut og, mut inputs, mut monitors) = (Vec::new(), Vec::new(), Vec::new());
+    for (name, desc) in pairs {
+        let lower = name.to_lowercase();
+        if name == "OpenGG_Virtual_Mic"
+            || lower.contains("gsr-")
+            || lower.contains("pw-cat")
+            || lower.contains("loopback")
+        {
+            continue; // internal helper or duplicate of OpenGG_Mic.monitor
+        }
+        if let Some(ch) = name
+            .strip_prefix("OpenGG_")
+            .and_then(|s| s.strip_suffix(".monitor"))
+        {
+            og.push(CaptureSource { value: name.clone(), label: ch.to_string() });
+        } else if name.ends_with(".monitor") {
+            monitors.push(CaptureSource { value: name.clone(), label: format!("{desc} (Monitor)") });
+        } else {
+            inputs.push(CaptureSource { value: name.clone(), label: desc });
+        }
+    }
+
+    // Order: OpenGG channels, then hardware inputs, then hardware output monitors.
+    let mut out = og;
+    out.extend(inputs);
+    out.extend(monitors);
+    if out.is_empty() {
+        Err("No audio sources found via pactl".into())
+    } else {
+        Ok(out)
     }
 }
 

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { usePersistenceStore } from '../../stores/persistence'
 import IconPicker from '../IconPicker.vue'
 import InfoIcon from '../InfoIcon.vue'
+import TimelineTrackRow from '../TimelineTrackRow.vue'
 import './settings-shared.css'
 
 const { t } = useI18n()
@@ -75,21 +76,23 @@ defineEmits<{ navigate: [page: string] }>()
     <div class="card">
       <div class="card-head">{{ t('settings.timelineTracks.livePreview') }} <InfoIcon :title="t('settings.timelineTracks.livePreviewHint')" /></div>
       <div class="tl-preview">
-        <div v-for="def in settings.trackDefs" :key="def.id" class="tl-preview-row" :style="{ '--pv': def.color }">
-          <div class="tl-pv-accent"></div>
-          <span class="tl-pv-id">{{ def.id }}</span>
-          <svg v-if="def.visible" class="tl-pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path v-if="def.icon==='video'"   d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M3 6h10a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2z"/>
-            <path v-else-if="def.icon==='game'"    d="M6 11h4m-2-2v4m7-1h.01M18 11h.01M2 6a2 2 0 012-2h16a2 2 0 012 2v10a4 4 0 01-4 4H6a4 4 0 01-4-4V6z"/>
-            <path v-else-if="def.icon==='mic'"     d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3zM19 10v2a7 7 0 01-14 0v-2M12 19v3M8 23h8"/>
-            <path v-else-if="def.icon==='chat'"    d="M3 18v-6a9 9 0 0118 0v6M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/>
-            <path v-else-if="def.icon==='media'"   d="M9 18V5l12-2v13M9 19c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2zm12-3c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2z"/>
-            <path v-else-if="def.icon==='overlay'" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-          </svg>
-          <span class="tl-pv-name" :style="{ color: def.color }">{{ def.name || def.id }}</span>
-          <div class="tl-pv-track-body">
-            <div class="tl-pv-bar" :style="{ background: def.color }"></div>
+        <div v-for="def in settings.trackDefs" :key="def.id" class="tl-preview-row">
+          <!-- Header: constrained to 110px width like the editor -->
+          <div class="tl-preview-hdr">
+            <TimelineTrackRow
+              part="header"
+              :color="def.color"
+              :label="def.name || def.id"
+              :icon="def.icon"
+              :show-icon="def.visible"
+            />
           </div>
+          <!-- Body: flex to fill, with preview bar -->
+          <TimelineTrackRow
+            part="body"
+            :color="def.color"
+            preview
+          />
         </div>
       </div>
     </div>
@@ -97,5 +100,20 @@ defineEmits<{ navigate: [page: string] }>()
 </template>
 
 <style scoped>
-/* Inherited from parent */
+/* Live preview header wrapper */
+.tl-preview-hdr {
+  width: 110px;
+  flex-shrink: 0;
+  display: flex;
+}
+
+.tl-preview-hdr > * {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Body row stretches to fill remaining space */
+.tl-preview-row > :last-child {
+  flex: 1;
+}
 </style>

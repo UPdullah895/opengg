@@ -27,15 +27,6 @@ const selectedLabel = computed(() =>
 
 function pick(val: string | number) { emit('update:modelValue', val); open.value = false }
 
-function onWheel(e: WheelEvent) {
-  if (!open.value) return
-  e.preventDefault()
-  const opts = normalized.value
-  const cur = opts.findIndex(o => o.value === props.modelValue)
-  const next = cur + (e.deltaY > 0 ? 1 : -1)
-  if (next >= 0 && next < opts.length) pick(opts[next].value)
-}
-
 function onOutside(e: MouseEvent) {
   if (rootRef.value && !rootRef.value.contains(e.target as Node)) open.value = false
 }
@@ -57,7 +48,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onOutside))
       </svg>
     </button>
     <Transition name="sf-drop">
-      <div v-if="open" class="sf-dropdown" @wheel.prevent="onWheel">
+      <div v-if="open" class="sf-dropdown">
         <button
           v-for="opt in normalized"
           :key="opt.value"

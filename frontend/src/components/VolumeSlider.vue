@@ -9,12 +9,16 @@ const props = withDefaults(defineProps<{
   step?: number
   showValue?: boolean
   disabled?: boolean
+  unit?: string
+  compact?: boolean
 }>(), {
   min: 0,
   max: 100,
   step: 1,
   showValue: true,
   disabled: false,
+  unit: '%',
+  compact: false,
 })
 
 const emit = defineEmits<{ 'update:modelValue': [number] }>()
@@ -33,7 +37,7 @@ const pct = computed(() => {
 </script>
 
 <template>
-  <div class="vs-wrap" :style="{ '--vs-color': color }">
+  <div class="vs-wrap" :class="{ compact }" :style="{ '--vs-color': color }">
     <input
       type="range"
       class="vs-slider"
@@ -46,7 +50,7 @@ const pct = computed(() => {
       @input="onInput"
     />
     <span v-if="showValue" class="vs-value" :class="{ muted: modelValue === 0 }">
-      {{ modelValue }}%
+      {{ modelValue }}{{ unit }}
     </span>
   </div>
 </template>
@@ -58,6 +62,14 @@ const pct = computed(() => {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.vs-wrap.compact {
+  flex: none;
+  gap: 4px;
+}
+.vs-wrap.compact .vs-slider {
+  width: 52px;
 }
 .vs-slider {
   flex: 1;
@@ -127,5 +139,10 @@ const pct = computed(() => {
 }
 .vs-value.muted {
   color: #E94560;
+}
+
+.vs-wrap.compact .vs-value {
+  font-size: 9px;
+  min-width: 22px;
 }
 </style>

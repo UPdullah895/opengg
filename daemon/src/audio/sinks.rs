@@ -14,6 +14,8 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use std::env;
+use std::path::PathBuf;
 use crate::subprocess;
 
 /// Minimum interval between `pactl` spawns for the same channel.
@@ -25,7 +27,88 @@ pub const CHANNEL_NAMES: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
 /// The Mic sink is fed by a loopback from the hardware source — its monitor
 /// port becomes the capturable "OpenGG_Mic" node for GSR and DSP chains.
 const SINK_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
-const RELABEL_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
+const RELABEL_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
+
+fn remove_legacy_sink_config() {
+    let cfg_home = env::var("XDG_CONFIG_HOME")
+        .ok()
+        .or_else(|| {
+            dirs::home_dir()
+                .map(|h| h.join(".config").to_string_lossy().to_string())
+        })
+        .unwrap_or_default();
+
+    let pw_dir = PathBuf::from(&cfg_home).join("pipewire/pipewire.conf.d");
+
+    if let Ok(entries) = std::fs::read_dir(&pw_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name == "opengg-sinks.conf" || name.starts_with("opengg-") && name.ends_with(".conf") {
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        tracing::debug!("Failed to delete {}: {}", path.display(), e);
+                    } else {
+                        tracing::info!("Deleted legacy config: {}", path.display());
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn list_opengg_node_ids() -> Vec<u32> {
+    let mut ids = Vec::new();
+
+    // Scan sinks
+    if let Ok(out) = subprocess::command("pactl")
+        .args(["list", "sinks", "short"])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[1];
+                if name.starts_with("OpenGG_") && !name.contains(".monitor") {
+                    if let Ok(id) = parts[0].parse::<u32>() {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Scan sources
+    if let Ok(out) = subprocess::command("pactl")
+        .args(["list", "sources", "short"])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[1];
+                if name.starts_with("OpenGG_") && !name.contains(".monitor") {
+                    if let Ok(id) = parts[0].parse::<u32>() {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ids
+}
+
+fn destroy_node(id: u32) {
+    let _ = subprocess::command("pw-cli")
+        .args(["destroy", &id.to_string()])
+        .status();
+}
 
 fn live_display_name(channel: &str) -> String {
     if RELABEL_CHANNELS.contains(&channel) {
@@ -65,6 +148,8 @@ pub struct SinkManager {
 impl SinkManager {
     /// Create virtual sinks gracefully — NO PipeWire restart.
     pub fn create_all() -> Result<Self> {
+        remove_legacy_sink_config();
+
         let channels = Arc::new(Mutex::new(HashMap::new()));
         let module_ids = Arc::new(Mutex::new(Vec::new()));
 
@@ -81,8 +166,6 @@ impl SinkManager {
                     }
                     Err(e) => {
                         tracing::warn!("Failed to create {sink_name}: {e}");
-                        // Try the config-file fallback (no restart!)
-                        tracing::info!("Trying WirePlumber config fallback for {sink_name}");
                     }
                 }
             } else {
@@ -111,8 +194,15 @@ impl SinkManager {
 
         // Step 4: Wire hardware mic → OpenGG_Mic virtual sink via loopback.
         // The sink's monitor port is what GSR and DSP chains capture from.
-        if let Err(e) = setup_mic_loopback() {
-            tracing::warn!("Mic loopback setup failed (raw HW mic will be used as fallback): {e}");
+        match setup_mic_loopback() {
+            Ok(mic_module_ids) => {
+                for id in mic_module_ids {
+                    module_ids.lock().unwrap().push(id);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Mic loopback setup failed (raw HW mic will be used as fallback): {e}");
+            }
         }
 
         tracing::info!("Virtual sinks ready (no PipeWire restart)");
@@ -169,15 +259,19 @@ impl SinkManager {
 impl SinkManager {
     /// Teardown all virtual audio sinks and sources.
     ///
-    /// This method:
-    /// 1. Unloads all tracked module IDs from create_all()
-    /// 2. Performs a straggler scan to unload any OpenGG modules not tracked
-    ///    (e.g., from previous daemon runs, or mic chain components)
-    /// 3. Restores OS defaults: picks the first non-OpenGG sink as default sink,
-    ///    and the first non-OpenGG non-monitor source as default source
-    /// 4. Verifies no OpenGG sinks remain; returns Err if any are detected
+    /// This method uses ordered, idempotent steps:
+    /// 1. Delete legacy config file (if present)
+    /// 2. Unload tracked module IDs
+    /// 3. Generalized straggler scan — unload any pactl module whose args contain "OpenGG_"
+    /// 4. Enumerate live OpenGG nodes (by id) and destroy via pw-cli
+    /// 5. Bounded retry (up to 4 passes): repeat steps 3–4 until clean
+    /// 6. Restore OS defaults
+    /// 7. Verify no OpenGG nodes remain
     pub fn teardown_all(&self) -> anyhow::Result<()> {
-        // Step 1: Unload all tracked module IDs
+        // Step 1: Remove legacy config file
+        remove_legacy_sink_config();
+
+        // Step 2: Unload all tracked module IDs
         if let Ok(mut ids) = self.module_ids.lock() {
             for id in ids.drain(..) {
                 let _ = subprocess::command("pactl")
@@ -186,40 +280,56 @@ impl SinkManager {
             }
         }
 
-        // Step 2: Straggler scan — unload any remaining OpenGG modules
-        let modules_out = subprocess::command("pactl")
-            .args(["list", "modules", "short"])
-            .output()
-            .context("pactl list modules short failed")?;
+        // Steps 3–5: Bounded retry loop for straggler modules + node destruction
+        const MAX_PASSES: u32 = 4;
+        const RETRY_DELAY_MS: u64 = 150;
 
-        let modules = String::from_utf8_lossy(&modules_out.stdout);
-        for line in modules.lines() {
-            if line.contains("module-null-sink") && line.contains("OpenGG_") {
-                if let Some(id) = line.split_whitespace().next() {
-                    let _ = subprocess::command("pactl")
-                        .args(["unload-module", id])
-                        .status();
-                    tracing::info!("Unloaded straggler null-sink module {id}");
+        for pass in 1..=MAX_PASSES {
+            // Step 3: Generalized straggler scan — unload any module with "OpenGG_" in args
+            let modules_out = subprocess::command("pactl")
+                .args(["list", "modules", "short"])
+                .output()
+                .context("pactl list modules short failed")?;
+
+            let modules = String::from_utf8_lossy(&modules_out.stdout);
+            for line in modules.lines() {
+                if line.contains("OpenGG_") {
+                    if let Some(id) = line.split_whitespace().next() {
+                        let _ = subprocess::command("pactl")
+                            .args(["unload-module", id])
+                            .status();
+                        tracing::debug!("Unloaded straggler module {id}");
+                    }
                 }
-            } else if line.contains("module-loopback") && line.contains("OpenGG_Mic") {
-                if let Some(id) = line.split_whitespace().next() {
-                    let _ = subprocess::command("pactl")
-                        .args(["unload-module", id])
-                        .status();
-                    tracing::info!("Unloaded straggler loopback module {id}");
-                }
-            } else if line.contains("module-remap-source") && line.contains("OpenGG_Virtual_Mic") {
-                if let Some(id) = line.split_whitespace().next() {
-                    let _ = subprocess::command("pactl")
-                        .args(["unload-module", id])
-                        .status();
-                    tracing::info!("Unloaded straggler remap-source module {id}");
-                }
+            }
+
+            // Step 4: Enumerate live OpenGG node IDs and destroy them
+            let node_ids = list_opengg_node_ids();
+            for id in node_ids {
+                destroy_node(id);
+                tracing::debug!("Destroyed PipeWire node {id}");
+            }
+
+            // Check if clean (no more OpenGG nodes)
+            let remaining = list_opengg_node_ids();
+            let modules_out = subprocess::command("pactl")
+                .args(["list", "modules", "short"])
+                .output()
+                .context("pactl list modules short failed")?;
+            let modules = String::from_utf8_lossy(&modules_out.stdout);
+            let has_opengg_modules = modules.lines().any(|l| l.contains("OpenGG_"));
+
+            if remaining.is_empty() && !has_opengg_modules {
+                tracing::debug!("Teardown: clean graph achieved on pass {pass}");
+                break;
+            }
+
+            if pass < MAX_PASSES {
+                std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
             }
         }
 
-        // Step 3: Restore OS defaults
-        // Pick first non-OpenGG sink as default
+        // Step 6: Restore OS defaults
         let sinks_out = subprocess::command("pactl")
             .args(["list", "sinks", "short"])
             .output()
@@ -239,7 +349,6 @@ impl SinkManager {
             tracing::warn!("No non-OpenGG sinks found to restore as default");
         }
 
-        // Pick first non-OpenGG non-monitor source as default
         let sources_out = subprocess::command("pactl")
             .args(["list", "sources", "short"])
             .output()
@@ -259,7 +368,7 @@ impl SinkManager {
             tracing::warn!("No non-OpenGG non-monitor sources found to restore as default");
         }
 
-        // Step 4: Verify no OpenGG sinks remain
+        // Step 7: Verify no OpenGG sinks/sources remain
         let final_sinks_out = subprocess::command("pactl")
             .args(["list", "sinks", "short"])
             .output()
@@ -273,9 +382,9 @@ impl SinkManager {
 
         if !stragglers.is_empty() {
             let straggler_list = stragglers.join("; ");
-            tracing::error!("Verification failed: OpenGG sinks still present: {straggler_list}");
+            tracing::error!("Verification failed: OpenGG sinks still present after retries: {straggler_list}");
             return Err(anyhow::anyhow!(
-                "Teardown incomplete — {} sink(s) still present",
+                "Teardown incomplete — {} sink(s) still present (config deleted; restart may clear them)",
                 stragglers.len()
             ));
         }
@@ -347,6 +456,7 @@ fn create_null_sink(sink_name: &str, description: &str) -> Result<u32> {
 
 /// Route the hardware microphone into the OpenGG_Mic virtual null-sink via a loopback module.
 /// Also creates a virtual source (OpenGG_Virtual_Mic) that apps can select as an input device.
+/// Returns the module IDs (loopback + remap-source) for lifecycle tracking.
 ///
 /// Graph after this call:
 ///   [@DEFAULT_SOURCE@] → [module-loopback] → [OpenGG_Mic null-sink]
@@ -357,7 +467,9 @@ fn create_null_sink(sink_name: &str, description: &str) -> Result<u32> {
 ///                     (OpenGG_Virtual_Mic)    ← Apps can select this as input
 ///                                                     ↓
 ///                                          (future jalv DSP chain: gate → compressor → EQ)
-fn setup_mic_loopback() -> Result<()> {
+fn setup_mic_loopback() -> Result<Vec<u32>> {
+    let mut module_ids = Vec::new();
+
     // Discover the hardware source (never let it be our own virtual sink)
     let hw_out = subprocess::command("pactl")
         .args(["get-default-source"])
@@ -386,6 +498,12 @@ fn setup_mic_loopback() -> Result<()> {
                 "latency_msec=10",
                 "source_dont_move=true",
                 "sink_dont_move=true",
+                // Name the two loopback streams instead of the default PID-based
+                // "loopback-<pid>-<n>" so they are identifiable in the graph and
+                // consistent with the other OpenGG nodes. (The module overrides
+                // node.description, but node.name applies — verified via pw-dump.)
+                "source_output_properties=node.name=OpenGG_Mic_Loopback_in media.name=OpenGG_Mic_Loopback",
+                "sink_input_properties=node.name=OpenGG_Mic_Loopback_out media.name=OpenGG_Mic_Loopback",
             ])
             .output()
             .context("pactl load-module module-loopback failed")?;
@@ -393,7 +511,14 @@ fn setup_mic_loopback() -> Result<()> {
         if !out.status.success() {
             anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim())
         }
-        tracing::info!("Mic loopback active: {hw_source} → OpenGG_Mic");
+
+        let id_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if let Ok(module_id) = id_str.parse::<u32>() {
+            module_ids.push(module_id);
+            tracing::info!("Mic loopback active: {hw_source} → OpenGG_Mic (module {module_id})");
+        } else {
+            tracing::warn!("Could not parse loopback module ID, assuming already created");
+        }
     } else {
         tracing::info!("Mic loopback already active — skipping loopback creation");
     }
@@ -422,7 +547,7 @@ fn setup_mic_loopback() -> Result<()> {
     if sources.lines().any(|l| l.contains("OpenGG_Virtual_Mic")) {
         if virtual_mic_wired_correctly() {
             tracing::info!("Virtual mic source already exists and is wired to OpenGG_Mic — skipping");
-            return Ok(());
+            return Ok(module_ids);
         }
         tracing::warn!("Virtual mic source exists but is wired to the wrong master — rebuilding");
         let modules_out = subprocess::command("pactl").args(["list", "modules", "short"]).output()?;
@@ -437,31 +562,40 @@ fn setup_mic_loopback() -> Result<()> {
         }
     }
 
-    // Load remap-source module to expose OpenGG_Mic.monitor as a selectable input device
-    // The description is quoted per POSIX shell rules but we pass it as a single argv element
-    // (pactl arg vectors never go through a shell), so we use the same sink_prop_value quoting helper
-    let mic_prop = sink_prop_value("OpenGG Mic");
+    // Load remap-source module to expose OpenGG_Mic.monitor as a selectable input device.
+    // pactl's remap-source proplist parser truncates the description at the first space and
+    // ignores simple `"..."`/`'...'`/escaped-space quoting (it produced just "OpenGG"). Only a
+    // doubly-quoted form survives — the whole proplist quoted AND the value quoted:
+    //   source_properties="device.description=\"OpenGG Mic\""   (verified via pw-dump)
+    let mic_desc_arg =
+        format!("source_properties=\"device.description=\\\"{}\\\"\"", "OpenGG Mic");
     let out = subprocess::command("pactl")
         .args([
             "load-module",
             "module-remap-source",
             "master=OpenGG_Mic.monitor",
             "source_name=OpenGG_Virtual_Mic",
-            &format!("source_properties=device.description={mic_prop}"),
+            &mic_desc_arg,
         ])
         .output()
         .context("pactl load-module module-remap-source failed")?;
 
     if out.status.success() {
-        tracing::info!("Virtual mic source created: OpenGG_Virtual_Mic (master=OpenGG_Mic.monitor)");
-        Ok(())
+        let id_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if let Ok(module_id) = id_str.parse::<u32>() {
+            module_ids.push(module_id);
+            tracing::info!("Virtual mic source created: OpenGG_Virtual_Mic (module {module_id})");
+        } else {
+            tracing::warn!("Could not parse remap-source module ID");
+        }
+        Ok(module_ids)
     } else {
         // Non-fatal: the monitor path (GSR, VU) still works without the virtual source
         tracing::warn!(
             "Failed to create virtual mic source: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
-        Ok(())
+        Ok(module_ids)
     }
 }
 

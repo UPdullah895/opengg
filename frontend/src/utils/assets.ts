@@ -2,7 +2,7 @@
  * Local Asset URL utility — maps absolute paths to HTTP URLs.
  *
  * URL scheme:
- *   http://localhost:PORT/media/home/user/Videos/clip.mp4
+ *   http://127.0.0.1:PORT/media/home/user/Videos/clip.mp4
  *   → warp::fs::dir("/") serves /home/user/Videos/clip.mp4
  *
  * warp::fs handles Range requests (206), streaming, and Content-Type
@@ -57,13 +57,16 @@ export async function getMediaToken(): Promise<string> {
  *
  * Example:
  *   mediaUrl('/home/user/Videos/clip.mp4', 33955, 'token123')
- *   → 'http://localhost:33955/media/home/user/Videos/clip.mp4?token=token123'
+ *   → 'http://127.0.0.1:33955/media/home/user/Videos/clip.mp4?token=token123'
  */
 export function mediaUrl(absolutePath: string, port: number, token: string): string {
   if (!absolutePath || !port || !token) return ''
   // Ensure the path starts with / (absolute)
   const cleanPath = absolutePath.startsWith('/') ? absolutePath : `/${absolutePath}`
-  return `http://localhost:${port}/media${cleanPath}?token=${encodeURIComponent(token)}`
+  // Use 127.0.0.1, not "localhost": the media server binds IPv4-only (127.0.0.1),
+  // but "localhost" can resolve to IPv6 ::1 first on many systems, giving
+  // "Could not connect to localhost: Connection refused".
+  return `http://127.0.0.1:${port}/media${cleanPath}?token=${encodeURIComponent(token)}`
 }
 
 export async function mediaUrlAsync(absolutePath: string): Promise<string> {

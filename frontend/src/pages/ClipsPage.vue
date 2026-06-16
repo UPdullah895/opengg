@@ -849,8 +849,14 @@ async function deleteSelected() {
     message: `Delete ${clips.length} clip(s)?`,
     kind: 'danger',
     onConfirm: async () => {
-      for (const c of clips) { try { await invoke('delete_clip', { filepath: c.filepath }); replay.removeClip(c.filepath) } catch {} }
-      replay.clearSelection(); showToast(t('clips.toast.clipsDeleted', { count: clips.length }))
+      let ok = 0
+      for (const c of clips) {
+        try { await invoke('delete_clip', { filepath: c.filepath }); replay.removeClip(c.filepath); ok++ } catch {}
+      }
+      replay.clearSelection()
+      // Report the count actually moved to Trash; surface an error if none succeeded.
+      if (ok > 0) showToast(t('clips.toast.clipsDeleted', { count: ok }))
+      else showToast(t('clips.toast.clipDeleteError', { error: '' }))
     },
   })
 }
@@ -1051,6 +1057,14 @@ onMounted(async () => {
     if (replay.clips.find(c => c.filepath === fp && !c.isSkeleton)) return
     const tempId = `skeleton_${fp}`
     replay.injectSkeleton(tempId, fp)  // grid stays visible with placeholder
+    // Newest sort puts the new clip at the top — scroll the active grid/list to the top
+    // so the leading skeleton (and the real card that replaces it) is actually visible
+    // and sits at row 0 (padTop = 0) inline with the other cards.
+    nextTick(() => {
+      gridScrollRef.value?.scrollTo({ top: 0 })
+      listScrollRef.value?.scrollTo({ top: 0 })
+      groupedScrollRef.value?.scrollTo({ top: 0 })
+    })
     let clip: Clip | null = null
     for (let i = 0; i < 5; i++) {
       try {
@@ -1063,8 +1077,12 @@ onMounted(async () => {
     if (clip) {
       replay.replaceSkeleton(tempId, clip)
       prefetchThumbnails()
+    } else {
+      // Detection never resolved the clip — drop the placeholder and force a full refresh
+      // so the new clip still shows up without the user re-entering the page.
+      replay.removeClip(tempId)
+      try { await replay.fetchClips(persist.state.settings.clip_directories[0]) } catch {}
     }
-    else replay.removeClip(tempId)
   })
 
   unlistenRemoved = await listen<string>('clip_removed', (event) => {
@@ -1442,18 +1460,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
             <span>{{ t('clips2.scanning') }}</span>
             <span v-if="scanCount > 0" class="scan-count">+{{ t('clips2.foundCount', { n: scanCount }) }}</span>
           </div>
-          <!-- Skeleton cards from file watcher -->
-          <div v-if="sortedSkeletons.length" class="clip-grid skeletons-row" :style="{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }">
-            <div v-for="clip in sortedSkeletons" :key="clip.id" class="skeleton-card watcher-skeleton">
-              <div class="skeleton-thumb animate-pulse"></div>
-              <div class="skeleton-info">
-                <div class="skeleton-line w70 animate-pulse"></div>
-                <div class="skeleton-line w40 animate-pulse"></div>
-              </div>
-              <div class="watcher-label">{{ t('clips2.newClipDetected') }}</div>
-            </div>
-          </div>
-          <!-- Virtual CSS grid — only visible rows + buffer rendered -->
+          <!-- Virtual CSS grid — only visible rows + buffer rendered.
+               File-watcher skeletons render as leading cells in the SAME grid so they flow
+               inline with normal spacing (the grid host is scrolled to top on clip_added so
+               padTop is 0 and they sit at row 0). -->
           <div
             class="clip-grid native-grid"
             :style="{
@@ -1464,6 +1474,14 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
               paddingBottom: virtualRange.padBot + 'px',
             }"
           >
+            <div v-for="clip in sortedSkeletons" :key="clip.id" class="skeleton-card watcher-skeleton">
+              <div class="skeleton-thumb animate-pulse"></div>
+              <div class="skeleton-info">
+                <div class="skeleton-line w70 animate-pulse"></div>
+                <div class="skeleton-line w40 animate-pulse"></div>
+              </div>
+              <div class="watcher-label">{{ t('clips2.newClipDetected') }}</div>
+            </div>
             <ClipCard
               v-for="clip in visibleClips"
               :key="clip.id"

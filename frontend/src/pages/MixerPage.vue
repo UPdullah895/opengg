@@ -12,7 +12,7 @@
  * That's a Phase 2 optimization — polling at 2s is sufficient for now.
  */
 
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
 import { useAudioStore } from '../stores/audio'
@@ -47,6 +47,12 @@ const TABS: { id: Tab; label: string }[] = [
 
 const setupLoading  = ref(false)
 
+// ── Global app-list layout settings (one control for every channel's app box) ──
+const appSettingsOpen = ref(false)
+const appBoxCount = computed(() => Math.max(1, Math.min(12, persist.state.settings.appBoxCount ?? 3)))
+const appBoxPerRow = computed<1 | 2>(() => (persist.state.settings.appBoxPerRow === 2 ? 2 : 1))
+function setBoxCount(n: number) { persist.state.settings.appBoxCount = Math.max(1, Math.min(12, n)) }
+function setBoxPerRow(n: 1 | 2) { persist.state.settings.appBoxPerRow = n }
 
 function triggerVirtualAudioSetup() {
   window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 1 } }))
@@ -93,7 +99,20 @@ function onMixerClick(e: MouseEvent) {
   if (!target.closest('.dz-chip') && !target.closest('.dropzone')) {
     audio.deselectApp()
   }
+  // Close the global app-settings popover when clicking outside it
+  if (appSettingsOpen.value && !target.closest('.app-settings-wrap')) {
+    appSettingsOpen.value = false
+  }
 }
+
+// Click-to-route focus is transient: clear it on Escape and when the window loses focus.
+function onMixerKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') { audio.deselectApp(); appSettingsOpen.value = false }
+}
+function onWindowBlur() { audio.deselectApp() }
+
+// Switching mixer tabs ends the routing interaction → clear the highlight.
+watch(activeTab, () => audio.deselectApp())
 
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
@@ -104,10 +123,15 @@ onMounted(async () => {
   // route_app call so the UI updates immediately instead of waiting for the next poll.
   unlistenRefresh = await listen('audio-mixer-refresh', () => { audio.fetchApps() })
   document.addEventListener('click', onMixerClick)
+  document.addEventListener('keydown', onMixerKeydown)
+  window.addEventListener('blur', onWindowBlur)
 })
 onUnmounted(() => {
   unlistenRefresh?.()
   document.removeEventListener('click', onMixerClick)
+  document.removeEventListener('keydown', onMixerKeydown)
+  window.removeEventListener('blur', onWindowBlur)
+  audio.deselectApp()
 })
 
 watch(() => audio.virtualAudioReady, ready => {
@@ -160,6 +184,38 @@ watch(overdriveEnabled, enabled => {
             <circle v-if="audio.earBlastActiveChannels.size > 0" cx="18" cy="6" r="3" fill="var(--accent)" stroke="none"/>
           </svg>
         </button>
+        <!-- ★ Global app-list layout settings (applies to every channel's app box) -->
+        <div class="app-settings-wrap">
+          <button
+            class="rfr"
+            :class="{ 'rfr--active': appSettingsOpen }"
+            :title="t('devices.appBoxSettings')"
+            @click.stop="appSettingsOpen = !appSettingsOpen"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
+          <div v-if="appSettingsOpen" class="app-settings-pop" @click.stop>
+            <div class="aps-title">{{ t('devices.appBoxSettings') }}</div>
+            <div class="aps-row">
+              <span class="aps-label">{{ t('devices.appsShown') }}</span>
+              <div class="aps-stepper">
+                <button @click="setBoxCount(appBoxCount - 1)" :disabled="appBoxCount <= 1">−</button>
+                <span class="aps-val">{{ appBoxCount }}</span>
+                <button @click="setBoxCount(appBoxCount + 1)" :disabled="appBoxCount >= 12">+</button>
+              </div>
+            </div>
+            <div class="aps-row">
+              <span class="aps-label">{{ t('devices.appsPerRow') }}</span>
+              <div class="aps-seg">
+                <button :class="{ active: appBoxPerRow === 1 }" @click="setBoxPerRow(1)">1</button>
+                <button :class="{ active: appBoxPerRow === 2 }" @click="setBoxPerRow(2)">2</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -275,6 +331,24 @@ watch(overdriveEnabled, enabled => {
 }
 .rfr svg { width: 15px; height: 15px; }
 .rfr:hover { background: var(--bg-hover); color: var(--text); }
+
+/* Global app-list settings popover */
+.app-settings-wrap { position: relative; }
+.app-settings-pop {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 1000; width: 200px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.45); display: flex; flex-direction: column; gap: 10px;
+}
+.aps-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--text-muted); }
+.aps-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.aps-label { font-size: 12px; color: var(--text-sec); }
+.aps-stepper { display: flex; align-items: center; gap: 6px; }
+.aps-stepper button { width: 24px; height: 24px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg-deep); color: var(--text); cursor: pointer; font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+.aps-stepper button:disabled { opacity: .4; cursor: not-allowed; }
+.aps-val { min-width: 18px; text-align: center; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.aps-seg { display: flex; gap: 2px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
+.aps-seg button { width: 28px; height: 22px; border: none; border-radius: 4px; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 12px; font-weight: 700; }
+.aps-seg button.active { background: var(--bg-card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
 /* ★ Epic 2: overdrive active state */
 .rfr--active {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -312,7 +386,7 @@ watch(overdriveEnabled, enabled => {
 }
 /* ★ Epic 1: Strict flex rules — strip grows to fill, dropzone is fixed-height scrollable */
 .col :deep(.strip)    { width: 100% !important; flex: 1 1 0% !important; min-height: 0 !important; height: auto !important; }
-.col :deep(.dropzone) { width: 100% !important; flex: 0 0 70px !important; height: 70px !important; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.col :deep(.dropzone) { width: 100% !important; flex: 0 0 var(--box-h, 70px) !important; height: var(--box-h, 70px) !important; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
 /* ★ Empty state */
 .empty-state {

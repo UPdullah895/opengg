@@ -4,6 +4,8 @@ import { useI18n } from 'vue-i18n'
 import { useDeviceStore } from '../stores/devices'
 import type { DeviceInfo } from '../stores/devices'
 import { getDeviceImage, trimDeviceName, ICON_AUDIO, ICON_POWER, ICON_VOLUME, ICON_BLUETOOTH } from '../assets/deviceAssets'
+import ToggleSwitch from './ToggleSwitch.vue'
+import VolumeSlider from './VolumeSlider.vue'
 
 const { t } = useI18n()
 const props = defineProps<{ device: DeviceInfo }>()
@@ -60,17 +62,14 @@ const deviceImage = computed(() => getDeviceImage(props.device.vid, props.device
               <span class="title-icon" v-html="ICON_AUDIO" />
               <h3 class="section-title">{{ t('devices.sidetone') }}</h3>
             </div>
-            <div class="slider-row">
-              <span class="slider-label">0</span>
-              <input
-                type="range" min="0" max="128" step="1"
-                v-model.number="sidetone"
-                @change="onSidetoneChange"
-                class="setting-slider"
-              />
-              <span class="slider-label">128</span>
-              <span class="slider-value">{{ sidetone }}</span>
-            </div>
+            <VolumeSlider
+              :model-value="sidetone"
+              color="var(--accent)"
+              :min="0"
+              :max="128"
+              unit=""
+              @update:model-value="v => { sidetone = v; onSidetoneChange() }"
+            />
           </section>
 
           <!-- Auto-Off — custom dropdown -->
@@ -106,10 +105,9 @@ const deviceImage = computed(() => getDeviceImage(props.device.vid, props.device
               <h3 class="section-title" style="text-transform:none;letter-spacing:0;font-size:14px">{{ t('devices.volumeLimiter') }}</h3>
             </div>
             <div class="toggle-row">
-              <button
-                class="toggle-btn"
-                :class="{ on: local.volumeLimiter }"
-                @click="store.setHeadsetVolumeLimiter(device.id, !local.volumeLimiter)"
+              <ToggleSwitch
+                :model-value="local.volumeLimiter"
+                @update:model-value="v => store.setHeadsetVolumeLimiter(device.id, v)"
               />
             </div>
           </section>
@@ -121,10 +119,9 @@ const deviceImage = computed(() => getDeviceImage(props.device.vid, props.device
               <h3 class="section-title" style="text-transform:none;letter-spacing:0;font-size:14px">{{ t('devices.btPoweredOn') }}</h3>
             </div>
             <div class="toggle-row">
-              <button
-                class="toggle-btn"
-                :class="{ on: local.btPoweredOn }"
-                @click="store.setHeadsetBtPoweredOn(device.id, !local.btPoweredOn)"
+              <ToggleSwitch
+                :model-value="local.btPoweredOn"
+                @update:model-value="v => store.setHeadsetBtPoweredOn(device.id, v)"
               />
             </div>
           </section>
@@ -135,17 +132,13 @@ const deviceImage = computed(() => getDeviceImage(props.device.vid, props.device
               <span class="title-icon" v-html="ICON_VOLUME" />
               <h3 class="section-title">{{ t('devices.btCallVolume') }}</h3>
             </div>
-            <div class="slider-row">
-              <span class="slider-label">0</span>
-              <input
-                type="range" min="0" max="100" step="1"
-                :value="local.btCallVolume"
-                @change="store.setHeadsetBtCallVolume(device.id, +($event.target as HTMLInputElement).value)"
-                class="setting-slider"
-              />
-              <span class="slider-label">100</span>
-              <span class="slider-value">{{ local.btCallVolume }}</span>
-            </div>
+            <VolumeSlider
+              :model-value="local.btCallVolume"
+              color="var(--accent)"
+              :min="0"
+              :max="100"
+              @update:model-value="v => store.setHeadsetBtCallVolume(device.id, v)"
+            />
           </section>
 
         </div><!-- /.settings-grid -->
@@ -221,60 +214,12 @@ const deviceImage = computed(() => getDeviceImage(props.device.vid, props.device
   margin: 0;
 }
 
-/* ── Slider ── */
-.slider-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.setting-slider {
-  flex: 1;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.slider-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  min-width: 20px;
-  text-align: center;
-}
-.slider-value {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  min-width: 48px;
-  text-align: right;
-}
 
 /* ── Toggle ── */
 .toggle-row {
   display: flex;
   align-items: center;
 }
-.toggle-btn {
-  width: 42px;
-  height: 24px;
-  border-radius: 12px;
-  border: none;
-  cursor: pointer;
-  background: var(--bg-surface);
-  transition: background .2s;
-  position: relative;
-  flex-shrink: 0;
-}
-.toggle-btn.on { background: var(--accent); }
-.toggle-btn::after {
-  content: '';
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: white;
-  transition: transform .2s;
-}
-.toggle-btn.on::after { transform: translateX(18px); }
 
 /* ── Custom dropdown ── */
 .custom-select-wrap {

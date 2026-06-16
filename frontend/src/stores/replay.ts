@@ -384,6 +384,9 @@ export const useReplayStore = defineStore('replay', () => {
   }
   function replaceSkeleton(tempId: string, clip: Clip) {
     clip._isNew = true
+    // Guarantee a valid newest-sort key so the freshly-detected clip lands at the top of
+    // filteredRealClips (a missing/zero createdTs would sort it to the bottom, off-screen).
+    if (!clip.createdTs) clip.createdTs = Date.now()
     clip._search = buildSearch(clip)
     const rawClip = markRaw(clip)
     const idx = clips.value.findIndex(c => c.id === tempId)

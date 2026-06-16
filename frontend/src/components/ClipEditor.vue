@@ -3,10 +3,12 @@ import { ref, computed, onMounted, onBeforeUnmount, inject, watch, nextTick } fr
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { mediaUrl } from '../utils/assets'
+import { friendlyTrackName } from '../utils/audio'
 import type { Clip, SteamGame } from '../stores/replay'
 import { useReplayStore } from '../stores/replay'
 import type { Ref } from 'vue'
 import CustomVideoPlayer from './CustomVideoPlayer.vue'
+import VolumeSlider from './VolumeSlider.vue'
 import { useI18n } from 'vue-i18n'
 import GameTagDropdown from './GameTagDropdown.vue'
 import { clipDisplayTitle } from '../utils/format'
@@ -41,7 +43,7 @@ function buildAudioUrl(streamIndex: number) {
   const token = mediaToken.value
   if (!port || !token) return ''
   const encoded = encodeURIComponent(props.clip.filepath)
-  return `http://localhost:${port}/audio?file=${encoded}&stream=${streamIndex}&token=${encodeURIComponent(token)}`
+  return `http://127.0.0.1:${port}/audio?file=${encoded}&stream=${streamIndex}&token=${encodeURIComponent(token)}`
 }
 
 function initAudioElements() {
@@ -163,7 +165,9 @@ onMounted(async () => {
     const streams = info.value?.streams.filter(s => s.codec_type === 'audio') || []
     audioTracks.value = streams.map((s, i) => ({
       id: `A${i + 1}`,
-      label: s.title || `Audio ${i + 1}`,
+      // Friendly label: new files carry friendly titles; for older files map the raw
+      // "OpenGG_*.monitor" source name → "Game"/"Chat"/"Mic" etc. Fall back to "Audio N".
+      label: friendlyTrackName(s.title) || s.title || `Audio ${i + 1}`,
       streamIndex: s.index,
       volume: 100,
       muted: false,
@@ -310,7 +314,13 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
               <svg v-else viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2"/><line x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2"/></svg>
             </button>
             <span class="track-label">{{ t.label }}</span>
-            <input type="range" min="0" max="100" :value="t.volume" @input="setTrackVolume(t, +($event.target as HTMLInputElement).value)" class="track-vol" />
+            <VolumeSlider
+              :model-value="t.volume"
+              color="var(--accent)"
+              :min="0"
+              :max="100"
+              @update:model-value="v => setTrackVolume(t, v)"
+            />
           </div>
         </div>
         <div class="transport">
@@ -451,5 +461,4 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
 .track-mute:hover { background:var(--bg-hover); }
 .track-mute.muted { color:#E94560; }
 .track-label { font-size:12px; color:var(--text-sec); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:120px; }
-.track-vol { flex:1; height:4px; accent-color:var(--accent); cursor:pointer; }
 </style>

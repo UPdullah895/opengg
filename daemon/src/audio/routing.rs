@@ -53,6 +53,11 @@ fn is_internal_stream(app_name: Option<&str>, media_name: Option<&str>, binary_n
                     || raw.contains("pipewire")
                     || raw.contains("peak detect")
                     || raw.contains("monitor")
+                    // OpenGG-internal helpers that must never show as user apps:
+                    || raw.contains("pw-cat")          // native VU-meter readers
+                    || raw.contains("gsr-")            // gpu-screen-recorder captures
+                    || raw.contains("gpu-screen-recorder")
+                    || raw.contains("loopback")        // mic loopback helper streams
             })
             .unwrap_or(false)
     };

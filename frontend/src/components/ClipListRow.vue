@@ -136,9 +136,6 @@ onMounted(() => {
         {{ fmtDur(displayDuration) }}
       </span>
       <span v-if="clip.created" class="list-time-badge">{{ fmtTime(clip.created) }}</span>
-      <button class="list-fav" :class="{ on: clip.favorite }" @click.stop="e => emit('favorite', clip, e)" title="Favorite">
-        <svg viewBox="0 0 24 24" :fill="clip.favorite?'currentColor':'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-      </button>
     </div>
     <div class="list-info">
       <div class="list-name" @click.stop="startEdit">
@@ -158,10 +155,13 @@ onMounted(() => {
         <span class="lm-pill"><span class="lm-ic" v-html="ICON_HARD_DRIVE"></span>{{ fmtSize(clip.filesize) }}</span>
         <span v-if="width" class="lm-pill"><span class="lm-ic" v-html="ICON_MONITOR"></span>{{ fmtRes(width, height) }}</span>
         <span v-if="clip.created" class="lm-pill lm-date"><span class="lm-ic" v-html="ICON_CLOCK"></span>{{ fmtDate(clip.created) }}</span>
-        <span v-if="clip.game && clip.game !== 'Unknown'" class="lm-game"><span class="lm-ic" v-html="ICON_GAMEPAD_SM"></span>{{ clip.game }}</span>
+        <span v-if="clip.game && clip.game !== 'Unknown'" class="lm-pill"><span class="lm-ic" v-html="ICON_GAMEPAD_SM"></span>{{ clip.game }}</span>
       </div>
     </div>
     <div class="list-actions">
+      <button class="list-act-icon" :class="{ on: clip.favorite }" @click.stop="e => emit('favorite', clip, e)" title="Favorite">
+        <svg viewBox="0 0 24 24" :fill="clip.favorite?'currentColor':'none'" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+      </button>
       <button class="list-act-icon" @click.stop="emit('preview', clip)" title="Preview">
         <span v-html="ICON_PLAY"></span>
       </button>
@@ -174,12 +174,13 @@ onMounted(() => {
 
 <style scoped>
 .list-row {
-  display:flex; align-items:stretch; gap:12px;
+  display:flex; align-items:center; gap:12px;
   padding: 0 calc(var(--list-pad, 8px) + 4px) 0 0;
   background:var(--bg-card); border:1px solid var(--border); border-radius:8px;
   cursor:pointer; overflow:hidden;
   transition: background .15s, padding .25s ease;
   contain: layout style paint;
+  min-height: calc(var(--list-thumb-h, 90px) + 2 * var(--list-pad, 8px));
 }
 .list-row:hover { background:var(--bg-hover); border-left:3px solid var(--accent); padding-left:calc(var(--list-pad, 8px) + 4px); }
 .list-row.selected { background:color-mix(in srgb, var(--accent) 8%, transparent); border-left:3px solid var(--accent); padding-left:calc(var(--list-pad, 8px) + 4px); }
@@ -208,7 +209,7 @@ onMounted(() => {
   display:flex; align-items:center; justify-content:center;
   font-size:18px; color:var(--text-muted);
 }
-.list-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:5px; padding: var(--list-pad, 8px) 0; justify-content: center; align-self:center; }
+.list-info { min-width: 0; display:flex; flex-direction:column; gap: 5px; padding: var(--list-pad, 8px) 0; }
 .list-name {
   font-size: var(--list-font, 13px); font-weight:600;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -233,7 +234,6 @@ onMounted(() => {
   position: relative; flex-shrink: 0;
   width: var(--list-thumb-w, 160px);
   height: var(--list-thumb-h, 90px);
-  align-self: center;
   transition: width .25s ease, height .25s ease;
 }
 .list-thumb-wrap .list-thumb { width: 100%; height: 100%; object-fit: cover; display: block; transition: none; border-radius: 0; }
@@ -255,29 +255,7 @@ onMounted(() => {
   padding: 1px 5px; border-radius: 3px;
   pointer-events: none; line-height: 1.4;
 }
-.list-fav {
-  position:absolute; top:6px; right:6px;
-  width:28px; height:28px; border-radius:50%; border:none;
-  background:rgba(0,0,0,.5); color:var(--text-muted);
-  cursor:pointer; display:flex; align-items:center; justify-content:center;
-  opacity:0; transition:all .15s; z-index:2;
-}
-.list-fav svg { width:14px; height:14px; }
-.list-thumb-wrap:hover .list-fav,
-.list-row:hover .list-fav,
-.list-fav.on { opacity:1; }
-.list-fav:hover { background:rgba(0,0,0,.8); color:var(--text); transform:scale(1.1); }
-.list-fav.on { color:#E94560; }
-.list-meta { font-size:var(--list-meta-font, 11px); color:var(--text-muted); display:flex; align-items:center; flex-wrap:nowrap; gap:4px; overflow:hidden; }
-.list-meta > * { min-width:0; }
-.lm-game {
-  margin-left:auto; min-width:0; max-width:100%; flex-shrink:1; font-weight:700; font-size:var(--list-meta-font, 11px);
-  color:var(--accent);
-  background:color-mix(in srgb, var(--accent) 14%, transparent);
-  padding:var(--list-act-pad-y, 4px) var(--list-chip-pad-x, 8px); border-radius:4px;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  display:flex; align-items:center; gap:4px;
-}
+.list-meta { font-size:var(--list-meta-font, 11px); color:var(--text-muted); display:flex; align-items:center; flex-wrap:wrap; gap: 6px; }
 .lm-pill { background:var(--bg-deep); padding:var(--list-act-pad-y, 4px) var(--list-pill-pad-x, 6px); border-radius:3px; flex-shrink:0; display:flex; align-items:center; gap:4px; }
 .lm-ic { width:calc(var(--list-meta-font, 11px) * 0.95); height:calc(var(--list-meta-font, 11px) * 0.95); display:inline-flex; color:var(--text-muted); }
 .lm-ic :deep(svg) { width:calc(var(--list-meta-font, 11px) * 0.95); height:calc(var(--list-meta-font, 11px) * 0.95); }
@@ -285,6 +263,8 @@ onMounted(() => {
 .list-actions { display:flex; gap:8px; flex-shrink:0; align-items:center; padding: var(--list-pad, 8px) 0; }
 .list-act-icon { width:calc(var(--list-act-font, 12px) * 2.5); height:calc(var(--list-act-font, 12px) * 2.5); border:1px solid var(--border); border-radius:6px; background:var(--bg-surface); color:var(--text-sec); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
 .list-act-icon:hover { background:var(--bg-hover); color:var(--text); border-color:var(--text-muted); }
+.list-act-icon.on { color:#E94560; border-color:#E94560; }
 .list-act-icon span { width:calc(var(--list-act-font, 12px) * 1.2); height:calc(var(--list-act-font, 12px) * 1.2); display:inline-flex; }
 .list-act-icon span :deep(svg) { width:calc(var(--list-act-font, 12px) * 1.2); height:calc(var(--list-act-font, 12px) * 1.2); }
+.list-act-icon svg { width:calc(var(--list-act-font, 12px) * 1.2); height:calc(var(--list-act-font, 12px) * 1.2); }
 </style>

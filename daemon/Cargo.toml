@@ -1,6 +1,6 @@
 [package]
 name = "openggd"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "OpenGG Gaming Daemon — Audio, Device, and Replay management for Linux"
 license = "MIT"

@@ -8,6 +8,7 @@ import { useExtensionStore, type ExtManifest, type ExtRuntime } from '../../stor
 import { useModalStore } from '../../stores/modal'
 import { useToast } from '../../composables/useToast'
 import InfoIcon from '../InfoIcon.vue'
+import ToggleSwitch from '../ToggleSwitch.vue'
 import './settings-shared.css'
 
 const { t } = useI18n()
@@ -33,7 +34,7 @@ const pendingConsentExtId = ref<string | null>(null)
 
 function getExtensionIconUrl(p: any): string | null {
   if (p._builtin || !p.icon) return null
-  return `http://localhost:${mediaPort.value}/ext/${encodeURIComponent(p.id)}/${encodeURIComponent(p.icon)}?token=${encodeURIComponent(mediaToken.value)}`
+  return `http://127.0.0.1:${mediaPort.value}/ext/${encodeURIComponent(p.id)}/${encodeURIComponent(p.icon)}?token=${encodeURIComponent(mediaToken.value)}`
 }
 
 function canConfigure(p: any): boolean {
@@ -215,9 +216,9 @@ defineEmits<{ navigate: [page: string] }>()
         {{ t('settings.general.modules') }}
         <InfoIcon :title="t('settings.extensions.hint')" />
       </div>
-      <label class="toggle-row"><input type="checkbox" v-model="persist.state.modules.audio"><span class="tname">{{ t('settings.general.audioHub') }}</span><span class="tdesc">{{ t('settings.general.audioHubDesc') }}</span></label>
-      <label class="toggle-row"><input type="checkbox" v-model="persist.state.modules.device"><span class="tname">{{ t('settings.general.deviceManager') }}</span><span class="tdesc">{{ t('settings.general.deviceManagerDesc') }}</span></label>
-      <label class="toggle-row"><input type="checkbox" v-model="persist.state.modules.replay"><span class="tname">{{ t('settings.general.replayClips') }}</span><span class="tdesc">{{ t('settings.general.replayClipsDesc') }}</span></label>
+      <label class="toggle-row"><ToggleSwitch v-model="persist.state.modules.audio" /><span class="tname">{{ t('settings.general.audioHub') }}</span><span class="tdesc">{{ t('settings.general.audioHubDesc') }}</span></label>
+      <label class="toggle-row"><ToggleSwitch v-model="persist.state.modules.device" /><span class="tname">{{ t('settings.general.deviceManager') }}</span><span class="tdesc">{{ t('settings.general.deviceManagerDesc') }}</span></label>
+      <label class="toggle-row"><ToggleSwitch v-model="persist.state.modules.replay" /><span class="tname">{{ t('settings.general.replayClips') }}</span><span class="tdesc">{{ t('settings.general.replayClipsDesc') }}</span></label>
     </div>
 
     <!-- GPU Screen Recorder -->
@@ -262,9 +263,7 @@ defineEmits<{ navigate: [page: string] }>()
       </div>
       <div class="gsr-toggle-row">
         <span class="gsr-label">Enable GSR Replay Buffer</span>
-        <button class="toggle-btn" :class="{ on: persist.state.settings.gsrEnabled }" @click="toggleGsr">
-          <span class="toggle-knob"></span>
-        </button>
+        <ToggleSwitch v-model="persist.state.settings.gsrEnabled" @update:model-value="toggleGsr" />
       </div>
     </div>
 
@@ -306,10 +305,7 @@ defineEmits<{ navigate: [page: string] }>()
             </div>
             <p class="ext-desc">{{ p.description }}</p>
           </div>
-          <label class="switch ext-card-switch">
-            <input type="checkbox" :checked="isExtEnabled(p)" @change="setExtEnabled(p, ($event.target as HTMLInputElement).checked)" :disabled="needsConsent(p) && !isExtEnabled(p)" />
-            <span class="switch-track"></span>
-          </label>
+          <ToggleSwitch class="ext-card-switch" :model-value="isExtEnabled(p)" @update:model-value="(v) => setExtEnabled(p, v)" :disabled="needsConsent(p) && !isExtEnabled(p)" />
         </div>
       </div>
     </div>

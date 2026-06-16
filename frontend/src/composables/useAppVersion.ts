@@ -8,7 +8,7 @@ let _loaded = false
 export async function loadAppVersion() {
   if (_loaded) return
   try { appVersion.value = await getVersion() }
-  catch { appVersion.value = '0.1.1' }
+  catch { appVersion.value = '0.1.3' }
   _loaded = true
 }
 

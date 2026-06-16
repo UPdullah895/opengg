@@ -22,6 +22,33 @@ describe('runMigrations', () => {
     expect(state.settings.gsrMonitorTarget).toBe('screen')
   })
 
+  it('normalizes "connector|resolution" composite to the bare connector', () => {
+    const state = { settings: { gsrMonitorTarget: 'DP-1|1920x1080' }, _schemaVersion: 9 }
+    runMigrations(state)
+    expect(state.settings.gsrMonitorTarget).toBe('DP-1')
+  })
+
+  it('resets a composite whose connector half is itself invalid', () => {
+    const state = { settings: { gsrMonitorTarget: '1920x1080|DP-1' }, _schemaVersion: 9 }
+    runMigrations(state)
+    expect(state.settings.gsrMonitorTarget).toBe('screen')
+  })
+
+  it('migrates legacy captureTracks source labels to real monitor node names', () => {
+    const state = {
+      settings: { captureTracks: [
+        { name: 'Track 1', source: 'Game' },
+        { name: 'Track 2', source: 'Mic' },
+        { name: 'Track 3', source: 'OpenGG_Aux.monitor' }, // already a real name — untouched
+      ] },
+      _schemaVersion: 10,
+    } as any
+    runMigrations(state)
+    expect(state.settings.captureTracks.map((t: any) => t.source)).toEqual([
+      'OpenGG_Game.monitor', 'OpenGG_Mic.monitor', 'OpenGG_Aux.monitor',
+    ])
+  })
+
   it('sets schema version after running', () => {
     const state = { settings: {}, _schemaVersion: 0 }
     runMigrations(state)

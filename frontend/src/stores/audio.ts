@@ -50,21 +50,33 @@ export const useAudioStore = defineStore('audio', () => {
       m[name] = { name, volume: channelVolumes[name] ?? 100, muted: channelMutes[name] ?? false, node_id: 0, apps: [] }
     }
     for (const app of allApps.value) {
-      if (app.channel && m[app.channel]) m[app.channel].apps.push(app)
+      if (app.channel && m[app.channel] && !isInternalApp(app.name)) m[app.channel].apps.push(app)
     }
     return m
   })
 
   const outputDevices = computed(() => devices.value.filter(d => d.device_type === 'sink'))
   const inputDevices = computed(() => devices.value.filter(d => d.device_type === 'source'))
+  // Defensive filter (backend already excludes these): never show OpenGG-internal helpers
+  // as user apps — VU readers (pw-cat), recorder captures (gsr-/gpu-screen-recorder),
+  // mic loopback streams, or the audio server itself.
+  const isInternalApp = (name: string) => {
+    const n = (name || '').toLowerCase()
+    return n.includes('opengg') || n === 'wireplumber' || n === 'pipewire'
+      || n.includes('pw-cat') || n.includes('gsr-') || n.includes('gpu-screen-recorder')
+      || n.includes('loopback')
+  }
   const unassignedApps = computed(() =>
-    allApps.value.filter(a => !a.channel && !a.name.toLowerCase().includes('opengg') && a.name.toLowerCase() !== 'wireplumber' && a.name.toLowerCase() !== 'pipewire')
+    allApps.value.filter(a => !a.channel && !isInternalApp(a.name))
   )
   const masterChannel = computed(() => ({
     name: 'Master',
     volume: channelVolumes.Master ?? 100,
     muted: channelMutes.Master ?? false,
     node_id: 0,
+    // Master shows only real app streams NOT claimed by a named channel (Game/Chat/
+    // Media/Aux/Mic) — i.e. streams going straight to the master/output. Apps routed
+    // to a channel appear under that channel only, never duplicated here.
     apps: unassignedApps.value,
   }))
 
@@ -74,7 +86,7 @@ export const useAudioStore = defineStore('audio', () => {
     volume: channelVolumes.Mic ?? 100,
     muted: channelMutes.Mic ?? false,
     node_id: 0,
-    apps: allApps.value.filter(a => a.channel === 'Mic'),
+    apps: allApps.value.filter(a => a.channel === 'Mic' && !isInternalApp(a.name)),
   }))
 
   // ★ P8: fetchChannels reads real state from D-Bus/pactl, respecting debounce
@@ -233,8 +245,18 @@ export const useAudioStore = defineStore('audio', () => {
   function startDrag(app: AppInfo) { draggedApp.value = app }
   function endDrag() { draggedApp.value = null; routingInProgress.value = false }
 
-  function selectAppForRoute(app: AppInfo | null) { selectedAppForClickRoute.value = app }
-  function deselectApp() { selectedAppForClickRoute.value = null }
+  // Click-to-route selection is transient: it must not stay highlighted indefinitely.
+  // Auto-clear after a short idle so the channel "drop here" highlight reverts on its own.
+  let selectClearTimer: ReturnType<typeof setTimeout> | null = null
+  function clearSelectTimer() {
+    if (selectClearTimer) { clearTimeout(selectClearTimer); selectClearTimer = null }
+  }
+  function selectAppForRoute(app: AppInfo | null) {
+    selectedAppForClickRoute.value = app
+    clearSelectTimer()
+    if (app) selectClearTimer = setTimeout(() => { selectedAppForClickRoute.value = null }, 6000)
+  }
+  function deselectApp() { clearSelectTimer(); selectedAppForClickRoute.value = null }
 
   async function dropOnChannel(channel: string) {
     if (!draggedApp.value || routingInProgress.value) return
@@ -250,6 +272,7 @@ export const useAudioStore = defineStore('audio', () => {
     if (!app) { routingInProgress.value = false; return }
     const prev = app.channel || ''
     draggedApp.value = null
+    clearSelectTimer()
     selectedAppForClickRoute.value = null
     // Optimistic update: replace array so Vue reactivity is guaranteed
     const targetChannel = (channel === 'Master') ? '' : channel

@@ -10,8 +10,13 @@ onMounted(async () => {
   await loadDeviceAccessStatus()
 })
 
+// The Devices feature is not shipped yet, so the device-access setup banner (which tells
+// the user to run `./dev.sh setup`) is irrelevant noise — suppress it for now. The
+// detection logic below stays in place, dormant; re-enable by restoring the real check
+// when the Devices feature goes live.
+const DEVICES_FEATURE_ENABLED = false
 const showBanner = () => {
-  if (bannerDismissed.value) return false
+  if (!DEVICES_FEATURE_ENABLED || bannerDismissed.value) return false
   return !deviceAccess.value.ratbagd_available ||
          !deviceAccess.value.in_input_group ||
          !deviceAccess.value.in_audio_group ||

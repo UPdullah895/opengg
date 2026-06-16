@@ -7,6 +7,8 @@ import { usePersistenceStore } from '../../stores/persistence'
 import { useModalStore } from '../../stores/modal'
 import { useToast } from '../../composables/useToast'
 import InfoIcon from '../InfoIcon.vue'
+import ToggleSwitch from '../ToggleSwitch.vue'
+import VolumeSlider from '../VolumeSlider.vue'
 import './settings-shared.css'
 
 const { t } = useI18n()
@@ -29,12 +31,15 @@ async function removeVirtualAudio() {
       vaLoading.value = true; dangerMsg.value = ''
       try {
         await invoke('remove_virtual_audio')
-        audio.setVirtualAudioReady(false)
-        toast.success(t('settings.dangerZone.removeVirtualAudio'))
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 1 } }))
-        }, 500)
+        await audio.refreshVirtualAudioStatus()
+        if (!audio.virtualAudioReady) {
+          toast.success(t('settings.dangerZone.removeVirtualAudio'))
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 1 } }))
+          }, 500)
+        }
       } catch (e: any) {
+        await audio.refreshVirtualAudioStatus()
         toast.error(String(e))
       } finally {
         vaLoading.value = false
@@ -53,12 +58,15 @@ async function resetVirtualAudio() {
       vaLoading.value = true; dangerMsg.value = ''
       try {
         await invoke('remove_virtual_audio')
-        audio.setVirtualAudioReady(false)
-        toast.success(t('settings.dangerZone.removeVirtualAudio'))
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 1 } }))
-        }, 500)
+        await audio.refreshVirtualAudioStatus()
+        if (!audio.virtualAudioReady) {
+          toast.success(t('settings.dangerZone.removeVirtualAudio'))
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('openOnboarding', { detail: { step: 1 } }))
+          }, 500)
+        }
       } catch (e: any) {
+        await audio.refreshVirtualAudioStatus()
         toast.error(String(e))
       } finally {
         vaLoading.value = false
@@ -142,13 +150,7 @@ defineEmits<{ navigate: [page: string] }>()
         <span>{{ t('settings.earBlast.title') }}</span>
         <InfoIcon :title="t('settings.earBlast.desc')" />
         <div class="card-head-actions">
-          <button
-            class="eb-toggle-btn"
-            :class="{ 'eb-toggle-btn--active': persist.state.mixer.earBlast.enabled }"
-            @click="audio.toggleEarBlast()"
-          >
-            {{ persist.state.mixer.earBlast.enabled ? 'Disable' : 'Enable' }}
-          </button>
+          <ToggleSwitch :model-value="persist.state.mixer.earBlast.enabled" @update:model-value="audio.toggleEarBlast()" />
         </div>
       </div>
 
@@ -173,21 +175,23 @@ defineEmits<{ navigate: [page: string] }>()
 
       <div class="form-grid">
         <div class="field">
-          <label>{{ t('settings.earBlast.threshold') }} — {{ persist.state.mixer.earBlast.threshold }}%</label>
-          <input
-            class="ear-blast-slider"
-            type="range" min="1" max="100"
-            :value="persist.state.mixer.earBlast.threshold"
-            @input="e => audio.setEarBlastThreshold(Number((e.target as HTMLInputElement).value))"
+          <label>{{ t('settings.earBlast.threshold') }}</label>
+          <VolumeSlider
+            :model-value="persist.state.mixer.earBlast.threshold"
+            color="var(--accent)"
+            :min="1"
+            :max="100"
+            @update:model-value="v => audio.setEarBlastThreshold(v)"
           />
         </div>
         <div class="field">
-          <label>{{ t('settings.earBlast.target') }} — {{ persist.state.mixer.earBlast.target }}%</label>
-          <input
-            class="ear-blast-slider"
-            type="range" min="0" max="100"
-            :value="persist.state.mixer.earBlast.target"
-            @input="e => audio.setEarBlastTarget(Number((e.target as HTMLInputElement).value))"
+          <label>{{ t('settings.earBlast.target') }}</label>
+          <VolumeSlider
+            :model-value="persist.state.mixer.earBlast.target"
+            color="var(--accent)"
+            :min="0"
+            :max="100"
+            @update:model-value="v => audio.setEarBlastTarget(v)"
           />
         </div>
       </div>

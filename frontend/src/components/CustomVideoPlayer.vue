@@ -23,6 +23,7 @@ const emit = defineEmits<{
   ended: []
   timeupdate: [currentTime: number]
   'volume-change': [volume: number]
+  'fullscreen-change': [isFullscreen: boolean]
 }>()
 
 const videoRef = ref<HTMLVideoElement | null>(null)
@@ -137,7 +138,13 @@ function onProgressClick(e: MouseEvent) {
 }
 
 // ── Fullscreen ──
-const onFsChange = () => { isFullscreen.value = !!document.fullscreenElement }
+const onFsChange = () => {
+  const newState = !!document.fullscreenElement
+  if (newState !== isFullscreen.value) {
+    isFullscreen.value = newState
+    emit('fullscreen-change', newState)
+  }
+}
 function toggleFullscreen() {
   isFullscreen.value ? document.exitFullscreen() : wrapRef.value?.requestFullscreen()
 }
@@ -193,8 +200,8 @@ defineExpose({ videoRef, playing, currentTime, duration, isFullscreen, seekTo, t
     <!-- Slot for overlays / custom ctrl-bar injected by parent -->
     <slot :isFullscreen="isFullscreen" :toggleFullscreen="toggleFullscreen" />
 
-    <!-- Built-in controls (hidden when showControls === false) -->
-    <div v-if="showControls !== false && !nativeControls" class="cvp-ctrl" :class="{ 'cvp-ctrl-vis': ctrlVisible }">
+    <!-- Built-in controls (hidden when showControls === false, unless fullscreen) -->
+    <div v-if="(showControls !== false || isFullscreen) && !nativeControls" class="cvp-ctrl" :class="{ 'cvp-ctrl-vis': ctrlVisible }">
       <div class="cvp-prog" @click="onProgressClick">
         <div class="cvp-prog-track">
           <div class="cvp-prog-fill" :style="{ width: duration ? (currentTime/duration*100)+'%' : '0%' }">

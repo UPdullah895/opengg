@@ -6,6 +6,7 @@ import { usePersistenceStore } from '../../stores/persistence'
 import { loadTheme, saveTheme, getCurrentTheme, applyThemeMode, getThemeMode } from '../../utils/theme'
 import SelectField from '../SelectField.vue'
 import InfoIcon from '../InfoIcon.vue'
+import ToggleSwitch from '../ToggleSwitch.vue'
 import './settings-shared.css'
 
 const { t } = useI18n()
@@ -135,10 +136,7 @@ defineEmits<{ navigate: [page: string] }>()
             <InfoIcon :title="t('settings.daemon.runAtStartupTooltip')" />
           </span>
         </div>
-        <button class="toggle-btn" :class="{ on: settings.runAtStartup }"
-                @click="settings.runAtStartup = !settings.runAtStartup; onRunAtStartupChange()">
-          <span class="toggle-knob"></span>
-        </button>
+        <ToggleSwitch v-model="settings.runAtStartup" @update:model-value="onRunAtStartupChange()" />
       </div>
       <div class="daemon-toggle-row">
         <div class="daemon-toggle-info">
@@ -147,10 +145,7 @@ defineEmits<{ navigate: [page: string] }>()
             <InfoIcon :title="t('settings.daemon.keepInBackgroundTooltip')" />
           </span>
         </div>
-        <button class="toggle-btn" :class="{ on: settings.runInBackground }"
-                @click="settings.runInBackground = !settings.runInBackground; onRunInBackgroundChange()">
-          <span class="toggle-knob"></span>
-        </button>
+        <ToggleSwitch v-model="settings.runInBackground" @update:model-value="onRunInBackgroundChange()" />
       </div>
     </div>
 

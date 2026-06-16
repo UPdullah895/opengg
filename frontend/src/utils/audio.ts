@@ -18,6 +18,25 @@
 
 let _ctx: AudioContext | null = null
 
+/**
+ * Map a recorded audio-track title to a friendly label for display.
+ * New recordings already carry friendly titles (set at save time), but older files have
+ * the raw capture-source node name (e.g. "OpenGG_Game.monitor"). Mirrors the backend
+ * `friendly_track_name` in commands.rs. Returns null when no mapping applies so callers
+ * keep their own fallback (e.g. "Audio 1").
+ */
+export function friendlyTrackName(title: string | undefined | null): string | null {
+  if (!title) return null
+  const t = title.startsWith('device:') ? title.slice('device:'.length) : title
+  const m = t.match(/^OpenGG_(.+)\.monitor$/)
+  if (m) return m[1] // Game / Chat / Media / Aux / Mic
+  if (t === 'default_output') return 'Desktop'
+  if (t === 'default_input') return 'Mic'
+  if (t.startsWith('alsa_input.')) return 'Mic'
+  if (t.endsWith('.monitor')) return 'Output'
+  return null
+}
+
 export function getAudioContext(): AudioContext {
   if (!_ctx || _ctx.state === 'closed') _ctx = new AudioContext()
   return _ctx

@@ -110,6 +110,20 @@
     },
     "changelog": [
       {
+        "version": "V0.1.3",
+        "date": "2026-06-16",
+        "items": [
+          "إصلاح فتح التطبيق على نافذة فارغة «تعذّر الاتصال» في إصدارات الإنتاج",
+          "المسجّل يلتقط من مراقبات القنوات الحقيقية؛ المحرك الصوتي الافتراضي أصبح اختيارياً (يتراجع إلى سطح المكتب + الميكروفون)",
+          "التسجيلات تحمل الآن أسماء مسارات صوت واضحة (Game / Chat / Mic)",
+          "الميكروفون قناة من الدرجة الأولى بتسمية متسقة؛ إزالة التقاط الإدخال الافتراضي المكرر",
+          "الخلاط: قناة Master تعرض التطبيقات غير الموجّهة فقط، وتركيز القناة مؤقت، وتحكّم عام واحد بتخطيط قائمة التطبيقات",
+          "المقاطع: عنصر المقطع الجديد يظهر ضمن الشبكة مباشرةً؛ حذف المقطع ينقله إلى سلة محذوفات النظام",
+          "الالتقاط والصوت: منتقي مصادر التقاط حي، إعادة ترتيب المسارات بالسحب، وإزالة تحذير Wayland غير الدقيق",
+          "إضافة نصوص الإشعارات الناقصة (الإنجليزية + العربية) وتحسين صفحة الأجهزة"
+        ]
+      },
+      {
         "version": "V0.1.2",
         "date": "2026-05-12",
         "items": [
@@ -315,6 +329,7 @@
       "captureHint": "اربط أحواض PipeWire الافتراضية بكل مسار تسجيل (أسلوب OBS).",
       "trackLabel": "مسار",
       "addTrack": "+ إضافة مسار",
+      "reorderTrack": "اسحب لإعادة الترتيب",
       "sources": {
         "Game": "ألعاب",
         "Chat": "دردشة",
@@ -330,7 +345,8 @@
       "thumbnailCache": "ذاكرة الصور المصغرة",
       "thumbnailHint": "مخزنة في ~/.local/share/opengg/thumbnails/",
       "clearCache": "مسح ذاكرة الصور المصغرة",
-      "clearing": "جارٍ المسح..."
+      "clearing": "جارٍ المسح...",
+      "cleared": "تم مسح {count} صورة مصغرة"
     },
     "storage": {
       "title": "التخزين",
@@ -352,7 +368,8 @@
       "steamDeniedTitle": "تم إيقاف الوصول إلى مكتبة Steam",
       "steamDeniedBody": "اسمح بالوصول لقراءة بيانات Steam المحلية وطلب بيانات وصفية من متجر Steam حتى يتمكن OpenGG من عرض مكتبتك هنا مع الأسماء والصور.",
       "steamReadyTitle": "متصل بمكتبة Steam — {count} لعبة",
-      "steamReadyBody": "مكتبة Steam متاحة الآن في قوائم اختيار الألعاب ومُدرجة هنا مع الصور عند توفرها. يستخدم OpenGG بيانات Steam المحلية مع بيانات وصفية من متجر Steam للأسماء والصور."
+      "steamReadyBody": "مكتبة Steam متاحة الآن في قوائم اختيار الألعاب ومُدرجة هنا مع الصور عند توفرها. يستخدم OpenGG بيانات Steam المحلية مع بيانات وصفية من متجر Steam للأسماء والصور.",
+      "steamTooltip": "استيراد مكتبة Steam إلى قوائم اختيار الألعاب في OpenGG والحفاظ على رؤيتها هنا في التخزين. بعد السماح، يقرأ OpenGG بيانات Steam المحلية وقد يطلب بيانات وصفية من متجر Steam للأسماء والصور."
     },
     "extensions": {
       "title": "الإضافات",
@@ -538,7 +555,9 @@
       "errorMissingGroups": "لم يتم إضافة المستخدم إلى مجموعة 'render'. شغّل: sudo usermod -aG render,video $USER — ثم أعد تسجيل الدخول.",
       "errorBinaryUnhealthy": "تم تثبيت gpu-screen-recorder لكنه فشل في التشغيل. تحقق من أنه نسخة متوافقة وأن تعريفات GPU محدثة.",
       "crashWarning": "توقف التسجيل بشكل غير متوقع. تحقق من السجلات لمزيد من التفاصيل.",
-      "crashRestarting": "انهيار التسجيل — إعادة التشغيل…"
+      "crashRestarting": "انهيار التسجيل — إعادة التشغيل…",
+      "errorGeneric": "خطأ في التسجيل: {message}",
+      "errorMissingAudio": "مصدر الصوت غير موجود: {source}"
     }
   },
   "onboarding": {
@@ -563,13 +582,16 @@
     "skip": "تخطي حالياً",
     "skipShort": "تخطي",
     "creating": "جارٍ الإنشاء…",
-    "saving": "جارٍ الحفظ…"
+    "saving": "جارٍ الحفظ…",
+    "errorComplete": "فشل إكمال الإعداد: {error}",
+    "errorCreate": "فشل إنشاء الصوت الافتراضي: {error}"
   },
   "clips2": {
     "scanning": "جارٍ فحص المقاطع الجديدة…",
     "newClipDetected": "تم اكتشاف مقطع جديد…",
     "apply": "تطبيق",
-    "cancel": "إلغاء"
+    "cancel": "إلغاء",
+    "foundCount": "تم العثور على {n}"
   },
   "clips": {
     "contextMenu": {
@@ -596,7 +618,8 @@
       "rename": "إعادة تسمية",
       "renamePlaceholder": "نمط مثال: Highlight_{n}",
       "clear": "مسح",
-      "delete": "حذف"
+      "delete": "حذف",
+      "selected": "{count} محدد"
     },
     "dateGroup": {
       "today": "اليوم",
@@ -605,7 +628,13 @@
     "toast": {
       "clipDeleted": "تم حذف المقطع",
       "clipDeleteError": "فشل حذف المقطع",
-      "exportCancelled": "تم إلغاء التصدير"
+      "exportCancelled": "تم إلغاء التصدير",
+      "clipsDeleted": "تم حذف {count} مقطع",
+      "exportFailed": "فشل التصدير: {error}",
+      "openFolderFailed": "تعذّر فتح المجلد: {error}",
+      "renamed": "تمت إعادة تسمية {count} مقطع",
+      "screenshotFailed": "فشل التقاط الصورة: {error}",
+      "screenshotSaved": "تم حفظ لقطة الشاشة: {file}"
     },
     "durationFilter": {
       "all": "كل المدد",
@@ -656,7 +685,9 @@
       "import": "استيراد ألعاب Steam",
       "refresh": "تحديث مكتبة Steam",
       "loading": "جارٍ الاستيراد…",
-      "failed": "فشل استيراد مكتبة Steam"
+      "failed": "فشل استيراد مكتبة Steam",
+      "imported": "تم استيراد {count} لعبة من Steam",
+      "readyTitle": "{count} لعبة من Steam جاهزة للاستيراد"
     },
     "toggleStats": "تبديل الإحصائيات"
   },
@@ -666,7 +697,8 @@
     "game": "اللعبة",
     "filename": "اسم الملف",
     "filesize": "حجم الملف",
-    "recordingStarted": "بدء التسجيل"
+    "recordingStarted": "بدء التسجيل",
+    "recordingFailed": "فشل التسجيل: {error}"
   },
   "recording": {
     "stopped": "متوقف",
@@ -675,7 +707,8 @@
     "gsrRunning": "ذاكرة الإعادة GSR قيد التشغيل",
     "quickSettings": "إعدادات سريعة",
     "saveClip": "حفظ المقطع",
-    "restartSuccess": "تمت إعادة تشغيل التسجيل بنجاح"
+    "restartSuccess": "تمت إعادة تشغيل التسجيل بنجاح",
+    "restartFailed": "فشل إعادة تشغيل التسجيل: {error}"
   },
   "devices": {
     "title": "الأجهزة",
@@ -683,6 +716,9 @@
     "noDevicesDesc": "قم بتوصيل فأرة أو سماعة مدعومة ثم انقر على تحديث",
     "noApps": "لا توجد تطبيقات",
     "dropHere": "أسقط هنا",
+    "appBoxSettings": "إعدادات قائمة التطبيقات",
+    "appsShown": "عدد التطبيقات الظاهرة",
+    "appsPerRow": "تطبيقات لكل صف",
     "refresh": "تحديث",
     "back": "رجوع",
     "sidetone": "الصدى الجانبي",

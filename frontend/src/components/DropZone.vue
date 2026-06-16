@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAudioStore } from '../stores/audio'
+import { usePersistenceStore } from '../stores/persistence'
 import VolumeSlider from './VolumeSlider.vue'
 
 const { t } = useI18n()
@@ -12,6 +13,26 @@ const props = defineProps<{
 }>()
 
 const audio = useAudioStore()
+const persist = usePersistenceStore()
+
+// ── App-box layout (global settings, shared across all channel boxes) ──
+const ROW_H = 26   // px per chip row
+const ROW_GAP = 2  // px gap between rows
+const BOX_PAD = 8  // px total vertical padding of the box
+const appBoxCount = computed(() => Math.max(1, Math.min(12, persist.state.settings.appBoxCount ?? 3)))
+const appBoxPerRow = computed<1 | 2>(() => (persist.state.settings.appBoxPerRow === 2 ? 2 : 1))
+const boxHeight = computed(() => {
+  const rows = Math.ceil(appBoxCount.value / appBoxPerRow.value)
+  return rows * ROW_H + (rows - 1) * ROW_GAP + BOX_PAD
+})
+const boxStyle = computed(() => ({
+  '--dz': props.color,
+  '--box-h': boxHeight.value + 'px',
+  '--box-cols': String(appBoxPerRow.value),
+}))
+
+// (App-box layout count/columns are controlled by a single global gear in the Mixer
+//  top toolbar — see MixerPage.vue. This component only consumes the global settings.)
 const hovering = ref(false)
 const isDragging = computed(() => audio.draggedApp !== null)
 const contextMenuOpen = ref(false)
@@ -370,7 +391,7 @@ function toggleMute(appId: number, currentVol: number) {
 </script>
 
 <template>
-  <div class="dropzone" :class="{ hovering: hovering || dragOverChannel === props.channel, 'show-target': isDragging || audio.selectedAppForClickRoute, 'click-target': audio.selectedAppForClickRoute }" :style="{ '--dz': color }"
+  <div class="dropzone" :class="{ hovering: hovering || dragOverChannel === props.channel, 'show-target': isDragging || audio.selectedAppForClickRoute, 'click-target': audio.selectedAppForClickRoute }" :style="boxStyle"
     :data-channel="props.channel"
     @click="onZoneClick">
     <div v-if="apps.length > 0" class="dz-apps">
@@ -479,7 +500,8 @@ function toggleMute(appId: number, currentVol: number) {
 </template>
 
 <style scoped>
-.dropzone { width: 100%; height: 70px; overflow-y: auto; border: 1px dashed var(--border); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; transition: all .15s; scrollbar-width: thin; scrollbar-color: var(--border) transparent; overscroll-behavior: contain; position: relative; }
+.dropzone { width: 100%; height: var(--box-h, 70px); overflow-y: auto; border: 1px dashed var(--border); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 2px; transition: border-color .15s, background .15s; scrollbar-width: thin; scrollbar-color: var(--border) transparent; overscroll-behavior: contain; position: relative; }
+
 .show-target { border-color: color-mix(in srgb, var(--dz) 40%, var(--border)); background: color-mix(in srgb, var(--dz) 3%, transparent); }
 .click-target { cursor: pointer; border-color: color-mix(in srgb, var(--dz) 60%, var(--border)); background: color-mix(in srgb, var(--dz) 6%, transparent); }
 .hovering { border-color: var(--dz) !important; background: color-mix(in srgb, var(--dz) 10%, transparent) !important; border-style: solid !important; box-shadow: 0 0 12px color-mix(in srgb, var(--dz) 20%, transparent); }
@@ -495,7 +517,7 @@ function toggleMute(appId: number, currentVol: number) {
   inset: -16px;
   z-index: -1;
 }
-.dz-apps { display: flex; flex-direction: column; gap: 2px; }
+.dz-apps { display: grid; grid-template-columns: repeat(var(--box-cols, 1), minmax(0, 1fr)); gap: 2px; align-content: start; }
 .dz-chip {
   display: flex; align-items: center; gap: 5px; padding: 6px 8px; background: var(--bg-deep); border-radius: 4px; font-size: 11px; color: var(--text-sec); cursor: grab; overflow: hidden; transition: background .1s, box-shadow .15s, opacity .1s;
   /* ★ FIX: prevent text selection from hijacking drag gesture */

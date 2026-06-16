@@ -185,7 +185,9 @@ function onFaderDown(e: MouseEvent) {
   transition: border-color .2s, opacity .2s; position: relative;
   min-height: 0; height: 100%;
 }
-.strip:hover { border-color: color-mix(in srgb, var(--ch) 40%, transparent); }
+/* Neutral hover only — must NOT use the channel color, otherwise plain hover reads as the
+   active/focus state. Real focus is the transient click-to-route selection, not hover. */
+.strip:hover { border-color: color-mix(in srgb, var(--text-muted) 35%, var(--border)); }
 .strip.muted { opacity: .45; }
 .strip--input  { border-style: solid; }
 .accent-bar { width: calc(100% + 2px); height: 3px; border-radius: 10px 10px 0 0; margin: -1px -1px 4px; opacity: .8; }

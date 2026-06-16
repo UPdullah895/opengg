@@ -1808,8 +1808,20 @@ pub async fn take_screenshot(
 }
 #[command]
 pub async fn delete_clip(filepath: String) -> Result<(), String> {
-    if Path::new(&filepath).exists() {
-        std::fs::remove_file(&filepath).map_err(|e| format!("{e}"))?;
+    let path = shexp(&filepath);
+    if Path::new(&path).exists() {
+        // Move the clip to the system Trash (recoverable) instead of permanently deleting it.
+        // `gio` ships with the glib stack that Tauri/WebKitGTK already require, so it is
+        // reliably present. On failure we return Err so the frontend keeps the card instead
+        // of removing it from the UI while the file still exists.
+        let status = std::process::Command::new("gio")
+            .args(["trash", "--"])
+            .arg(&path)
+            .status()
+            .map_err(|e| format!("Could not move clip to Trash (gio unavailable): {e}"))?;
+        if !status.success() {
+            return Err(format!("Failed to move clip to Trash (gio trash exited {status})"));
+        }
     }
     let id = format!("{:x}", hash_str(&filepath));
     let t = thumb_dir().join(format!("{id}.jpg"));
@@ -4259,15 +4271,13 @@ pub fn gsr_diagnostics(audio_sources: Vec<String>) -> GsrDiagnosticResult {
         }
     }
     if !result.audio_sources_ok {
-        result.ok = false;
+        // The virtual engine is optional — missing channel monitors is informational, not a
+        // blocker. Recording falls back to the real default devices (default_output/input).
         let missing = result.missing_audio_sources.join(", ");
         result.items.push(DiagnosticItem {
-            message: format!("Missing audio capture sources: {missing}. Open the Audio Mixer and create the Virtual Audio Engine before recording."),
-            severity: "error".into(),
-            fix: Some(DiagnosticFix {
-                command: "".into(),
-                description: "Open the Audio Mixer and create the Virtual Audio Engine first.".into(),
-            }),
+            message: format!("Virtual audio sources not found ({missing}). Recording will use your default output + microphone. Create the Virtual Audio Engine for per-channel capture."),
+            severity: "info".into(),
+            fix: None,
         });
     }
 
@@ -4344,26 +4354,50 @@ pub fn start_gsr_replay(
     std::fs::create_dir_all(&expanded)
         .map_err(|e| format!("Cannot create output dir '{expanded}': {e}"))?;
 
-    // ★ FIX: Validate that all virtual sinks exist before passing them to GSR.
-    // If a sink is missing, GSR silently records silence for that audio track.
-    let sinks_short = std::process::Command::new("pactl")
-        .args(["list", "sinks", "short"])
+    // ★ The virtual audio engine is OPTIONAL — never hard-block recording.
+    // Resolve each requested source to the capture node GSR expects, keep the ones that
+    // actually exist as live PipeWire sources, and fall back to the real default devices
+    // (desktop + mic) when none are available.
+    let sources_short = std::process::Command::new("pactl")
+        .args(["list", "sources", "short"])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
-    for src in &audio_sources {
-        let sink_name = if src.contains('_') || src.contains('.') || src.contains('-') {
-            src.clone()
+    // Map a requested source to the capture node name GSR records with.
+    let resolve_capture = |src: &str| -> String {
+        if src.contains("default") {
+            src.to_string() // GSR special names default_output / default_input
+        } else if src.ends_with(".monitor") || src.starts_with("alsa_input.") {
+            src.to_string() // already a real source / monitor
+        } else if !src.contains('_') && !src.contains('.') && !src.contains('-') {
+            format!("OpenGG_{src}.monitor") // bare channel name e.g. "Game"
         } else {
-            format!("OpenGG_{src}")
-        };
-        // Check both the sink and its monitor source exist
-        if !sinks_short.contains(&sink_name) {
-            return Err(format!(
-                "Virtual audio sink '{}' not found. Open the Audio Mixer and click 'Create Virtual Audio Engine' before recording.",
-                sink_name
-            ));
+            format!("{src}.monitor") // a sink name e.g. "OpenGG_Game"
         }
+    };
+    let source_exists = |name: &str| {
+        sources_short
+            .lines()
+            .any(|l| l.split('\t').nth(1) == Some(name))
+    };
+    let mut audio_targets: Vec<String> = Vec::new();
+    for src in &audio_sources {
+        let cap = resolve_capture(src);
+        // default_* are resolved by GSR itself; everything else must be a live source.
+        if cap.contains("default") || source_exists(&cap) {
+            if !audio_targets.contains(&cap) {
+                audio_targets.push(cap);
+            }
+        } else {
+            log::warn!("capture source {cap:?} not present — skipping (virtual engine absent?)");
+        }
+    }
+    if audio_targets.is_empty() {
+        log::info!(
+            "No OpenGG capture sources available — falling back to default_output + default_input"
+        );
+        audio_targets.push("default_output".to_string());
+        audio_targets.push("default_input".to_string());
     }
 
     // Guard against stale settings that contain EDID model names or resolution strings
@@ -4371,13 +4405,16 @@ pub fn start_gsr_replay(
     // GSR only accepts connector names ("screen", "DP-1", "HDMI-A-1", "focused").
     // A valid connector name never starts with a digit and never contains a space.
     let monitor_target = {
-        let looks_invalid = monitor_target.is_empty()
-            || monitor_target
+        // Legacy installs stored a "connector|resolution" composite (e.g. "DP-1|1920x1080").
+        // GSR's -w only accepts the bare connector — keep the part before '|'.
+        let connector = monitor_target.split('|').next().unwrap_or("").trim().to_string();
+        let looks_invalid = connector.is_empty()
+            || connector
                 .chars()
                 .next()
                 .map(|c| c.is_ascii_digit())
                 .unwrap_or(false)
-            || monitor_target.contains(' ');
+            || connector.contains(' ');
         if looks_invalid {
             log::warn!(
                 "gsrMonitorTarget {:?} is not a valid GSR connector name — resetting to 'screen'",
@@ -4385,7 +4422,7 @@ pub fn start_gsr_replay(
             );
             "screen".to_string()
         } else {
-            monitor_target
+            connector
         }
     };
 
@@ -4436,20 +4473,9 @@ pub fn start_gsr_replay(
         cmd.args(["-s", res]);
     }
 
-    for src in &audio_sources {
-        // Legacy short names (e.g. "Game") are prefixed; full sink names are passed as-is
-        let sink = if src.contains('_') || src.contains('.') || src.contains('-') {
-            src.clone()
-        } else {
-            format!("OpenGG_{src}")
-        };
-        // PipeWire/PulseAudio virtual sinks require the .monitor suffix for capture
-        let monitor = if sink.ends_with(".monitor") {
-            sink
-        } else {
-            format!("{sink}.monitor")
-        };
-        cmd.args(["-a", &monitor]);
+    // Audio capture targets resolved above (existing sources, or default fallback).
+    for monitor in &audio_targets {
+        cmd.args(["-a", monitor]);
     }
 
     // ★ Pipe stderr so we can diagnose immediate failures (missing groups, bad GPU, etc.)
@@ -4511,6 +4537,7 @@ pub fn start_gsr_replay(
             bitrate_kbps,
             monitor_target,
             audio_sources,
+            audio_targets,
         },
         stderr_log,
     });
@@ -4547,6 +4574,58 @@ fn sanitize_filename(s: &str) -> String {
         }
     }
     out.trim_matches('_').to_string()
+}
+
+/// Map a GSR capture target (e.g. "OpenGG_Game.monitor", "default_output") to a friendly
+/// audio-track title shown in players. Mirrors the frontend mapping in `utils/audio.ts`.
+fn friendly_track_name(target: &str) -> String {
+    let t = target.strip_prefix("device:").unwrap_or(target);
+    if let Some(ch) = t.strip_prefix("OpenGG_").and_then(|s| s.strip_suffix(".monitor")) {
+        return ch.to_string(); // Game / Chat / Media / Aux / Mic
+    }
+    match t {
+        "default_output" => "Desktop".to_string(),
+        "default_input" => "Mic".to_string(),
+        _ if t.starts_with("alsa_input.") => "Mic".to_string(),
+        _ if t.ends_with(".monitor") => "Output".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Remux `src` → `dest` with friendly per-audio-track titles (stream-copy, no re-encode).
+/// `targets` is the ordered capture list; audio stream N is titled `friendly_track_name(targets[N])`.
+/// Returns true only if ffmpeg succeeded and `dest` exists. Any failure → false (caller falls
+/// back to a plain rename so saving never regresses).
+fn remux_with_track_titles(
+    src: &std::path::Path,
+    dest: &std::path::Path,
+    targets: &[String],
+) -> bool {
+    if targets.is_empty() {
+        return false; // nothing to title — plain rename is fine
+    }
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.args(["-y", "-i"]);
+    cmd.arg(src);
+    cmd.args(["-map", "0", "-c", "copy", "-movflags", "+faststart"]);
+    for (i, target) in targets.iter().enumerate() {
+        cmd.arg(format!("-metadata:s:a:{i}"));
+        cmd.arg(format!("title={}", friendly_track_name(target)));
+    }
+    cmd.arg(dest);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    match cmd.status() {
+        Ok(s) if s.success() && dest.exists() => true,
+        Ok(s) => {
+            log::warn!("ffmpeg remux for track titles exited {s:?}; falling back to rename");
+            false
+        }
+        Err(e) => {
+            log::warn!("ffmpeg not available for track titles ({e}); falling back to rename");
+            false
+        }
+    }
 }
 
 /// Find the newest video file written *strictly after* `after_time` in `dir`.
@@ -4620,7 +4699,7 @@ pub fn save_gsr_replay(app: AppHandle, restart_on_save: bool) -> Result<(), Stri
 
     // Step 1: send SIGUSR1 and clone spawn params.
     // Lock scope is tight — we drop it before calling start_gsr_replay to avoid deadlock.
-    let (output_dir_exp, restart_params): (String, Option<GsrSpawnParams>) = {
+    let (output_dir_exp, restart_params, audio_targets_ordered): (String, Option<GsrSpawnParams>, Vec<String>) = {
         let lock = state.0.lock().unwrap();
         match &*lock {
             Some(gsr_state) => {
@@ -4631,6 +4710,7 @@ pub fn save_gsr_replay(app: AppHandle, restart_on_save: bool) -> Result<(), Stri
                 }
                 log::info!("GSR SIGUSR1 → pid {pid}");
                 let expanded = shexp(&gsr_state.params.output_dir);
+                let targets = gsr_state.params.audio_targets.clone();
                 let rp = if restart_on_save {
                     Some(GsrSpawnParams {
                         output_dir: gsr_state.params.output_dir.clone(),
@@ -4640,11 +4720,12 @@ pub fn save_gsr_replay(app: AppHandle, restart_on_save: bool) -> Result<(), Stri
                         bitrate_kbps: gsr_state.params.bitrate_kbps,
                         monitor_target: gsr_state.params.monitor_target.clone(),
                         audio_sources: gsr_state.params.audio_sources.clone(),
+                        audio_targets: gsr_state.params.audio_targets.clone(),
                     })
                 } else {
                     None
                 };
-                (expanded, rp)
+                (expanded, rp, targets)
             }
             None => return Err("gpu-screen-recorder is not running".into()),
         }
@@ -4689,7 +4770,20 @@ pub fn save_gsr_replay(app: AppHandle, restart_on_save: bool) -> Result<(), Stri
         };
         let new_name = format!("{safe_name}_{now}.mp4");
         let dest = std::path::Path::new(&output_dir_exp).join(&new_name);
-        let (save_ok, filesize_mb) = if let Err(e) = std::fs::rename(&src_path, &dest) {
+        // Produce the final file by remuxing with friendly per-track titles
+        // (-c copy = no re-encode), so the muxed audio streams show "Game"/"Chat"/"Mic"
+        // etc. in any player instead of the raw "OpenGG_*.monitor" source names. The audio
+        // stream order matches `audio_targets_ordered`. Falls back to a plain rename if
+        // ffmpeg is unavailable or the remux fails.
+        let remuxed = remux_with_track_titles(&src_path, &dest, &audio_targets_ordered);
+        let (save_ok, filesize_mb) = if remuxed {
+            let _ = std::fs::remove_file(&src_path);
+            log::info!("GSR clip saved as {new_name} (with track titles)");
+            let mb = std::fs::metadata(&dest)
+                .map(|m| m.len() as f64 / 1_000_000.0)
+                .unwrap_or(0.0);
+            (true, mb)
+        } else if let Err(e) = std::fs::rename(&src_path, &dest) {
             log::warn!("GSR clip rename failed ({src_path:?} → {dest:?}): {e}");
             (false, 0.0f64)
         } else {

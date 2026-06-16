@@ -12,6 +12,8 @@ import { usePersistenceStore } from '../stores/persistence'
 import { resumeAudioContext } from '../utils/audio'
 import CustomVideoPlayer from './CustomVideoPlayer.vue'
 import GameTagDropdown from './GameTagDropdown.vue'
+import VolumeSlider from './VolumeSlider.vue'
+import TimelineTrackRow from './TimelineTrackRow.vue'
 import { clipDisplayTitle } from '../utils/format'
 
 // ── Types ──
@@ -152,7 +154,7 @@ function buildAudioUrl(streamIndex: number) {
   const token = mediaToken.value
   if (!port || !token) return ''
   const encoded = encodeURIComponent(props.clip.filepath)
-  return `http://localhost:${port}/audio?file=${encoded}&stream=${streamIndex}&token=${encodeURIComponent(token)}`
+  return `http://127.0.0.1:${port}/audio?file=${encoded}&stream=${streamIndex}&token=${encodeURIComponent(token)}`
 }
 
 function initAudioElements() {
@@ -539,7 +541,7 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
         :src="videoSrc"
         :muted="hasMultipleAudioTracks"
         :master-volume="localVol"
-        :show-controls="true"
+        :show-controls="false"
         :capture-keyboard="false"
         @loadedmetadata="onMeta"
         @play="onVideoPlay"
@@ -609,8 +611,15 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
         <path v-if="localVol > 0" d="M15.54 8.46a5 5 0 010 7.07"/>
         <line v-else x1="23" y1="9" x2="17" y2="15"/><line v-if="localVol === 0" x1="17" y1="9" x2="23" y2="15"/>
       </svg>
-      <input type="range" min="0" max="1" step="0.05" v-model.number="localVol" class="vol-monitor-range" />
-      <span class="vol-monitor-val">{{ Math.round(localVol * 100) }}</span>
+      <VolumeSlider
+        :model-value="Math.round(localVol * 100)"
+        color="var(--accent)"
+        :min="0"
+        :max="100"
+        unit=""
+        compact
+        @update:model-value="v => localVol = v / 100"
+      />
     </div>
     <!-- Magnet Mode toggle -->
     <button class="tr-btn" :class="{ active: magnetMode }" @click="magnetMode = !magnetMode" title="Magnet Mode — sync video/audio trim handles">
@@ -637,30 +646,35 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
     <div class="tl-container">
       <!--  Left: Track Headers (fixed width, gap from canvas) -->
       <div class="tl-headers">
-        <div v-for="t in tracks" :key="'h' + t.id" class="tl-header" :style="{ '--tc': t.color }"
-          @mouseenter="hoveredTrackId = t.id" @mouseleave="hoveredTrackId = null">
-          <svg v-if="showIcons(t.id) && getTrackDef(t.id)?.icon" class="hdr-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path v-if="getTrackDef(t.id)?.icon === 'video'"   d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M3 6h10a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2z"/>
-            <path v-else-if="getTrackDef(t.id)?.icon === 'game'"    d="M6 11h4m-2-2v4m7-1h.01M18 11h.01M2 6a2 2 0 012-2h16a2 2 0 012 2v10a4 4 0 01-4 4H6a4 4 0 01-4-4V6z"/>
-            <path v-else-if="getTrackDef(t.id)?.icon === 'mic'"     d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3zM19 10v2a7 7 0 01-14 0v-2M12 19v3M8 23h8"/>
-            <path v-else-if="getTrackDef(t.id)?.icon === 'chat'"    d="M3 18v-6a9 9 0 0118 0v6M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z"/>
-            <path v-else-if="getTrackDef(t.id)?.icon === 'media'"   d="M9 18V5l12-2v13M9 19c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2zm12-3c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2z"/>
-          </svg>
-          <span class="hdr-name">{{ t.label }}</span>
-          <!-- Speaker icon on RIGHT edge of header for audio tracks -->
-          <template v-if="t.type === 'audio'">
+        <TimelineTrackRow
+          v-for="t in tracks"
+          :key="'h' + t.id"
+          part="header"
+          :color="t.color"
+          :label="t.label"
+          :icon="getTrackDef(t.id)?.icon"
+          :show-icon="showIcons(t.id)"
+          @mouseenter="hoveredTrackId = t.id"
+          @mouseleave="hoveredTrackId = null"
+        >
+          <template v-if="t.type === 'audio'" #actions>
             <div class="vol-zone" style="margin-left:auto">
               <button class="hdr-speaker" :class="{ off: t.muted }" @click.stop="t.volOpen = !t.volOpen; tracks.filter(x => x.id !== t.id).forEach(x => x.volOpen = false)">
                 <svg v-if="t.muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="ic-s"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
                 <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="ic-s"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg>
               </button>
               <div v-if="t.volOpen" class="vol-popover no-seek" @click.stop>
-                <input type="range" min="0" max="100" v-model.number="t.volume" class="vol-range" :style="{ accentColor: t.color }" />
-                <span class="vol-val">{{ t.volume }}</span>
+                <VolumeSlider
+                  :model-value="t.volume"
+                  :color="t.color"
+                  :min="0"
+                  :max="100"
+                  @update:model-value="v => t.volume = v"
+                />
               </div>
             </div>
           </template>
-        </div>
+        </TimelineTrackRow>
       </div>
 
       <!-- Right: Timeline Canvas — each track is a FIXED HEIGHT ROW -->
@@ -671,11 +685,17 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
 
         <!-- E1: Each track is a distinct fixed-height row -->
         <div class="tl-rows">
-          <div v-for="t in tracks" :key="'r' + t.id" class="tl-row" :style="{ '--tc': t.color }"
-            @mouseenter="hoveredTrackId = t.id" @mouseleave="hoveredTrackId = null">
+          <TimelineTrackRow
+            v-for="t in tracks"
+            :key="'r' + t.id"
+            part="body"
+            :color="t.color"
+            @mouseenter="hoveredTrackId = t.id"
+            @mouseleave="hoveredTrackId = null"
+          >
             <!-- Audio track → waveform -->
             <canvas v-if="t.type === 'audio' && t.peaks.length" :ref="el => drawWave(el as HTMLCanvasElement, t)" class="waveform"></canvas>
-          </div>
+          </TimelineTrackRow>
         </div>
 
         <!-- Trim handles — Magnet ON: unified handles span all tracks -->
@@ -901,8 +921,6 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 
 /* ★ Epic 2: Local monitor volume slider */
 .vol-monitor { display: flex; align-items: center; gap: 4px; padding: 0 4px; }
-.vol-monitor-range { width: 52px; height: 4px; accent-color: var(--accent); cursor: pointer; }
-.vol-monitor-val { font-size: 9px; color: var(--text-muted); min-width: 22px; text-align: right; }
 
 /* ═══ E1: Timeline — FIXED HEIGHT ROWS ═══ */
 .tl-wrap { min-height: 60px; overflow: hidden; flex-shrink: 0; }
@@ -910,17 +928,6 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 
 /* Track Headers — flush against canvas (no gap) */
 .tl-headers { width: 110px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--bg-deep); z-index: 4; }
-.tl-header {
-  height: 36px; /* ★ E1: FIXED height per track */
-  display: flex; align-items: center; gap: 4px; padding: 0 8px;
-  border-bottom: 1px solid var(--border);
-  border-left: 3px solid var(--tc);
-  background: color-mix(in srgb, var(--tc) 8%, var(--bg-deep));
-  position: relative;
-}
-.hdr-id { font-size: 10px; font-weight: 900; color: var(--tc); }
-.hdr-icon-svg { width: 11px; height: 11px; color: var(--tc); opacity: .75; flex-shrink: 0; }
-.hdr-name { font-size: 9px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Speaker icon on right edge */
 .vol-zone { position: relative; }
@@ -928,8 +935,6 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 .hdr-speaker:hover { opacity: 1; }
 .hdr-speaker.off { opacity: .3; }
 .vol-popover { position: absolute; right: 0; top: 100%; margin-top: 4px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; display: flex; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,.4); z-index: 20; white-space: nowrap; }
-.vol-range { width: 60px; height: 4px; }
-.vol-val { font-size: 9px; font-weight: 700; color: var(--tc); min-width: 20px; }
 
 /* Timeline Canvas */
 .tl-canvas { flex: 1; position: relative; overflow: hidden; cursor: crosshair; user-select: none; }
@@ -939,14 +944,6 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 
 /* ★ E1: Each track row has FIXED height with visible borders */
 .tl-rows { display: flex; flex-direction: column; height: 100%; }
-.tl-row {
-  height: 36px; /* matches header */
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--tc) 6%, var(--bg-deep));
-  position: relative;
-  overflow: hidden;
-}
 
 /* Waveform canvas */
 .waveform { width: 100%; height: 100%; display: block; }

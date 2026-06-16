@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { useReplayStore } from '../stores/replay'
@@ -16,43 +16,17 @@ const toast   = useToast()
 const open = ref(false)
 const root = ref<HTMLElement | null>(null)
 
-// ── Live timer ──
-const elapsed = ref(0)  // seconds since GSR was started / replay began
-let timerStartMs = 0
-let timerRaf = 0
-
-function startTimer() {
-  elapsed.value = 0
-  timerStartMs = Date.now()
-  const tick = () => {
-    elapsed.value = Math.floor((Date.now() - timerStartMs) / 1000)
-    timerRaf = requestAnimationFrame(tick)
-  }
-  timerRaf = requestAnimationFrame(tick)
-}
-function stopTimer() {
-  if (timerRaf) { cancelAnimationFrame(timerRaf); timerRaf = 0 }
-  elapsed.value = 0
-  timerStartMs = 0
-}
-function fmtElapsed(s: number) {
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  const sec = s % 60
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
-}
-
-// ── Status label ──
+// ── Status ──
+// Minimal indicator: a red dot when capture is active — no running timer.
 const isGsr      = computed(() => settings.value.gsrEnabled)
 const isRunning  = computed(() => replay.status !== 'idle')
 const isRecording = computed(() => replay.status === 'recording')
 
+// Short static label (no elapsed seconds) shown next to the red dot.
 const statusLabel = computed(() => {
   if (!isRunning.value) return t('dashboard.idle')
-  if (isGsr.value) return `${t('recording.replayBuffer')} · ${fmtElapsed(elapsed.value)}`
-  if (isRecording.value) return `${t('dashboard.recording')} · ${fmtElapsed(elapsed.value)}`
-  return `${t('recording.replay')} · ${replay.replayDuration}s`
+  if (isRecording.value) return t('dashboard.recording')
+  return t('recording.replay')
 })
 
 // ── Quick-settings options ──
@@ -95,19 +69,15 @@ async function toggleRecording() {
       if (isRunning.value) {
         await invoke('stop_gsr_replay')
         replay.status = 'idle'
-        stopTimer()
       } else {
         await invoke('start_gsr_replay', gsrParams())
         replay.status = 'replay'
-        startTimer()
       }
     } else {
       if (isRunning.value) {
         await replay.stopRecorder()
-        stopTimer()
       } else {
         await replay.startReplay(settings.value.gsrReplaySecs)
-        startTimer()
       }
     }
   } catch (e) {
@@ -138,14 +108,6 @@ async function restartGsr() {
   }
 }
 
-// ── Sync timer with backend status ──
-watch(() => replay.status, (status, prev) => {
-  // If backend says idle but our timer is running, stop it
-  if (status === 'idle' && prev !== 'idle') {
-    stopTimer()
-  }
-})
-
 // ── Close on outside click ──
 function onDocClick(e: MouseEvent) {
   if (root.value && !root.value.contains(e.target as Node)) open.value = false
@@ -154,8 +116,6 @@ onMounted(async () => {
   document.addEventListener('mousedown', onDocClick)
   // Hydrate recording status from backend so the pill shows the correct state after route change
   try { await replay.fetchStatus() } catch { /* daemon may not be running */ }
-  // If status came back as running, start the elapsed timer
-  if (isRunning.value) startTimer()
   // Populate monitor target dropdown from Tauri's native monitor API
   try {
     const sessionType = await invoke<string>('get_session_type')
@@ -169,7 +129,6 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDocClick)
-  stopTimer()
 })
 </script>
 

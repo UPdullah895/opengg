@@ -52,6 +52,9 @@ export interface PersistedState {
     // Clip directories (watched for new clips)
     clip_directories: string[]
     screenshotDirs: string[]
+    // ★ Mixer app-box layout (global, applies to every channel's connected-apps box)
+    appBoxCount: number          // number of apps shown before the box scrolls
+    appBoxPerRow: 1 | 2          // apps per row (1 = single column, 2 = two columns)
     // ★ GPU Screen Recorder
     gsrEnabled: boolean
     gsrFps: number
@@ -80,7 +83,7 @@ export interface PersistedState {
   macros: Record<string, MouseMacro[]>
 }
 
-const CURRENT_SCHEMA_VERSION = 9
+const CURRENT_SCHEMA_VERSION = 11
 
 export const DEFAULTS: PersistedState = {
   _schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -105,14 +108,16 @@ export const DEFAULTS: PersistedState = {
       { id: 'A5', name: 'Audio 5',  color: '#ec4899', icon: 'media',   visible: true },
     ],
     captureTracks: [
-      { name: 'Track 1', source: 'Game' },
-      { name: 'Track 2', source: 'Chat' },
-      { name: 'Track 3', source: 'Mic'  },
+      { name: 'Track 1', source: 'OpenGG_Game.monitor' },
+      { name: 'Track 2', source: 'OpenGG_Chat.monitor' },
+      { name: 'Track 3', source: 'OpenGG_Mic.monitor'  },
     ],
     runAtStartup:      false,
     runInBackground:   true,
     clip_directories:  ['~/Videos/OpenGG'],
     screenshotDirs:    ['~/Pictures'],
+    appBoxCount:       3,
+    appBoxPerRow:      1,
     gsrEnabled:        false,
     gsrFps:            60,
     gsrQuality:        'cbr',
@@ -213,6 +218,36 @@ const MIGRATIONS: Record<number, (state: any) => void> = {
     if (!s?.mixer?.earBlast) {
       s.mixer = s.mixer || {}
       s.mixer.earBlast = { enabled: false, channels: ['Game'], threshold: 85, target: 60 }
+    }
+  },
+  10: (s) => {
+    // Normalize legacy "connector|resolution" gsrMonitorTarget composites
+    // (e.g. "DP-1|1920x1080"). GSR's -w only accepts the bare connector name —
+    // passing the composite makes GSR crash with `display "1920x1080" not found`.
+    // Migration 4 only caught pure resolution/space values, not this composite.
+    const t = s?.settings?.gsrMonitorTarget
+    if (typeof t === 'string') {
+      const connector = t.split('|')[0].trim()
+      if (!connector || /^\d/.test(connector) || connector.includes(' ')) {
+        s.settings.gsrMonitorTarget = 'screen'
+      } else if (connector !== t) {
+        s.settings.gsrMonitorTarget = connector
+      }
+    }
+  },
+  11: (s) => {
+    // captureTracks now store the real PipeWire source node.name (what the recorder
+    // captures from) so the live "Audio Capture Devices" dropdown can select any source.
+    // Convert legacy friendly labels ("Game"/"Chat"/"Media"/"Aux"/"Mic") to the real
+    // OpenGG channel monitor node names. Values already containing '.'/'_' are left as-is.
+    const tracks = s?.settings?.captureTracks
+    if (Array.isArray(tracks)) {
+      const LEGACY = ['Game', 'Chat', 'Media', 'Aux', 'Mic']
+      for (const tr of tracks) {
+        if (tr && typeof tr.source === 'string' && LEGACY.includes(tr.source)) {
+          tr.source = `OpenGG_${tr.source}.monitor`
+        }
+      }
     }
   },
 }

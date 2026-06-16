@@ -118,11 +118,6 @@ const steamStorageTitle = computed(() => {
   return t('settings.storage.steamTitle')
 })
 
-const steamStorageBody = computed(() => {
-  if (steamGamesLoaded.value) return t('settings.storage.steamReadyBody')
-  if (steamAccess.value === 'denied') return t('settings.storage.steamDeniedBody')
-  return t('settings.storage.steamBody')
-})
 
 const steamStorageButtonLabel = computed(() => {
   if (steamImportBusy.value) return t('clips.steamImport.loading')
@@ -186,43 +181,41 @@ defineEmits<{ navigate: [page: string] }>()
       </div>
     </div>
 
-    <!-- Thumbnail cache + Disk usage side-by-side -->
-    <div class="storage-grid">
-      <div class="card">
-        <div class="card-head">{{ t('settings.clipSettings.thumbnailCache') }} <InfoIcon :title="t('settings.clipSettings.thumbnailHint')" /></div>
-        <div class="action-row">
-          <button class="btn btn-warn" @click="clearCache" :disabled="cacheClearing">
-            {{ cacheClearing ? t('settings.clipSettings.clearing') : t('settings.clipSettings.clearCache') }}
-          </button>
-          <span v-if="cacheMsg" class="cache-msg">{{ cacheMsg }}</span>
+    <!-- Storage stats + cache management (unified card) -->
+    <div class="card">
+      <div class="card-head-row">
+        <div class="storage-header-left">
+          <div class="storage-title">{{ t('settings.storage.diskUsage') }}</div>
         </div>
+        <button v-if="storageInfo" class="btn-icon-sm btn-icon-clear" @click="clearCache" :disabled="cacheClearing" :title="cacheClearing ? t('settings.clipSettings.clearing') : t('settings.clipSettings.clearCache')">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
       </div>
-
-      <div class="card">
-        <div class="card-head">{{ t('settings.storage.diskUsage') }}</div>
-        <div v-if="storageLoading" class="hint">{{ t('settings.storage.loading') }}</div>
-        <template v-else-if="storageInfo">
-          <div class="storage-stats">
-            <div class="stat-pill">
-              <span class="stat-label">{{ t('settings.storage.clips') }}</span>
-              <span class="stat-val accent">{{ storageInfo.clip_count }}</span>
-            </div>
-            <div class="stat-pill">
-              <span class="stat-label">{{ t('settings.storage.used') }}</span>
-              <span class="stat-val">{{ fmtBytes(storageInfo.used_bytes) }}</span>
-            </div>
+      <div v-if="storageLoading" class="hint">{{ t('settings.storage.loading') }}</div>
+      <template v-else-if="storageInfo">
+        <div class="storage-stats">
+          <div class="stat-pill">
+            <span class="stat-label">{{ t('settings.storage.clips') }}</span>
+            <span class="stat-val accent">{{ storageInfo.clip_count }}</span>
           </div>
-        </template>
-        <div v-else class="hint">{{ t('settings.storage.readError') }}</div>
-      </div>
+          <div class="stat-pill">
+            <span class="stat-label">{{ t('settings.storage.used') }}</span>
+            <span class="stat-val">{{ fmtBytes(storageInfo.used_bytes) }}</span>
+          </div>
+        </div>
+        <div v-if="cacheMsg" class="cache-msg">{{ cacheMsg }}</div>
+      </template>
+      <div v-else class="hint">{{ t('settings.storage.readError') }}</div>
     </div>
 
     <div class="card">
-      <div class="card-head">{{ t('settings.storage.steamSection') }}</div>
+      <div class="card-head">
+        {{ t('settings.storage.steamSection') }}
+        <InfoIcon :title="t('settings.storage.steamTooltip')" />
+      </div>
       <div class="steam-storage-head">
         <div class="steam-storage-copy">
           <div class="steam-storage-title">{{ steamStorageTitle }}</div>
-          <div class="steam-storage-body">{{ steamStorageBody }}</div>
         </div>
         <button class="btn btn-sm steam-storage-btn" :disabled="steamImportBusy" @click="importSteamLibrary(steamAccess === 'denied')">
           {{ steamStorageButtonLabel }}

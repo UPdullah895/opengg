@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDspStore } from '../stores/dsp'
+import ToggleSwitch from './ToggleSwitch.vue'
+import VolumeSlider from './VolumeSlider.vue'
 
 const { t } = useI18n()
 const props = defineProps<{ channel: string; color: string }>()
@@ -41,20 +43,21 @@ const ch = computed(() => store.dsp[props.channel])
             <span class="card-name">{{ t('dsp.noiseReduction') }}</span>
             <span class="card-desc">{{ t('dsp.noiseReductionDesc') }}</span>
           </div>
-          <label class="tog-wrap">
-            <input type="checkbox" :checked="ch?.nr.enabled" @change="store.setNr(channel, { enabled: ($event.target as HTMLInputElement).checked })" />
-            <span class="tog-track"><span class="tog-thumb"></span></span>
-          </label>
+          <ToggleSwitch
+            :model-value="ch?.nr.enabled ?? false"
+            @update:model-value="v => store.setNr(channel, { enabled: v })"
+          />
         </div>
         <!-- Always rendered; disabled state via CSS when off -->
         <div class="card-body" :class="{ 'card-body--off': !ch?.nr.enabled }">
           <div class="ctrl-row">
             <span class="ctrl-lbl">{{ t('dsp.intensity') }}</span>
-            <span class="ctrl-val" :style="{ color }">{{ ch?.nr.intensity ?? 50 }}%</span>
           </div>
-          <input type="range" class="ctrl-sl" min="0" max="100" step="1"
-            :value="ch?.nr.intensity ?? 50" :style="{ '--ch': color }"
-            @input="store.setNr(channel, { intensity: parseInt(($event.target as HTMLInputElement).value) })" />
+          <VolumeSlider
+            :model-value="ch?.nr.intensity ?? 50"
+            :color="color"
+            @update:model-value="v => store.setNr(channel, { intensity: v })"
+          />
         </div>
       </div>
 
@@ -68,19 +71,23 @@ const ch = computed(() => store.dsp[props.channel])
             <span class="card-name">{{ t('dsp.noiseGate') }}</span>
             <span class="card-desc">{{ t('dsp.noiseGateDesc') }}</span>
           </div>
-          <label class="tog-wrap">
-            <input type="checkbox" :checked="ch?.gate.enabled" @change="store.setGate(channel, { enabled: ($event.target as HTMLInputElement).checked })" />
-            <span class="tog-track"><span class="tog-thumb"></span></span>
-          </label>
+          <ToggleSwitch
+            :model-value="ch?.gate.enabled ?? false"
+            @update:model-value="v => store.setGate(channel, { enabled: v })"
+          />
         </div>
         <div class="card-body" :class="{ 'card-body--off': !ch?.gate.enabled }">
           <div class="ctrl-row">
             <span class="ctrl-lbl">{{ t('dsp.threshold') }}</span>
-            <span class="ctrl-val" :style="{ color }">{{ ch?.gate.threshold ?? -40 }} dB</span>
           </div>
-          <input type="range" class="ctrl-sl" min="-80" max="0" step="1"
-            :value="ch?.gate.threshold ?? -40" :style="{ '--ch': color }"
-            @input="store.setGate(channel, { threshold: parseInt(($event.target as HTMLInputElement).value) })" />
+          <VolumeSlider
+            :model-value="ch?.gate.threshold ?? -40"
+            :color="color"
+            :min="-80"
+            :max="0"
+            unit=" dB"
+            @update:model-value="v => store.setGate(channel, { threshold: v })"
+          />
           <label class="check-row">
             <input type="checkbox" :checked="ch?.gate.auto" @change="store.setGate(channel, { auto: ($event.target as HTMLInputElement).checked })" />
             <span>{{ t('dsp.autoDetect') }}</span>
@@ -98,19 +105,20 @@ const ch = computed(() => store.dsp[props.channel])
             <span class="card-name">{{ t('dsp.compressor') }}</span>
             <span class="card-desc">{{ t('dsp.compressorDesc') }}</span>
           </div>
-          <label class="tog-wrap">
-            <input type="checkbox" :checked="ch?.comp.enabled" @change="store.setComp(channel, { enabled: ($event.target as HTMLInputElement).checked })" />
-            <span class="tog-track"><span class="tog-thumb"></span></span>
-          </label>
+          <ToggleSwitch
+            :model-value="ch?.comp.enabled ?? false"
+            @update:model-value="v => store.setComp(channel, { enabled: v })"
+          />
         </div>
         <div class="card-body" :class="{ 'card-body--off': !ch?.comp.enabled }">
           <div class="ctrl-row">
             <span class="ctrl-lbl">{{ t('dsp.level') }}</span>
-            <span class="ctrl-val" :style="{ color }">{{ ch?.comp.level ?? 50 }}%</span>
           </div>
-          <input type="range" class="ctrl-sl" min="0" max="100" step="1"
-            :value="ch?.comp.level ?? 50" :style="{ '--ch': color }"
-            @input="store.setComp(channel, { level: parseInt(($event.target as HTMLInputElement).value) })" />
+          <VolumeSlider
+            :model-value="ch?.comp.level ?? 50"
+            :color="color"
+            @update:model-value="v => store.setComp(channel, { level: v })"
+          />
         </div>
       </div>
 
@@ -174,22 +182,6 @@ const ch = computed(() => store.dsp[props.channel])
 .card-name { font-size: 13px; font-weight: 600; }
 .card-desc { font-size: 11px; color: var(--text-muted); }
 
-/* Toggle */
-.tog-wrap  { display: flex; align-items: center; cursor: pointer; flex-shrink: 0; }
-.tog-wrap input { display: none; }
-.tog-track {
-  width: 38px; height: 20px; border-radius: 10px;
-  background: var(--bg-deep); border: 1px solid var(--border);
-  position: relative; transition: background .2s, border-color .2s;
-}
-.tog-wrap input:checked ~ .tog-track { background: var(--accent); border-color: var(--accent); }
-.tog-thumb {
-  position: absolute; top: 3px; left: 3px;
-  width: 12px; height: 12px; border-radius: 50%;
-  background: #fff; transition: left .2s; box-shadow: 0 1px 3px rgba(0,0,0,.4);
-}
-.tog-wrap input:checked ~ .tog-track .tog-thumb { left: 21px; }
-
 /* Card body — always rendered, dimmed when off */
 .card-body {
   padding: 0 16px 14px;
@@ -204,12 +196,6 @@ const ch = computed(() => store.dsp[props.channel])
 
 .ctrl-row { display: flex; justify-content: space-between; align-items: center; padding-top: 12px; }
 .ctrl-lbl { font-size: 11px; color: var(--text-muted); }
-.ctrl-val { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
-
-.ctrl-sl {
-  width: 100%; cursor: pointer;
-  accent-color: var(--ch, var(--accent));
-}
 
 .check-row {
   display: flex; align-items: center; gap: 6px;

@@ -2,6 +2,7 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDspStore } from '../stores/dsp'
+import ToggleSwitch from './ToggleSwitch.vue'
 
 const { t } = useI18n()
 const props = defineProps<{ channel: string; color: string }>()
@@ -183,11 +184,12 @@ onUnmounted(() => {
           <svg class="preset-arrow" viewBox="0 0 10 6" fill="currentColor"><path d="M0 0l5 6 5-6z"/></svg>
         </div>
         <button class="eq-reset" :disabled="!eq?.enabled" @click="store.resetEq(channel)">{{ t('eq.flat') }}</button>
-        <label class="tog-wrap">
-          <input type="checkbox" :checked="eq?.enabled" @change="store.setEqEnabled(channel, ($event.target as HTMLInputElement).checked)" />
-          <span class="tog-track"><span class="tog-thumb"></span></span>
-          <span class="tog-lbl">{{ eq?.enabled ? 'ON' : 'OFF' }}</span>
-        </label>
+        <ToggleSwitch
+          compact
+          :model-value="eq?.enabled ?? false"
+          @update:model-value="v => store.setEqEnabled(channel, v)"
+        />
+        <span class="eq-tog-lbl" :class="{ on: eq?.enabled }">{{ eq?.enabled ? 'ON' : 'OFF' }}</span>
       </div>
     </div>
 
@@ -383,22 +385,8 @@ onUnmounted(() => {
 .eq-reset:hover:not(:disabled) { border-color: var(--text-sec); color: var(--text); }
 .eq-reset:disabled { opacity: .35; cursor: not-allowed; }
 
-.tog-wrap  { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
-.tog-wrap input { display: none; }
-.tog-track {
-  width: 34px; height: 18px; border-radius: 9px;
-  background: var(--bg-deep); border: 1px solid var(--border);
-  position: relative; transition: background .2s, border-color .2s; flex-shrink: 0;
-}
-.tog-wrap input:checked ~ .tog-track { background: var(--accent); border-color: var(--accent); }
-.tog-thumb {
-  position: absolute; top: 2px; left: 2px;
-  width: 12px; height: 12px; border-radius: 50%;
-  background: #fff; transition: left .2s; box-shadow: 0 1px 3px rgba(0,0,0,.4);
-}
-.tog-wrap input:checked ~ .tog-track .tog-thumb { left: 18px; }
-.tog-lbl { font-size: 11px; font-weight: 700; color: var(--text-muted); width: 26px; }
-.tog-wrap input:checked ~ .tog-lbl { color: var(--accent); }
+.eq-tog-lbl { font-size: 11px; font-weight: 700; color: var(--text-muted); width: 26px; }
+.eq-tog-lbl.on { color: var(--accent); }
 
 /* ── Canvas ── */
 .eq-canvas-wrap {

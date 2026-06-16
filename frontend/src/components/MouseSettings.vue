@@ -5,6 +5,7 @@ import { useDeviceStore } from '../stores/devices'
 import type { DeviceInfo } from '../stores/devices'
 import { getDeviceImage, trimDeviceName } from '../assets/deviceAssets'
 import MouseMacros from './MouseMacros.vue'
+import VolumeSlider from './VolumeSlider.vue'
 
 const { t } = useI18n()
 const props = defineProps<{ device: DeviceInfo }>()
@@ -40,14 +41,15 @@ const hasRealImage = computed(() => !imgSrc.value.startsWith('data:'))
       <section class="setting-section">
         <h3 class="section-title">{{ t('devices.dpi') }}</h3>
         <div class="dpi-row">
-          <input
-            type="range"
+          <VolumeSlider
+            :model-value="dpiInput"
+            color="var(--accent)"
             :min="dpiMin"
             :max="dpiMax"
-            step="50"
-            v-model.number="dpiInput"
-            @change="onDpiChange"
-            class="dpi-slider"
+            :step="50"
+            unit=""
+            :show-value="false"
+            @update:model-value="v => { dpiInput = v; onDpiChange() }"
           />
           <input
             type="number"
@@ -140,12 +142,6 @@ const hasRealImage = computed(() => !imgSrc.value.startsWith('data:'))
   display: flex;
   align-items: center;
   gap: 12px;
-}
-.dpi-slider {
-  flex: 1;
-  accent-color: var(--accent);
-  height: 4px;
-  cursor: pointer;
 }
 .dpi-number {
   width: 80px;

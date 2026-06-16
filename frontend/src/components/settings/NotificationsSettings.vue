@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { usePersistenceStore } from '../../stores/persistence'
 import SelectField from '../SelectField.vue'
 import InfoIcon from '../InfoIcon.vue'
+import VolumeSlider from '../VolumeSlider.vue'
 import './settings-shared.css'
 
 const { t } = useI18n()
@@ -74,15 +75,15 @@ defineEmits<{ navigate: [page: string] }>()
 
       <!-- Duration — only for X11 Overlay -->
       <div class="field notif-duration-field" v-if="settings.notificationStyle === 'x11-overlay'">
-        <label>{{ t('settings.notificationsPage.duration') }}: {{ settings.notificationDuration }}s <InfoIcon :title="t('settings.notificationsPage.durationDesc')" /></label>
-        <input
-          type="range"
-          class="notif-duration-slider"
-          :value="settings.notificationDuration"
-          min="1"
-          max="10"
-          step="1"
-          @input="settings.notificationDuration = Number(($event.target as HTMLInputElement).value)"
+        <label>{{ t('settings.notificationsPage.duration') }} <InfoIcon :title="t('settings.notificationsPage.durationDesc')" /></label>
+        <VolumeSlider
+          :model-value="settings.notificationDuration"
+          color="var(--accent)"
+          :min="1"
+          :max="10"
+          :step="1"
+          unit="s"
+          @update:model-value="v => settings.notificationDuration = v"
         />
       </div>
     </div>

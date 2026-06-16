@@ -3,38 +3,42 @@
 //! Manages the replay buffer and regular recording via gpu-screen-recorder.
 //! Communicates with the process via signals (SIGUSR1 to save, SIGINT to stop).
 
-use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use anyhow::Result;
+use std::path::Path;
 use std::sync::Arc;
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::Mutex;
 
-/// Recording mode.
+/// Recording mode. The daemon recorder is always `Idle` now (recording is owned
+/// by the OpenGG app); the other variants remain part of the D-Bus status surface.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum RecordMode {
     Idle,
     Replay { duration: u32 },
     Recording,
 }
 
-/// Manages a gpu-screen-recorder subprocess.
+/// Daemon-side recorder shell.
+///
+/// NOTE: live screen/audio recording is owned entirely by the OpenGG app
+/// (the Tauri host's `start_gsr_replay`), which captures each enabled channel
+/// from its real `OpenGG_<ch>.monitor`. This daemon-side recorder is retained
+/// only for its D-Bus surface; it no longer spawns its own gpu-screen-recorder.
+/// The old implementation hardcoded `-a OpenGG_Game.monitor -a OpenGG_Chat.monitor
+/// -a default_input`, which created a second, conflicting capture and double-wired
+/// the raw default mic (`gsr-default_input`) into the graph.
 pub struct Recorder {
     process: Arc<Mutex<Option<Child>>>,
     mode: Arc<Mutex<RecordMode>>,
-    output_dir: PathBuf,
-    fps: u32,
-    quality: String,
 }
 
 impl Recorder {
-    pub fn new(output_dir: &Path, fps: u32, quality: &str) -> Self {
+    pub fn new(output_dir: &Path, _fps: u32, _quality: &str) -> Self {
         std::fs::create_dir_all(output_dir).ok();
         Self {
             process: Arc::new(Mutex::new(None)),
             mode: Arc::new(Mutex::new(RecordMode::Idle)),
-            output_dir: output_dir.to_owned(),
-            fps,
-            quality: quality.into(),
         }
     }
 
@@ -59,83 +63,21 @@ impl Recorder {
         *mode
     }
 
-    /// Map user-facing quality preset to GSR's CLI quality argument.
-    fn gsr_quality_arg(&self) -> &'static str {
-        match self.quality.as_str() {
-            "Low" => "medium",
-            "Medium" => "high",
-            "High" => "very_high",
-            "Ultra" => "ultra",
-            _ => "very_high",
-        }
-    }
-
-    /// Detect the appropriate GSR capture target based on the session type.
-    fn gsr_capture_target(&self) -> &'static str {
-        if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
-            "portal"
-        } else {
-            "screen"
-        }
-    }
-
-    /// Build the base GSR command with shared arguments.
-    fn build_gsr_cmd(&self, quality: &'static str, target: &'static str) -> Command {
-        let mut cmd = Command::new("gpu-screen-recorder");
-        cmd.args([
-            "-w", target,
-            "-f", &self.fps.to_string(),
-            "-q", quality,
-            "-c", "mp4",
-            "-a", "OpenGG_Game.monitor",
-            "-a", "OpenGG_Chat.monitor",
-            "-a", "default_input",
-            "-o", self.output_dir.to_str().unwrap_or("/tmp"),
-        ]);
-        cmd.kill_on_drop(true);
-        cmd
-    }
-
-    /// Start the replay buffer.
-    pub async fn start_replay(&self, duration: u32) -> Result<()> {
-        if self.status().await != RecordMode::Idle {
-            anyhow::bail!("Recorder already running");
-        }
-
-        let quality = self.gsr_quality_arg();
-        let target = self.gsr_capture_target();
-        tracing::info!("GSR capture target: {target} (session type: {:?})", std::env::var("XDG_SESSION_TYPE"));
-
-        let mut cmd = self.build_gsr_cmd(quality, target);
-        cmd.args(["-r", &duration.to_string()]);
-
-        let child = cmd.spawn().context("gpu-screen-recorder not found")?;
-
-        *self.process.lock().await = Some(child);
-        *self.mode.lock().await = RecordMode::Replay { duration };
-
-        tracing::info!("Replay buffer started: {duration}s, {fps}fps", fps = self.fps);
+    /// No-op: replay/recording is owned by the OpenGG app (`start_gsr_replay`),
+    /// which captures each enabled channel from its real `OpenGG_<ch>.monitor`.
+    /// The daemon must not spawn a second gpu-screen-recorder.
+    pub async fn start_replay(&self, _duration: u32) -> Result<()> {
+        tracing::info!(
+            "Daemon start_replay ignored — recording is handled by the OpenGG app"
+        );
         Ok(())
     }
 
-    /// Start regular recording (no replay buffer).
+    /// No-op for the same reason as `start_replay`.
     pub async fn start_recording(&self) -> Result<()> {
-        if self.status().await != RecordMode::Idle {
-            anyhow::bail!("Recorder already running");
-        }
-
-        let quality = self.gsr_quality_arg();
-        let target = self.gsr_capture_target();
-        tracing::info!("GSR capture target: {target} (session type: {:?})", std::env::var("XDG_SESSION_TYPE"));
-
-        let child = self.build_gsr_cmd(quality, target)
-            .spawn()
-            .context("gpu-screen-recorder not found")?;
-
-        *self.process.lock().await = Some(child);
-        *self.mode.lock().await = RecordMode::Recording;
-
-        tracing::info!("Recording started");
+        tracing::info!(
+            "Daemon start_recording ignored — recording is handled by the OpenGG app"
+        );
         Ok(())
     }
 

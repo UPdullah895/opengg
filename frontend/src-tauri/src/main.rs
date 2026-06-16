@@ -282,6 +282,7 @@ fn main() {
             commands::restart_gsr_replay,
             commands::get_active_window_title,
             commands::list_audio_sinks,
+            commands::list_capture_sources,
             commands::get_session_type,
             commands::list_monitors,
             commands::show_clip_notification,
@@ -790,6 +791,10 @@ pub struct GsrSpawnParams {
     pub bitrate_kbps: Option<u32>,
     pub monitor_target: String,
     pub audio_sources: Vec<String>,
+    /// The resolved, ordered capture targets actually passed to GSR via `-a` (after
+    /// existence-filtering / default fallback). The muxed file's audio stream order matches
+    /// this, so it's used to title each audio track with a friendly name on save.
+    pub audio_targets: Vec<String>,
 }
 
 /// Managed state for the GPU Screen Recorder child process.

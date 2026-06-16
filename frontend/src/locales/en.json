@@ -110,6 +110,20 @@
     },
     "changelog": [
       {
+        "version": "V0.1.3",
+        "date": "2026-06-16",
+        "items": [
+          "Fixed launching to a blank “connection refused” window in release builds",
+          "Recorder captures real per-channel monitors; the virtual audio engine is now optional (falls back to desktop + mic)",
+          "Recordings now carry friendly audio-track names (Game / Chat / Mic)",
+          "Mic is a consistently-named first-class channel; removed the duplicate default-input capture",
+          "Mixer: Master lists only unrouted apps, channel focus is transient, and one global control sets the app-list layout",
+          "Clips: the new-clip placeholder flows inline and appears live; deleting a clip moves it to the system Trash",
+          "Capture & Sound: live capture-source picker, drag-to-reorder tracks, and the inaccurate Wayland warning removed",
+          "Added missing in-app notification text (English + Arabic) and tidied the Devices page"
+        ]
+      },
+      {
         "version": "V0.1.2",
         "date": "2026-05-12",
         "items": [
@@ -315,6 +329,7 @@
       "captureHint": "Assign PipeWire virtual sinks to each recording track (OBS-style).",
       "trackLabel": "Track",
       "addTrack": "+ Add Track",
+      "reorderTrack": "Drag to reorder",
       "sources": {
         "Game": "Game",
         "Chat": "Chat",
@@ -330,7 +345,8 @@
       "thumbnailCache": "Thumbnail Cache",
       "thumbnailHint": "Cached at ~/.local/share/opengg/thumbnails/",
       "clearCache": "Clear Thumbnail Cache",
-      "clearing": "Clearing…"
+      "clearing": "Clearing…",
+      "cleared": "Cleared {count} cached thumbnails"
     },
     "storage": {
       "title": "Storage",
@@ -352,7 +368,8 @@
       "steamDeniedTitle": "Steam library access is off",
       "steamDeniedBody": "Allow access to read local Steam data and request Steam Store metadata so OpenGG can list your Steam library here with names and artwork.",
       "steamReadyTitle": "Steam library connected — {count} games",
-      "steamReadyBody": "Your Steam library is available in game pickers and listed here with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images."
+      "steamReadyBody": "Your Steam library is available in game pickers and listed here with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images.",
+      "steamTooltip": "Import your Steam library to OpenGG's game pickers and keep it visible here in Storage. After you allow access, OpenGG reads local Steam data and may request Steam Store metadata for names and artwork."
     },
     "extensions": {
       "title": "Extensions",
@@ -379,7 +396,7 @@
         "installNote": "Install from registry coming soon — see docs/EXTENSION_DEV.md for manual install",
         "viewRepository": "View Repository",
         "author": "By {author}",
-        "version": "v{version}",
+        "version": "v0.1.3",
         "noDaemon": "UI only",
         "hasDaemon": "Includes daemon",
         "noPermissions": "Standard access",
@@ -454,7 +471,9 @@
       "errorMissingGroups": "Your user is not in the 'render' group. Run: sudo usermod -aG render,video $USER — then re-login.",
       "errorBinaryUnhealthy": "gpu-screen-recorder is installed but failed to run. Check that it is a compatible version and your GPU drivers are up to date.",
       "crashWarning": "Recording stopped unexpectedly. Check logs for details.",
-      "crashRestarting": "Recording crashed — restarting…"
+      "crashRestarting": "Recording crashed — restarting…",
+      "errorGeneric": "Recording error: {message}",
+      "errorMissingAudio": "Audio source not found: {source}"
     },
     "notificationsPage": {
       "title": "Notifications",
@@ -566,7 +585,8 @@
       "rename": "Rename",
       "renamePlaceholder": "Pattern e.g. Highlight_{n}",
       "clear": "Clear",
-      "delete": "Delete"
+      "delete": "Delete",
+      "selected": "{count} selected"
     },
     "dateGroup": {
       "today": "Today",
@@ -575,7 +595,13 @@
     "toast": {
       "clipDeleted": "Clip deleted",
       "clipDeleteError": "Failed to delete clip",
-      "exportCancelled": "Export cancelled"
+      "exportCancelled": "Export cancelled",
+      "clipsDeleted": "{count} clips deleted",
+      "exportFailed": "Export failed: {error}",
+      "openFolderFailed": "Could not open folder: {error}",
+      "renamed": "{count} clips renamed",
+      "screenshotFailed": "Screenshot failed: {error}",
+      "screenshotSaved": "Screenshot saved: {file}"
     },
     "durationFilter": {
       "all": "All Durations",
@@ -627,7 +653,9 @@
       "import": "Import Steam Games",
       "refresh": "Refresh Steam Library",
       "loading": "Importing…",
-      "failed": "Steam library import failed"
+      "failed": "Steam library import failed",
+      "imported": "Imported {count} Steam games",
+      "readyTitle": "{count} Steam games ready to import"
     }
   },
   "notification": {
@@ -636,7 +664,8 @@
     "game": "Game",
     "filename": "Filename",
     "filesize": "File Size",
-    "recordingStarted": "Recording started"
+    "recordingStarted": "Recording started",
+    "recordingFailed": "Recording failed: {error}"
   },
   "recording": {
     "stopped": "Stopped",
@@ -645,7 +674,8 @@
     "gsrRunning": "GSR Replay Buffer Running",
     "quickSettings": "Quick Settings",
     "saveClip": "Save Clip",
-    "restartSuccess": "Recording restarted successfully"
+    "restartSuccess": "Recording restarted successfully",
+    "restartFailed": "Failed to restart recording: {error}"
   },
   "devices": {
     "title": "Devices",
@@ -653,6 +683,9 @@
     "noDevicesDesc": "Connect a supported mouse or headset and click Refresh",
     "noApps": "No apps",
     "dropHere": "Drop here",
+    "appBoxSettings": "App list settings",
+    "appsShown": "Apps shown",
+    "appsPerRow": "Apps per row",
     "refresh": "Refresh",
     "back": "Back",
     "sidetone": "Sidetone",
@@ -752,13 +785,16 @@
     "skip": "Skip for now",
     "skipShort": "Skip",
     "creating": "Creating…",
-    "saving": "Saving…"
+    "saving": "Saving…",
+    "errorComplete": "Failed to finish setup: {error}",
+    "errorCreate": "Failed to create virtual audio: {error}"
   },
   "clips2": {
     "scanning": "Scanning for new clips…",
     "newClipDetected": "New clip detected…",
     "apply": "Apply",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "foundCount": "{n} found"
   },
   "dsp": {
     "title": "DSP Controls",
