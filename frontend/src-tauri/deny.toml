@@ -18,6 +18,12 @@ multiple-versions = "warn"
 wildcards = "warn"
 highlight = "all"
 
+# warp 0.3.7 → headers 0.3.9 pins base64 0.21.x; tauri uses 0.22.x.
+# Cannot resolve without warp releasing a headers bump upstream.
+[[bans.skip]]
+name = "base64"
+version = "=0.21.7"
+
 [licenses]
 # Permissive licenses common in the Rust/Linux ecosystem. Not enforced by the
 # CI gate (which runs advisories+bans only), but kept valid for local checks.
@@ -34,3 +40,8 @@ allow = [
 ]
 confidence-threshold = 0.8
 exceptions = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
