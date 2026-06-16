@@ -1,9 +1,36 @@
 [advisories]
 version = 2
 ignore = [
-    # unic-ucd-version is unmaintained (RUSTSEC-2025-0098).
-    # Pulled in transitively by tauri-utils → tauri v2.x; no fix available upstream.
+    # -----------------------------------------------------------------------
+    # All entries below are GTK3 / Tauri v2.x transitive dependencies.
+    # None are reachable from OpenGG's own code. No upstream fixes exist;
+    # tracked at https://github.com/tauri-apps/tauri.
+    # -----------------------------------------------------------------------
+
+    # gdkwayland-sys — tauri-runtime-wry → tao
+    { id = "RUSTSEC-2024-0411" },
+    # gdk — tauri → wry
+    { id = "RUSTSEC-2024-0412" },
+    # atk — tauri → tray-icon → libappindicator → gtk
+    { id = "RUSTSEC-2024-0413" },
+    # gdkx11-sys — tauri → wry
+    { id = "RUSTSEC-2024-0414" },
+    # gtk — tauri → tray-icon → libappindicator
+    { id = "RUSTSEC-2024-0415" },
+    # atk-sys — tauri → gtk
+    { id = "RUSTSEC-2024-0416" },
+    # gdkx11 — tauri → wry
+    { id = "RUSTSEC-2024-0417" },
+    # gdk-sys — tauri → webkit2gtk
+    { id = "RUSTSEC-2024-0418" },
+    # gtk3-macros — tauri → gtk
+    { id = "RUSTSEC-2024-0419" },
+    # gtk-sys — tauri → gtk
+    { id = "RUSTSEC-2024-0420" },
+    # unic-ucd-version — tauri-utils → tauri v2.x
     { id = "RUSTSEC-2025-0098" },
+    # proc-macro-error (unmaintained) — tauri → gtk transitive
+    { id = "RUSTSEC-2024-0370" },
 ]
 
 [bans]
