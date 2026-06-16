@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/src-tauri/icons/logo.svg" alt="OpenGG" width="120" />
+  <img src="frontend/src-tauri/icons/128x128.png" alt="OpenGG" width="120" />
 </p>
 
 <h1 align="center">OpenGG</h1>
