@@ -8,7 +8,7 @@ wildcards = "allow"
 highlight = "all"
 
 [licenses]
-default = "allow"
+unlicensed = "allow"
 
 [sources]
 unknown-registry = "warn"
