@@ -9,7 +9,11 @@
 # and only warn on yanked so first adoption doesn't red-fail on a transitive.
 unmaintained = "workspace"
 yanked = "warn"
-ignore = []
+ignore = [
+    # unic-ucd-version is unmaintained (RUSTSEC-2025-0098).
+    # Pulled in transitively by tauri-utils → tauri v2.x; no fix available upstream.
+    { id = "RUSTSEC-2025-0098" },
+]
 
 [bans]
 # Tauri host handles the media server, IPC, and file operations. Surface
