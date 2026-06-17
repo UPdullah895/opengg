@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libpulse-dev
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            frontend/src-tauri -> target
+            daemon -> target
+
+      - name: Install frontend deps
+        run: cd frontend && npm ci
+
+      - name: Build daemon
+        run: cd daemon && cargo build --release
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: frontend
+          tagName: ${{ github.ref_name }}
+          releaseName: OpenGG ${{ github.ref_name }}
+          releaseBody: |
+            See the [README](https://github.com/UPdullah895/opengg#readme) for installation instructions.
+          releaseDraft: false
+          prerelease: false
+
+      - name: Package release tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ROOT="opengg-v${VERSION}-linux-x86_64"
+          TARBALL="${ROOT}.tar.gz"
+
+          mkdir -p "$ROOT/usr/bin"
+          cp frontend/src-tauri/target/release/opengg "$ROOT/usr/bin/opengg"
+          cp daemon/target/release/openggd "$ROOT/usr/bin/openggd"
+
+          mkdir -p "$ROOT/usr/lib/udev/rules.d"
+          cp packaging/99-opengg.rules "$ROOT/usr/lib/udev/rules.d/"
+
+          mkdir -p "$ROOT/usr/share/dbus-1/services"
+          cp packaging/org.opengg.Daemon.service "$ROOT/usr/share/dbus-1/services/"
+
+          mkdir -p "$ROOT/usr/lib/systemd/user"
+          cp packaging/openggd.service "$ROOT/usr/lib/systemd/user/"
+
+          mkdir -p "$ROOT/usr/share/polkit-1/actions"
+          cp packaging/org.opengg.setup.policy "$ROOT/usr/share/polkit-1/actions/"
+
+          tar -czf "$TARBALL" "$ROOT"
+          gh release upload "$GITHUB_REF_NAME" "$TARBALL" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
