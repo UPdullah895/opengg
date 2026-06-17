@@ -33,3 +33,4 @@ CLAUDE.md
 
 # Runtime per-session logs
 Logs/
+.tauri-signing-private-key.txt
