@@ -4365,10 +4365,11 @@ pub fn start_gsr_replay(
         .unwrap_or_default();
     // Map a requested source to the capture node name GSR records with.
     let resolve_capture = |src: &str| -> String {
-        if src.contains("default") {
-            src.to_string() // GSR special names default_output / default_input
-        } else if src.ends_with(".monitor") || src.starts_with("alsa_input.") {
-            src.to_string() // already a real source / monitor
+        if src.contains("default")
+            || src.ends_with(".monitor")
+            || src.starts_with("alsa_input.")
+        {
+            src.to_string() // GSR special names (default_output/default_input) or already a real source/monitor
         } else if !src.contains('_') && !src.contains('.') && !src.contains('-') {
             format!("OpenGG_{src}.monitor") // bare channel name e.g. "Game"
         } else {
