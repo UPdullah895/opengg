@@ -1,7 +1,9 @@
 {
   "identifier": "default",
   "description": "Default permissions for OpenGG",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -16,7 +18,6 @@
     "dialog:default",
     "dialog:allow-open",
     "opener:default",
-    "global-shortcut:default",
-    "updater:default"
+    "global-shortcut:default"
   ]
 }
