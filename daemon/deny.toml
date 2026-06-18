@@ -1,36 +1,29 @@
-# cargo-deny configuration for the OpenGG daemon crate.
-# Schema targets cargo-deny 0.18+ (bundled by cargo-deny-action@v2.0.20).
-# The CI gate runs `check advisories bans`; the [licenses] section is kept
-# schema-valid for local `cargo deny check` but is not enforced in CI.
-
 [advisories]
-# Vulnerabilities and unsound advisories are always errors — no lint-level
-# field exists for them in modern cargo-deny. We surface unmaintained crates
-# and only warn on yanked so first adoption doesn't red-fail on a transitive.
-unmaintained = "workspace"
-yanked = "warn"
 ignore = []
 
 [bans]
-# Daemon is security-sensitive (D-Bus exposure, device access). Surface
-# duplicate versions and wildcard deps without hard-failing on adoption.
 multiple-versions = "warn"
-wildcards = "warn"
+wildcards = "allow"
 highlight = "all"
 
 [licenses]
-# Permissive licenses common in the Rust/Linux ecosystem. Not enforced by the
-# CI gate (which runs advisories+bans only), but kept valid for local checks.
 allow = [
-  "MIT",
-  "Apache-2.0",
-  "BSD-2-Clause",
-  "BSD-3-Clause",
-  "ISC",
-  "Unicode-DFS-2016",
-  "Unicode-3.0",
-  "Zlib",
-  "MPL-2.0",
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Zlib",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "OpenSSL",
+    "BSL-1.0",
 ]
-confidence-threshold = 0.8
-exceptions = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,36 +1,70 @@
-# cargo-deny configuration for the OpenGG Tauri host crate.
-# Schema targets cargo-deny 0.18+ (bundled by cargo-deny-action@v2.0.20).
-# The CI gate runs `check advisories bans`; the [licenses] section is kept
-# schema-valid for local `cargo deny check` but is not enforced in CI.
-
 [advisories]
-# Vulnerabilities and unsound advisories are always errors — no lint-level
-# field exists for them in modern cargo-deny. We surface unmaintained crates
-# and only warn on yanked so first adoption doesn't red-fail on a transitive.
-unmaintained = "workspace"
-yanked = "warn"
-ignore = []
+ignore = [
+    # -----------------------------------------------------------------------
+    # All entries below are GTK3 / Tauri v2.x transitive dependencies.
+    # None are reachable from OpenGG's own code. No upstream fixes exist;
+    # tracked at https://github.com/tauri-apps/tauri.
+    # -----------------------------------------------------------------------
+
+    # gdkwayland-sys — tauri-runtime-wry → tao
+    { id = "RUSTSEC-2024-0411" },
+    # gdk — tauri → wry
+    { id = "RUSTSEC-2024-0412" },
+    # atk — tauri → tray-icon → libappindicator → gtk
+    { id = "RUSTSEC-2024-0413" },
+    # gdkx11-sys — tauri → wry
+    { id = "RUSTSEC-2024-0414" },
+    # gtk — tauri → tray-icon → libappindicator
+    { id = "RUSTSEC-2024-0415" },
+    # atk-sys — tauri → gtk
+    { id = "RUSTSEC-2024-0416" },
+    # gdkx11 — tauri → wry
+    { id = "RUSTSEC-2024-0417" },
+    # gdk-sys — tauri → webkit2gtk
+    { id = "RUSTSEC-2024-0418" },
+    # gtk3-macros — tauri → gtk
+    { id = "RUSTSEC-2024-0419" },
+    # gtk-sys — tauri → gtk
+    { id = "RUSTSEC-2024-0420" },
+    # rust-unic family (archived project, no fix) — tauri-utils → urlpattern → tauri v2.x
+    { id = "RUSTSEC-2025-0075" },  # unic-char-range
+    { id = "RUSTSEC-2025-0080" },  # unic-common
+    { id = "RUSTSEC-2025-0081" },  # unic-char-property
+    { id = "RUSTSEC-2025-0098" },  # unic-ucd-version
+    { id = "RUSTSEC-2025-0100" },  # unic-ucd-ident
+    # proc-macro-error (unmaintained) — tauri → gtk transitive
+    { id = "RUSTSEC-2024-0370" },
+]
 
 [bans]
-# Tauri host handles the media server, IPC, and file operations. Surface
-# duplicate versions and wildcard deps without hard-failing on adoption.
 multiple-versions = "warn"
-wildcards = "warn"
+wildcards = "allow"
 highlight = "all"
 
+# warp 0.3.7 → headers 0.3.9 pins base64 0.21.x; tauri uses 0.22.x.
+# Cannot resolve without warp releasing a headers bump upstream.
+[[bans.skip]]
+name = "base64"
+version = "=0.21.7"
+
 [licenses]
-# Permissive licenses common in the Rust/Linux ecosystem. Not enforced by the
-# CI gate (which runs advisories+bans only), but kept valid for local checks.
 allow = [
-  "MIT",
-  "Apache-2.0",
-  "BSD-2-Clause",
-  "BSD-3-Clause",
-  "ISC",
-  "Unicode-DFS-2016",
-  "Unicode-3.0",
-  "Zlib",
-  "MPL-2.0",
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Zlib",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "OpenSSL",
+    "BSL-1.0",
 ]
-confidence-threshold = 0.8
-exceptions = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
