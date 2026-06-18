@@ -19,8 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     container: ${{ matrix.container }}
     timeout-minutes: 45
-    fail-fast: false
     strategy:
+      fail-fast: false
       matrix:
         include:
           - distro: Debian Stable
