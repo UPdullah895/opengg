@@ -29,7 +29,7 @@
     "typescript": "^5.4",
     "vite": "^8.0.16",
     "vitest": "^4.1.6",
-    "vue-tsc": "^2.0"
+    "vue-tsc": "^3.3"
   },
   "overrides": {
     "@tauri-apps/api": "2.10.1"
