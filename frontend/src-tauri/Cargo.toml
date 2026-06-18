@@ -24,7 +24,7 @@ futures-util = "0.3"
 dirs = "5"
 arboard = "3"
 rusqlite = { version = "0.31", features = ["bundled"] }
-warp = "0.3"
+warp = "0.4"
 percent-encoding = "2"
 libpulse-binding = "2"
 libpulse-simple-binding = "2"
