@@ -177,7 +177,7 @@ onMounted(async () => {
   document.addEventListener('mousedown', onDocClick)
   if (!persist.loaded) await persist.load()
   // mediaPort and mediaToken are already injected from App.vue and are guaranteed to be set
-  try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
+  try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.5' }
   try { await replay.fetchStatus() } catch { /* daemon may not be running */ }
   try {
     const dirs = persist.state.settings.clip_directories?.length

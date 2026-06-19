@@ -16,7 +16,7 @@ const showAllAccess = ref(false)
 const expandedAccessItem = ref<string | null>(null)
 
 onMounted(async () => {
-  try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.1' }
+  try { appVersion.value = await getVersion() } catch { appVersion.value = '0.1.5' }
   await loadDependencyStatus()
   await loadDeviceAccessStatus()
   await loadDistroInfo()
