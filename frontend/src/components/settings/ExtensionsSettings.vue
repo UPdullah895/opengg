@@ -203,6 +203,10 @@ onBeforeUnmount(() => {
   if (copiedTimer) clearTimeout(copiedTimer)
 })
 
+// TODO: Extensions are not ready for release. Flip `extensionsComingSoon` back to false
+// to restore the full Extensions UI (core modules, GSR install, extensions list).
+const extensionsComingSoon = ref(true)
+
 defineEmits<{ navigate: [page: string] }>()
 </script>
 
@@ -210,6 +214,15 @@ defineEmits<{ navigate: [page: string] }>()
   <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.extensions.title') }}</h2>
 
+    <!-- Coming soon placeholder — see `extensionsComingSoon` flag in <script> -->
+    <div v-if="extensionsComingSoon" class="coming-soon-panel">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>
+      <div class="cs-title">{{ t('settings.extensions.comingSoon') }}</div>
+      <div class="cs-sub">{{ t('settings.extensions.comingSoonDesc') }}</div>
+    </div>
+
+    <!-- Full Extensions UI — preserved, restorable by flipping extensionsComingSoon to false -->
+    <template v-if="!extensionsComingSoon">
     <!-- Core Modules -->
     <div class="card">
       <div class="card-head">
@@ -331,10 +344,18 @@ defineEmits<{ navigate: [page: string] }>()
         </div>
       </div>
     </Teleport>
+    </template>
   </section>
 </template>
 
 <style scoped>
+.coming-soon-panel {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; text-align: center; padding: 56px 24px; color: var(--text-muted);
+}
+.coming-soon-panel svg { opacity: .5; }
+.coming-soon-panel .cs-title { font-size: 16px; font-weight: 700; color: var(--text); }
+.coming-soon-panel .cs-sub { font-size: 12px; color: var(--text-muted); line-height: 1.5; max-width: 380px; }
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

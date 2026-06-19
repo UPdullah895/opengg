@@ -20,6 +20,11 @@ const isRtlLanguage = computed(() => {
 function setLanguage(code: string) {
   settings.value.language = code
   locale.value = code
+  // Direction follows the language: Arabic → RTL, others → LTR. Keep rtlMode in sync.
+  const entry = LANGUAGES.find(l => l.code === code)
+  const isRtl = entry?.dir === 'rtl'
+  settings.value.rtlMode = isRtl
+  document.documentElement.dir = isRtl ? 'rtl' : 'ltr'
 }
 
 function enableRtl() {

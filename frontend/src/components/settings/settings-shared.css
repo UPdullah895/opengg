@@ -540,6 +540,10 @@
 .settings-section .social-btn:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); border-color: var(--accent); }
 .settings-section .social-btn svg { flex-shrink: 0; opacity: .8; }
 .settings-section .social-btn:hover svg { opacity: 1; color: var(--accent); }
+.settings-section .social-btn-disabled { opacity: .55; cursor: not-allowed; }
+.settings-section .social-btn-disabled:hover { background: var(--bg-deep); color: var(--text-sec); border-color: var(--border); }
+.settings-section .social-btn-disabled:hover svg { opacity: .8; color: inherit; }
+.settings-section .soon-badge { margin-left: auto; font-size: 10px; font-weight: 700; background: var(--bg-surface); color: var(--text-muted); padding: 2px 6px; border-radius: 4px; letter-spacing: .4px; }
 .settings-section .about-contributors { font-size: 12px; color: var(--text-muted); text-align: center; margin: 0; padding: 8px 0 16px; }
 
 /* ── Notifications page ── */

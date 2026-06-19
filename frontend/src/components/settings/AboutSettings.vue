@@ -85,13 +85,15 @@ defineEmits<{ navigate: [page: string] }>()
     <div class="connect-card">
       <h3 style="margin:0 0 8px;font-size:14px;font-weight:700;color:var(--text)">{{ t('settings.about.connect') }}</h3>
       <div class="social-links">
-        <button class="social-btn" @click="openExternal('https://github.com/opengg-org/opengg')">
+        <button class="social-btn" @click="openExternal('https://github.com/UPdullah895/opengg')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-3-.5-6.5-.5-6.5 0-1.5-1.5-2.5-1.5-2.5-1.5-.28 1.15-.28 2.35 0 3.5-.73 1.02-1.08 2.25-1 3.5 0 3.5 3 5.5 6 5.5-.5.5-.82 1.2-.82 2v4"/><path d="M9 16c-.25.125-.5.125-.75.125M15 16c.25.125.5.125.75.125"/></svg>
           GitHub
         </button>
-        <button class="social-btn" @click="openExternal('https://discord.gg/opengg')">
+        <!-- TODO: replace with the real Discord invite URL once the server exists, then
+             restore the @click="openExternal(...)" handler and remove the disabled state. -->
+        <button class="social-btn social-btn-disabled" disabled :title="t('settings.about.discordSoon')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M6.5 2a1 1 0 0 0-1 1v18a1 1 0 0 0 1.6.8l5.4-4.5 4.4 3.6 2.1-2.1-2-1.8 4-3.3V3a1 1 0 0 0-1-1h-13z"/></svg>
-          Discord
+          Discord <span class="soon-badge">{{ t('settings.about.soon') }}</span>
         </button>
       </div>
     </div>

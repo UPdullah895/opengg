@@ -233,9 +233,10 @@ impl SinkManager {
 
         let vol_pct = (volume * 100.0) as u32;
         let pct_str = format!("{vol_pct}%");
-        // All channels (including Mic) now have a virtual null-sink — control it uniformly.
+        // Master has no virtual sink — it controls the hardware default output directly.
+        let sink_name = if channel == "Master" { "@DEFAULT_SINK@".to_string() } else { format!("OpenGG_{channel}") };
         let _ = subprocess::command("pactl")
-            .args(["set-sink-volume", &format!("OpenGG_{channel}"), &pct_str])
+            .args(["set-sink-volume", &sink_name, &pct_str])
             .output();
         Ok(())
     }
@@ -245,8 +246,9 @@ impl SinkManager {
             info.muted = muted;
         }
         let val = if muted { "1" } else { "0" };
+        let sink_name = if channel == "Master" { "@DEFAULT_SINK@".to_string() } else { format!("OpenGG_{channel}") };
         let _ = subprocess::command("pactl")
-            .args(["set-sink-mute", &format!("OpenGG_{channel}"), val])
+            .args(["set-sink-mute", &sink_name, val])
             .output();
         Ok(())
     }

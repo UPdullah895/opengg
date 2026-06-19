@@ -18,7 +18,7 @@ import { useAudioStore } from './stores/audio'
 import { loadTheme } from './utils/theme'
 import { getMediaPort, getMediaToken } from './utils/assets'
 import { installAudioUnlocker } from './utils/audio'
-import { registerLocale } from './i18n'
+import { LANGUAGES, registerLocale } from './i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -159,10 +159,16 @@ async function registerGlobalShortcuts() {
   } catch (e) { console.warn('global shortcuts:', e) }
 }
 
+// Direction follows the selected language's `dir` (RTL for Arabic, LTR otherwise).
+// { immediate: true } sets it at startup; the watch re-applies on every language change.
+watch(() => persist.state.settings.language, (lang) => {
+  const e = LANGUAGES.find(l => l.code === lang)
+  document.documentElement.dir = e?.dir === 'rtl' ? 'rtl' : 'ltr'
+}, { immediate: true })
+
 onMounted(async () => {
   await persist.load()
   locale.value = persist.state.settings.language || 'en'
-  document.documentElement.dir = persist.state.settings.rtlMode ? 'rtl' : 'ltr'
   await loadTheme()
   if (!persist.state.settings.tutorialSeen) {
     showTutorial.value = true

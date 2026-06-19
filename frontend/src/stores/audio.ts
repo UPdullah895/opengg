@@ -154,7 +154,7 @@ export const useAudioStore = defineStore('audio', () => {
         if (app.channel || !app.auto_channel) continue
         const key = app.binary || app.name
         const rule = key ? rules[key] : undefined
-        if (rule && rule !== 'default' && rule !== 'Master') continue
+        if (rule && rule !== 'default') continue
         // ★ FIX: apply cooldown guard to auto-routing branch too
         if (isRoutingCooldown(app.id)) continue
         routeApp(app.id, app.auto_channel, app.binary).catch(() => {})

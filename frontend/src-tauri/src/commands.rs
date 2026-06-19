@@ -5979,6 +5979,14 @@ pub struct DependencyStatus {
 
 #[command]
 pub fn get_dependency_status() -> Result<Vec<DependencyStatus>, String> {
+    // X11-only tools are irrelevant on Wayland — don't probe or list them there,
+    // so we don't ask Wayland users to install dependencies they can't use.
+    let on_wayland = std::env::var("XDG_SESSION_TYPE")
+        .map(|v| v.eq_ignore_ascii_case("wayland"))
+        .unwrap_or(false)
+        || std::env::var_os("WAYLAND_DISPLAY").is_some();
+    const X11_ONLY: &[&str] = &["xdotool"];
+
     let deps = vec![
         ("gpu-screen-recorder", "recording"),
         ("ffmpeg", "export"),
@@ -5992,6 +6000,7 @@ pub fn get_dependency_status() -> Result<Vec<DependencyStatus>, String> {
 
     let mut results = Vec::new();
     for (binary, feature) in deps {
+        if on_wayland && X11_ONLY.contains(&binary) { continue; }
         results.push(DependencyStatus {
             binary: binary.to_string(),
             available: subprocess::is_available(binary),

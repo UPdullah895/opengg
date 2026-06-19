@@ -116,7 +116,45 @@ pub fn list_streams() -> Result<Vec<StreamInfo>> {
 
         streams.push(StreamInfo { index, sink: sink_name, app_name, binary, icon, channel });
     }
+    streams.extend(list_source_outputs());
     Ok(streams)
+}
+
+/// Scan mic-capturing apps (source-outputs) so they appear under the Mic track.
+/// IDs are offset by 90000 to avoid colliding with sink-input indices.
+fn list_source_outputs() -> Vec<StreamInfo> {
+    let Ok(out) = subprocess::command("pactl")
+        .args(["-f", "json", "list", "source-outputs"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let Ok(sos) = serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout) else {
+        return Vec::new();
+    };
+    let mut streams = Vec::new();
+    for (idx, so) in sos.iter().enumerate() {
+        let props = &so["properties"];
+        let binary = props["application.process.binary"].as_str().unwrap_or("").to_string();
+        let app_name = normalized_stream_name(
+            props["application.name"].as_str(),
+            props["media.name"].as_str(),
+            Some(binary.as_str()),
+        );
+        let icon = props["application.icon_name"].as_str().unwrap_or("").to_string();
+        if is_internal_stream(Some(app_name.as_str()), None, Some(binary.as_str())) {
+            continue;
+        }
+        streams.push(StreamInfo {
+            index: 90000 + idx as u32,
+            sink: String::new(),
+            app_name,
+            binary,
+            icon,
+            channel: "Mic".into(),
+        });
+    }
+    streams
 }
 
 fn list_streams_text() -> Result<Vec<StreamInfo>> {
@@ -157,6 +195,7 @@ fn list_streams_text() -> Result<Vec<StreamInfo>> {
             .map(|x| x.to_string())
             .unwrap_or_default();
     }
+    streams.extend(list_source_outputs());
     Ok(streams)
 }
 

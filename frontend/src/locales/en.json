@@ -110,6 +110,26 @@
     },
     "changelog": [
       {
+        "version": "V0.1.5",
+        "date": "2026-06-19",
+        "items": [
+          "Added a proper desktop entry so OpenGG appears in application launchers",
+          "Synced all version strings across the app and packaging to v0.1.5",
+          "AUR/packaging polish for the release"
+        ]
+      },
+      {
+        "version": "V0.1.4",
+        "date": "2026-06-17",
+        "items": [
+          "Fixed the AUR/release binary failing to launch — added libwebkit2gtk-4.1 and libayatana-appindicator runtime dependencies to all package formats",
+          "Patched vite to 8.0.16 (security) and replaced the broken CI security-audit action",
+          "Added the release build workflow plus cargo-deny / cargo-audit security scanning",
+          "Removed the unused Tauri updater plugin (distributing via AUR/deb/rpm)",
+          "Restored the full v0.1.3 feature set"
+        ]
+      },
+      {
         "version": "V0.1.3",
         "date": "2026-06-16",
         "items": [
@@ -374,6 +394,8 @@
     "extensions": {
       "title": "Extensions",
       "sectionTitle": "Extensions",
+      "comingSoon": "Coming Soon",
+      "comingSoonDesc": "The OpenGG extensions platform is under active development and will be available in a future release.",
       "hint": "Enable or disable extensions. Disabled extensions are hidden everywhere — keeping the interface clean for what you actually use.",
       "openFolder": "Open Extensions Folder",
       "refresh": "Refresh",
@@ -501,7 +523,9 @@
       "goal2": "Deliver professional-grade audio routing with PipeWire and per-app volume control",
       "goal3": "Enable seamless clip capture with gpu-screen-recorder integration and instant replay",
       "connect": "Connect With Us",
-      "credits": "OpenGG is maintained by the community. Contributions are welcome!"
+      "credits": "OpenGG is maintained by the community. Contributions are welcome!",
+      "discordSoon": "Discord server coming soon",
+      "soon": "Soon"
     },
     "aboutPage": {
       "tagline": "Your ultimate open-source Linux gaming companion.",
