@@ -394,8 +394,6 @@
     "extensions": {
       "title": "Extensions",
       "sectionTitle": "Extensions",
-      "comingSoon": "Coming Soon",
-      "comingSoonDesc": "The OpenGG extensions platform is under active development and will be available in a future release.",
       "hint": "Enable or disable extensions. Disabled extensions are hidden everywhere — keeping the interface clean for what you actually use.",
       "openFolder": "Open Extensions Folder",
       "refresh": "Refresh",
@@ -406,6 +404,8 @@
     },
     "store": {
       "title": "Extension Store",
+      "comingSoon": "Coming Soon",
+      "comingSoonDesc": "The OpenGG extension store is under active development and will be available in a future release.",
       "browse": {
         "title": "Browse Extensions",
         "description": "Discover community-contributed extensions for OpenGG.",

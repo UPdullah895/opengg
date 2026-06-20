@@ -50,8 +50,12 @@ async function openRepository(url: string) {
   }
 }
 
+// TODO: The Store is not ready for release. Flip `storeComingSoon` back to false to
+// restore the full Extension Store UI (registry browser).
+const storeComingSoon = ref(true)
+
 onMounted(() => {
-  fetchRegistry()
+  if (!storeComingSoon.value) fetchRegistry()
 })
 
 defineEmits<{ navigate: [page: string] }>()
@@ -61,7 +65,15 @@ defineEmits<{ navigate: [page: string] }>()
   <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.store.title') }}</h2>
 
-    <div class="card browse-card">
+    <!-- Coming soon placeholder — see `storeComingSoon` flag in <script> -->
+    <div v-if="storeComingSoon" class="coming-soon-panel">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><circle cx="12" cy="15" r="1"/></svg>
+      <div class="cs-title">{{ t('settings.store.comingSoon') }}</div>
+      <div class="cs-sub">{{ t('settings.store.comingSoonDesc') }}</div>
+    </div>
+
+    <!-- Full Store UI — preserved, restorable by flipping storeComingSoon to false -->
+    <div v-else class="card browse-card">
       <div class="browse-header">
         <h3 class="browse-title">{{ t('settings.store.browse.title') }}</h3>
         <p class="browse-desc">{{ t('settings.store.browse.description') }}</p>
@@ -147,6 +159,13 @@ defineEmits<{ navigate: [page: string] }>()
 </template>
 
 <style scoped>
+.coming-soon-panel {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; text-align: center; padding: 56px 24px; color: var(--text-muted);
+}
+.coming-soon-panel svg { opacity: .5; }
+.coming-soon-panel .cs-title { font-size: 16px; font-weight: 700; color: var(--text); }
+.coming-soon-panel .cs-sub { font-size: 12px; color: var(--text-muted); line-height: 1.5; max-width: 380px; }
 .browse-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
