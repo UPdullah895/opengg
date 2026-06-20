@@ -98,6 +98,7 @@ interface GsrDiagnosticResult {
   audio_sources_ok: boolean
   missing_audio_sources: string[]
   items: DiagnosticItem[]
+  report: string
 }
 const diagLoading = ref(false)
 const diagResult = ref<GsrDiagnosticResult | null>(null)
@@ -109,6 +110,7 @@ async function runDiagnostics() {
   try {
     const res = await invoke<GsrDiagnosticResult>('gsr_diagnostics', {
       audioSources: gsrAudioSources.value,
+      monitorTarget: settings.value.gsrMonitorTarget || 'screen',
     })
     diagResult.value = res
   } catch (e) {
@@ -348,6 +350,16 @@ defineEmits<{ navigate: [page: string] }>()
               </div>
             </div>
           </div>
+          <button
+            v-if="diagResult.report"
+            class="btn btn-sm diag-copy-btn"
+            :class="{ copied: copiedCommand === diagResult.report }"
+            style="margin-top:10px"
+            @click="doCopy(diagResult.report)"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            {{ copiedCommand === diagResult.report ? t('settings.captureGsr.diagnosticsCopied') : t('settings.captureGsr.copyDiagnostics') }}
+          </button>
         </div>
       </div>
 

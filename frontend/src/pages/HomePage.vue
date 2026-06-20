@@ -134,8 +134,11 @@ async function toggleRecording() {
       toast.error(t('settings.captureGsr.errorMissingGroups'))
     } else if (msg.includes('not found') && msg.includes('sink')) {
       toast.error(t('settings.captureGsr.errorMissingAudio', { source: msg }))
-    } else if (msg.includes('gpu-screen-recorder not found') || msg.includes('exited immediately')) {
+    } else if (msg.includes('gpu-screen-recorder not found')) {
       toast.error(t('settings.captureGsr.errorBinaryUnhealthy'))
+    } else if (msg.includes('exited immediately') || msg.includes('Details:')) {
+      // Surface the REAL gpu-screen-recorder stderr/exit instead of a generic message.
+      toast.error(t('settings.captureGsr.errorRunFailed', { error: msg }))
     } else {
       toast.error(t('notification.recordingFailed', { error: msg }))
     }

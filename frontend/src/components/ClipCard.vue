@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { ref, inject, watch, onMounted, onBeforeUnmount, nextTick, computed } from 'vue'
+import { ref, inject, onMounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { mediaUrl } from '../utils/assets'
 import type { Clip } from '../stores/replay'
 import { useReplayStore } from '../stores/replay'
-import { useSharedIntersectionObserver } from '../composables/useSharedIntersectionObserver'
-import { useThumbnailQueue } from '../composables/useThumbnailQueue'
+import { useClipThumbnail } from '../composables/useClipThumbnail'
 import { fmtDur, fmtSize, fmtRes, fmtDate, fmtTime, clipDisplayTitle } from '../utils/format'
 import type { Ref } from 'vue'
 
@@ -14,163 +13,35 @@ const emit = defineEmits<{ 'preview': [Clip]; 'editor': [Clip]; 'rename': [Clip]
 
 const replay = useReplayStore()
 const cardRef = ref<HTMLElement | null>(null)
-const thumbUrl = ref('')
-const thumbLoaded = ref(false)
-const trimmedDuration = ref<number | null>(null)
-
-// Local duration/resolution — updated via liveMeta watch (same pattern as liveThumbs/thumbUrl).
-// Bypasses the filteredClips prop chain so they appear at the same time as the thumbnail.
-const liveDuration = ref(props.clip.duration)
-const liveWidth = ref(props.clip.width)
-const liveHeight = ref(props.clip.height)
-const displayDuration = computed(() => trimmedDuration.value ?? liveDuration.value)
-const isTrimmed = computed(() => trimmedDuration.value != null)
 
 // ★ Get media server port and token from App.vue's provide()
 const mediaPort = inject<Ref<number>>('mediaPort', ref(0))
 const mediaToken = inject<Ref<string>>('mediaToken', ref(''))
 
-// ── RAM optimization: resolved thumbnail path (non-reactive) ──
-// Stores the resolved filesystem path so we can clear/restore thumbUrl without
-// re-fetching. When card scrolls off-screen, thumbUrl is set to '' which removes
-// the <img> from the DOM and releases the decoded bitmap (~410KB–1.6MB per image).
-// When card scrolls back into view, we restore from this cached path instantly.
-let resolvedThumbPath = ''
-let removeTrimListener: (() => void) | null = null
+// ── Shared thumbnail lifecycle (same composable LIST view uses) ──
+// Display-only: shows already-generated thumbnails and unloads decoded bitmaps
+// off-screen. Generation is handled by ClipsPage's prefetch flow (which pauses
+// during scroll), so no probe/generate IPC fires while scrolling — this is what
+// keeps GRID scrolling as smooth as LIST.
+const {
+  thumbUrl, thumbLoaded, liveWidth, liveHeight, displayDuration, isTrimmed, bind,
+} = useClipThumbnail(
+  props.clip.id,
+  props.clip.filepath,
+  props.clip.duration,
+  props.clip.thumbnail,
+  mediaPort,
+  (path, port) => mediaUrl(path, port, mediaToken.value),
+)
 
 // Context menu — emit event to parent (ClipsPage) instead of managing own menu
 function openMenu(e: MouseEvent) {
   emit('contextmenu', props.clip, e)
 }
 
-// ★ Lazy thumbnail — uses shared IntersectionObserver + concurrency-limited queue
-const { observe, unobserve } = useSharedIntersectionObserver()
-const { enqueue } = useThumbnailQueue()
-
-// React to prefetchThumbnails() generating this card's thumbnail.
-// liveThumbs is updated sequentially newest→oldest, so thumbnails appear in order
-// without needing the IO observer to fire first.
-watch(() => replay.liveThumbs.get(props.clip.id), (path) => {
-  if (path && mediaPort.value) {
-    resolvedThumbPath = path
-    // Only set thumbUrl if card is visible (IO will restore it otherwise)
-    if (!thumbUrl.value) thumbUrl.value = mediaUrl(path, mediaPort.value, mediaToken.value)
-  }
-})
-
-// React to per-clip probe results — updates duration badge and resolution pill
-// at the same time as the thumbnail, bypassing the filteredClips prop chain.
-watch(() => replay.liveMeta.get(props.clip.id), (meta) => {
-  if (meta) {
-    liveDuration.value = meta.duration
-    liveWidth.value = meta.width
-    liveHeight.value = meta.height
-  }
-})
-
-/** Resolve the initial thumbnail path from clip data or liveThumbs. */
-function resolveInitialThumb(): string {
-  if (props.clip.thumbnail) return props.clip.thumbnail
-  return replay.liveThumbs.get(props.clip.id) || ''
-}
-
 onMounted(() => {
-  const initial = resolveInitialThumb()
-  if (initial) resolvedThumbPath = initial
-  void loadTrimState()
-  const trimListener = (event: Event) => {
-    const detail = (event as CustomEvent<{ filepath?: string; trimStart?: number; trimEnd?: number }>).detail
-    if (!detail || detail.filepath !== props.clip.filepath) return
-    if (typeof detail.trimStart === 'number' && typeof detail.trimEnd === 'number' && detail.trimEnd > detail.trimStart) {
-      const nextDuration = Math.max(0, detail.trimEnd - detail.trimStart)
-      trimmedDuration.value = nextDuration > 0 && Math.abs(nextDuration - liveDuration.value) > 0.05 ? nextDuration : null
-      return
-    }
-    void loadTrimState()
-  }
-  window.addEventListener('clip-trim-updated', trimListener as EventListener)
-  removeTrimListener = () => window.removeEventListener('clip-trim-updated', trimListener as EventListener)
-
-  // Track whether this card has already kicked off its own thumbnail load so
-  // repeated observer callbacks (e.g., scroll jitter) don't spawn duplicates.
-  let loadStarted = false
-
-  if (cardRef.value) {
-    const mountTime = import.meta.env.DEV ? performance.now() : 0
-    observe(cardRef.value, async (entry) => {
-      // ── RAM: unload decoded bitmap when card scrolls far off-screen ──
-      if (!entry.isIntersecting) {
-        if (thumbUrl.value) {
-          thumbUrl.value = ''
-          thumbLoaded.value = false
-        }
-        return
-      }
-
-      // Card is intersecting — restore thumbnail if we already have a path
-      if (resolvedThumbPath && !thumbUrl.value && mediaPort.value) {
-        thumbUrl.value = mediaUrl(resolvedThumbPath, mediaPort.value, mediaToken.value)
-        return
-      }
-
-      // ── First-time thumbnail generation (IO fallback path) ──
-      if (loadStarted || thumbUrl.value) return
-      if (!replay.clipsProbed && props.clip.duration === 0) return
-      if (replay.isPrefetching) return
-      loadStarted = true
-      const priority = entry.intersectionRatio > 0.3 ? 'high' : 'normal'
-      try {
-        let duration = props.clip.duration
-        let width = props.clip.width
-        let height = props.clip.height
-        if (duration === 0) {
-          const probed = await invoke<[string, number, number, number][]>('probe_clips', { filepaths: [props.clip.filepath] })
-          if (probed.length > 0) [, duration, width, height] = probed[0]
-        }
-        const path = await enqueue(
-          () => invoke<string>('generate_thumbnail', { filepath: props.clip.filepath, duration: duration > 0 ? duration : undefined }),
-          priority
-        )
-        resolvedThumbPath = path
-        if (mediaPort.value) {
-          thumbUrl.value = mediaUrl(path, mediaPort.value, mediaToken.value)
-        }
-        if (import.meta.env.DEV) {
-          console.debug(`[perf] card thumb loaded: ${(performance.now() - mountTime).toFixed(0)}ms (${priority}) ${props.clip.filename}`)
-        }
-        replay.applyProbeAndThumb(props.clip.filepath, duration, width, height, props.clip.id, path)
-      } catch (e) { console.warn('thumb:', e); loadStarted = false }
-    })
-  }
+  if (cardRef.value) bind(cardRef.value)
 })
-// ── RAM: clear/restore thumb when ClipsPage is deactivated/activated by KeepAlive ──
-watch(() => replay.pageActive, (active) => {
-  if (!active) {
-    thumbUrl.value = ''
-    thumbLoaded.value = false
-  } else if (resolvedThumbPath && mediaPort.value) {
-    thumbUrl.value = mediaUrl(resolvedThumbPath, mediaPort.value, mediaToken.value)
-  }
-})
-
-onBeforeUnmount(() => {
-  if (cardRef.value) unobserve(cardRef.value)
-  removeTrimListener?.()
-  removeTrimListener = null
-})
-
-async function loadTrimState() {
-  try {
-    const state = await invoke<{ trim_start: number; trim_end: number } | null>('get_trim_state', { filepath: props.clip.filepath })
-    if (state && state.trim_end > state.trim_start) {
-      const nextDuration = Math.max(0, state.trim_end - state.trim_start)
-      trimmedDuration.value = nextDuration > 0 && Math.abs(nextDuration - liveDuration.value) > 0.05 ? nextDuration : null
-      return
-    }
-  } catch {}
-  trimmedDuration.value = null
-}
-
 
 async function toggleFav(e: Event) {
   e.stopPropagation()
@@ -256,7 +127,7 @@ function cancelEdit() { isEditing.value = false }
 </template>
 
 <style scoped>
-.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; contain:layout style paint; height: 100%; }
+.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s; contain:layout style paint; content-visibility:auto; contain-intrinsic-size:auto 240px; height: 100%; }
 .card:hover { border-color:var(--accent); transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.25); }
 .card.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent); }
 .thumb { width:100%; aspect-ratio:16/9; background:var(--bg-deep); position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden; }

@@ -4045,6 +4045,9 @@ pub struct GsrDiagnosticResult {
     pub audio_sources_ok: bool,
     pub missing_audio_sources: Vec<String>,
     pub items: Vec<DiagnosticItem>,
+    /// Full human-readable diagnostic dump (session, monitors, resolved target, and a real
+    /// gpu-screen-recorder test-capture stderr) — surfaced via a "Copy diagnostic output" button.
+    pub report: String,
 }
 
 /// Parse /etc/os-release to extract ID and ID_LIKE fields
@@ -4099,7 +4102,7 @@ fn detect_distro() -> &'static str {
 /// Run a comprehensive pre-flight check before attempting to start GSR.
 /// Returns a structured report the UI can turn into actionable messages.
 #[command]
-pub fn gsr_diagnostics(audio_sources: Vec<String>) -> GsrDiagnosticResult {
+pub fn gsr_diagnostics(audio_sources: Vec<String>, monitor_target: String) -> GsrDiagnosticResult {
     let distro = detect_distro();
 
     let mut result = GsrDiagnosticResult {
@@ -4112,6 +4115,7 @@ pub fn gsr_diagnostics(audio_sources: Vec<String>) -> GsrDiagnosticResult {
         audio_sources_ok: true,
         missing_audio_sources: Vec::new(),
         items: Vec::new(),
+        report: String::new(),
     };
 
     // Distro-specific install commands
@@ -4281,7 +4285,126 @@ pub fn gsr_diagnostics(audio_sources: Vec<String>) -> GsrDiagnosticResult {
         });
     }
 
+    // ── Build the copyable diagnostic report (session, monitors, resolved target,
+    //    and a REAL test capture's stderr) so failures on other machines are visible. ──
+    result.report = build_gsr_report(&result, &monitor_target);
+
     result
+}
+
+/// Normalize a saved gsrMonitorTarget the same way `start_gsr_replay` does, then apply the
+/// Wayland mapping — so the diagnostic tests exactly what a real recording would use.
+fn resolve_gsr_target(monitor_target: &str) -> String {
+    let connector = monitor_target.split('|').next().unwrap_or("").trim().to_string();
+    let looks_invalid = connector.is_empty()
+        || connector.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+        || connector.contains(' ');
+    let base = if looks_invalid { "screen".to_string() } else { connector };
+    let base = match base.as_str() {
+        "focused" => get_focused_window_monitor().unwrap_or_else(|| "focused".to_string()),
+        "" => "screen".to_string(),
+        other => other.to_string(),
+    };
+    map_gsr_target_for_wayland(&base)
+}
+
+/// Spawn gpu-screen-recorder for ~1.3s against `target`, then SIGINT it, capturing the real
+/// stderr + exit status. This reproduces the exact failure a recording would hit.
+fn gsr_test_capture(target: &str) -> String {
+    let tmp = std::env::temp_dir().join("opengg_gsr_diag_test.mp4");
+    let mut cmd = std::process::Command::new("gpu-screen-recorder");
+    cmd.args(["-w", target, "-f", "30", "-c", "mp4", "-o"]);
+    cmd.arg(&tmp);
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::null());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return format!("test capture failed to spawn gpu-screen-recorder: {e}"),
+    };
+    let stderr_buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    if let Some(stderr) = child.stderr.take() {
+        let buf = Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                buf.lock().unwrap().push(line);
+            }
+        });
+    }
+    // Give it time to either crash or reach a steady recording state.
+    std::thread::sleep(std::time::Duration::from_millis(1300));
+    let outcome = match child.try_wait() {
+        Ok(Some(status)) => format!("EXITED EARLY with {status:?} (failure)"),
+        Ok(None) => {
+            // Still running → capture works. Stop it cleanly.
+            let _ = std::process::Command::new("kill")
+                .args(["-SIGINT", &child.id().to_string()])
+                .output();
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let _ = child.kill();
+            let _ = child.wait();
+            "OK — capture ran for ~1.3s without crashing".to_string()
+        }
+        Err(e) => format!("could not poll test process: {e}"),
+    };
+    let _ = std::fs::remove_file(&tmp);
+    let tail = {
+        let b = stderr_buf.lock().unwrap();
+        b.iter().rev().take(20).rev().cloned().collect::<Vec<_>>().join("\n")
+    };
+    if tail.is_empty() {
+        format!("Result: {outcome}\n(stderr was empty)")
+    } else {
+        format!("Result: {outcome}\nstderr:\n{tail}")
+    }
+}
+
+/// Assemble the full copyable diagnostic dump.
+fn build_gsr_report(result: &GsrDiagnosticResult, monitor_target: &str) -> String {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "(unset)".into());
+    let wayland = if std::env::var_os("WAYLAND_DISPLAY").is_some() { "yes" } else { "no" };
+    let xdg_desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "(unset)".into());
+    let monitors = list_monitors_raw();
+    let resolved = resolve_gsr_target(monitor_target);
+    let test = gsr_test_capture(&resolved);
+
+    format!(
+        "=== OpenGG GPU Screen Recorder Diagnostics ===\n\
+         distro: {distro}\n\
+         session type: {session}   wayland: {wayland}   desktop: {xdg_desktop}\n\
+         gpu-screen-recorder installed: {installed}  version: {version}\n\
+         groups: render={render} video={video}\n\
+         gpu encoder (vaapi/nvenc/amf) available: {enc}\n\
+         configured monitor target: {target:?}\n\
+         resolved capture target: {resolved:?}\n\
+         detected monitors (gpu-screen-recorder --list-monitors):\n{monitors}\n\
+         audio sources requested: {audio:?}  (missing: {missing:?})\n\
+         --- real test capture ---\n{test}\n",
+        distro = detect_distro(),
+        session = session,
+        wayland = wayland,
+        xdg_desktop = xdg_desktop,
+        installed = result.gsr_installed,
+        version = result.gsr_version.clone().unwrap_or_else(|| "(unknown)".into()),
+        render = result.in_render_group,
+        video = result.in_video_group,
+        enc = result.gpu_encoder_available,
+        target = monitor_target,
+        resolved = resolved,
+        monitors = monitors,
+        audio = "(see settings)",
+        missing = result.missing_audio_sources,
+        test = test,
+    )
+}
+
+/// Raw `gpu-screen-recorder --list-monitors` output (newline-joined), for the report.
+fn list_monitors_raw() -> String {
+    match std::process::Command::new("gpu-screen-recorder").arg("--list-monitors").output() {
+        Ok(o) if !o.stdout.is_empty() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Ok(o) => format!("(none; exit={:?})", o.status.code()),
+        Err(e) => format!("(failed to run: {e})"),
+    }
 }
 
 /// Returns true if the gpu-screen-recorder binary is found in PATH.

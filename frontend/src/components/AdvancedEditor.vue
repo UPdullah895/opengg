@@ -18,7 +18,7 @@ import { clipDisplayTitle } from '../utils/format'
 
 // ── Types ──
 interface MInfo { duration: number; width: number; height: number; fps: number; video_codec: string; streams: { index: number; codec_type: string; title: string }[]; audio_streams: number }
-interface Track { id: string; label: string; type: 'video' | 'audio'; color: string; volume: number; muted: boolean; streamIndex: number; peaks: number[]; volOpen: boolean }
+interface Track { id: string; label: string; type: 'video' | 'audio'; color: string; volume: number; muted: boolean; streamIndex: number; peaks: number[]; volOpen: boolean; title?: string }
 
 const props = defineProps<{ clip: Clip }>()
 const emit = defineEmits<{ 'close': []; 'toast': [string]; 'saved': [string] }>()
@@ -66,8 +66,16 @@ function getTrackDef(id: string) {
 function getTrackColor(id: string): string {
   return getTrackDef(id)?.color ?? TRACK_FALLBACKS[id] ?? '#64748b'
 }
+// Default label when no name is configured — never render blank.
+function defaultTrackName(id: string): string {
+  if (id === 'V1') return 'Video'
+  if (id.startsWith('A')) return `Audio ${id.slice(1)}`
+  if (id.startsWith('O')) return `Overlay ${id.slice(1)}`
+  return id
+}
 function getTrackName(id: string): string {
-  return getTrackDef(id)?.name ?? (id.startsWith('A') ? `Audio ${id.slice(1)}` : id)
+  // `||` (not `??`) so a cleared/empty name falls back to the default instead of rendering blank.
+  return getTrackDef(id)?.name?.trim() || defaultTrackName(id)
 }
 function showIcons(trackId: string): boolean {
   return getTrackDef(trackId)?.visible ?? true
@@ -271,13 +279,18 @@ function sideResizeDown(e: MouseEvent) {
 }
 
 // ── Init ──
-function getCaptureTrackName(index: number): string {
-  // Priority 1: trackDefs name (Settings → Timeline Tracks is authoritative)
+function getCaptureTrackName(index: number, embeddedTitle?: string): string {
+  // Priority 1: the per-recording EMBEDDED track title (baked in at record time from the
+  // actual capture source via remux_with_track_titles). This is correct across machines and
+  // for old recordings, where global trackDefs (positional) would mismatch.
+  const title = embeddedTitle?.trim()
+  if (title) return title
+  // Priority 2: trackDefs name (Settings → Timeline Tracks)
   const def = getTrackDef(`A${index + 1}`)
-  if (def?.name) return def.name
-  // Priority 2: captureTracks override name
+  if (def?.name?.trim()) return def.name.trim()
+  // Priority 3: captureTracks override name
   const ct = persist.state.settings.captureTracks?.[index]
-  if (ct?.name) return ct.name
+  if (ct?.name?.trim()) return ct.name.trim()
   return `Audio ${index + 1}`
 }
 
@@ -287,7 +300,7 @@ function initTracks() {
   const audioStreams = info.value?.streams.filter(s => s.codec_type === 'audio') || []
   audioStreams.forEach((s, i) => {
     const id = `A${i + 1}`
-    t.push({ id, label: getCaptureTrackName(i), type: 'audio', color: getTrackColor(id), volume: 100, muted: false, streamIndex: s.index, peaks: [], volOpen: false })
+    t.push({ id, label: getCaptureTrackName(i, s.title), type: 'audio', color: getTrackColor(id), volume: 100, muted: false, streamIndex: s.index, peaks: [], volOpen: false, title: s.title })
   })
   if (!audioStreams.length) t.push({ id: 'A1', label: getCaptureTrackName(0), type: 'audio', color: getTrackColor('A1'), volume: 100, muted: false, streamIndex: 1, peaks: [], volOpen: false })
   tracks.value = t
@@ -300,7 +313,7 @@ watch(() => persist.state.settings.trackDefs, () => {
     // Update labels for all track types — trackDefs is the authoritative name source
     if (t.type === 'audio') {
       const i = parseInt(t.id.slice(1), 10) - 1
-      t.label = getCaptureTrackName(i)
+      t.label = getCaptureTrackName(i, t.title)
     } else {
       t.label = getTrackName(t.id)
     }
@@ -310,7 +323,7 @@ watch(() => persist.state.settings.captureTracks, () => {
   tracks.value.forEach((t, _) => {
     if (t.type !== 'audio') return
     const i = parseInt(t.id.slice(1), 10) - 1
-    t.label = getCaptureTrackName(i)
+    t.label = getCaptureTrackName(i, t.title)
   })
 }, { deep: true })
 
