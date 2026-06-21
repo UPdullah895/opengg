@@ -21,10 +21,13 @@ impl AudioHub {
             .expect("sink creation panicked")?;
         let sink_mgr = Arc::new(sink_mgr);
 
-        // Apply configured default volumes
-        for (name, &vol) in &config.default_volumes {
-            sink_mgr.set_volume(name, vol as f32 / 100.0)?;
-        }
+        // NOTE: We deliberately do NOT re-apply `config.default_volumes` here. Doing so on
+        // every daemon (re)start fired a `pactl set-sink-volume` per channel → an OS volume
+        // notification on each start and clobbered whatever the user had set. Brand-new
+        // null-sinks already default to 100%; the user's saved per-channel levels are
+        // restored once at app startup by the Tauri host's `hydrate_audio_routing`, which
+        // reads them from ui-settings.json (the UI's source of truth).
+        let _ = &config.default_volumes;
 
         let hub = Self {
             sink_mgr,

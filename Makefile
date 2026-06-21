@@ -15,7 +15,7 @@ ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
 FRONTEND := $(ROOT)/frontend
 
-.PHONY: dev daemon ui build appimage setup clean install install-desktop lint check help new-extension validate-extension
+.PHONY: dev daemon ui build appimage setup clean install install-service install-desktop lint check help new-extension validate-extension
 
 # ── Default ──────────────────────────────────────────────────────
 help:
@@ -80,11 +80,22 @@ setup:
 	@chmod +x dev.sh && ./dev.sh setup
 
 # ── Install ──────────────────────────────────────────────────────
-install: daemon-release
+install: daemon-release install-service
 	@mkdir -p $(HOME)/.local/bin
 	cp $(DAEMON)/target/release/openggd $(HOME)/.local/bin/
 	@echo "✓ Installed openggd to ~/.local/bin/"
-	@echo "  Run: sudo $(DAEMON)/scripts/setup.sh"
+
+# ── systemd user service ─────────────────────────────────────────
+# Install + enable the per-user daemon so the virtual audio engine auto-starts at
+# login and survives reboots (the sinks are ephemeral and recreated on daemon start).
+# No sudo needed — this is a `--user` unit.
+install-service:
+	@mkdir -p $(HOME)/.config/systemd/user
+	cp $(ROOT)/packaging/openggd.service $(HOME)/.config/systemd/user/
+	@systemctl --user daemon-reload
+	@systemctl --user enable --now openggd.service && \
+		echo "✓ openggd.service enabled (auto-starts at login)" || \
+		echo "⚠ Could not enable openggd.service — run: systemctl --user enable --now openggd.service"
 
 # ── Desktop launcher ─────────────────────────────────────────────
 install-desktop:

@@ -253,9 +253,79 @@ impl SinkManager {
         Ok(())
     }
 
+    /// Return channel state with **live** volume/mute read from pactl, so the mixer
+    /// always reflects reality (including external changes via pavucontrol) instead of a
+    /// stale in-memory default. The cached in-memory value is the fallback when a sink
+    /// isn't found (e.g. before creation or right after a restart).
     pub fn get_channels(&self) -> Vec<ChannelInfo> {
-        self.channels.lock().unwrap().values().cloned().collect()
+        let live = read_live_sink_state();
+        let default_sink = get_default_sink_name();
+        let mut channels: Vec<ChannelInfo> = self.channels.lock().unwrap().values().cloned().collect();
+        for ch in &mut channels {
+            // Master controls the hardware default output directly; everything else is OpenGG_{name}.
+            let sink_name = if ch.name == "Master" {
+                default_sink.clone()
+            } else {
+                Some(format!("OpenGG_{}", ch.name))
+            };
+            if let Some(name) = sink_name {
+                if let Some(&(vol, muted)) = live.get(&name) {
+                    ch.volume = vol;
+                    ch.muted = muted;
+                }
+            }
+        }
+        channels
     }
+}
+
+/// Resolve the current default sink's node name via `pactl get-default-sink`.
+fn get_default_sink_name() -> Option<String> {
+    let out = subprocess::command("pactl")
+        .args(["get-default-sink"])
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if name.is_empty() { None } else { Some(name) }
+}
+
+/// Parse one `pactl list sinks` pass into name → (volume 0.0–1.5, muted).
+/// Volume is taken from the first channel's percentage; mute from the `Mute:` line.
+fn read_live_sink_state() -> HashMap<String, (f32, bool)> {
+    let mut map = HashMap::new();
+    let out = match subprocess::command("pactl").args(["list", "sinks"]).output() {
+        Ok(o) => o,
+        Err(_) => return map,
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    let mut cur_name: Option<String> = None;
+    let mut cur_muted = false;
+    let mut cur_vol: Option<f32> = None;
+    let flush = |name: &mut Option<String>, vol: &mut Option<f32>, muted: &mut bool, map: &mut HashMap<String, (f32, bool)>| {
+        if let (Some(n), Some(v)) = (name.take(), vol.take()) {
+            map.insert(n, (v, *muted));
+        }
+        *muted = false;
+    };
+
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("Name: ") {
+            // New block starts at "Name:" — flush the previous one first.
+            flush(&mut cur_name, &mut cur_vol, &mut cur_muted, &mut map);
+            cur_name = Some(rest.trim().to_string());
+        } else if let Some(rest) = t.strip_prefix("Mute: ") {
+            cur_muted = rest.trim() == "yes";
+        } else if t.starts_with("Volume:") && cur_vol.is_none() {
+            // e.g. "Volume: front-left: 39322 /  60% / -13.40 dB,  front-right: ..."
+            if let Some(pct) = t.split('%').next().and_then(|s| s.rsplit('/').next()).and_then(|s| s.trim().parse::<f32>().ok()) {
+                cur_vol = Some((pct / 100.0).clamp(0.0, 1.5));
+            }
+        }
+    }
+    flush(&mut cur_name, &mut cur_vol, &mut cur_muted, &mut map);
+    map
 }
 
 impl SinkManager {

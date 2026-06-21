@@ -4259,19 +4259,21 @@ pub fn gsr_diagnostics(audio_sources: Vec<String>, monitor_target: String) -> Gs
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     for src in &audio_sources {
-        let sink = if src.contains('_') || src.contains('.') || src.contains('-') {
-            src.clone()
-        } else {
-            format!("OpenGG_{src}")
-        };
-        let monitor = if sink.ends_with(".monitor") {
-            sink.clone()
-        } else {
-            format!("{sink}.monitor")
-        };
-        if !sources_short.contains(&monitor) {
+        // Use the SAME resolver as the recorder so hardware inputs (alsa_input.*) and
+        // output monitors (*.monitor) validate identically and aren't falsely flagged.
+        let cap = resolve_capture_source(src);
+        // GSR resolves default_output/default_input itself — always treat as present.
+        if cap.contains("default") {
+            continue;
+        }
+        // pactl `list sources short` is tab-separated: "<id>\t<name>\t..." — match the name
+        // column exactly so a substring of a longer node name can't give a false positive.
+        let present = sources_short
+            .lines()
+            .any(|l| l.split('\t').nth(1) == Some(cap.as_str()));
+        if !present {
             result.audio_sources_ok = false;
-            result.missing_audio_sources.push(monitor.clone());
+            result.missing_audio_sources.push(cap);
         }
     }
     if !result.audio_sources_ok {
@@ -4450,6 +4452,24 @@ fn map_gsr_target_for_wayland(target: &str) -> String {
     }
 }
 
+/// Map a requested capture source to the PipeWire node name GSR records from.
+///
+/// Shared by the recorder (`start_gsr_replay`) and the diagnostic validator
+/// (`gsr_diagnostics`) so both agree on what a source resolves to. GSR special names
+/// (`default_output`/`default_input`), real monitor sources (`*.monitor`), and hardware
+/// capture inputs (`alsa_input.*`) are already valid capture nodes and pass through
+/// unchanged. A bare channel name ("Game") maps to its OpenGG monitor; a sink name
+/// ("OpenGG_Game") gets its `.monitor` suffix.
+pub fn resolve_capture_source(src: &str) -> String {
+    if src.contains("default") || src.ends_with(".monitor") || src.starts_with("alsa_input.") {
+        src.to_string()
+    } else if !src.contains('_') && !src.contains('.') && !src.contains('-') {
+        format!("OpenGG_{src}.monitor") // bare channel name e.g. "Game"
+    } else {
+        format!("{src}.monitor") // a sink name e.g. "OpenGG_Game"
+    }
+}
+
 /// Start gpu-screen-recorder in replay-buffer mode.
 /// Quality is passed directly as a GSR preset string: cbr | medium | high | very_high | ultra.
 /// When quality is "cbr", `bitrate_kbps` sets the target bitrate (e.g. 8000 = 8 Mbps).
@@ -4486,19 +4506,8 @@ pub fn start_gsr_replay(
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
-    // Map a requested source to the capture node name GSR records with.
-    let resolve_capture = |src: &str| -> String {
-        if src.contains("default")
-            || src.ends_with(".monitor")
-            || src.starts_with("alsa_input.")
-        {
-            src.to_string() // GSR special names (default_output/default_input) or already a real source/monitor
-        } else if !src.contains('_') && !src.contains('.') && !src.contains('-') {
-            format!("OpenGG_{src}.monitor") // bare channel name e.g. "Game"
-        } else {
-            format!("{src}.monitor") // a sink name e.g. "OpenGG_Game"
-        }
-    };
+    // Map a requested source to the capture node name GSR records with (shared resolver).
+    let resolve_capture = resolve_capture_source;
     let source_exists = |name: &str| {
         sources_short
             .lines()

@@ -2285,6 +2285,52 @@ pub fn hydrate_audio_routing() {
             }
         }
     }
+
+    // ── Restore saved per-channel volumes/mutes ONCE at startup ──────────────────
+    // After a reboot the daemon recreates the OpenGG_* null-sinks at a fresh 100%.
+    // The UI's persisted levels (ui-settings.json → mixer.volumes/mutes) are the source
+    // of truth, so re-apply them here a single time. Only the OpenGG channel sinks are
+    // touched (never @DEFAULT_SINK@ / Master) so we don't change the system output level.
+    // We compare against the live value first and skip no-ops to avoid spurious OS toasts.
+    const VOLUME_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
+    let volumes = v["mixer"]["volumes"].as_object();
+    let mutes = v["mixer"]["mutes"].as_object();
+    for &channel in VOLUME_CHANNELS {
+        let sink = format!("OpenGG_{channel}");
+        if let Some(saved) = volumes.and_then(|m| m.get(channel)).and_then(|x| x.as_u64()) {
+            let saved = saved.min(150) as u32;
+            if current_sink_volume_pct(&sink).map(|c| c != saved).unwrap_or(true) {
+                Command::new("pactl")
+                    .args(["set-sink-volume", &sink, &format!("{saved}%")])
+                    .output()
+                    .ok();
+                eprintln!("hydrate: {channel} volume → {saved}%");
+            }
+        }
+        if let Some(saved) = mutes.and_then(|m| m.get(channel)).and_then(|x| x.as_bool()) {
+            if current_sink_muted(&sink).map(|c| c != saved).unwrap_or(true) {
+                Command::new("pactl")
+                    .args(["set-sink-mute", &sink, if saved { "1" } else { "0" }])
+                    .output()
+                    .ok();
+            }
+        }
+    }
+}
+
+/// Live volume percentage of a sink via `pactl get-sink-volume` (first channel's `%`).
+fn current_sink_volume_pct(sink: &str) -> Option<u32> {
+    let out = run_cmd_sync("pactl", &["get-sink-volume", sink]).ok()?;
+    out.split('%')
+        .next()
+        .and_then(|s| s.rsplit('/').next())
+        .and_then(|s| s.trim().parse::<u32>().ok())
+}
+
+/// Live mute state of a sink via `pactl get-sink-mute` ("Mute: yes/no").
+fn current_sink_muted(sink: &str) -> Option<bool> {
+    let out = run_cmd_sync("pactl", &["get-sink-mute", sink]).ok()?;
+    Some(out.trim().ends_with("yes"))
 }
 /// List PipeWire/PulseAudio sink names for the audio capture devices dropdown.
 #[command]
