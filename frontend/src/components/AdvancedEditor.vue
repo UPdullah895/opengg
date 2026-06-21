@@ -80,6 +80,14 @@ function getTrackName(id: string): string {
 function showIcons(trackId: string): boolean {
   return getTrackDef(trackId)?.visible ?? true
 }
+// Role badge text: video tracks → "Video"; mic capture → "Input"; everything else
+// (desktop/game/chat/media/aux output capture) → "Output". Uses the track's name/embedded
+// title so it follows the actual captured source, not a positional guess.
+function trackKindLabel(tk: Track): string {
+  if (tk.type === 'video') return t('editor.trackKind.video')
+  const hay = `${tk.label} ${tk.title ?? ''}`.toLowerCase()
+  return /\bmic\b|microphone|ميكروف|مايك/.test(hay) ? t('editor.trackKind.input') : t('editor.trackKind.output')
+}
 
 // AudioContext resume is handled by the shared singleton in utils/audio.ts.
 // installAudioUnlocker() in App.vue covers the global one-shot unlock.
@@ -233,14 +241,20 @@ function applyAudioVolumes() {
     for (const t of audioTracks) {
       const el = audioEls.value[t.id]
       if (el) {
-        el.volume = (t.muted || t.volume <= 0) ? 0 : Math.min(1, (t.volume / 100) * localVol.value)
+        const silent = t.muted || t.volume <= 0
+        el.volume = silent ? 0 : Math.min(1, (t.volume / 100) * localVol.value)
         // True mute: volume 0 alone can be undone by element/UA quirks — set muted too.
-        el.muted = localVol.value <= 0 || t.muted
+        // A 0% track (even if not flagged muted) must be dead silent.
+        el.muted = localVol.value <= 0 || silent
       }
     }
   } else if (videoRef.value) {
     const t = audioTracks[0]
-    if (t) videoRef.value.volume = (t.muted || t.volume <= 0) ? 0 : Math.min(1, (t.volume / 100) * localVol.value)
+    if (t) {
+      const silent = t.muted || t.volume <= 0
+      videoRef.value.volume = silent ? 0 : Math.min(1, (t.volume / 100) * localVol.value)
+      videoRef.value.muted = localVol.value <= 0 || silent
+    }
   }
 }
 watch(tracks, applyAudioVolumes, { deep: true })
@@ -429,7 +443,9 @@ async function doExport() {
   try {
     const p = `${exportDir.value}/${exportName.value.replace(/[<>:"/\\|?*\x00]/g, '').trim()}.mp4`
     const audioTracks = tracks.value.filter(t => t.type === 'audio').map(t => ({
-      stream_index: t.streamIndex, volume: t.volume / 100, muted: t.muted,
+      // A 0% track is treated as muted so the backend filter drops it entirely (true
+      // silence) — otherwise float dust below 1% leaks through as faint audio.
+      stream_index: t.streamIndex, volume: t.volume / 100, muted: t.muted || t.volume <= 0,
     }))
     const hasFilters = audioTracks.some(t => t.muted || t.volume < 1)
     let out: string
@@ -665,6 +681,7 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
           part="header"
           :color="t.color"
           :label="t.label"
+          :kind-label="trackKindLabel(t)"
           :icon="getTrackDef(t.id)?.icon"
           :show-icon="showIcons(t.id)"
           @mouseenter="hoveredTrackId = t.id"

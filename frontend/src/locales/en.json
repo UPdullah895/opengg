@@ -1,4 +1,5 @@
 {
+  "_meta": { "name": "English", "dir": "ltr" },
   "nav": {
     "home": "Home",
     "mixer": "Mixer",
@@ -14,6 +15,7 @@
     "copy": "Copy"
   },
   "editor": {
+    "trackKind": { "input": "Input", "output": "Output", "video": "Video" },
     "exportClip": "Export Clip",
     "exportComplete": "Export Complete",
     "dragReady": "Drag this file to Discord, Telegram, or a folder",

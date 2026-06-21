@@ -5,6 +5,7 @@ const props = withDefaults(defineProps<{
   part: 'header' | 'body'
   color: string
   label?: string
+  kindLabel?: string
   icon?: string
   showIcon?: boolean
   preview?: boolean
@@ -36,6 +37,7 @@ const svgPath = computed(() => {
       <path :d="svgPath" />
     </svg>
     <span v-if="label" class="hdr-name">{{ label }}</span>
+    <span v-if="kindLabel" class="hdr-kind">{{ kindLabel }}</span>
     <slot name="actions"></slot>
   </div>
 
@@ -76,6 +78,21 @@ const svgPath = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Role badge: distinguishes input (mic) vs output (desktop) vs video tracks. */
+.hdr-kind {
+  flex-shrink: 0;
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--tc);
+  background: color-mix(in srgb, var(--tc) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tc) 30%, transparent);
 }
 
 .tl-row {

@@ -1,4 +1,5 @@
 {
+  "_meta": { "name": "العربية", "dir": "rtl" },
   "nav": {
     "home": "الرئيسية",
     "mixer": "الخلاط",
@@ -14,6 +15,7 @@
     "copy": "نسخ"
   },
   "editor": {
+    "trackKind": { "input": "إدخال", "output": "إخراج", "video": "فيديو" },
     "exportClip": "تصدير المقطع",
     "exportComplete": "اكتمل التصدير",
     "dragReady": "اسحب هذا الملف إلى Discord أو Telegram أو مجلد",

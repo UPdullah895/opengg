@@ -144,7 +144,7 @@ defineEmits<{ navigate: [page: string] }>()
     </div>
 
     <!-- ★ Ear Blast Protection settings -->
-    <div class="card">
+    <div class="card eb-card">
       <div class="card-head">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px;flex-shrink:0"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
         <span>{{ t('settings.earBlast.title') }}</span>
@@ -154,7 +154,7 @@ defineEmits<{ navigate: [page: string] }>()
         </div>
       </div>
 
-      <div class="field" style="margin-top: 10px;">
+      <div class="field eb-channels">
         <label>{{ t('settings.earBlast.channels') }}</label>
         <div class="channel-checks">
           <button
@@ -200,5 +200,13 @@ defineEmits<{ navigate: [page: string] }>()
 </template>
 
 <style scoped>
-/* Inherited from parent */
+/* Ear Blast card: even, consistent internal spacing (the shared .card-head has no gap,
+   which left the icon/title/InfoIcon cramped). */
+.eb-card :deep(.card-head) { gap: 8px; }
+.eb-card .eb-channels { margin-top: 4px; }
+.eb-card .eb-channels :deep(.channel-checks) { gap: 8px; margin-bottom: 0; }
+.eb-card :deep(.channel-pill) { padding: 5px 12px; }
+/* Threshold/Target sliders: comfortable column + row gap, separated from the channels row. */
+.eb-card :deep(.form-grid) { gap: 16px 18px; margin-top: 16px; }
+.eb-card :deep(.field) label { margin-bottom: 8px; }
 </style>
