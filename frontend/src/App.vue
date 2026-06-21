@@ -25,7 +25,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { AudioDevice } from './stores/audio'
 import ToastContainer from './components/ToastContainer.vue'
 import GlobalModal from './components/GlobalModal.vue'
-import TutorialModal from './components/TutorialModal.vue'
+import GuidedTour from './components/tour/GuidedTour.vue'
+import { useTour } from './composables/useTour'
 import { useToast } from './composables/useToast'
 import { loadDependencyStatus } from './composables/useDependencyStatus'
 
@@ -72,6 +73,10 @@ provide('mediaToken', mediaToken)
 
 function navigate(page: string) { currentPage.value = page }
 
+// Guided tour: drive page navigation through the same currentPage model (no vue-router).
+const tour = useTour()
+tour.setNavigate((page) => { currentPage.value = page })
+
 // ═══ Frameless window resize handles ═══
 async function startResize(dir: string) {
   try { await getCurrentWindow().startResizeDragging(dir as any) } catch (e) {
@@ -101,8 +106,6 @@ const audioDevices = ref<AudioDevice[]>([])
 const selectedHeadphones = ref('')
 const selectedMic = ref('')
 
-// ═══ First-Run Tutorial ═══
-const showTutorial = ref(false)
 
 const outputDevices = () => audioDevices.value.filter(d => d.device_type === 'sink' && !d.name.includes('OpenGG'))
 const inputDevices  = () => audioDevices.value.filter(d => d.device_type === 'source')
@@ -172,7 +175,15 @@ onMounted(async () => {
   locale.value = persist.state.settings.language || 'en'
   await loadTheme()
   if (!persist.state.settings.tutorialSeen) {
-    showTutorial.value = true
+    // Start the guided tour on first launch — but only once the audio-setup wizard
+    // (if it's open) has closed, so two overlays never stack.
+    if (showOnboarding.value) {
+      const stop = watch(showOnboarding, (open) => {
+        if (!open) { stop(); setTimeout(() => tour.start(), 350) }
+      })
+    } else {
+      setTimeout(() => { if (!showOnboarding.value) tour.start() }, 700)
+    }
   }
 
   // ★ FIX: Fetch media port + token FIRST, then set mediaReady=true before any page mounts.
@@ -387,9 +398,9 @@ onMounted(async () => {
     showOnboarding.value = true
   })
 
-  // Listen for tutorial replay requests from HomePage
+  // Listen for tour replay requests (HomePage button + Settings "Replay tour").
   window.addEventListener('openTutorial', () => {
-    showTutorial.value = true
+    tour.start()
   })
 })
 
@@ -519,7 +530,7 @@ async function loadUserLocales() {
       </div>
     </Teleport>
 
-    <TutorialModal v-model="showTutorial" @complete="persist.state.settings.tutorialSeen = true" />
+    <GuidedTour />
     <GlobalModal />
     <ToastContainer />
 

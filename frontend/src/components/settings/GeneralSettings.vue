@@ -14,6 +14,9 @@ const persist = usePersistenceStore()
 
 const settings = computed(() => persist.state.settings)
 
+// Re-launch the guided tour on demand (App.vue listens for this event).
+function replayTour() { window.dispatchEvent(new CustomEvent('openTutorial')) }
+
 // ─── Theme ───
 const themeAccent = ref('#E94560')
 const themeLoading = ref(false)
@@ -82,6 +85,20 @@ defineEmits<{ navigate: [page: string] }>()
 <template>
   <section class="settings-section">
     <h2 class="sec-title">{{ t('settings.general.title') }}</h2>
+
+    <!-- Guided tour -->
+    <div class="card">
+      <div class="card-head">
+        {{ t('settings.tour.title') }}
+        <InfoIcon :title="t('settings.tour.desc')" />
+      </div>
+      <div class="field-row" style="align-items:center; justify-content:space-between">
+        <span class="hint" style="font-size:12px; color:var(--text-sec)">{{ t('settings.tour.desc') }}</span>
+        <button class="btn btn-accent" data-tour="settings-replay" @click="replayTour">
+          {{ t('settings.tour.replay') }}
+        </button>
+      </div>
+    </div>
 
     <div class="card">
       <div class="card-head">

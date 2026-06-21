@@ -21,6 +21,7 @@ const items = [
         :key="item.id"
         class="nav-item"
         :class="{ active: active === item.id }"
+        :data-tour="`nav-${item.id}`"
         @click="emit('navigate', item.id)"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

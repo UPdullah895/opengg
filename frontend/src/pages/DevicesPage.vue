@@ -36,7 +36,7 @@ const missingItems = () => {
 </script>
 
 <template>
-  <div class="devices-page">
+  <div class="devices-page" data-tour="devices-list">
     <!-- Device Access Guidance Banner -->
     <div v-if="showBanner()" class="access-banner">
       <div class="banner-content">

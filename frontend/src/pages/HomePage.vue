@@ -221,7 +221,7 @@ const updates = computed(() => tm('dashboard.changelog') as ChangelogEntry[])
       <button class="gsr-warn-dismiss" @click="gsrWarning=false">{{ t('dashboard.gsrDismiss') }}</button>
     </div>
 
-    <div class="grid">
+    <div class="grid" data-tour="home-dashboard">
       <!-- AUDIO MIXER card -->
       <div class="card" :class="{ 'card-active': activeCard === 'mixer' }" @click="toggleCard('mixer')">
         <div class="card-head">
@@ -261,7 +261,7 @@ const updates = computed(() => tm('dashboard.changelog') as ChangelogEntry[])
       </div>
 
       <!-- RECORDER card -->
-      <div class="card" :class="{ 'card-active': activeCard === 'recorder' }" @click="toggleCard('recorder')">
+      <div class="card" :class="{ 'card-active': activeCard === 'recorder' }" data-tour="home-recorder" @click="toggleCard('recorder')">
         <div class="card-head">
           <span class="card-label">{{ t('dashboard.recorder') }}</span>
           <div class="card-icon red">

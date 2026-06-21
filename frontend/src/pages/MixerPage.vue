@@ -256,7 +256,7 @@ watch(overdriveEnabled, enabled => {
         ★ FIX 3: strips-row now uses min-height:55vh so faders are tall.
         The flex:1 lets it grow if the window is maximized.
       -->
-      <div v-else class="strips-row">
+      <div v-else class="strips-row" data-tour="mixer-channels">
       <!-- MASTER -->
       <div class="col">
         <ChannelStrip :channel="audio.masterChannel" :color="COLORS.Master" type="master" :vuLevel="audio.vuLevels['Master'] ?? -60"

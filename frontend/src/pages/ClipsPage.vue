@@ -1236,7 +1236,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 </script>
 
 <template>
-  <div class="page">
+  <div class="page" data-tour="clips-grid">
     <!-- Header -->
     <PageHeader :title="t('nav.clips')" />
 

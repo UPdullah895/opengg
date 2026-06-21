@@ -285,6 +285,11 @@
       "moments": "MOMENTS",
       "extensions": "EXTENSIONS"
     },
+    "tour": {
+      "title": "Guided tour",
+      "desc": "Replay the interactive walkthrough of OpenGG.",
+      "replay": "Replay tour"
+    },
     "general": {
       "title": "General",
       "reloadTheme": "↻ Reload theme.json",
@@ -760,40 +765,26 @@
       "runSetup": "Run this command in a terminal:"
     }
   },
-  "tutorial": {
-    "skip": "Skip",
-    "next": "Next",
-    "previous": "Previous",
-    "finish": "Get Started",
+  "tour": {
+    "controls": {
+      "next": "Next",
+      "back": "Back",
+      "skip": "Skip tour",
+      "finish": "Done",
+      "done": "Done!",
+      "dontShowAgain": "Don't show this again"
+    },
     "steps": {
-      "welcome": {
-        "title": "Welcome to OpenGG",
-        "desc": "Your open-source Linux gaming hub. Let's take a quick tour of what you can do."
-      },
-      "dashboard": {
-        "title": "Dashboard",
-        "desc": "Your command center. Quick-access cards for Audio, Recording, Clips, and Devices. Click any card for fast actions."
-      },
-      "mixer": {
-        "title": "Audio Mixer",
-        "desc": "Route Game, Chat, Media, and Aux through independent virtual sinks. Drag apps between channels and control per-app volume."
-      },
-      "clips": {
-        "title": "Clips & Recording",
-        "desc": "Save instant replays, browse your clip gallery, and import folders. The replay buffer runs in the background while you play."
-      },
-      "scanning": {
-        "title": "Scanning",
-        "desc": "Import entire folders of clips with one click. Device scanning will be available in a future update."
-      },
-      "settings": {
-        "title": "Settings",
-        "desc": "Customize themes, shortcuts, and recording quality. Set up virtual audio in the Audio Engine tab."
-      },
-      "finish": {
-        "title": "You're Ready!",
-        "desc": "If you haven't set up virtual audio yet, we'll guide you through it now."
-      }
+      "welcome": { "title": "Welcome to OpenGG", "body": "A quick tour of the essentials. You can skip anytime." },
+      "nav": { "title": "Navigate here", "body": "Jump between Dashboard, Mixer, Clips, Devices and Settings from this rail." },
+      "dashboard": { "title": "Your dashboard", "body": "Start or stop recording and see your status and recent clips at a glance." },
+      "mixerIntro": { "title": "The audio mixer", "body": "OpenGG splits your sound into Game, Chat, Media, Aux and Mic channels." },
+      "mixerAction": { "title": "Try an audio split", "body": "Drag a running app onto a channel to route just its sound there.", "action": "Route any app to a channel" },
+      "clips": { "title": "Your clips", "body": "Recorded clips land here. Switch grid or list, preview, trim and export." },
+      "recorder": { "title": "Capture & replay", "body": "Record on demand or save the last few seconds with the replay buffer. Tune it in Capture settings." },
+      "devices": { "title": "Your devices", "body": "Headset battery, ChatMix, RGB and per-game profiles all appear here." },
+      "settings": { "title": "Make it yours", "body": "Themes, language and RTL, capture quality, shortcuts and more live in Settings." },
+      "finish": { "title": "You're all set", "body": "Replay this tour anytime from Settings. Enjoy OpenGG!" }
     }
   },
   "onboarding": {
