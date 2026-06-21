@@ -203,6 +203,35 @@ fn extract_val(line: &str) -> String {
     line.split_once('=').map(|(_, v)| v.trim().trim_matches('"').to_string()).unwrap_or_default()
 }
 
+/// Resolve an incoming stream id to a pactl sink-input INDEX.
+///
+/// The id may already be a pactl sink-input index, or a PipeWire node.id (object.id).
+/// `pactl move-sink-input` requires the index, so passing a node.id yields
+/// "No such entity". Translating here keeps the whole route path in one id space.
+/// Returns `None` for ids that are not sink-inputs (e.g. source-outputs / mic captures,
+/// which cannot be moved to a playback sink).
+fn resolve_sink_input_index(stream_id: u32) -> Option<u32> {
+    let out = subprocess::command("pactl")
+        .args(["-f", "json", "list", "sink-inputs"])
+        .output()
+        .ok()?;
+    let sis: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).ok()?;
+    // Direct index match.
+    if sis.iter().any(|si| si["index"].as_u64() == Some(stream_id as u64)) {
+        return Some(stream_id);
+    }
+    // Otherwise treat stream_id as a PW node.id (object.id) and find its sink-input.
+    for si in &sis {
+        let p = &si["properties"];
+        for key in ["object.id", "node.id", "object.serial"] {
+            if p[key].as_str().and_then(|s| s.parse::<u32>().ok()) == Some(stream_id) {
+                return si["index"].as_u64().map(|i| i as u32);
+            }
+        }
+    }
+    None
+}
+
 pub fn route_stream(stream_id: u32, channel: &str) -> Result<()> {
     let target = if channel == "default" {
         let o = subprocess::command("pactl").args(["get-default-sink"]).output()?;
@@ -210,17 +239,25 @@ pub fn route_stream(stream_id: u32, channel: &str) -> Result<()> {
     } else {
         format!("OpenGG_{channel}")
     };
-    // ★ FIX: check exit code — pactl returns non-zero on failure (wrong index,
-    // sink not found, etc.) but .output() only errors if the binary isn't found.
+
+    // ★ Single id space: translate node.id → pactl sink-input index before moving.
+    let si_index = resolve_sink_input_index(stream_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "stream {stream_id} is not a movable sink-input (no pactl index nor node.id match) → {target}"
+        )
+    })?;
+
+    // ★ check exit code — pactl returns non-zero on failure (wrong index, sink not
+    // found, etc.) but .output() only errors if the binary isn't found.
     let out = subprocess::command("pactl")
-        .args(["move-sink-input", &stream_id.to_string(), &target])
+        .args(["move-sink-input", &si_index.to_string(), &target])
         .output()
-        .context(format!("pactl not found while routing {stream_id} → {target}"))?;
+        .context(format!("pactl not found while routing {si_index} → {target}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        anyhow::bail!("pactl move-sink-input {stream_id} {target} failed: {err}");
+        anyhow::bail!("pactl move-sink-input {si_index} {target} failed: {err}");
     }
-    tracing::info!("Routed stream {stream_id} → {target}");
+    tracing::info!("Routed stream {stream_id} (si #{si_index}) → {target}");
     Ok(())
 }
 

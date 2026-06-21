@@ -114,6 +114,11 @@ function onWindowBlur() { audio.deselectApp() }
 // Switching mixer tabs ends the routing interaction → clear the highlight.
 watch(activeTab, () => audio.deselectApp())
 
+// Focus-change auto-deactivation: when the pointer leaves the mixer area, clear ALL
+// transient highlight (drag + click-to-route) so the channel boxes return to grey
+// without needing a page navigation.
+function onMixerLeave() { audio.clearInteractionState() }
+
 onMounted(async () => {
   if (!persist.loaded) await persist.load()
   await audio.refreshVirtualAudioStatus()
@@ -121,7 +126,7 @@ onMounted(async () => {
 
   // Push-based refresh: backend emits 'audio-mixer-refresh' after every successful
   // route_app call so the UI updates immediately instead of waiting for the next poll.
-  unlistenRefresh = await listen('audio-mixer-refresh', () => { audio.fetchApps() })
+  unlistenRefresh = await listen('audio-mixer-refresh', () => { audio.fetchApps(); audio.clearInteractionState() })
   document.addEventListener('click', onMixerClick)
   document.addEventListener('keydown', onMixerKeydown)
   window.addEventListener('blur', onWindowBlur)
@@ -146,7 +151,7 @@ watch(overdriveEnabled, enabled => {
 </script>
 
 <template>
-  <div class="mixer">
+  <div class="mixer" @mouseleave="onMixerLeave">
     <div class="mixer-hdr">
         <div><h1 class="t">{{ t('dashboard.audioMixer') }}</h1></div>
       <div class="hdr-actions">

@@ -149,32 +149,83 @@ struct Router {
 
 impl Router {
     async fn route(self) -> Result<(), String> {
-        // Strategy 0: D-Bus daemon
+        // Strategy 0: D-Bus daemon (preferred — single source of truth)
         if let Ok(()) = self.try_dbus().await {
             return Ok(());
         }
 
         log_routing_context(self.app_id, &self.channel);
 
-        // Resolve target sink once
+        // Resolve target sink's pactl integer index once.
         let sink_name = self.resolve_sink_name().await?;
         let sink_name_clone = sink_name.clone();
         let sink_idx = tokio::task::spawn_blocking(move || get_sink_index_by_name(&sink_name_clone))
             .await
             .map_err(|e| format!("spawn_blocking: {e}"))??;
 
-        // Strategy 1: direct pactl index
-        if let Ok(()) = self.try_direct_pactl(sink_idx).await {
-            return Ok(());
-        }
+        // ── ONE identifier space ──
+        // The incoming `app_id` may be a pactl sink-input index OR a PipeWire node.id
+        // (object.id). Translate it to the pactl sink-input index up front so every
+        // downstream call (move + verify) speaks the same namespace. `pactl
+        // move-sink-input <si_idx> <sink_idx>` is the reliable, verifiable mechanism
+        // (pw-metadata target.node was unreliable — it writes metadata WirePlumber may
+        // not act on, "succeeding" without moving the stream).
+        let app_id = self.app_id;
+        let si_idx = tokio::task::spawn_blocking(move || resolve_pactl_si_index(app_id))
+            .await
+            .map_err(|e| format!("spawn_blocking: {e}"))?
+            .ok_or_else(|| {
+                format!(
+                    "route_app: id {} is not a movable sink-input (no pactl index nor PW node.id match) — not routing to {}",
+                    self.app_id, self.channel
+                )
+            })?;
 
-        // Strategy 2: PW-ID cross-reference
-        if let Ok(()) = self.try_pw_id_resolve(sink_idx).await {
-            return Ok(());
-        }
+        self.move_and_verify(si_idx, sink_idx).await
+    }
 
-        // Strategy 3: pw-metadata + verification
-        self.try_pw_metadata(&sink_name, sink_idx).await
+    /// Move the stream to the target sink via `pactl move-sink-input` and confirm it
+    /// actually landed there by re-reading the sink-input's `sink` field (with retry).
+    /// Both arguments are pactl integer indices.
+    async fn move_and_verify(&self, si_idx: u32, sink_idx: u32) -> Result<(), String> {
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            }
+            match run_cmd_async(
+                "pactl",
+                &["move-sink-input", &si_idx.to_string(), &sink_idx.to_string()],
+            )
+            .await
+            {
+                Ok(_) => {
+                    let verified =
+                        tokio::task::spawn_blocking(move || verify_stream_routed(si_idx, sink_idx))
+                            .await
+                            .unwrap_or(false);
+                    if verified {
+                        eprintln!(
+                            "route_app[{}→{}]: ✓ moved sink-input #{si_idx} → sink #{sink_idx} (verified)",
+                            self.app_id, self.channel
+                        );
+                        let _ = self.app.emit("audio-mixer-refresh", ());
+                        return Ok(());
+                    }
+                    eprintln!(
+                        "route_app[{}→{}]: move command ok but stream not on target yet (attempt {}/3)",
+                        self.app_id, self.channel, attempt + 1
+                    );
+                }
+                Err(e) => eprintln!(
+                    "route_app[{}→{}]: pactl move-sink-input failed (attempt {}/3): {e}",
+                    self.app_id, self.channel, attempt + 1
+                ),
+            }
+        }
+        Err(format!(
+            "route_app: failed to move id {} ({}→{}) after retries",
+            self.app_id, si_idx, self.channel
+        ))
     }
 
     async fn try_dbus(&self) -> Result<(), String> {
@@ -201,153 +252,20 @@ impl Router {
         }
     }
 
-    async fn try_direct_pactl(&self, sink_idx: u32) -> Result<(), String> {
-        if !validate_sink_input_exists(self.app_id) {
-            eprintln!(
-                "route_app: app_id {} not a pactl sink-input index — skipping direct attempt",
-                self.app_id
-            );
-            return Err("not a direct index".into());
-        }
+}
 
-        let cmd_str = format!("pactl move-sink-input {} {}", self.app_id, sink_idx);
-        for attempt in 0..=2 {
-            if attempt > 0 {
-                std::thread::sleep(std::time::Duration::from_millis(150));
-            }
-            eprintln!("route_app: [attempt {}/3] executing: {cmd_str}", attempt + 1);
-
-            match run_cmd_async("pactl", &[
-                "move-sink-input",
-                &self.app_id.to_string(),
-                &sink_idx.to_string(),
-            ]).await {
-                Ok(_) => {
-                    eprintln!(
-                        "route_app: ✓ attempt {}/3 command succeeded: sink-input {} → sink #{sink_idx} ({})",
-                        attempt + 1,
-                        self.app_id,
-                        self.channel
-                    );
-                    // Verify that the stream is actually on the target sink
-                    if !verify_stream_routed(self.app_id, sink_idx) {
-                        eprintln!("route_app: pactl move-sink-input command succeeded but verification failed — stream not on target sink");
-                        if attempt < 2 {
-                            continue; // retry
-                        } else {
-                            return Err("pactl succeeded but verification failed".into());
-                        }
-                    }
-                    eprintln!(
-                        "route_app: ✓ attempt {}/3: sink-input {} → sink #{sink_idx} verified ({})",
-                        attempt + 1,
-                        self.app_id,
-                        self.channel
-                    );
-                    let _ = self.app.emit("audio-mixer-refresh", ());
-                    return Ok(());
-                }
-                Err(err) => {
-                    eprintln!("route_app: attempt {}/3 failed ({err})", attempt + 1);
-                }
-            }
-        }
-
-        eprintln!("route_app: all 3 direct attempts exhausted, scanning for correct sink-input...");
-        Err("direct attempts exhausted".into())
+/// Translate an incoming app id to a pactl sink-input index.
+///
+/// The id may already BE a pactl sink-input index, or it may be a PipeWire node.id
+/// (object.id) — e.g. when the daemon supplied a node id. Resolving to one namespace
+/// here is what fixes the "pactl move-sink-input <pw_node_id> → No such entity" failure.
+/// Returns `None` if the id maps to no current sink-input (e.g. a source-output / mic
+/// capture, which cannot be moved to a playback sink).
+fn resolve_pactl_si_index(app_id: u32) -> Option<u32> {
+    if validate_sink_input_exists(app_id) {
+        return Some(app_id);
     }
-
-    async fn try_pw_id_resolve(&self, sink_idx: u32) -> Result<(), String> {
-        let si_idx = match find_pactl_si_for_pw_id(self.app_id) {
-            Ok(idx) => idx,
-            Err(_) => {
-                eprintln!(
-                    "route_app: no pactl sink-input found for PW#{}, trying pw-metadata...",
-                    self.app_id
-                );
-                return Err("PW ID not found".into());
-            }
-        };
-
-        let cmd = format!("pactl move-sink-input {} {}", si_idx, sink_idx);
-        eprintln!("route_app: found PW#{} → pactl si#{}, executing: {cmd}", self.app_id, si_idx);
-
-        match run_cmd_async("pactl", &[
-            "move-sink-input",
-            &si_idx.to_string(),
-            &sink_idx.to_string(),
-        ]).await {
-            Ok(_) => {
-                eprintln!(
-                    "route_app: pactl move-sink-input command succeeded: PW#{} → pactl si#{si_idx} → sink #{sink_idx} ({})",
-                    self.app_id,
-                    self.channel
-                );
-                // Verify that the stream is actually on the target sink
-                if !verify_stream_routed(si_idx, sink_idx) {
-                    eprintln!("route_app: pactl move-sink-input (PW cross-ref) succeeded but verification failed — stream not on target sink");
-                    return Err("pactl corrected-index succeeded but verification failed".into());
-                }
-                eprintln!(
-                    "route_app: ✓ PW#{} → pactl si#{si_idx} → sink #{sink_idx} verified ({})",
-                    self.app_id,
-                    self.channel
-                );
-                let _ = self.app.emit("audio-mixer-refresh", ());
-                return Ok(());
-            }
-            Err(err) => {
-                eprintln!("route_app: corrected pactl index also failed ({err}), trying pw-metadata...");
-            }
-        }
-        Err("corrected index failed".into())
-    }
-
-    async fn try_pw_metadata(&self, sink_name: &str, sink_idx: u32) -> Result<(), String> {
-        let sink_pw_id = match get_pw_node_id_for_sink(sink_name) {
-            Ok(id) => id,
-            Err(e) => {
-                eprintln!("route_app: cannot resolve sink '{sink_name}' PW node.id: {e}");
-                return Err(format!(
-                    "route_app: all routing methods failed for id {} → {}. \
-                     Sink PW node.id unavailable: {e}",
-                    self.app_id, self.channel
-                ));
-            }
-        };
-
-        eprintln!(
-            "route_app: [pw-metadata] node#{} → target.node={sink_pw_id} (sink '{sink_name}', channel '{}')",
-            self.app_id, self.channel
-        );
-
-        if let Err(e) = route_via_pw_metadata(self.app_id, sink_pw_id) {
-            eprintln!("route_app[{}→{}]: pw-metadata command failed: {e}", self.app_id, self.channel);
-            return Err(format!(
-                "route_app: all routing methods failed for id {} → {}. \
-                 See logs above for diagnostics.",
-                self.app_id, self.channel
-            ));
-        }
-
-        eprintln!("route_app[{}→{}]: pw-metadata command succeeded, verifying stream placement", self.app_id, self.channel);
-
-        // Verification: pw-metadata can report success without actually moving the stream
-        // if the stream isn't WirePlumber-managed.
-        if !verify_stream_routed(self.app_id, sink_idx) {
-            eprintln!("route_app[{}→{}]: pw-metadata succeeded but verification FAILED — stream still on wrong sink", self.app_id, self.channel);
-            return Err(format!(
-                "route_app: routing to {} appeared to succeed via pw-metadata \
-                 but verification showed the stream is still not on the target sink. \
-                 app_id={}, sink_idx={sink_idx}",
-                self.channel, self.app_id
-            ));
-        }
-
-        eprintln!("route_app[{}→{}]: ✓ pw-metadata move verified — stream is on target sink", self.app_id, self.channel);
-        let _ = self.app.emit("audio-mixer-refresh", ());
-        Ok(())
-    }
+    find_pactl_si_for_pw_id(app_id).ok()
 }
 
 #[command]
@@ -560,6 +478,7 @@ fn find_pactl_si_for_pw_id(pw_id: u32) -> Result<u32, String> {
 /// Resolve a PipeWire sink's node.id (PW namespace) from its pactl name.
 /// The PW node.id is stored in the sink's properties["node.id"] in pactl JSON output
 /// and is the correct identifier for pw-metadata target.node writes.
+#[allow(dead_code)]
 fn get_pw_node_id_for_sink(sink_name: &str) -> Result<u32, String> {
     let j = run_cmd_sync("pactl", &["-f", "json", "list", "sinks"])?;
     let sinks: Vec<serde_json::Value> =
@@ -592,6 +511,11 @@ fn get_pw_node_id_for_sink(sink_name: &str) -> Result<u32, String> {
 /// WirePlumber watches the "settings" metadata namespace and moves the stream
 /// when it sees a `target.node` entry for a managed stream node. This is
 /// the same mechanism used internally by pavucontrol and the GNOME audio panel.
+///
+/// NOTE: kept for reference only. In practice this proved unreliable (the metadata
+/// write reports success without WirePlumber moving the stream), so routing now uses
+/// `pactl move-sink-input` by translated pactl index — see `Router::move_and_verify`.
+#[allow(dead_code)]
 fn route_via_pw_metadata(stream_pw_id: u32, sink_pw_id: u32) -> Result<(), String> {
     eprintln!(
         "route_via_pw_metadata: pw-metadata -n settings {} target.node {}",
@@ -1196,110 +1120,33 @@ fn lookup_sink_channel(sink_idx: u32) -> String {
     String::new()
 }
 
-/// Verify that a stream (identified by PW node ID `stream_pw_id`) is currently on the
-/// target sink (identified by pactl integer index `sink_idx`).
+/// Verify that the sink-input `si_idx` (pactl integer index) is actually on the target
+/// sink `sink_idx` (pactl integer index), by re-reading pactl's live `sink` field.
 ///
-/// This prevents the "pw-metadata reports success but stream isn't actually moved" bug
-/// which causes the frontend polling loop to re-trigger routing every 2 seconds forever.
-///
-/// Returns `true` if the stream is on the target sink, `false` otherwise.
-/// Uses pw-dump when available for faster verification, falls back to pactl JSON.
-fn verify_stream_routed(stream_pw_id: u32, sink_idx: u32) -> bool {
-    use crate::subprocess;
-
-    // Try pw-dump first for faster verification
-    if subprocess::is_available("pw-dump") {
-        if let Ok(output) = subprocess::run("pw-dump", &[]) {
-            if let Ok(true) = verify_via_pw_dump(&output.stdout, stream_pw_id, sink_idx) {
+/// This is reality-based: pactl's `sink` field reflects where the stream is *actually*
+/// linked (confirmed empirically), unlike a metadata write that may report success
+/// without moving anything. Polls a few times to absorb the brief settle after a move.
+fn verify_stream_routed(si_idx: u32, sink_idx: u32) -> bool {
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+        }
+        let Ok(j) = run_cmd_sync("pactl", &["-f", "json", "list", "sink-inputs"]) else {
+            continue;
+        };
+        let Ok(sis) = serde_json::from_str::<Vec<serde_json::Value>>(&j) else {
+            continue;
+        };
+        if let Some(si) = sis
+            .iter()
+            .find(|si| si["index"].as_u64() == Some(si_idx as u64))
+        {
+            if si["sink"].as_u64() == Some(sink_idx as u64) {
                 return true;
             }
         }
     }
-
-    // Fallback: pactl JSON verification (original code)
-    let j = match run_cmd_sync("pactl", &["-f", "json", "list", "sink-inputs"]) {
-        Ok(j) => j,
-        Err(_) => return false,
-    };
-    let sis: Vec<serde_json::Value> = match serde_json::from_str(&j) {
-        Ok(sis) => sis,
-        Err(_) => return false,
-    };
-    for si in &sis {
-        let _idx = match si["index"].as_u64() {
-            Some(i) => i as u32,
-            None => continue,
-        };
-        let sink_of_si = match si["sink"].as_u64() {
-            Some(s) => s as u32,
-            None => continue,
-        };
-        if sink_of_si != sink_idx {
-            continue;
-        }
-        let p = &si["properties"];
-        for key in &[
-            "object.serial",
-            "object.id",
-            "node.id",
-            "pipewire.access.portal.app_id",
-        ] {
-            if let Some(s) = p[key].as_str() {
-                if let Ok(id) = s.parse::<u32>() {
-                    if id == stream_pw_id {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
     false
-}
-
-/// Verify routing via pw-dump: check if stream_pw_id's target.object or implicit sink
-/// matches the pactl sink_idx.
-fn verify_via_pw_dump(dump_bytes: &[u8], stream_pw_id: u32, sink_idx: u32) -> Result<bool, String> {
-    let dump_str = String::from_utf8_lossy(dump_bytes);
-    let data: Vec<serde_json::Value> =
-        serde_json::from_str(&dump_str).map_err(|e| format!("parse pw-dump: {e}"))?;
-
-    for obj in &data {
-        let obj_type = obj.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        if obj_type != "PipeWire:Interface:Node" {
-            continue;
-        }
-
-        let props = obj
-            .get("info")
-            .and_then(|i| i.get("props"))
-            .and_then(|p| p.as_object())
-            .ok_or("missing props")?;
-
-        // Find the stream node by object.serial
-        let node_serial = props
-            .get("object.serial")
-            .and_then(|s| s.as_str())
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
-
-        if node_serial != stream_pw_id {
-            continue;
-        }
-
-        // Found the stream — check if its target matches the target sink
-        let matches = props
-            .get("target.object")
-            .and_then(|t| t.as_str())
-            .and_then(|target_name| {
-                get_sink_index_by_name(target_name).ok().map(|idx| idx == sink_idx)
-            })
-            .unwrap_or(false); // If no target.object, assume not correctly routed
-
-        return Ok(matches);
-    }
-
-    // Stream not found in pw-dump
-    Err("stream not found".into())
 }
 // ═══ Audio Devices ═══
 #[derive(Debug, Serialize, Deserialize, Clone)]

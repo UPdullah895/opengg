@@ -319,6 +319,13 @@ const volumeMenuApp = computed(() => {
   return props.apps.find(a => a.id === volumeMenuAppId.value) || null
 })
 
+// Live view of the right-clicked app so the context-menu volume slider reflects
+// the app's real PipeWire stream volume (independent of the channel volume).
+const contextAppLive = computed(() => {
+  if (!contextApp.value) return null
+  return props.apps.find(a => a.id === contextApp.value!.id) || null
+})
+
 const volMenuStyle = computed(() => {
   let x = volMenuPos.value.x
   let y = volMenuPos.value.y
@@ -447,6 +454,29 @@ function toggleMute(appId: number, currentVol: number) {
         </div>
       </template>
       <template v-else>
+        <!-- Per-app volume: controls THIS app's own PipeWire stream, independent of the
+             channel volume. -->
+        <div v-if="contextAppLive && typeof contextAppLive.volume === 'number'" class="dz-ctx-vol" @click.stop>
+          <div class="dz-ctx-vol-row">
+            <span class="dz-ctx-vol-label">{{ t('devices.appVolume') }}</span>
+            <span class="dz-ctx-vol-pct" :class="{ 'dz-ctx-vol-pct--muted': contextAppLive.volume === 0 }">{{ contextAppLive.volume }}%</span>
+          </div>
+          <VolumeSlider
+            :model-value="contextAppLive.volume"
+            :color="color"
+            :show-value="false"
+            @update:model-value="onVolumeChange(contextApp!.id, $event)"
+          />
+          <button
+            class="dz-ctx-vol-mute"
+            :class="{ 'dz-ctx-vol-mute--active': contextAppLive.volume === 0 }"
+            @click="toggleMute(contextApp!.id, contextAppLive.volume || 0)"
+          >
+            {{ contextAppLive.volume === 0 ? t('devices.unmute') : t('devices.mute') }}
+          </button>
+        </div>
+        <div class="dz-ctx-sep"></div>
+        <div class="dz-ctx-subtitle">{{ t('devices.routeTo') }}</div>
         <button v-for="target in ROUTE_TARGETS" :key="target"
           class="dz-ctx-item"
           :class="{ 'dz-ctx-item--active': target === props.channel }"
@@ -634,6 +664,22 @@ function toggleMute(appId: number, currentVol: number) {
 .dz-ctx-item:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
 .dz-ctx-item:disabled { opacity: .4; cursor: default; }
 .dz-ctx-item--active { color: var(--dz); font-weight: 600; }
+
+/* Per-app volume block inside the context menu */
+.dz-ctx-menu { min-width: 170px; }
+.dz-ctx-vol { padding: 6px 8px 8px; display: flex; flex-direction: column; gap: 6px; }
+.dz-ctx-vol-row { display: flex; align-items: center; justify-content: space-between; }
+.dz-ctx-vol-label { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
+.dz-ctx-vol-pct { font-size: 11px; font-weight: 700; color: var(--text-sec); font-variant-numeric: tabular-nums; }
+.dz-ctx-vol-pct--muted { color: var(--danger); }
+.dz-ctx-vol-mute {
+  padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); background: transparent;
+  color: var(--text-sec); font-size: 10px; font-weight: 600; cursor: pointer; transition: all .1s;
+}
+.dz-ctx-vol-mute:hover { background: var(--bg-hover); color: var(--text); }
+.dz-ctx-vol-mute--active { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+.dz-ctx-sep { height: 1px; background: var(--border); margin: 2px 0; }
+.dz-ctx-subtitle { padding: 3px 8px; font-size: 9px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
 
 /* Locked chips */
 .dz-chip--locked {

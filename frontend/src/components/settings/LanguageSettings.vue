@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { usePersistenceStore } from '../../stores/persistence'
@@ -18,13 +18,11 @@ const isRtlLanguage = computed(() => {
 })
 
 function setLanguage(code: string) {
+  // Language and text-direction are INDEPENDENT persisted settings. Changing the
+  // language never changes direction — the saved `rtlMode` (default OFF / LTR) is
+  // always respected. The user explicitly turns RTL on via the toggle if they want it.
   settings.value.language = code
   locale.value = code
-  // Direction follows the language: Arabic → RTL, others → LTR. Keep rtlMode in sync.
-  const entry = LANGUAGES.find(l => l.code === code)
-  const isRtl = entry?.dir === 'rtl'
-  settings.value.rtlMode = isRtl
-  document.documentElement.dir = isRtl ? 'rtl' : 'ltr'
 }
 
 function enableRtl() {
@@ -36,11 +34,6 @@ function disableRtl() {
   settings.value.rtlMode = false
   document.documentElement.dir = 'ltr'
 }
-
-watch(() => settings.value.language, (newLang) => {
-  const entry = LANGUAGES.find(l => l.code === newLang)
-  if (entry?.dir !== 'rtl' && settings.value.rtlMode) disableRtl()
-})
 
 // ─── Language: open locales folder + dynamic locale reload ───
 const localesReloading = ref(false)
@@ -91,7 +84,7 @@ defineEmits<{ navigate: [page: string] }>()
             <span class="info-tooltip-wrap"><span class="btn-tooltip">{{ t('settings.language.reloadLanguages') }}</span></span>
           </button>
           <button
-            v-if="isRtlLanguage"
+            v-if="isRtlLanguage || settings.rtlMode"
             class="theme-icon-btn"
             :class="{ active: settings.rtlMode }"
             @click="settings.rtlMode ? disableRtl() : enableRtl()"

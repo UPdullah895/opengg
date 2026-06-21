@@ -66,9 +66,19 @@ export const useAudioStore = defineStore('audio', () => {
       || n.includes('pw-cat') || n.includes('gsr-') || n.includes('gpu-screen-recorder')
       || n.includes('loopback')
   }
-  const unassignedApps = computed(() =>
-    allApps.value.filter(a => !a.channel && !isInternalApp(a.name))
-  )
+  // Master shows ONLY genuinely unrouted apps: not internal, not physically on a named
+  // channel, AND not assigned to one by a saved rule (covers the brief window after a
+  // reboot/restart before the rule is re-applied to the live stream).
+  const unassignedApps = computed(() => {
+    const rules = usePersistenceStore().state.mixer.appRules
+    return allApps.value.filter(a => {
+      if (isInternalApp(a.name)) return false
+      if (a.channel) return false
+      const key = a.binary || a.name
+      const rule = key ? rules[key] : undefined
+      return !(rule && rule !== 'default' && rule !== 'Master')
+    })
+  })
   const masterChannel = computed(() => ({
     name: 'Master',
     volume: channelVolumes.Master ?? 100,
@@ -242,8 +252,21 @@ export const useAudioStore = defineStore('audio', () => {
     for (const [k, v] of Object.entries(saved)) { if (typeof v === 'number') channelVolumes[k] = v }
   }
 
-  function startDrag(app: AppInfo) { draggedApp.value = app }
-  function endDrag() { draggedApp.value = null; routingInProgress.value = false }
+  // Drag watchdog: if pointer events are lost (drag never completes), auto-clear the
+  // drag state so the channel drop-target highlight doesn't stick until page navigation.
+  let dragWatchdog: ReturnType<typeof setTimeout> | null = null
+  function startDrag(app: AppInfo) {
+    draggedApp.value = app
+    if (dragWatchdog) clearTimeout(dragWatchdog)
+    dragWatchdog = setTimeout(() => { draggedApp.value = null; routingInProgress.value = false }, 6000)
+  }
+  function endDrag() {
+    if (dragWatchdog) { clearTimeout(dragWatchdog); dragWatchdog = null }
+    draggedApp.value = null; routingInProgress.value = false
+  }
+  // Clear ALL transient interaction highlight (drag + click-to-route selection) — used by
+  // the Mixer page on mouse-leave / focus-change so the "active" border reliably resets.
+  function clearInteractionState() { endDrag(); deselectApp() }
 
   // Click-to-route selection is transient: it must not stay highlighted indefinitely.
   // Auto-clear after a short idle so the channel "drop here" highlight reverts on its own.
@@ -254,7 +277,7 @@ export const useAudioStore = defineStore('audio', () => {
   function selectAppForRoute(app: AppInfo | null) {
     selectedAppForClickRoute.value = app
     clearSelectTimer()
-    if (app) selectClearTimer = setTimeout(() => { selectedAppForClickRoute.value = null }, 6000)
+    if (app) selectClearTimer = setTimeout(() => { selectedAppForClickRoute.value = null }, 4000)
   }
   function deselectApp() { clearSelectTimer(); selectedAppForClickRoute.value = null }
 
@@ -386,7 +409,7 @@ export const useAudioStore = defineStore('audio', () => {
     refreshVirtualAudioStatus, setVirtualAudioReady,
     setVolume, setMute, setAppVolume, routeApp, unrouteApp,
     setChannelDevice, restoreFromPersistence,
-    startDrag, endDrag, selectAppForRoute, deselectApp, dropOnChannel, dropOnChannelById,
+    startDrag, endDrag, clearInteractionState, selectAppForRoute, deselectApp, dropOnChannel, dropOnChannelById,
     startPolling, stopPolling,
     toggleEarBlast, setEarBlastChannels, setEarBlastThreshold, setEarBlastTarget, syncEarBlastState,
   }
