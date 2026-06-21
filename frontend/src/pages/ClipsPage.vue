@@ -1560,7 +1560,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', closeContextMenu
 
       </Transition><!-- /view-fade -->
 
-      <!-- Error state: fetchClips failed (e.g. missing data dir, permission error in AppImage) -->
+      <!-- Error state: fetchClips failed (e.g. missing data dir, permission error) -->
       <div
         v-if="!replay.loading && replay.fetchError"
         class="empty-state"

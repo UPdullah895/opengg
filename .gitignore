@@ -26,7 +26,6 @@ GEMINI.md
 .gemini/
 
 # Build artifacts
-*.AppImage
 *.deb
 *.rpm
 

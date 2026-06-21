@@ -191,7 +191,7 @@ pub fn route_app_to_channel(stream_id: u32, channel: &str) -> Result<()> {
 - Auto-profile switching (/proc watcher)
 - Global hotkey listener (evdev)
 - Multi-clip timeline editor
-- AppImage/deb packaging
+- deb/rpm packaging
 
 ---
 

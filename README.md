@@ -56,7 +56,7 @@ cd frontend && npm install && cd ..
 | `./dev.sh` | Full stack — daemon + Tauri frontend |
 | `./dev.sh daemon` | Daemon only |
 | `./dev.sh ui` | Frontend only (hot-reload) |
-| `./dev.sh build` | Release build (AppImage / deb / rpm) |
+| `./dev.sh build` | Release build (deb / rpm) |
 | `./dev.sh setup` | First-time: udev rules, groups, D-Bus policy |
 | `make dev` | Same as `./dev.sh` |
 | `make build` | Release build |
