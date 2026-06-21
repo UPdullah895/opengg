@@ -107,6 +107,11 @@ const selectedHeadphones = ref('')
 const selectedMic = ref('')
 
 
+// Let the guided tour resume after the audio-setup wizard (which it can open via a CTA) closes.
+watch(showOnboarding, (open) => {
+  if (!open) window.dispatchEvent(new CustomEvent('onboardingClosed'))
+})
+
 const outputDevices = () => audioDevices.value.filter(d => d.device_type === 'sink' && !d.name.includes('OpenGG'))
 const inputDevices  = () => audioDevices.value.filter(d => d.device_type === 'source')
 
@@ -125,10 +130,17 @@ async function fetchOnboardDevices() {
 async function doCreateVirtualAudio() {
   onboardLoading.value = true; onboardMsg.value = ''
   try {
+    if (import.meta.env.DEV) console.debug('[opengg][audio] create_virtual_audio: start')
     await invoke('create_virtual_audio')
     await invoke('hydrate_audio_routing')
     const { useAudioStore } = await import('./stores/audio')
-    useAudioStore().setVirtualAudioReady(true)
+    const audioStore = useAudioStore()
+    audioStore.setVirtualAudioReady(true)
+    // Self-heal: re-fetch/re-hydrate channel state from the daemon right after creation so the
+    // correct volumes appear immediately instead of the store's default 100% (which previously
+    // only corrected after a manual Mixer leave/return).
+    audioStore.rehydrate()
+    if (import.meta.env.DEV) console.debug('[opengg][audio] create_virtual_audio: ready + rehydrated')
     await fetchOnboardDevices()
     onboardStep.value = 2
   } catch (e) { onboardMsg.value = t('onboarding.errorCreate', { error: String(e) }) }
@@ -144,6 +156,9 @@ async function completeOnboarding() {
       await audio.setChannelDevice('Master', selectedHeadphones.value)
     }
     await invoke('hydrate_audio_routing')
+    // Re-hydrate again after linking devices so channel volumes/devices reflect live state.
+    const { useAudioStore: _useAudio } = await import('./stores/audio')
+    _useAudio().rehydrate()
     showOnboarding.value = false
     onboardStep.value = 1
   } catch (e) { onboardMsg.value = t('onboarding.errorComplete', { error: String(e) }) }

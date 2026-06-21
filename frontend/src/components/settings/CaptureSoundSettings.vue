@@ -8,6 +8,7 @@ import { missing } from '../../composables/useDependencyStatus'
 import SelectField from '../SelectField.vue'
 import InfoIcon from '../InfoIcon.vue'
 import ToggleSwitch from '../ToggleSwitch.vue'
+import RecorderInstallHelper from './RecorderInstallHelper.vue'
 import './settings-shared.css'
 
 const { t } = useI18n()
@@ -241,13 +242,8 @@ defineEmits<{ navigate: [page: string] }>()
 
     <!-- GPU Screen Recorder panel (top) -->
     <div class="card">
-      <!-- Missing gpu-screen-recorder warning -->
-      <div v-if="missing('recording')" class="dep-warn dep-warn-recording">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;flex-shrink:0">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
-        </svg>
-        <span>{{ t('settings.deps.missingGsr') }}</span>
-      </div>
+      <!-- Missing gpu-screen-recorder → distro-aware install helper (command + Copy + Recheck) -->
+      <RecorderInstallHelper v-if="missing('recording')" />
 
       <div class="card-head gsr-head">
         <span>{{ t('settings.captureGsr.title') }}</span>

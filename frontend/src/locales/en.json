@@ -1,5 +1,8 @@
 {
-  "_meta": { "name": "English", "dir": "ltr" },
+  "_meta": {
+    "name": "English",
+    "dir": "ltr"
+  },
   "nav": {
     "home": "Home",
     "mixer": "Mixer",
@@ -15,7 +18,11 @@
     "copy": "Copy"
   },
   "editor": {
-    "trackKind": { "input": "Input", "output": "Output", "video": "Video" },
+    "trackKind": {
+      "input": "Input",
+      "output": "Output",
+      "video": "Video"
+    },
     "exportClip": "Export Clip",
     "exportComplete": "Export Complete",
     "dragReady": "Drag this file to Discord, Telegram, or a folder",
@@ -592,6 +599,12 @@
       "ratbagdNote": "After install, you can configure mouse settings in the Devices page.",
       "reloginNote": "Log out and log back in for the group changes to take effect.",
       "udevNote": "udev rules allow direct hardware access for headsets and RGB devices without sudo."
+    },
+    "recorderInstall": {
+      "installed": "gpu-screen-recorder is installed.",
+      "notFound": "gpu-screen-recorder is not installed — recording is disabled.",
+      "recheck": "Recheck",
+      "rechecking": "Checking…"
     }
   },
   "clips": {
@@ -772,19 +785,72 @@
       "skip": "Skip tour",
       "finish": "Done",
       "done": "Done!",
-      "dontShowAgain": "Don't show this again"
+      "dontShowAgain": "Don't show this again",
+      "more": "More",
+      "less": "Less",
+      "setupAudio": "Set up audio engine"
     },
     "steps": {
-      "welcome": { "title": "Welcome to OpenGG", "body": "A quick tour of the essentials. You can skip anytime." },
-      "nav": { "title": "Navigate here", "body": "Jump between Dashboard, Mixer, Clips, Devices and Settings from this rail." },
-      "dashboard": { "title": "Your dashboard", "body": "Start or stop recording and see your status and recent clips at a glance." },
-      "mixerIntro": { "title": "The audio mixer", "body": "OpenGG splits your sound into Game, Chat, Media, Aux and Mic channels." },
-      "mixerAction": { "title": "Try an audio split", "body": "Drag a running app onto a channel to route just its sound there.", "action": "Route any app to a channel" },
-      "clips": { "title": "Your clips", "body": "Recorded clips land here. Switch grid or list, preview, trim and export." },
-      "recorder": { "title": "Capture & replay", "body": "Record on demand or save the last few seconds with the replay buffer. Tune it in Capture settings." },
-      "devices": { "title": "Your devices", "body": "Headset battery, ChatMix, RGB and per-game profiles all appear here." },
-      "settings": { "title": "Make it yours", "body": "Themes, language and RTL, capture quality, shortcuts and more live in Settings." },
-      "finish": { "title": "You're all set", "body": "Replay this tour anytime from Settings. Enjoy OpenGG!" }
+      "welcome": {
+        "title": "Welcome to OpenGG",
+        "body": "A quick tour of the essentials — about a minute. You can skip anytime.",
+        "deep": "OpenGG is your all-in-one hub: a per-app audio mixer, a low-overhead clip recorder with replay, and headset/device controls. This tour walks each page in order."
+      },
+      "nav": {
+        "title": "Navigate here",
+        "body": "Jump between Dashboard, Mixer, Clips, Devices and Settings from this rail.",
+        "deep": "The current page is highlighted. You can return to any section at any time — nothing here is one-way."
+      },
+      "dashboard": {
+        "title": "Your dashboard",
+        "body": "Start or stop recording and see your status and recent clips at a glance.",
+        "deep": "The cards show recorder state, your latest clips and quick toggles, so you can act without digging through menus."
+      },
+      "recorder": {
+        "title": "The screen recorder",
+        "body": "OpenGG records with GPU Screen Recorder. Record on demand or keep the last few seconds with the replay buffer.",
+        "deep": "GPU Screen Recorder must be installed separately. If it's missing, use the install command below, then Recheck. Fine-tune quality, FPS and the replay buffer in Capture & Sound settings."
+      },
+      "mixerIntro": {
+        "title": "The audio mixer",
+        "body": "OpenGG splits your sound into Game, Chat, Media, Aux and Mic channels.",
+        "deep": "Each channel is a virtual device with its own volume, mute and EQ/DSP. Set them up once and route any app's audio independently."
+      },
+      "mixerAction": {
+        "title": "Try an audio split",
+        "body": "Route a single app's sound to its own channel — game audio to Game, your voice chat to Chat, and so on.",
+        "action": "Route any app to a channel",
+        "deep": "Drag an app chip onto a channel, or right-click it to pick a channel and set its individual volume. Routing is remembered per app."
+      },
+      "clips": {
+        "title": "Your clips",
+        "body": "Recorded clips land here. Switch grid or list, preview, trim and export.",
+        "deep": "Search and filter by game, mark favourites, and bulk-select. Double-click a clip to open it; single-click behaviour is configurable in Settings."
+      },
+      "editorTracks": {
+        "title": "The clip editor",
+        "body": "Open a clip to trim it and work with its timeline of video and audio tracks.",
+        "deep": "Each track sits on its own row. Right-click a track for actions, and use the audio track controls to mute or rebalance voices — handy for muting your mic on a highlight."
+      },
+      "editorFilters": {
+        "title": "Montage & export",
+        "body": "The side panel holds clip info and montage settings; export applies your trims, track mix and target size.",
+        "deep": "Adjust per-track volume (0% mutes a track from the export), set a target file size, then export. The result is a fresh clip back in your library."
+      },
+      "devices": {
+        "title": "Your devices",
+        "body": "Headset battery, ChatMix, RGB and per-game profiles all appear here.",
+        "deep": "Supported headsets and mice are detected automatically; ChatMix can drive the Game/Chat balance in the mixer."
+      },
+      "settings": {
+        "title": "Make it yours",
+        "body": "Themes, language and RTL, capture quality, shortcuts and more live in Settings.",
+        "deep": "This is also where you install missing dependencies, set global hotkeys, and replay this tour."
+      },
+      "finish": {
+        "title": "You're all set",
+        "body": "Replay this tour anytime from Settings → Guided tour. Enjoy OpenGG!"
+      }
     }
   },
   "onboarding": {

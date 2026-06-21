@@ -23,6 +23,7 @@ import { mediaUrl } from '../utils/assets'
 import { viewMode } from '../composables/useViewMode'
 import { ICON_DELETE, ICON_GAMEPAD } from '../assets/deviceAssets'
 import { useModalStore } from '../stores/modal'
+import { useTour } from '../composables/useTour'
 import type { Ref } from 'vue'
 
 const { t } = useI18n()
@@ -46,11 +47,11 @@ function compareNewestFirst(a: Clip, b: Clip) {
 }
 
 function clipNeedsThumbnailWork(clip: Clip) {
-  return !clip.isSkeleton && ((!clip.thumbnail && !replay.liveThumbs.get(clip.id)) || clip.duration === 0)
+  return !clip.isSkeleton && !clip.isDemo && ((!clip.thumbnail && !replay.liveThumbs.get(clip.id)) || clip.duration === 0)
 }
 
 function clipNeedsGeneratedThumbnail(clip: Clip) {
-  return !clip.isSkeleton && !clip.thumbnail && !replay.liveThumbs.get(clip.id)
+  return !clip.isSkeleton && !clip.isDemo && !clip.thumbnail && !replay.liveThumbs.get(clip.id)
 }
 
 function refreshThumbnailProgressTotals(extraClips: Clip[] = []) {
@@ -766,13 +767,39 @@ function onGridKeydown(e: KeyboardEvent) {
 
 // ── Card interactions ──
 function onCardClick(clip: Clip) {
-  if (clip.isSkeleton) return
+  if (clip.isSkeleton || clip.isDemo) return // demo card is illustrative only — not openable
   if (replay.selectMode) { replay.toggleSelect(clip.id); return }
   if (persist.state?.settings?.defaultClickAction === 'editor') openAdvanced(clip)
   else openPreview(clip)
 }
 function openPreview(clip: Clip) { editorClip.value = clip; editorMode.value = 'preview' }
 function openAdvanced(clip: Clip) { advancedClip.value = clip }
+
+// ── Guided tour integration ─────────────────────────────────────────────
+// The Clips/editor tour steps live here because this page owns the clip list + editor.
+// - clips step with no real clips → inject an in-memory demo card so the user sees one.
+// - editorTracks/editorFilters steps → open AdvancedEditor on the first real clip.
+// - any other step / tour end → close the editor and remove the demo card (robust cleanup).
+const tour = useTour()
+const firstRealClip = () => replay.clips.find(c => !c.isSkeleton && !c.isDemo) || null
+watch(() => tour.current.value?.id, (id) => {
+  if (!tour.active.value) return
+  if (id === 'clips') {
+    if (!firstRealClip()) replay.injectDemoClip()
+    if (advancedClip.value?.isDemo || advancedClip.value) advancedClip.value = null
+  } else if (id === 'editorTracks' || id === 'editorFilters') {
+    const real = firstRealClip()
+    if (real && advancedClip.value?.id !== real.id) advancedClip.value = real
+  } else {
+    // Left the Clips/editor steps — tear down editor + demo so nothing leaks onto other pages.
+    if (advancedClip.value) advancedClip.value = null
+    replay.removeDemoClip()
+  }
+}, { immediate: true })
+// Tour ended/skipped → guaranteed cleanup.
+watch(() => tour.active.value, (a) => {
+  if (!a) { if (advancedClip.value) advancedClip.value = null; replay.removeDemoClip() }
+})
 
 async function doImportSteamGames() {
   steamImportBusy.value = true
@@ -807,7 +834,7 @@ async function importSteamLibrary(forcePrompt = false) {
 }
 
 
-function startRename(clip: Clip) { renameTarget.value = clip; renameValue.value = clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename.replace(/\.[^.]+$/, '')) }
+function startRename(clip: Clip) { if (clip.isDemo) return; renameTarget.value = clip; renameValue.value = clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename.replace(/\.[^.]+$/, '')) }
 async function confirmRename() {
   if (!renameTarget.value) return
   const n = renameValue.value.trim()
@@ -817,6 +844,7 @@ async function confirmRename() {
 }
 
 async function deleteClip(clip: Clip) {
+  if (clip.isDemo) return // demo card is in-memory only; nothing to delete on disk
   modal.showConfirm({
     message: `Delete "${clip.custom_name || (clip.game !== 'Unknown' ? clip.game : clip.filename)}"?`,
     kind: 'danger',

@@ -9,6 +9,7 @@ export interface Clip {
   created: string; createdTs: number; duration: number; width: number; height: number
   game: string; custom_name: string; favorite: boolean; thumbnail: string
   isSkeleton?: boolean // ★ Epic 3: live-watcher placeholder — never persisted
+  isDemo?: boolean     // guided-tour demo card — in-memory only, never persisted, never on disk
   _isNew?: boolean     // transient UI flag — cleared after card-entry animation
   _search?: string     // pre-lowercased searchable haystack (derived, not persisted)
   probing?: boolean    // ★ Job #3: "Fetching video data..." state
@@ -395,6 +396,26 @@ export const useReplayStore = defineStore('replay', () => {
     setTimeout(() => { rawClip._isNew = false }, 400)
   }
 
+  // ── Guided-tour demo clip (in-memory only) ──────────────────────────────
+  // Shown on the Clips tour step when the user has no real clips, so they see what a clip
+  // card looks like. Never written to disk and never probed/exported; `fetchClips` replaces
+  // `clips` from disk so it can never become an orphan, but removeDemoClip() makes cleanup
+  // explicit on tour end/skip.
+  const DEMO_CLIP_ID = '__tour_demo__'
+  function injectDemoClip() {
+    if (clips.value.find(c => c.id === DEMO_CLIP_ID)) return
+    clips.value = [markRaw({
+      id: DEMO_CLIP_ID, filename: 'demo-clip.mp4', filepath: DEMO_CLIP_ID, filesize: 48_000_000,
+      created: new Date().toISOString().slice(0, 19).replace('T', ' '), createdTs: Date.now(),
+      duration: 42, width: 1920, height: 1080,
+      game: 'Demo Game', custom_name: '', favorite: false, thumbnail: '',
+      isDemo: true,
+    }), ...clips.value]
+  }
+  function removeDemoClip() {
+    if (clips.value.some(c => c.isDemo)) clips.value = clips.value.filter(c => !c.isDemo)
+  }
+
   function toggleSelect(id: string) { if (selectedIds.value.has(id)) selectedIds.value.delete(id); else selectedIds.value.add(id); selectMode.value = selectedIds.value.size > 0 }
   function clearSelection() { selectedIds.value.clear(); selectMode.value = false }
   function isSelected(id: string) { return selectedIds.value.has(id) }
@@ -406,7 +427,7 @@ export const useReplayStore = defineStore('replay', () => {
     selectedIds, selectMode, selectedCount,
     fetchStatus, startReplay, stopRecorder, saveReplay,
     liveThumbs,
-    fetchClips, updateClipMeta, applyProbeAndThumb, applyBulkProbe, applyBulkProbeAndThumb, flushClipsNow, removeClip, setThumbnail, addClip, injectSkeleton, replaceSkeleton,
+    fetchClips, updateClipMeta, applyProbeAndThumb, applyBulkProbe, applyBulkProbeAndThumb, flushClipsNow, removeClip, setThumbnail, addClip, injectSkeleton, replaceSkeleton, injectDemoClip, removeDemoClip,
     liveMeta,
     toggleSelect, clearSelection, isSelected,
     activeMenuClipId, activeMenuPos,

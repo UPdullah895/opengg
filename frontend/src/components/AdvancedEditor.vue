@@ -583,7 +583,7 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
     </div>
 
     <!-- ═══ E4: Resizable Sidebar ═══ -->
-    <div class="sidebar" :class="{ shut: !sideOpen }" :style="sideOpen ? { width: sideWidth + 'px' } : {}">
+    <div class="sidebar" data-tour="editor-filters" :class="{ shut: !sideOpen }" :style="sideOpen ? { width: sideWidth + 'px' } : {}">
       <div v-if="sideOpen" class="side-resize" @mousedown="sideResizeDown"></div>
       <button class="side-toggle" @click="sideOpen = !sideOpen">{{ sideOpen ? '›' : '‹' }}</button>
       <div v-if="sideOpen" class="side-inner">
@@ -671,7 +671,7 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
   </div>
 
   <!-- ═══ E1: Timeline with PROPER row layout ═══ -->
-  <div class="tl-wrap" :style="{ flex: tlFlex }">
+  <div class="tl-wrap" data-tour="editor-timeline" :style="{ flex: tlFlex }">
     <div class="tl-container">
       <!--  Left: Track Headers (fixed width, gap from canvas) -->
       <div class="tl-headers">

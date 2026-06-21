@@ -140,9 +140,12 @@ onUnmounted(() => {
 })
 
 watch(() => audio.virtualAudioReady, ready => {
-  // Polling is managed centrally by App.vue; this watch just ensures
-  // we don't try to poll when virtual audio isn't ready.
-  if (!ready) audio.stopPolling()
+  // Polling is managed centrally by App.vue on page change, but App.vue does NOT react to
+  // the engine becoming ready. When the user creates the engine from this page, restart
+  // polling here so channel volumes self-heal immediately (no leave/return needed). When the
+  // engine isn't ready, make sure we're not polling.
+  if (ready) audio.startPolling(2000)
+  else audio.stopPolling()
 })
 
 watch(overdriveEnabled, enabled => {

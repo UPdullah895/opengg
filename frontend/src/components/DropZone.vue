@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAudioStore } from '../stores/audio'
 import { usePersistenceStore } from '../stores/persistence'
+import { activeMenuId, nextMenuId, openMenu, closeMenu } from '../composables/useActiveMenu'
 import VolumeSlider from './VolumeSlider.vue'
 
 const { t } = useI18n()
@@ -36,6 +37,8 @@ const boxStyle = computed(() => ({
 const hovering = ref(false)
 const isDragging = computed(() => audio.draggedApp !== null)
 const contextMenuOpen = ref(false)
+// Unique owner id for the single-open-menu coordinator (only one DropZone menu at a time).
+const menuOwnerId = nextMenuId()
 const contextMenuPos = ref({ x: 0, y: 0 })
 const contextApp = ref<{ id: number; name: string; binary: string; locked?: boolean } | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
@@ -247,6 +250,8 @@ function onChipContextMenu(e: MouseEvent, app: { id: number; name: string; binar
   contextApp.value = app
   contextMenuPos.value = { x: e.clientX, y: e.clientY }
   contextMenuOpen.value = true
+  // Become the sole open menu — any other DropZone's menu closes via the activeMenuId watch.
+  openMenu(menuOwnerId)
   menuSize.value = { w: 0, h: 0 }
   nextTick(() => requestAnimationFrame(() => {
     const el = menuRef.value
@@ -259,6 +264,7 @@ function routeViaMenu(targetChannel: string) {
   const appId = contextApp.value.id
   contextMenuOpen.value = false
   contextApp.value = null
+  closeMenu(menuOwnerId)
   if (targetChannel === props.channel) return // already there
   audio.dropOnChannelById(appId, targetChannel)
 }
@@ -266,7 +272,16 @@ function routeViaMenu(targetChannel: string) {
 function closeContextMenu() {
   contextMenuOpen.value = false
   contextApp.value = null
+  closeMenu(menuOwnerId)
 }
+
+// Single-open enforcement: when another DropZone becomes the active menu, close ours.
+watch(activeMenuId, (id) => {
+  if (id !== menuOwnerId && contextMenuOpen.value) {
+    contextMenuOpen.value = false
+    contextApp.value = null
+  }
+})
 
 // Close context menu / volume menu when clicking anywhere outside
 function onWindowClick(e: MouseEvent) {

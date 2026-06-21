@@ -241,6 +241,13 @@ export async function loadDependencyStatus() {
   _loaded = true
 }
 
+// Force a fresh dependency probe — used by the "Recheck" button after the user installs a
+// missing binary (e.g. gpu-screen-recorder) so the warning clears without an app restart.
+export async function reloadDependencyStatus() {
+  _loaded = false
+  await loadDependencyStatus()
+}
+
 export async function loadDistroInfo() {
   if (_distroLoaded) return
   try {

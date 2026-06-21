@@ -104,6 +104,7 @@ export const useAudioStore = defineStore('audio', () => {
     try {
       loading.value = true
       const j = await invoke<string>('get_channels')
+      if (import.meta.env.DEV) console.debug('[opengg][audio] fetchChannels raw:', j)
       const chs = JSON.parse(j) as Channel[]
       for (const ch of chs) {
         // ★ P7: Don't overwrite channels the user just dragged
@@ -249,7 +250,22 @@ export const useAudioStore = defineStore('audio', () => {
   function restoreFromPersistence() {
     Object.assign(channelDevices, usePersistenceStore().state.mixer.devices)
     const saved = usePersistenceStore().state.mixer.volumes || {}
+    if (import.meta.env.DEV) console.debug('[opengg][audio] restoreFromPersistence saved volumes:', JSON.stringify(saved))
     for (const [k, v] of Object.entries(saved)) { if (typeof v === 'number') channelVolumes[k] = v }
+  }
+
+  // Self-heal after the virtual audio engine is (re)created. The Mixer stops polling while
+  // the engine isn't ready, and App.vue only (re)starts polling on a page change — so right
+  // after creation the store keeps its default 100% volumes until a manual leave/return.
+  // rehydrate() runs the same one-shot refresh page re-entry does (restore saved → fetch live
+  // state) so correct volumes appear immediately with no navigation. Continuous polling is
+  // resumed by MixerPage when the engine becomes ready (only relevant while on that page).
+  function rehydrate() {
+    if (import.meta.env.DEV) console.debug('[opengg][audio] rehydrate() after engine-created')
+    restoreFromPersistence()
+    fetchChannels()
+    fetchApps()
+    fetchDevices()
   }
 
   // Drag watchdog: if pointer events are lost (drag never completes), auto-clear the
@@ -408,7 +424,7 @@ export const useAudioStore = defineStore('audio', () => {
     fetchChannels, fetchApps, fetchDevices,
     refreshVirtualAudioStatus, setVirtualAudioReady,
     setVolume, setMute, setAppVolume, routeApp, unrouteApp,
-    setChannelDevice, restoreFromPersistence,
+    setChannelDevice, restoreFromPersistence, rehydrate,
     startDrag, endDrag, clearInteractionState, selectAppForRoute, deselectApp, dropOnChannel, dropOnChannelById,
     startPolling, stopPolling,
     toggleEarBlast, setEarBlastChannels, setEarBlastThreshold, setEarBlastTarget, syncEarBlastState,
