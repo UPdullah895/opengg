@@ -2,7 +2,7 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  useFloating, autoUpdate, offset, flip, shift, arrow,
+  useFloating, autoUpdate, offset, flip, shift, arrow, limitShift,
   type Placement,
 } from '@floating-ui/vue'
 import { useElementBounding } from '@vueuse/core'
@@ -38,20 +38,75 @@ const placement = computed<Placement>(() => {
   return p
 })
 
-const { floatingStyles, middlewareData, placement: actualPlacement } = useFloating(
+// strategy:'fixed' → x/y are viewport-relative, so clamping math below is against
+// window.innerWidth/Height directly. flip picks the best side; shift (both axes) keeps
+// the card on-screen; the explicit clamp in `placed` is the hard guarantee it fits.
+const { x, y, strategy, middlewareData, placement: actualPlacement, update: updateFloating } = useFloating(
   referenceEl,
   floatingEl,
   {
     placement,
-    middleware: [offset(14), flip({ padding: 8 }), shift({ padding: 10 }), arrow({ element: arrowEl })],
+    strategy: 'fixed',
+    middleware: [
+      offset(14),
+      flip({ padding: 12 }),
+      shift({ padding: 12, crossAxis: true, limiter: limitShift() }),
+      arrow({ element: arrowEl }),
+    ],
     whileElementsMounted: autoUpdate,
   },
 )
 
 // Live target rect for the spotlight cutout (follows scroll/resize).
 const { left, top, width, height, update } = useElementBounding(referenceEl)
+// Live card size — keeps the clamp math correct as the card content changes.
+const { width: cardW, height: cardH } = useElementBounding(floatingEl)
 const PAD = 6
 const hasTarget = computed(() => !!referenceEl.value && width.value > 0)
+
+// A target that fills most of the viewport (e.g. the Devices "Coming Soon" page) can't
+// have a card anchored to its edge without overflowing — anchor such steps to the center.
+const targetTooBig = ref(false)
+// The card is anchored to a target only when one exists AND it isn't oversized.
+const anchored = computed(() => hasTarget.value && !targetTooBig.value)
+
+// ── Final position: clamp floating-ui's x/y so the card is ALWAYS fully on-screen ──
+const EDGE = 10  // min gap from any window edge
+const placed = computed(() => {
+  const W = window.innerWidth, H = window.innerHeight
+  const cw = cardW.value || 340
+  const ch = cardH.value || 220
+  const rawX = x.value ?? 0
+  const rawY = y.value ?? 0
+  // Clamp into [EDGE, W-cw-EDGE]; guard against inversion on tiny viewports.
+  const maxX = Math.max(EDGE, W - cw - EDGE)
+  const maxY = Math.max(EDGE, H - ch - EDGE)
+  const cx = Math.min(Math.max(rawX, EDGE), maxX)
+  const cy = Math.min(Math.max(rawY, EDGE), maxY)
+  const movedX = Math.abs(rawX - cx)
+  const movedY = Math.abs(rawY - cy)
+  // The arrow only makes sense when the card sits where floating-ui put it.
+  const showArrow = movedX <= 2 && movedY <= 2
+  const fits = cx >= 0 && cy >= 0 && cx + cw <= W + 0.5 && cy + ch <= H + 0.5
+  return {
+    style: {
+      position: strategy.value,
+      left: '0px',
+      top: '0px',
+      transform: `translate(${Math.round(cx)}px, ${Math.round(cy)}px)`,
+    } as Record<string, string>,
+    showArrow,
+    log: { cw: Math.round(cw), ch: Math.round(ch), W, H, x: Math.round(cx), y: Math.round(cy), fits, moved: { x: Math.round(movedX), y: Math.round(movedY) } },
+  }
+})
+
+// Proof-of-fit logging: every reposition logs card box vs window bounds + the
+// (top>=0, left>=0, right<=W, bottom<=H) verdict, so clipping is verifiable.
+watch(placed, (p) => {
+  if (!anchored.value) return
+  // eslint-disable-next-line no-console
+  console.debug(`[tour] step="${stepId.value}" card=${p.log.cw}x${p.log.ch} win=${p.log.W}x${p.log.H} pos=(${p.log.x},${p.log.y}) moved=(${p.log.moved.x},${p.log.moved.y}) fits=${p.log.fits}`)
+}, { flush: 'post' })
 const ring = computed(() => ({
   left: `${left.value - PAD}px`, top: `${top.value - PAD}px`,
   width: `${width.value + PAD * 2}px`, height: `${height.value + PAD * 2}px`,
@@ -148,14 +203,18 @@ watch(() => tour.current.value, async (step) => {
   satisfied.value = false
   showDeep.value = false
   referenceEl.value = null
+  targetTooBig.value = false
   if (!step) return
   await nextTick()
   if (step.target) {
     const el = await waitForElement(step.target)
     referenceEl.value = el
     if (el) {
+      const r = el.getBoundingClientRect()
+      // Oversized target → center the card instead of pinning to an edge that clips.
+      targetTooBig.value = r.height > window.innerHeight * 0.7 || r.width > window.innerWidth * 0.85
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' })
-      requestAnimationFrame(() => update())
+      requestAnimationFrame(() => { update(); updateFloating() })
     }
   }
   if (step.action) setupAction(step.action.detect)
@@ -190,8 +249,9 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <div v-if="tour.active.value && !paused" class="tour-root">
-      <!-- Spotlight: four dim panels around the target (interactive hole), or full dim -->
-      <template v-if="panels">
+      <!-- Spotlight: four dim panels around the target (interactive hole), or full dim.
+           Oversized targets (anchored=false) fall back to a full dim + centered card. -->
+      <template v-if="anchored && panels">
         <div class="tour-dim" :style="panels.top"></div>
         <div class="tour-dim" :style="panels.bottom"></div>
         <div class="tour-dim" :style="panels.left"></div>
@@ -204,10 +264,10 @@ onBeforeUnmount(() => {
       <div
         ref="floatingEl"
         class="tour-card"
-        :class="{ 'tour-card--centered': !hasTarget }"
-        :style="hasTarget ? floatingStyles : undefined"
+        :class="{ 'tour-card--centered': !anchored }"
+        :style="anchored ? placed.style : undefined"
       >
-        <div v-if="hasTarget" ref="arrowEl" class="tour-arrow" :style="arrowStyle"></div>
+        <div v-if="anchored && placed.showArrow" ref="arrowEl" class="tour-arrow" :style="arrowStyle"></div>
 
         <div class="tour-dots">
           <span

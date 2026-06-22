@@ -37,8 +37,10 @@ const playerComp = ref<InstanceType<typeof CustomVideoPlayer> | null>(null)
 const videoRef   = ref<HTMLVideoElement | null>(null)  // synced from playerComp in onMounted
 const dur = ref(props.clip.duration || 30)
 
-// ★ Epic 2: Local monitor volume (preview only — NOT exported) and hover-mute tracking
+// Master volume — authoritative gain applied to every track in BOTH preview and export.
+// (Previously preview-only; now factored into doExport so 0% = true silence in the file.)
 const localVol        = ref(1)
+const masterVolOpen   = ref(false)
 const hoveredTrackId  = ref<string | null>(null)
 const ct = ref(0)
 const playing = ref(false)
@@ -80,15 +82,6 @@ function getTrackName(id: string): string {
 function showIcons(trackId: string): boolean {
   return getTrackDef(trackId)?.visible ?? true
 }
-// Role badge text: video tracks → "Video"; mic capture → "Input"; everything else
-// (desktop/game/chat/media/aux output capture) → "Output". Uses the track's name/embedded
-// title so it follows the actual captured source, not a positional guess.
-function trackKindLabel(tk: Track): string {
-  if (tk.type === 'video') return t('editor.trackKind.video')
-  const hay = `${tk.label} ${tk.title ?? ''}`.toLowerCase()
-  return /\bmic\b|microphone|ميكروف|مايك/.test(hay) ? t('editor.trackKind.input') : t('editor.trackKind.output')
-}
-
 // AudioContext resume is handled by the shared singleton in utils/audio.ts.
 // installAudioUnlocker() in App.vue covers the global one-shot unlock.
 // resumeAudioContext() is called immediately before every play() as a safeguard.
@@ -232,8 +225,9 @@ onBeforeUnmount(() => {
   for (const el of Object.values(audioEls.value)) { el.pause(); el.src = '' }
 })
 
-// Per-track volume/mute → update the corresponding <audio> element
-// localVol is applied as a master monitor gain (preview only — not in export)
+// Per-track volume/mute → update the corresponding <audio> element.
+// localVol is the master gain; it is applied here for preview AND folded into the
+// export in doExport(), so what you hear is what gets rendered.
 function applyAudioVolumes() {
   const audioTracks = tracks.value.filter(t => t.type === 'audio')
   const hasMulti = Object.keys(audioEls.value).length > 0
@@ -405,9 +399,13 @@ function shortcutMatches(e: KeyboardEvent, combo: string): boolean {
       && (evKey === key || evCode === key)
 }
 
-// Click-outside for track volume popovers
+// Click-outside for track volume popovers AND the master-volume popover
 function onDocClick(e: MouseEvent) {
-  tracks.value.forEach(t => { if (!(e.target as HTMLElement).closest('.vol-zone')) t.volOpen = false })
+  const inZone = (e.target as HTMLElement).closest('.vol-zone')
+  if (!inZone) {
+    tracks.value.forEach(t => { t.volOpen = false })
+    masterVolOpen.value = false
+  }
 }
 onMounted(() => document.addEventListener('mousedown', onDocClick)); onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
 function selectGame(g: string) { gameTag.value = g; saveMeta() }
@@ -442,10 +440,15 @@ async function doExport() {
   })
   try {
     const p = `${exportDir.value}/${exportName.value.replace(/[<>:"/\\|?*\x00]/g, '').trim()}.mp4`
+    // Master volume is authoritative: fold it into every track's gain so the exported
+    // mix matches what's heard in preview. master=0 → every track muted (true silence).
+    const master = localVol.value
     const audioTracks = tracks.value.filter(t => t.type === 'audio').map(t => ({
-      // A 0% track is treated as muted so the backend filter drops it entirely (true
-      // silence) — otherwise float dust below 1% leaks through as faint audio.
-      stream_index: t.streamIndex, volume: t.volume / 100, muted: t.muted || t.volume <= 0,
+      // A 0% track (or master at 0) is treated as muted so the backend filter drops it
+      // entirely (true silence) — otherwise float dust below 1% leaks through as faint audio.
+      stream_index: t.streamIndex,
+      volume: (t.volume / 100) * master,
+      muted: t.muted || t.volume <= 0 || master <= 0,
     }))
     const hasFilters = audioTracks.some(t => t.muted || t.volume < 1)
     let out: string
@@ -633,22 +636,29 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
     <span class="tr-sep">│</span>
     <span class="tr-time dim">{{ fmt(trimE) }}</span>
     <div style="flex:1"></div>
-    <!-- ★ Epic 2: Local monitor volume (preview only — not exported) -->
-    <div class="vol-monitor" title="Monitor volume (preview only)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ic" style="opacity:.5">
-        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/>
-        <path v-if="localVol > 0" d="M15.54 8.46a5 5 0 010 7.07"/>
-        <line v-else x1="23" y1="9" x2="17" y2="15"/><line v-if="localVol === 0" x1="17" y1="9" x2="23" y2="15"/>
-      </svg>
-      <VolumeSlider
-        :model-value="Math.round(localVol * 100)"
-        color="var(--accent)"
-        :min="0"
-        :max="100"
-        unit=""
-        compact
-        @update:model-value="v => localVol = v / 100"
-      />
+    <!-- Master volume — authoritative gain applied to ALL tracks in preview AND export.
+         Compact vertical slider in a popover that opens upward + right-aligned so it
+         always stays inside the window (never clipped at any edge). -->
+    <div class="vol-monitor vol-zone no-seek" :title="t('editor.masterVolume')">
+      <button class="tr-btn" :class="{ active: masterVolOpen }" @click.stop="masterVolOpen = !masterVolOpen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ic">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/>
+          <path v-if="localVol > 0" d="M15.54 8.46a5 5 0 010 7.07"/>
+          <line v-else x1="23" y1="9" x2="17" y2="15"/><line v-if="localVol === 0" x1="17" y1="9" x2="23" y2="15"/>
+        </svg>
+      </button>
+      <div v-if="masterVolOpen" class="vol-monitor-pop no-seek" @click.stop>
+        <VolumeSlider
+          vertical
+          :length="84"
+          :model-value="Math.round(localVol * 100)"
+          color="var(--accent)"
+          :min="0"
+          :max="100"
+          unit="%"
+          @update:model-value="v => setPreviewVol(v / 100)"
+        />
+      </div>
     </div>
     <!-- Magnet Mode toggle -->
     <button class="tr-btn" :class="{ active: magnetMode }" @click="magnetMode = !magnetMode" title="Magnet Mode — sync video/audio trim handles">
@@ -681,7 +691,6 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
           part="header"
           :color="t.color"
           :label="t.label"
-          :kind-label="trackKindLabel(t)"
           :icon="getTrackDef(t.id)?.icon"
           :show-icon="showIcons(t.id)"
           @mouseenter="hoveredTrackId = t.id"
@@ -949,8 +958,14 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 .tr-sep { color: var(--text-muted); font-size: 9px; }
 .tr-dur { font-size: 11px; color: var(--accent); font-weight: 600; }
 
-/* ★ Epic 2: Local monitor volume slider */
-.vol-monitor { display: flex; align-items: center; gap: 4px; padding: 0 4px; }
+/* Master volume — speaker button + upward, right-aligned popover (always inside window) */
+.vol-monitor { position: relative; display: flex; align-items: center; gap: 4px; padding: 0 4px; }
+.vol-monitor-pop {
+  position: absolute; bottom: 100%; right: 0; margin-bottom: 8px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 8px 26px; box-shadow: 0 6px 18px rgba(0,0,0,.5);
+  z-index: 30; display: flex; align-items: center; justify-content: center;
+}
 
 /* ═══ E1: Timeline — FIXED HEIGHT ROWS ═══ */
 .tl-wrap { min-height: 60px; overflow: hidden; flex-shrink: 0; }

@@ -63,6 +63,7 @@ impl AudioInterface {
             m.insert("binary".into(), s.binary);
             m.insert("channel".into(), s.channel);
             m.insert("icon".into(), s.icon);
+            m.insert("volume".into(), s.volume.to_string());
             m
         }).collect();
         serde_json::to_string(&data).unwrap_or_else(|_| "[]".into())

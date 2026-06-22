@@ -18,11 +18,7 @@
     "copy": "نسخ"
   },
   "editor": {
-    "trackKind": {
-      "input": "إدخال",
-      "output": "إخراج",
-      "video": "فيديو"
-    },
+    "masterVolume": "مستوى الصوت — يؤثر على جميع المسارات (المعاينة والتصدير)",
     "exportClip": "تصدير المقطع",
     "exportComplete": "اكتمل التصدير",
     "dragReady": "اسحب هذا الملف إلى Discord أو Telegram أو مجلد",
@@ -935,5 +931,10 @@
         "locales_read": "ملفات اللغات"
       }
     }
+  },
+  "langPicker": {
+    "title": "اختر لغتك",
+    "subtitle": "يمكنك تغييرها لاحقاً من الإعدادات.",
+    "continue": "متابعة"
   }
 }

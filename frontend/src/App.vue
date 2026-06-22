@@ -77,6 +77,36 @@ function navigate(page: string) { currentPage.value = page }
 const tour = useTour()
 tour.setNavigate((page) => { currentPage.value = page })
 
+// First-launch language picker
+const showLangPicker = ref(false)
+const langPickerChoice = ref('en')
+const AVAILABLE_LANGUAGES = [
+  { code: 'en', label: 'English' },
+  { code: 'ar', label: 'العربية' },
+]
+
+function startTourIfNeeded() {
+  if (!persist.state.settings.tutorialSeen) {
+    if (showOnboarding.value) {
+      const stop = watch(showOnboarding, (open) => {
+        if (!open) { stop(); setTimeout(() => tour.start(), 350) }
+      })
+    } else {
+      setTimeout(() => { if (!showOnboarding.value) tour.start() }, 700)
+    }
+  }
+}
+
+function pickLanguage() {
+  const lang = langPickerChoice.value
+  persist.state.settings.language = lang
+  locale.value = lang
+  if (lang === 'ar') persist.state.settings.rtlMode = true
+  persist.state.settings.languagePicked = true
+  showLangPicker.value = false
+  startTourIfNeeded()
+}
+
 // ═══ Frameless window resize handles ═══
 async function startResize(dir: string) {
   try { await getCurrentWindow().startResizeDragging(dir as any) } catch (e) {
@@ -189,16 +219,13 @@ onMounted(async () => {
   await persist.load()
   locale.value = persist.state.settings.language || 'en'
   await loadTheme()
-  if (!persist.state.settings.tutorialSeen) {
-    // Start the guided tour on first launch — but only once the audio-setup wizard
-    // (if it's open) has closed, so two overlays never stack.
-    if (showOnboarding.value) {
-      const stop = watch(showOnboarding, (open) => {
-        if (!open) { stop(); setTimeout(() => tour.start(), 350) }
-      })
-    } else {
-      setTimeout(() => { if (!showOnboarding.value) tour.start() }, 700)
-    }
+  if (!persist.state.settings.languagePicked) {
+    // Very first launch: show language picker before the tour
+    langPickerChoice.value = persist.state.settings.language || 'en'
+    showLangPicker.value = true
+    // startTourIfNeeded() is called by pickLanguage() after the user confirms
+  } else {
+    startTourIfNeeded()
   }
 
   // ★ FIX: Fetch media port + token FIRST, then set mediaReady=true before any page mounts.
@@ -545,6 +572,30 @@ async function loadUserLocales() {
       </div>
     </Teleport>
 
+    <!-- ═══ First-launch language picker ═══ -->
+    <Teleport to="body">
+      <div v-if="showLangPicker" class="lang-picker-overlay">
+        <div class="lang-picker-box">
+          <h2 class="lang-picker-title">{{ t('langPicker.title') }}</h2>
+          <p class="lang-picker-subtitle">{{ t('langPicker.subtitle') }}</p>
+          <div class="lang-picker-options">
+            <button
+              v-for="lang in AVAILABLE_LANGUAGES"
+              :key="lang.code"
+              class="lang-picker-option"
+              :class="{ 'lang-picker-option--active': langPickerChoice === lang.code }"
+              @click="langPickerChoice = lang.code"
+            >
+              {{ lang.label }}
+            </button>
+          </div>
+          <button class="onboard-primary lang-picker-cta" @click="pickLanguage">
+            {{ t('langPicker.continue') }}
+          </button>
+        </div>
+      </div>
+    </Teleport>
+
     <GuidedTour />
     <GlobalModal />
     <ToastContainer />
@@ -753,4 +804,29 @@ body:has(video:-webkit-full-screen) [data-tauri-drag-region] { display: none !im
 .device-field label { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--text-sec); }
 .device-field label svg { width: 13px; height: 13px; }
 /* device-select replaced by SelectField component */
+
+/* ═══ Language picker ═══ */
+.lang-picker-overlay {
+  position: fixed; inset: 0; z-index: 9100;
+  background: rgba(0,0,0,.72); backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+}
+.lang-picker-box {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 16px; padding: 36px 32px; width: 340px;
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+}
+.lang-picker-title { font-size: 18px; font-weight: 700; color: var(--text); margin: 0; }
+.lang-picker-subtitle { font-size: 13px; color: var(--text-sec); margin: 0; text-align: center; }
+.lang-picker-options {
+  display: flex; gap: 12px; width: 100%; justify-content: center;
+}
+.lang-picker-option {
+  flex: 1; padding: 14px 12px; border-radius: 10px; font-size: 14px; font-weight: 600;
+  border: 2px solid var(--border); background: var(--bg-surface); color: var(--text-sec);
+  cursor: pointer; transition: border-color .15s, color .15s, background .15s;
+}
+.lang-picker-option:hover { border-color: var(--accent); color: var(--text); }
+.lang-picker-option--active { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface)); }
+.lang-picker-cta { width: 100%; justify-content: center; margin-top: 4px; }
 </style>

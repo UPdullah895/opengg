@@ -18,11 +18,7 @@
     "copy": "Copy"
   },
   "editor": {
-    "trackKind": {
-      "input": "Input",
-      "output": "Output",
-      "video": "Video"
-    },
+    "masterVolume": "Volume — affects all tracks (preview & export)",
     "exportClip": "Export Clip",
     "exportComplete": "Export Complete",
     "dragReady": "Drag this file to Discord, Telegram, or a folder",
@@ -935,5 +931,10 @@
         "locales_read": "Locale files"
       }
     }
+  },
+  "langPicker": {
+    "title": "Choose your language",
+    "subtitle": "You can change this later in Settings.",
+    "continue": "Continue"
   }
 }

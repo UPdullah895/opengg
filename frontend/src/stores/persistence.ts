@@ -73,6 +73,7 @@ export interface PersistedState {
     notificationDuration: number  // 1-10 seconds
     rtlMode: boolean
     tutorialSeen: boolean
+    languagePicked: boolean
   }
   modules: { audio: boolean; device: boolean; replay: boolean }
   /** Keyed by extension id (e.g. 'overlays-system'). true = enabled. */
@@ -83,7 +84,7 @@ export interface PersistedState {
   macros: Record<string, MouseMacro[]>
 }
 
-const CURRENT_SCHEMA_VERSION = 11
+const CURRENT_SCHEMA_VERSION = 12
 
 export const DEFAULTS: PersistedState = {
   _schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -135,6 +136,7 @@ export const DEFAULTS: PersistedState = {
     notificationDuration: 4,
     rtlMode:               false,
     tutorialSeen:          false,
+    languagePicked:        false,
   },
   modules: { audio: true, device: true, replay: true },
   extensions: {},
@@ -249,6 +251,10 @@ const MIGRATIONS: Record<number, (state: any) => void> = {
         }
       }
     }
+  },
+  12: (s) => {
+    // Mark existing users as having already picked a language (skip the first-launch picker)
+    if (s?.settings) s.settings.languagePicked = true
   },
 }
 

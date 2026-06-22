@@ -11,6 +11,8 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   unit?: string
   compact?: boolean
+  vertical?: boolean
+  length?: number
 }>(), {
   min: 0,
   max: 100,
@@ -19,6 +21,8 @@ const props = withDefaults(defineProps<{
   disabled: false,
   unit: '%',
   compact: false,
+  vertical: false,
+  length: 84,
 })
 
 const emit = defineEmits<{ 'update:modelValue': [number] }>()
@@ -37,7 +41,7 @@ const pct = computed(() => {
 </script>
 
 <template>
-  <div class="vs-wrap" :class="{ compact }" :style="{ '--vs-color': color }">
+  <div class="vs-wrap" :class="{ compact, vertical }" :style="{ '--vs-color': color, '--vs-len': length + 'px' }">
     <input
       type="range"
       class="vs-slider"
@@ -144,5 +148,36 @@ const pct = computed(() => {
 .vs-wrap.compact .vs-value {
   font-size: 9px;
   min-width: 22px;
+}
+
+/* ─── Vertical mode (bottom = low, top = high) ───
+   WebKitGTK (Tauri/Linux) has no reliable native vertical range, so we rotate a
+   horizontal one -90°. The rotated input keeps its un-rotated layout box (len×18),
+   so it is absolutely centered inside a box that reserves the vertical length. */
+.vs-wrap.vertical {
+  flex: none;
+  position: relative;
+  flex-direction: column;
+  width: 30px;
+  height: var(--vs-len, 84px);
+  gap: 0;
+}
+.vs-wrap.vertical .vs-slider {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--vs-len, 84px);
+  height: 18px;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  transform-origin: center;
+}
+/* After rotate(-90°) the "to right" track gradient fills from the bottom upward. */
+.vs-wrap.vertical .vs-value {
+  position: absolute;
+  bottom: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 0;
+  text-align: center;
 }
 </style>

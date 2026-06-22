@@ -14,6 +14,7 @@ pub struct StreamInfo {
     pub binary: String,
     pub icon: String,
     pub channel: String,
+    pub volume: u32,
 }
 
 /// Build a sink-index → sink-name map from `pactl list sinks`.
@@ -108,13 +109,20 @@ pub fn list_streams() -> Result<Vec<StreamInfo>> {
         );
         let icon = props["application.icon_name"].as_str().unwrap_or("").to_string();
 
+        let volume = input["volume"]
+            .as_object()
+            .and_then(|v| v.values().next())
+            .and_then(|ch| ch["value_percent"].as_str())
+            .and_then(|s| s.trim_end_matches('%').parse::<u32>().ok())
+            .unwrap_or(100);
+
         let channel = super::sinks::CHANNEL_NAMES
             .iter()
             .find(|&&ch| sink_name.contains(&format!("OpenGG_{ch}")))
             .map(|s| s.to_string())
             .unwrap_or_default();
 
-        streams.push(StreamInfo { index, sink: sink_name, app_name, binary, icon, channel });
+        streams.push(StreamInfo { index, sink: sink_name, app_name, binary, icon, channel, volume });
     }
     streams.extend(list_source_outputs());
     Ok(streams)
@@ -152,6 +160,7 @@ fn list_source_outputs() -> Vec<StreamInfo> {
             binary,
             icon,
             channel: "Mic".into(),
+            volume: 100,
         });
     }
     streams
@@ -170,7 +179,7 @@ fn list_streams_text() -> Result<Vec<StreamInfo>> {
             let id = trimmed.trim_start_matches("Sink Input #").parse::<u32>().unwrap_or(0);
             current = Some(StreamInfo {
                 index: id, sink: String::new(), app_name: "Unknown".into(),
-                binary: String::new(), icon: String::new(), channel: String::new(),
+                binary: String::new(), icon: String::new(), channel: String::new(), volume: 100,
             });
         } else if let Some(ref mut s) = current {
             if trimmed.starts_with("Sink:") {

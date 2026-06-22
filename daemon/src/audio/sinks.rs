@@ -191,6 +191,9 @@ impl SinkManager {
         if let Err(e) = setup_loopbacks() {
             tracing::warn!("Loopback setup had issues: {e}");
         }
+        // Dedup: WirePlumber session policies may auto-route system apps (plasmashell, kwin_*)
+        // to OpenGG sinks every time they are created. Move them back to default output.
+        cleanup_blacklisted_routing();
 
         // Step 4: Wire hardware mic → OpenGG_Mic virtual sink via loopback.
         // The sink's monitor port is what GSR and DSP chains capture from.
@@ -752,6 +755,9 @@ pub fn setup_loopbacks() -> Result<()> {
     const OUTPUT_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
     tracing::info!("Linking virtual sinks → {default_sink}");
 
+    // Pre-check: read existing links so we can skip ones already present.
+    let existing_links = parse_pw_links().unwrap_or_default();
+
     // Collect intended links for verification
     let mut intended_links: Vec<(String, String, &str)> = Vec::new();
 
@@ -761,6 +767,12 @@ pub fn setup_loopbacks() -> Result<()> {
             let source = format!("{sink_name}:monitor_{port}");
             let dest = format!("{default_sink}:playback_{port}");
             intended_links.push((source.clone(), dest.clone(), ch));
+
+            // Skip if this exact link already exists in the PipeWire graph.
+            if existing_links.contains(&(source.clone(), dest.clone())) {
+                tracing::debug!("Skipping already-linked {source} → {dest}");
+                continue;
+            }
 
             // Attempt initial link
             let result = subprocess::command("pw-link")
@@ -853,4 +865,74 @@ pub fn setup_loopbacks() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Move blacklisted system-app streams (plasmashell, kwin_*, etc.) off OpenGG
+/// virtual sinks back to the hardware default. WirePlumber session policies may
+/// auto-route these apps to OpenGG null-sinks every time sinks are (re)created,
+/// causing duplicated Media links and unexpected audio routing.
+fn cleanup_blacklisted_routing() {
+    const BLACKLIST: &[&str] = &[
+        "plasmashell",
+        "kwin_wayland",
+        "kwin_x11",
+        "swaync",
+        "xdg-desktop-portal",
+        "xdg-desktop-portal-gnome",
+        "xdg-desktop-portal-kde",
+    ];
+
+    // Get the hardware default sink to move blacklisted streams onto.
+    let Ok(out) = subprocess::command("pactl").args(["get-default-sink"]).output() else {
+        return;
+    };
+    let default_sink = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if default_sink.is_empty() {
+        return;
+    }
+
+    // Build sink-index → name map so we can check if a stream is on an OpenGG sink.
+    let sink_map: std::collections::HashMap<u32, String> = {
+        let Ok(out) = subprocess::command("pactl").args(["-f", "json", "list", "sinks"]).output() else {
+            return;
+        };
+        let Ok(sinks) = serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout) else {
+            return;
+        };
+        sinks.iter().filter_map(|s| {
+            Some((s["index"].as_u64()? as u32, s["name"].as_str()?.to_string()))
+        }).collect()
+    };
+
+    let Ok(out) = subprocess::command("pactl").args(["-f", "json", "list", "sink-inputs"]).output() else {
+        return;
+    };
+    let Ok(sis) = serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout) else {
+        return;
+    };
+
+    for si in &sis {
+        let idx = si["index"].as_u64().unwrap_or(0) as u32;
+        let p = &si["properties"];
+        let binary = p["application.process.binary"].as_str().unwrap_or("");
+
+        if !BLACKLIST.iter().any(|&b| binary.contains(b)) {
+            continue;
+        }
+
+        let sink_idx = si["sink"].as_u64().unwrap_or(u64::MAX) as u32;
+        let sink_name = sink_map.get(&sink_idx).map(|s| s.as_str()).unwrap_or("");
+
+        if !sink_name.starts_with("OpenGG_") {
+            continue;
+        }
+
+        tracing::info!(
+            "Cleanup: moving blacklisted '{}' (sink-input #{}) off {} → {}",
+            binary, idx, sink_name, default_sink
+        );
+        let _result = subprocess::command("pactl")
+            .args(["move-sink-input", &idx.to_string(), &default_sink])
+            .output();
+    }
 }
