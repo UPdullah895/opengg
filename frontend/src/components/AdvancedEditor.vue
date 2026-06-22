@@ -410,6 +410,37 @@ function onDocClick(e: MouseEvent) {
 onMounted(() => document.addEventListener('mousedown', onDocClick)); onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
 function selectGame(g: string) { gameTag.value = g; saveMeta() }
 
+// ── Per-track volume popover (single shared, fixed-position, viewport-clamped) ──
+const openVolTrack = computed(() => tracks.value.find(t => t.volOpen) ?? null)
+const volPopPos = ref<{ top: number; left: number } | null>(null)
+
+// Open/close a track's volume popover. Positions a fixed popover from the speaker
+// button's rect, flipping up and clamping so it never leaves the window.
+function toggleTrackVol(t: Track, e: MouseEvent) {
+  const wasOpen = t.volOpen
+  tracks.value.forEach(x => { x.volOpen = false })
+  masterVolOpen.value = false
+  if (wasOpen) { volPopPos.value = null; return }
+  t.volOpen = true
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const PW = 34, PH = 122, GAP = 6, M = 8
+  let left = r.right - PW                       // right-align popover to the speaker
+  let top = r.bottom + GAP                       // prefer opening downward
+  if (top + PH > window.innerHeight - M) top = r.top - PH - GAP   // flip up if no room below
+  top = Math.max(M, Math.min(top, window.innerHeight - PH - M))
+  left = Math.max(M, Math.min(left, window.innerWidth - PW - M))
+  volPopPos.value = { top, left }
+}
+function setOpenTrackVol(v: number) {
+  const t = tracks.value.find(x => x.volOpen)
+  if (t) t.volume = v
+}
+// Master popover toggle — closes any open per-track popover so only one shows at a time.
+function toggleMasterVol() {
+  tracks.value.forEach(x => { x.volOpen = false })
+  masterVolOpen.value = !masterVolOpen.value
+}
+
 // Export
 async function openExport() { exportModal.value = true; exportName.value = editName.value || 'export'; exportDir.value = props.clip.filepath.replace(/\/[^/]+$/, ''); exportTarget.value = 0; exportProgress.value = 0; exportSpeed.value = ''; exportStage.value = ''; exportCodec.value = 'libx264'; exportAdvancedOpen.value = false; await updateProj() }
 const codecDisplayName: Record<string, string> = { libx264: 'H.264', libx265: 'H.265', 'libvpx-vp9': 'VP9', libsvtav1: 'AV1', copy: 'Original' }
@@ -640,7 +671,7 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
          Compact vertical slider in a popover that opens upward + right-aligned so it
          always stays inside the window (never clipped at any edge). -->
     <div class="vol-monitor vol-zone no-seek" :title="t('editor.masterVolume')">
-      <button class="tr-btn" :class="{ active: masterVolOpen }" @click.stop="masterVolOpen = !masterVolOpen">
+      <button class="tr-btn" :class="{ active: masterVolOpen }" @click.stop="toggleMasterVol">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ic">
           <polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/>
           <path v-if="localVol > 0" d="M15.54 8.46a5 5 0 010 7.07"/>
@@ -698,19 +729,10 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
         >
           <template v-if="t.type === 'audio'" #actions>
             <div class="vol-zone" style="margin-left:auto">
-              <button class="hdr-speaker" :class="{ off: t.muted }" @click.stop="t.volOpen = !t.volOpen; tracks.filter(x => x.id !== t.id).forEach(x => x.volOpen = false)">
-                <svg v-if="t.muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="ic-s"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+              <button class="hdr-speaker" :class="{ off: t.muted, active: t.volOpen }" @click.stop="toggleTrackVol(t, $event)">
+                <svg v-if="t.muted || t.volume <= 0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="ic-s"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
                 <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="ic-s"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg>
               </button>
-              <div v-if="t.volOpen" class="vol-popover no-seek" @click.stop>
-                <VolumeSlider
-                  :model-value="t.volume"
-                  :color="t.color"
-                  :min="0"
-                  :max="100"
-                  @update:model-value="v => t.volume = v"
-                />
-              </div>
             </div>
           </template>
         </TimelineTrackRow>
@@ -863,6 +885,29 @@ function drawWave(canvas: HTMLCanvasElement | null, t: Track) { if (!canvas || !
       <div v-if="toastFile" class="toast-drag" draggable="true" @dragstart="onToastDrag">📎 Drag to share</div>
     </div>
   </Transition>
+
+  <!-- Per-track volume popover — one shared instance, teleported to body with fixed
+       coords + viewport clamp so it is never clipped by the timeline's overflow:hidden.
+       Carries .vol-zone so the click-outside handler treats interactions here as inside. -->
+  <Teleport to="body">
+    <div
+      v-if="openVolTrack && volPopPos"
+      class="vol-popover-fixed vol-zone no-seek"
+      :style="{ top: volPopPos.top + 'px', left: volPopPos.left + 'px' }"
+      @click.stop
+      @mousedown.stop
+    >
+      <VolumeSlider
+        vertical
+        :length="84"
+        :model-value="openVolTrack.volume"
+        :color="openVolTrack.color"
+        :min="0"
+        :max="100"
+        @update:model-value="setOpenTrackVol"
+      />
+    </div>
+  </Teleport>
 </div>
 </template>
 
@@ -979,7 +1024,14 @@ kbd { padding: 1px 4px; background: var(--bg-deep); border: 1px solid var(--bord
 .hdr-speaker { border: none; background: none; cursor: pointer; padding: 2px; color: var(--tc); opacity: .7; }
 .hdr-speaker:hover { opacity: 1; }
 .hdr-speaker.off { opacity: .3; }
-.vol-popover { position: absolute; right: 0; top: 100%; margin-top: 4px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; display: flex; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,.4); z-index: 20; white-space: nowrap; }
+.hdr-speaker.active { opacity: 1; }
+/* Per-track volume popover — fixed + JS-positioned, so overflow:hidden can't clip it. */
+.vol-popover-fixed {
+  position: fixed;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 8px 26px; box-shadow: 0 6px 18px rgba(0,0,0,.5);
+  z-index: 10000; display: flex; align-items: center; justify-content: center;
+}
 
 /* Timeline Canvas */
 .tl-canvas { flex: 1; position: relative; overflow: hidden; cursor: crosshair; user-select: none; }
