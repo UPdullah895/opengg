@@ -102,8 +102,33 @@ function onTimeUpdate(ct: number) {
   }
 }
 
-function toggleTrackMute(t: AudioTrack) { t.muted = !t.muted }
-function setTrackVolume(t: AudioTrack, v: number) { t.volume = v; if (v > 0) t.muted = false }
+// ── Per-track volume popover (single shared, fixed-position, viewport-clamped) ──
+// Mirrors AdvancedEditor: a speaker per row opens a compact VERTICAL slider that is
+// teleported + fixed-positioned so it can never be clipped. 0% = that track muted.
+const openTrackId = ref<string | null>(null)
+const openVolTrack = computed(() => audioTracks.value.find(t => t.id === openTrackId.value) ?? null)
+const volPopPos = ref<{ top: number; left: number } | null>(null)
+function toggleTrackVol(t: AudioTrack, e: MouseEvent) {
+  if (openTrackId.value === t.id) { openTrackId.value = null; volPopPos.value = null; return }
+  openTrackId.value = t.id
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const PW = 34, PH = 122, GAP = 6, M = 8
+  let left = r.right - PW
+  let top = r.bottom + GAP
+  if (top + PH > window.innerHeight - M) top = r.top - PH - GAP
+  top = Math.max(M, Math.min(top, window.innerHeight - PH - M))
+  left = Math.max(M, Math.min(left, window.innerWidth - PW - M))
+  volPopPos.value = { top, left }
+}
+function setOpenTrackVol(v: number) {
+  const t = openVolTrack.value
+  if (t) { t.volume = v; if (v > 0) t.muted = false }
+}
+function onVolDocClick(e: MouseEvent) {
+  if (!(e.target as HTMLElement).closest('.vol-zone')) { openTrackId.value = null; volPopPos.value = null }
+}
+onMounted(() => document.addEventListener('mousedown', onVolDocClick))
+onBeforeUnmount(() => document.removeEventListener('mousedown', onVolDocClick))
 const editTitle = ref(clipDisplayTitle(props.clip.custom_name || '', props.clip.game || '', props.clip.filename))
 const titleDirty = ref(false)
 const trimStart = ref(0)
@@ -213,9 +238,27 @@ async function doExport(targetMb: number) {
     if (e.payload.stage) exportStage.value = e.payload.stage
   })
   try {
-    const out = targetMb <= 0
-      ? await invoke<string>('trim_clip', { inputPath: props.clip.filepath, startSec: trimStart.value, endSec: trimEnd.value, outputPath: '', codec: 'libx264' })
-      : await invoke<string>('export_clip_sized', { inputPath: props.clip.filepath, startSec: trimStart.value, endSec: trimEnd.value, targetMb, outputPath: '', codec: 'libx264', audioStartSec: null, audioEndSec: null })
+    // Per-track gain is authoritative for the exported mix: a 0%/muted track must be
+    // fully silent in the file (backend drops it from amix → anullsrc), others untouched.
+    const at = audioTracks.value.map(tk => ({
+      stream_index: tk.streamIndex,
+      volume: tk.volume / 100,
+      muted: tk.muted || tk.volume <= 0,
+    }))
+    const hasFilters = at.some(tk => tk.muted || tk.volume < 1)
+    let out: string
+    if (hasFilters) {
+      // Route through the filter export so per-track volume/mute lands in the render.
+      out = await invoke<string>('export_clip_with_filters', {
+        inputPath: props.clip.filepath, startSec: trimStart.value, endSec: trimEnd.value,
+        audioTracks: at, overlays: [], targetMb: targetMb <= 0 ? 0 : targetMb,
+        outputPath: '', codec: 'libx264', audioStartSec: null, audioEndSec: null,
+      })
+    } else {
+      out = targetMb <= 0
+        ? await invoke<string>('trim_clip', { inputPath: props.clip.filepath, startSec: trimStart.value, endSec: trimEnd.value, outputPath: '', codec: 'libx264' })
+        : await invoke<string>('export_clip_sized', { inputPath: props.clip.filepath, startSec: trimStart.value, endSec: trimEnd.value, targetMb, outputPath: '', codec: 'libx264', audioStartSec: null, audioEndSec: null })
+    }
     exportResult.value = out
     emit('saved', out)
   } catch (e: any) { emit('toast', t('clips.toast.exportFailed', { error: String(e) })) }
@@ -308,19 +351,13 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
 
         <!-- Multi-track audio controls (trim mode only) -->
         <div v-if="audioTracks.length > 1" class="audio-tracks">
-          <div v-for="t in audioTracks" :key="t.id" class="audio-track">
-            <button class="track-mute" :class="{ muted: t.muted }" @click="toggleTrackMute(t)" :title="t.muted ? 'Unmute' : 'Mute'">
-              <svg v-if="!t.muted" viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 010 7.07" stroke="currentColor" fill="none" stroke-width="2"/></svg>
-              <svg v-else viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2"/><line x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2"/></svg>
+          <div v-for="t in audioTracks" :key="t.id" class="audio-track vol-zone">
+            <button class="track-spk" :class="{ off: t.muted || t.volume <= 0, active: openTrackId === t.id }" @click.stop="toggleTrackVol(t, $event)" :title="t.label">
+              <svg v-if="t.muted || t.volume <= 0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:14px;height:14px"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:14px;height:14px"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg>
             </button>
             <span class="track-label">{{ t.label }}</span>
-            <VolumeSlider
-              :model-value="t.volume"
-              color="var(--accent)"
-              :min="0"
-              :max="100"
-              @update:model-value="v => setTrackVolume(t, v)"
-            />
+            <span class="track-vol-num" :class="{ muted: t.muted || t.volume <= 0 }">{{ t.muted ? 0 : t.volume }}%</span>
           </div>
         </div>
         <div class="transport">
@@ -372,6 +409,27 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
       </div>
     </div>
   </div>
+
+  <!-- Per-track volume popover — shared instance, teleported + fixed so it's never clipped. -->
+  <Teleport to="body">
+    <div
+      v-if="openVolTrack && volPopPos"
+      class="vol-popover-fixed vol-zone"
+      :style="{ top: volPopPos.top + 'px', left: volPopPos.left + 'px' }"
+      @click.stop
+      @mousedown.stop
+    >
+      <VolumeSlider
+        vertical
+        :length="84"
+        :model-value="openVolTrack.volume"
+        color="var(--accent)"
+        :min="0"
+        :max="100"
+        @update:model-value="setOpenTrackVol"
+      />
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -461,4 +519,18 @@ function fmt(s: number) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 
 .track-mute:hover { background:var(--bg-hover); }
 .track-mute.muted { color:#E94560; }
 .track-label { font-size:12px; color:var(--text-sec); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:120px; }
+/* Per-track speaker → opens vertical volume popover (0% = muted) */
+.track-spk { width:28px; height:28px; border:none; background:transparent; color:var(--accent); cursor:pointer; border-radius:6px; display:flex; align-items:center; justify-content:center; flex-shrink:0; opacity:.85; }
+.track-spk:hover { background:var(--bg-hover); opacity:1; }
+.track-spk.off { color:#E94560; }
+.track-spk.active { background:var(--bg-hover); opacity:1; }
+.track-vol-num { margin-left:auto; font-size:11px; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; flex-shrink:0; }
+.track-vol-num.muted { color:#E94560; }
+/* Per-track volume popover — fixed + JS-positioned so overflow can't clip it. */
+.vol-popover-fixed {
+  position: fixed;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 8px 26px; box-shadow: 0 6px 18px rgba(0,0,0,.5);
+  z-index: 10000; display: flex; align-items: center; justify-content: center;
+}
 </style>
