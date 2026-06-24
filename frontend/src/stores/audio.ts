@@ -147,27 +147,32 @@ export const useAudioStore = defineStore('audio', () => {
       // Re-apply saved routing rules to streams whose actual PipeWire channel doesn't
       // match the saved rule — happens after reboot, wake-from-sleep, or daemon restart.
       // Uses `fetched` (raw backend state) not `allApps.value` (already rule-overridden).
-      // Cooldown guard prevents infinite loop when routing appears to fail (pw-metadata
-      // reports success but stream move is not actually applied by PipeWire).
+      // ★ Dedupe by STABLE binary/name key (see autoRoutedKeys) so a flood of short-lived
+      // streams from one app does NOT re-trigger routing for every fresh stream id.
       for (const fetchedApp of fetched) {
         const key = fetchedApp.binary || fetchedApp.name
-        const rule = key ? rules[key] : undefined
+        if (!key) continue   // anonymous/transient stream — never auto-route
+        const rule = rules[key]
         if (!rule || rule === 'default' || rule === 'Master') continue
-        if ((fetchedApp.channel || '') !== rule && !isRoutingCooldown(Number(fetchedApp.id))) {
-          routeApp(Number(fetchedApp.id), rule, fetchedApp.binary).catch(() => {})
-        }
+        if ((fetchedApp.channel || '') === rule) continue   // already where it belongs
+        if (autoRouteRecently(key)) continue                // handled this app recently
+        autoRoutedKeys.set(key, Date.now())
+        console.debug(`[opengg] auto-route(rule): '${key}' (id ${fetchedApp.id}) → ${rule}`)
+        routeApp(Number(fetchedApp.id), rule, fetchedApp.binary).catch(() => {})
       }
 
       // Smart auto-routing: for apps with no saved rule and no current channel,
-      // use the backend's classification suggestion. Only fires on first appearance
-      // (once routed, the rule is saved and this branch is never reached again).
+      // use the backend's classification suggestion. Keyed by binary/name so each app
+      // is auto-routed at most once per cooldown window, regardless of stream churn.
       for (const app of allApps.value) {
         if (app.channel || !app.auto_channel) continue
         const key = app.binary || app.name
-        const rule = key ? rules[key] : undefined
+        if (!key) continue   // anonymous/transient stream — never auto-route
+        const rule = rules[key]
         if (rule && rule !== 'default') continue
-        // ★ FIX: apply cooldown guard to auto-routing branch too
-        if (isRoutingCooldown(app.id)) continue
+        if (autoRouteRecently(key)) continue
+        autoRoutedKeys.set(key, Date.now())
+        console.debug(`[opengg] auto-route(smart): '${key}' (id ${app.id}) → ${app.auto_channel}`)
         routeApp(app.id, app.auto_channel, app.binary).catch(() => {})
       }
     } catch (e) { console.error('[opengg] fetchApps:', e) }
@@ -224,6 +229,19 @@ export const useAudioStore = defineStore('audio', () => {
     return false
   }
   function setRoutingDone(appId: number) { pendingRoutes.set(appId, Date.now()) }
+
+  // ★ Runaway-loop fix: auto-routing must dedupe by STABLE app identity (binary/name),
+  // NOT the per-stream id. PipeWire object.serial increases for every new stream, so a
+  // game firing many short-lived audio streams produced a fresh id each poll → every
+  // id-keyed guard was bypassed and we re-routed hundreds of phantom streams to Game.
+  // Keying by binary means an app is auto-routed once, then ignored for the cooldown
+  // window no matter how many transient streams it spawns.
+  const AUTO_ROUTE_COOLDOWN_MS = 15000
+  const autoRoutedKeys = new Map<string, number>()
+  function autoRouteRecently(key: string): boolean {
+    const t = autoRoutedKeys.get(key)
+    return !!t && Date.now() - t < AUTO_ROUTE_COOLDOWN_MS
+  }
 
   async function routeApp(appId: number, channel: string, binary?: string) {
     if (isRoutingCooldown(appId)) return

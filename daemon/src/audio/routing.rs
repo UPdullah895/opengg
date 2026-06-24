@@ -250,11 +250,21 @@ pub fn route_stream(stream_id: u32, channel: &str) -> Result<()> {
     };
 
     // ★ Single id space: translate node.id → pactl sink-input index before moving.
-    let si_index = resolve_sink_input_index(stream_id).ok_or_else(|| {
-        anyhow::anyhow!(
-            "stream {stream_id} is not a movable sink-input (no pactl index nor node.id match) → {target}"
-        )
-    })?;
+    // A miss here almost always means the stream was short-lived and already closed
+    // before we could move it (e.g. a game's per-sound-effect streams). That is an
+    // EXPECTED, benign condition — log it at debug, not as an error, so it can never
+    // turn into the runaway error spam we saw. The caller treats this as a soft skip.
+    let si_index = match resolve_sink_input_index(stream_id) {
+        Some(idx) => idx,
+        None => {
+            tracing::debug!(
+                "RouteApp: stream {stream_id} vanished before routing (→ {target}); skipping"
+            );
+            anyhow::bail!(
+                "stream {stream_id} is not a movable sink-input (no pactl index nor node.id match) → {target}"
+            );
+        }
+    };
 
     // ★ check exit code — pactl returns non-zero on failure (wrong index, sink not
     // found, etc.) but .output() only errors if the binary isn't found.

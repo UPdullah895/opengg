@@ -231,12 +231,15 @@ impl Router {
     async fn try_dbus(&self) -> Result<(), String> {
         match call_dbus_void("RouteApp", AU_PATH, AU_IFACE, (self.app_id, self.channel.as_str())).await {
             Ok(()) => {
-                eprintln!("route_app[{}→{}]: D-Bus call succeeded, emitting refresh", self.app_id, self.channel);
+                log::info!("route_app[{}→{}]: D-Bus call succeeded, emitting refresh", self.app_id, self.channel);
                 let _ = self.app.emit("audio-mixer-refresh", ());
                 Ok(())
             }
             Err(e) => {
-                eprintln!("route_app[{}→{}]: D-Bus route failed ({e}), falling back to pactl", self.app_id, self.channel);
+                // Debug, not error: the per-app circuit breaker / cooldown above limits how
+                // often we get here, and a failure usually just means a short-lived stream
+                // already closed. The pactl fallback below is the real attempt.
+                log::debug!("route_app[{}→{}]: D-Bus route failed ({e}), falling back to pactl", self.app_id, self.channel);
                 Err(e)
             }
         }
@@ -276,6 +279,20 @@ pub async fn route_app(
     channel: String,
     binary: String,
 ) -> Result<(), String> {
+    // Stable routing key: the app's binary (lowercased) when known, else the volatile
+    // stream id. Keying every guard by this — NOT the per-stream PipeWire object.serial —
+    // is what stops the runaway flood: hundreds of short-lived streams from one app now
+    // share a single key, so the cooldown + circuit breaker actually engage instead of
+    // seeing a "fresh" id every time and waving each one through.
+    let key = if binary.trim().is_empty() {
+        app_id.to_string()
+    } else {
+        binary.to_lowercase()
+    };
+
+    // Identity log: what we're about to route and why it resolved to this key/channel.
+    log::debug!("route_app: id={app_id} binary='{binary}' → channel='{channel}' key='{key}'");
+
     // ── Guard 1: Blacklist ──
     if state.is_blacklisted(&binary) {
         return Err(format!(
@@ -285,28 +302,30 @@ pub async fn route_app(
     }
 
     // ── Guard 2: Already routed to same channel ──
-    if state.is_already_routed(app_id, &channel) {
+    if state.is_already_routed(&key, &channel) {
         return Ok(());
     }
 
     // ── Guard 3: Cooldown (even on failure, don't retry) ──
-    if state.is_on_cooldown(app_id) {
+    if state.is_on_cooldown(&key) {
+        log::debug!("route_app: '{key}' on cooldown ({}s) — skipping", crate::ROUTE_COOLDOWN_SECS);
         return Err(format!(
-            "route_app: PID {} is on cooldown ({}s)",
-            app_id, crate::ROUTE_COOLDOWN_SECS
+            "route_app: {} is on cooldown ({}s)",
+            key, crate::ROUTE_COOLDOWN_SECS
         ));
     }
 
-    // ── Guard 4: Circuit breaker (too many recent failures) ──
-    if state.is_circuit_open(app_id) {
+    // ── Guard 4: Circuit breaker (too many recent failures for this app) ──
+    if state.is_circuit_open(&key) {
+        log::debug!("route_app: '{key}' circuit breaker open — skipping");
         return Err(format!(
-            "route_app: PID {} circuit breaker open (too many failures)",
-            app_id
+            "route_app: {} circuit breaker open (too many failures)",
+            key
         ));
     }
 
     // Record attempt BEFORE execution to prevent concurrent duplicate calls
-    state.record_attempt(app_id);
+    state.record_attempt(&key);
 
     // ── Single execution block: exit on first success ──
     let result = Router {
@@ -319,18 +338,24 @@ pub async fn route_app(
 
     match result {
         Ok(()) => {
-            state.record_success(app_id, channel);
+            state.record_success(&key, channel);
             Ok(())
         }
         Err(ref e) => {
-            let circuit_open = state.record_failure(app_id);
+            let circuit_open = state.record_failure(&key);
             if circuit_open {
-                eprintln!(
-                    "route_app: PID {} circuit breaker OPEN after {} failures in {}s",
-                    app_id,
+                // First time the breaker trips for this app: warn once. Subsequent
+                // attempts short-circuit at Guard 4 (debug), so no error spam.
+                log::warn!(
+                    "route_app: '{key}' circuit breaker OPEN after {} failures in {}s — \
+                     suppressing further attempts for {}s (likely transient/short-lived streams)",
                     crate::FAIL_THRESHOLD,
-                    crate::FAIL_WINDOW_SECS
+                    crate::FAIL_WINDOW_SECS,
+                    crate::FAIL_COOLDOWN_SECS,
                 );
+            } else {
+                // Expected for vanished short-lived streams — debug, not error spam.
+                log::debug!("route_app: id={app_id} ('{key}') → {channel} failed: {e}");
             }
             Err(e.clone())
         }

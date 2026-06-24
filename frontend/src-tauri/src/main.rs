@@ -835,12 +835,16 @@ const FAIL_COOLDOWN_SECS: u64 = 30;
 /// the infinite re-routing loop that spawns pactl/pw-metadata thousands
 /// of times per second and eventually OOM-kills the system.
 pub struct RouteState {
-    /// PID → last routing attempt time. Prevents retry during cooldown.
-    pub cooldown: Mutex<HashMap<u32, SystemTime>>,
-    /// PID → (channel, success_time). Tracks successfully routed PIDs.
-    pub routed: Mutex<HashMap<u32, (String, SystemTime)>>,
-    /// PID → (fail_count, first_fail_time). Circuit breaker for repeated failures.
-    pub fail_counts: Mutex<HashMap<u32, (u32, SystemTime)>>,
+    /// routing-key → last routing attempt time. Prevents retry during cooldown.
+    /// KEY = stable app identity (binary, lowercased) when known, else the stream id.
+    /// Keying by binary (not the volatile PipeWire object.serial / sink-input index)
+    /// is what makes these guards actually work: a flood of short-lived streams from
+    /// one app shares ONE key, so the cooldown + circuit breaker can finally engage.
+    pub cooldown: Mutex<HashMap<String, SystemTime>>,
+    /// routing-key → (channel, success_time). Tracks successfully routed apps.
+    pub routed: Mutex<HashMap<String, (String, SystemTime)>>,
+    /// routing-key → (fail_count, first_fail_time). Circuit breaker for repeated failures.
+    pub fail_counts: Mutex<HashMap<String, (u32, SystemTime)>>,
     /// Binary names that must never be routed.
     pub blacklist: HashSet<&'static str>,
 }
@@ -869,41 +873,42 @@ impl RouteState {
         self.blacklist.contains(binary.to_lowercase().as_str())
     }
 
-    pub fn is_on_cooldown(&self, pid: u32) -> bool {
+    pub fn is_on_cooldown(&self, key: &str) -> bool {
         let map = self.cooldown.lock().unwrap();
-        map.get(&pid).is_some_and(|t| {
+        map.get(key).is_some_and(|t| {
             SystemTime::now().duration_since(*t).unwrap_or(Duration::MAX)
                 < Duration::from_secs(ROUTE_COOLDOWN_SECS)
         })
     }
 
-    pub fn record_attempt(&self, pid: u32) {
-        self.cooldown.lock().unwrap().insert(pid, SystemTime::now());
+    pub fn record_attempt(&self, key: &str) {
+        self.cooldown.lock().unwrap().insert(key.to_string(), SystemTime::now());
     }
 
-    pub fn record_success(&self, pid: u32, channel: String) {
-        self.routed.lock().unwrap().insert(pid, (channel, SystemTime::now()));
+    pub fn record_success(&self, key: &str, channel: String) {
+        self.routed.lock().unwrap().insert(key.to_string(), (channel, SystemTime::now()));
         // Clear failure count on success
-        self.fail_counts.lock().unwrap().remove(&pid);
+        self.fail_counts.lock().unwrap().remove(key);
     }
 
-    pub fn is_already_routed(&self, pid: u32, channel: &str) -> bool {
+    pub fn is_already_routed(&self, key: &str, channel: &str) -> bool {
         let map = self.routed.lock().unwrap();
-        map.get(&pid).is_some_and(|(ch, _)| ch == channel)
+        map.get(key).is_some_and(|(ch, _)| ch == channel)
     }
 
-    pub fn clear_pid(&self, pid: u32) {
-        self.cooldown.lock().unwrap().remove(&pid);
-        self.routed.lock().unwrap().remove(&pid);
-        self.fail_counts.lock().unwrap().remove(&pid);
+    #[allow(dead_code)]
+    pub fn clear_key(&self, key: &str) {
+        self.cooldown.lock().unwrap().remove(key);
+        self.routed.lock().unwrap().remove(key);
+        self.fail_counts.lock().unwrap().remove(key);
     }
 
     /// Records a failure and returns `true` if the circuit breaker is now
-    /// open (PID should be blocked from further attempts).
-    pub fn record_failure(&self, pid: u32) -> bool {
+    /// open (this app should be blocked from further attempts).
+    pub fn record_failure(&self, key: &str) -> bool {
         let mut map = self.fail_counts.lock().unwrap();
         let now = SystemTime::now();
-        let entry = map.entry(pid).or_insert((0, now));
+        let entry = map.entry(key.to_string()).or_insert((0, now));
         if now.duration_since(entry.1).unwrap_or(Duration::MAX)
             > Duration::from_secs(FAIL_WINDOW_SECS)
         {
@@ -914,7 +919,7 @@ impl RouteState {
         if entry.0 >= FAIL_THRESHOLD {
             // Also put on extended cooldown
             self.cooldown.lock().unwrap().insert(
-                pid,
+                key.to_string(),
                 now + Duration::from_secs(FAIL_COOLDOWN_SECS),
             );
             true
@@ -923,10 +928,10 @@ impl RouteState {
         }
     }
 
-    pub fn is_circuit_open(&self, pid: u32) -> bool {
+    pub fn is_circuit_open(&self, key: &str) -> bool {
         let map = self.fail_counts.lock().unwrap();
         let now = SystemTime::now();
-        map.get(&pid).is_some_and(|(count, first)| {
+        map.get(key).is_some_and(|(count, first)| {
             *count >= FAIL_THRESHOLD
                 && now.duration_since(*first).unwrap_or(Duration::MAX)
                     <= Duration::from_secs(FAIL_COOLDOWN_SECS)
