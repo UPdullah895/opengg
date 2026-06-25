@@ -1,9 +1,12 @@
 [Desktop Entry]
 Name=OpenGG
-Comment=Open-source Linux gaming hub
+GenericName=Gaming Hub
+Comment=Unified audio mixer, device/RGB manager, and instant replay for Linux gaming
 Exec=opengg
 Icon=opengg
 Terminal=false
 Type=Application
-Categories=Game;Utility;
-Keywords=gaming;audio;clips;recorder;mixer;controller;linux;
+Categories=Game;AudioVideo;Settings;
+Keywords=gaming;audio;mixer;replay;rgb;equalizer;pipewire;sonar;moments;
+StartupNotify=true
+StartupWMClass=opengg

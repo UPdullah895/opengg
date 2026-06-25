@@ -1,6 +1,24 @@
-# OpenGG
+<p align="center">
+  <img src="frontend/src-tauri/icons/128x128.png" alt="OpenGG" width="120" />
+</p>
 
 **v0.1.5** · Open-source Linux gaming hub — unified audio mixer, device/RGB manager, and instant replay. A modular alternative to SteelSeries GG (Sonar + Engine + Moments).
+
+---
+
+## Installation
+
+### Arch Linux / CachyOS (recommended)
+
+```bash
+yay -S opengg-bin
+```
+
+The `opengg-bin` AUR package installs the pre-built binary and sets up all required udev rules, D-Bus policy, and systemd units automatically.
+
+### Build from source
+
+See [Quick Start](#quick-start) below.
 
 ## Modules
 

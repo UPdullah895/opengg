@@ -1,4 +1,9 @@
 [advisories]
+# Vulnerabilities and unsound advisories are always errors — no lint-level
+# field exists for them in modern cargo-deny. We surface unmaintained crates
+# and only warn on yanked so first adoption doesn't red-fail on a transitive.
+unmaintained = "workspace"
+yanked = "warn"
 ignore = [
     # -----------------------------------------------------------------------
     # All entries below are GTK3 / Tauri v2.x transitive dependencies.
