@@ -19,6 +19,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 procfs = "0.16"
 anyhow = "1"
-dirs = "5"
+dirs = "6"
 libc = "0.2"
 async-trait = "0.1"
