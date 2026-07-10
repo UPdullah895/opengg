@@ -31,11 +31,21 @@ sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$ROOT/fronten
 # ── Extension template ──
 sed -i "s/\"version\":\s*\"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$ROOT/extension-template/manifest.json"
 
-# ── Locale files (About page version string) ──
-# Note: changelog entries are historical and NOT bumped
-sed -i "s/\"version\": \"v[^\"]*\"/\"version\": \"v$NEW_VERSION\"/" "$ROOT/frontend/src/locales/en.json"
-# Arabic locale: "الإصدار X.X.X" — replace the version number at the end
-sed -i "s/\"version\": \"الإصدار [0-9]\+\.[0-9]\+\.[0-9]\+\"/\"version\": \"الإصدار $NEW_VERSION\"/" "$ROOT/frontend/src/locales/ar.json"
+# Note: the app's own version is read at runtime via Tauri's getVersion()
+# (see frontend/src/composables/useAppVersion.ts) — there is no static
+# "About page version" string in the locale files to bump. Changelog
+# entries are historical and NOT bumped either. Don't add a blind
+# "version": "v..." sed here — settings.store.browse.version in both
+# locales is an unrelated per-extension display template ("v{version}")
+# and a prior version of this script clobbered it by mistake.
+
+# ── AUR packaging ──
+sed -i "s/^pkgver=.*/pkgver=$NEW_VERSION/" "$ROOT/packaging/aur/PKGBUILD"
+if command -v makepkg >/dev/null 2>&1; then
+  (cd "$ROOT/packaging/aur" && makepkg --printsrcinfo > .SRCINFO)
+else
+  echo "⚠ makepkg not found — packaging/aur/.SRCINFO NOT regenerated, do it manually before releasing."
+fi
 
 # ── package-lock.json ──
 cd "$ROOT/frontend"
@@ -45,3 +55,6 @@ echo "✓ Version bumped to $NEW_VERSION"
 echo ""
 echo "Files modified:"
 git -C "$ROOT" diff --name-only 2>/dev/null || true
+
+# ── Local AUR clone (opt-in, only if it exists on this machine) ──
+"$SCRIPT_DIR/sync-aur.sh" || true
