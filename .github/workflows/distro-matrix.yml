@@ -49,21 +49,15 @@ jobs:
       - name: Install Rust via rustup
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          source "$HOME/.cargo/env"
-          rustc --version
-          cargo --version
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Verify Rust is in PATH
         run: |
-          source "$HOME/.cargo/env"
-          which cargo
+          rustc --version
+          cargo --version
 
       - name: Cargo check daemon
-        run: |
-          source "$HOME/.cargo/env"
-          cd daemon && cargo check
+        run: cd daemon && cargo check
 
       - name: Cargo check Tauri backend
-        run: |
-          source "$HOME/.cargo/env"
-          cd frontend/src-tauri && cargo check
+        run: cd frontend/src-tauri && cargo check
