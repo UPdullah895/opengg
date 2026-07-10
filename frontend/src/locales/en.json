@@ -428,7 +428,7 @@
         "installNote": "Install from registry coming soon — see docs/EXTENSION_DEV.md for manual install",
         "viewRepository": "View Repository",
         "author": "By {author}",
-        "version": "v0.1.3",
+        "version": "v{version}",
         "noDaemon": "UI only",
         "hasDaemon": "Includes daemon",
         "noPermissions": "Standard access",
