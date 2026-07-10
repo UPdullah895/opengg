@@ -1,0 +1,35 @@
+[advisories]
+# Mirrors the rationale in deny.toml's [advisories.ignore]. cargo-audit and
+# cargo-deny are separate tools with separate config formats, so both need
+# the same ignores kept in sync.
+ignore = [
+    # quick-xml 0.39 — wayland-scanner (proc-macro) → wayland-client → ashpd →
+    # rfd → tauri-plugin-dialog. wayland-scanner only parses vendored, trusted
+    # Wayland protocol XML at build time (codegen, not shipped in the
+    # binary), so the DoS/quadratic-parse issues aren't reachable with
+    # attacker-controlled input. No fix available: wayland-scanner's latest
+    # release (0.31.10) still pins quick-xml ^0.39.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+
+    # GTK3 / Tauri v2.x transitive dependencies, unreachable from OpenGG's
+    # own code, no upstream fix — tracked at https://github.com/tauri-apps/tauri.
+    "RUSTSEC-2024-0411", # gdkwayland-sys
+    "RUSTSEC-2024-0412", # gdk
+    "RUSTSEC-2024-0413", # atk
+    "RUSTSEC-2024-0414", # gdkx11-sys
+    "RUSTSEC-2024-0415", # gtk
+    "RUSTSEC-2024-0416", # atk-sys
+    "RUSTSEC-2024-0417", # gdkx11
+    "RUSTSEC-2024-0418", # gdk-sys
+    "RUSTSEC-2024-0419", # gtk3-macros
+    "RUSTSEC-2024-0420", # gtk-sys
+    "RUSTSEC-2024-0370", # proc-macro-error, unmaintained — tauri → gtk
+
+    # rust-unic family (archived project, no fix) — tauri-utils → urlpattern → tauri v2.x
+    "RUSTSEC-2025-0075", # unic-char-range
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
+]
