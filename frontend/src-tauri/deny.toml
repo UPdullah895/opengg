@@ -39,6 +39,16 @@ ignore = [
     { id = "RUSTSEC-2025-0100" },  # unic-ucd-ident
     # proc-macro-error (unmaintained) — tauri → gtk transitive
     { id = "RUSTSEC-2024-0370" },
+
+    # quick-xml 0.39 — wayland-scanner (proc-macro) → wayland-client → ashpd →
+    # rfd → tauri-plugin-dialog. wayland-scanner only parses the vendored,
+    # trusted Wayland protocol XML bundled in wayland-protocols at build time
+    # (codegen, not shipped in the binary), so the DoS/quadratic-parse issues
+    # aren't reachable with attacker-controlled input. No fix available:
+    # wayland-scanner's latest release (0.31.10) still pins quick-xml ^0.39.
+    # Re-check when wayland-scanner bumps past that.
+    { id = "RUSTSEC-2026-0194" },
+    { id = "RUSTSEC-2026-0195" },
 ]
 
 [bans]
