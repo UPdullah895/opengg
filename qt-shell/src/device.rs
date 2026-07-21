@@ -2,8 +2,8 @@
 //! daemon (`org.opengg.Daemon.Device`). Read-only for now (does not write to the
 //! user's real hardware); setters land with the full Devices UI in a later phase.
 //!
-//! Boundary note: thin D-Bus client only; moves to opengg-core with the other
-//! daemon clients during the core-extraction task (TODO(core), plan §2.2/§2.3).
+//! The daemon D-Bus client lives in `opengg_core::device` (plan §2.2/§2.3); this
+//! controller is pure presentation glue over `opengg_core::device::get_devices()`.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -29,41 +29,20 @@ pub mod qobject {
 use core::pin::Pin;
 use cxx_qt_lib::QString;
 
-const DEST: &str = "org.opengg.Daemon";
-const PATH: &str = "/org/opengg/Daemon/Device";
-const IFACE: &str = "org.opengg.Daemon.Device";
-
+#[derive(Default)]
 pub struct DeviceControllerRust {
     devices_json: QString,
     connected: bool,
-    conn: Option<zbus::blocking::Connection>,
-}
-
-impl Default for DeviceControllerRust {
-    fn default() -> Self {
-        Self {
-            devices_json: QString::default(),
-            connected: false,
-            conn: zbus::blocking::Connection::session().ok(),
-        }
-    }
 }
 
 impl qobject::DeviceController {
     pub fn refresh(mut self: Pin<&mut Self>) {
-        let json = self.conn.as_ref().and_then(|c| fetch_devices(c).ok());
-        match json {
-            Some(j) => {
+        match opengg_core::device::get_devices() {
+            Ok(j) => {
                 self.as_mut().set_devices_json(QString::from(&j));
                 self.as_mut().set_connected(true);
             }
-            None => self.as_mut().set_connected(false),
+            Err(_) => self.as_mut().set_connected(false),
         }
     }
-}
-
-fn fetch_devices(c: &zbus::blocking::Connection) -> zbus::Result<String> {
-    let reply = c.call_method(Some(DEST), PATH, Some(IFACE), "GetDevices", &())?;
-    let json: String = reply.body().deserialize()?;
-    Ok(json)
 }
