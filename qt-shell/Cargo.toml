@@ -1,0 +1,17 @@
+[package]
+name = "opengg-qt"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "opengg-qt"
+path = "src/main.rs"
+
+[dependencies]
+cxx = "1"
+cxx-qt = "0.9"
+cxx-qt-lib = { version = "0.9", features = ["full"] }
+
+[build-dependencies]
+cxx-qt-build = "0.9"
