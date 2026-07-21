@@ -14,6 +14,9 @@ cxx-qt = "0.9"
 cxx-qt-lib = { version = "0.9", features = ["full"] }
 # preserve_order keeps the shared ui-settings.json key order stable on rewrite.
 serde_json = { version = "1", features = ["preserve_order"] }
+# TODO(core): the daemon D-Bus client belongs in opengg-core (plan §2.2/§2.3);
+# it lives here temporarily until the core-extraction task, marked for relocation.
+zbus = "4"
 
 [build-dependencies]
 cxx-qt-build = "0.9"

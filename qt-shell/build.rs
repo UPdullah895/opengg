@@ -19,6 +19,6 @@ fn main() {
 
     CxxQtBuilder::new_qml_module(QmlModule::new("com.opengg.app").qml_files(qml_files))
         // Rust cxx-qt QObjects (registered into the com.opengg.app module).
-        .files(["src/i18n.rs"])
+        .files(["src/i18n.rs", "src/audio.rs"])
         .build();
 }
