@@ -45,9 +45,8 @@ use opengg_core::clips::{
 
 // Re-export D-Bus path/iface consts from core so audio.rs and other local
 // commands can access them via `use super::{AU_PATH, AU_IFACE, ...}`.
-pub(crate) use opengg_core::daemon::{
-    AU_PATH, AU_IFACE, RP_PATH, RP_IFACE, EX_PATH, EX_IFACE,
-};
+// (RP_* moved with the replay commands into opengg_core::recording.)
+pub(crate) use opengg_core::daemon::{AU_PATH, AU_IFACE, EX_PATH, EX_IFACE};
 
 mod audio;
 pub use audio::*;
@@ -762,15 +761,21 @@ pub fn get_recorder_status(app: AppHandle) -> String {
 }
 #[command]
 pub async fn start_replay(duration: u32) -> Result<(), String> {
-    call_dbus_void("StartReplay", RP_PATH, RP_IFACE, (duration,)).await
+    tokio::task::spawn_blocking(move || opengg_core::recording::start_replay(duration))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
 }
 #[command]
 pub async fn stop_recorder() -> Result<(), String> {
-    call_dbus_void("Stop", RP_PATH, RP_IFACE, ()).await
+    tokio::task::spawn_blocking(opengg_core::recording::stop_recorder)
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
 }
 #[command]
 pub async fn save_replay() -> Result<(), String> {
-    call_dbus_void("SaveReplay", RP_PATH, RP_IFACE, ()).await
+    tokio::task::spawn_blocking(opengg_core::recording::save_replay)
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
 }
 
 // ═══ SQLite ═══

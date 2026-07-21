@@ -15,6 +15,7 @@ pub mod daemon;
 pub mod device;
 pub mod media;
 pub mod paths;
+pub mod recording;
 pub mod settings;
 pub mod steam;
 pub mod storage;
