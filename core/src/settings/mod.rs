@@ -7,10 +7,137 @@
 //! `ui-settings.json` shape shared across both UIs.
 
 use serde_json::{json, Value};
+use std::path::PathBuf;
 
 /// Current settings schema version. Migrations run sequentially up to this.
 /// Keep in lockstep with `CURRENT_SCHEMA_VERSION` in `persistence.ts`.
 pub const CURRENT_SCHEMA_VERSION: i64 = 12;
+
+// ── On-disk settings IO (moved verbatim from src-tauri/commands.rs) ──
+//
+// Canonical paths + read/write for theme.json, ui-settings.json, and the
+// user-droppable locales directory. These are shared verbatim by the Tauri
+// host and the Qt shell; each stack keeps only a thin wrapper.
+
+/// `$XDG_CONFIG_HOME` (or `~/.config`) root.
+fn config_root() -> PathBuf {
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from("~/.config"))
+}
+
+/// `~/.config/opengg/theme.json`.
+pub fn theme_path() -> PathBuf {
+    config_root().join("opengg/theme.json")
+}
+
+/// `~/.config/opengg/ui-settings.json`.
+pub fn settings_path() -> PathBuf {
+    config_root().join("opengg/ui-settings.json")
+}
+
+/// `~/.config/opengg/locales/` — user-droppable runtime locale catalogs.
+pub fn locales_dir() -> PathBuf {
+    config_root().join("opengg/locales")
+}
+
+/// Fallback theme served when no `theme.json` exists yet.
+pub const DEFAULT_THEME_JSON: &str =
+    "{\"colors\":{\"--accent\":\"#E94560\"},\"layout\":{\"--clips-grid-cols\":\"4\"}}";
+
+/// Read `theme.json`, or the built-in default when absent.
+pub fn load_theme() -> Result<String, String> {
+    let p = theme_path();
+    if p.exists() {
+        std::fs::read_to_string(&p).map_err(|e| format!("{e}"))
+    } else {
+        Ok(DEFAULT_THEME_JSON.into())
+    }
+}
+
+/// Write `theme.json` (creating the parent directory if needed).
+pub fn save_theme(theme_json: &str) -> Result<(), String> {
+    let p = theme_path();
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).ok();
+    }
+    std::fs::write(&p, theme_json).map_err(|e| format!("{e}"))
+}
+
+/// Write `ui-settings.json` (creating the parent directory if needed).
+pub fn save_ui_settings(settings_json: &str) -> Result<(), String> {
+    let p = settings_path();
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).ok();
+    }
+    std::fs::write(&p, settings_json).map_err(|e| format!("{e}"))
+}
+
+/// Read `ui-settings.json`, or the string `"null"` when absent.
+pub fn load_ui_settings() -> Result<String, String> {
+    let p = settings_path();
+    if p.exists() {
+        std::fs::read_to_string(&p).map_err(|e| format!("{e}"))
+    } else {
+        Ok("null".into())
+    }
+}
+
+/// Ensure `~/.config/opengg/locales/` exists, seed it with the bundled English
+/// template (`en_template`) if `en.json` is missing, open it in the system file
+/// manager, and return the directory path.
+///
+/// The template is passed in rather than `include_str!`'d here so this crate
+/// stays decoupled from any UI's locale assets (plan §2.3): the Tauri wrapper
+/// supplies `frontend/src/locales/en.json`, the Qt wrapper its own catalog.
+pub fn open_locales_folder(en_template: &str) -> Result<String, String> {
+    let dir = locales_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
+
+    let template_path = dir.join("en.json");
+    if !template_path.exists() {
+        std::fs::write(&template_path, en_template)
+            .map_err(|e| format!("write en.json template: {e}"))?;
+    }
+
+    let path_str = dir.to_string_lossy().to_string();
+    open::that(&dir).map_err(|e| format!("open folder: {e}"))?;
+    Ok(path_str)
+}
+
+/// A user-supplied locale catalog: its language `code` (filename stem) and the
+/// raw JSON `json_content` for the frontend to parse and register.
+#[derive(serde::Serialize)]
+pub struct UserLocale {
+    pub code: String,
+    pub json_content: String,
+}
+
+/// Read every `*.json` in `~/.config/opengg/locales/` and return their raw
+/// content keyed by filename stem.
+pub fn list_user_locales() -> Result<Vec<UserLocale>, String> {
+    let dir = locales_dir();
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut locales = Vec::new();
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("read dir: {e}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let code = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(c) if !c.is_empty() => c.to_string(),
+            _ => continue,
+        };
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            locales.push(UserLocale {
+                code,
+                json_content: content,
+            });
+        }
+    }
+    Ok(locales)
+}
 
 /// Deep-merge `b` into `a`, mirroring `deepMerge` in `persistence.ts`.
 ///

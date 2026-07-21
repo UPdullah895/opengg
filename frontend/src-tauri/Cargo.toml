@@ -7,6 +7,9 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Shared Tauri-free business logic (plan §2.1). The commands below are thin
+# wrappers delegating to this crate; the Qt shell shares the same code.
+opengg-core = { path = "../../core" }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }

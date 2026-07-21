@@ -2558,31 +2558,14 @@ fn chrono_now() -> String {
     )
 }
 
-// ═══ Theme ═══
-fn theme_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("opengg/theme.json")
-}
+// ═══ Theme ═══ (logic in opengg_core::settings; these are thin wrappers)
 #[command]
 pub async fn load_theme() -> Result<String, String> {
-    let p = theme_path();
-    if p.exists() {
-        std::fs::read_to_string(&p).map_err(|e| format!("{e}"))
-    } else {
-        Ok(
-            "{\"colors\":{\"--accent\":\"#E94560\"},\"layout\":{\"--clips-grid-cols\":\"4\"}}"
-                .into(),
-        )
-    }
+    opengg_core::settings::load_theme()
 }
 #[command]
 pub async fn save_theme(theme_json: String) -> Result<(), String> {
-    let p = theme_path();
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d).ok();
-    }
-    std::fs::write(&p, &theme_json).map_err(|e| format!("{e}"))
+    opengg_core::settings::save_theme(&theme_json)
 }
 #[command]
 pub async fn get_media_server_port(app: AppHandle) -> Result<u16, String> {
@@ -2602,20 +2585,11 @@ fn settings_path() -> PathBuf {
 }
 #[command]
 pub async fn save_ui_settings(settings_json: String) -> Result<(), String> {
-    let p = settings_path();
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d).ok();
-    }
-    std::fs::write(&p, &settings_json).map_err(|e| format!("{e}"))
+    opengg_core::settings::save_ui_settings(&settings_json)
 }
 #[command]
 pub async fn load_ui_settings() -> Result<String, String> {
-    let p = settings_path();
-    if p.exists() {
-        std::fs::read_to_string(&p).map_err(|e| format!("{e}"))
-    } else {
-        Ok("null".into())
-    }
+    opengg_core::settings::load_ui_settings()
 }
 
 /// Opens the user-facing locales directory in the system file manager.
@@ -2624,23 +2598,11 @@ pub async fn load_ui_settings() -> Result<String, String> {
 /// immediately have a complete base file to duplicate and translate.
 #[command]
 pub async fn open_locales_folder() -> Result<String, String> {
-    let dir = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("opengg/locales");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
-
     // Embed the shipped English locale at compile time — always stays in sync
-    // with the app's built-in translations.
+    // with the app's built-in translations. Passed to core so the crate stays
+    // decoupled from this UI's locale assets (plan §2.3).
     const EN_TEMPLATE: &str = include_str!("../../src/locales/en.json");
-    let template_path = dir.join("en.json");
-    if !template_path.exists() {
-        std::fs::write(&template_path, EN_TEMPLATE)
-            .map_err(|e| format!("write en.json template: {e}"))?;
-    }
-
-    let path_str = dir.to_string_lossy().to_string();
-    open::that(&dir).map_err(|e| format!("open folder: {e}"))?;
-    Ok(path_str)
+    opengg_core::settings::open_locales_folder(EN_TEMPLATE)
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -3056,39 +3018,11 @@ pub async fn fetch_extension_registry(url: Option<String>) -> Result<serde_json:
 /// Reads every `*.json` file in `~/.config/opengg/locales/` and returns their
 /// raw content. The frontend parses each file, extracts `_meta.{name,dir}`,
 /// and registers the locale dynamically via `i18n.global.setLocaleMessage`.
-#[derive(Serialize)]
-pub struct UserLocale {
-    pub code: String,
-    pub json_content: String,
-}
+pub use opengg_core::settings::UserLocale;
 
 #[command]
 pub async fn list_user_locales() -> Result<Vec<UserLocale>, String> {
-    let dir = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("opengg/locales");
-    if !dir.exists() {
-        return Ok(vec![]);
-    }
-    let mut locales = Vec::new();
-    let entries = std::fs::read_dir(&dir).map_err(|e| format!("read dir: {e}"))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        let code = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(c) if !c.is_empty() => c.to_string(),
-            _ => continue,
-        };
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            locales.push(UserLocale {
-                code,
-                json_content: content,
-            });
-        }
-    }
-    Ok(locales)
+    opengg_core::settings::list_user_locales()
 }
 
 #[derive(Serialize)]
