@@ -10,7 +10,7 @@ Rectangle {
         spacing: 12
 
         Text {
-            text: "Mixer"
+            text: (I18n.language, I18n.t("nav.mixer"))
             color: Theme.text
             font.pixelSize: 28
             font.weight: Font.Bold

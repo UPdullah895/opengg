@@ -17,8 +17,9 @@ ApplicationWindow {
     // Current navigation page
     property string currentPage: "home"
 
-    // RTL layout mirroring setup (placeholder for future I18n.rtl binding)
-    LayoutMirroring.enabled: false
+    // RTL layout mirroring driven by the active language (§3.2). childrenInherit
+    // propagates it down the whole tree; L4-exempt subtrees opt back out locally.
+    LayoutMirroring.enabled: I18n.rtl
     LayoutMirroring.childrenInherit: true
 
     ColumnLayout {

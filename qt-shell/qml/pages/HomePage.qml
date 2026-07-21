@@ -10,7 +10,7 @@ Rectangle {
         spacing: 12
 
         Text {
-            text: "Home"
+            text: (I18n.language, I18n.t("nav.home"))
             color: Theme.text
             font.pixelSize: 28
             font.weight: Font.Bold

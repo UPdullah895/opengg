@@ -34,16 +34,41 @@ Rectangle {
     // Drag handler for frameless window movement
     MouseArea {
         anchors.fill: parent
-        anchors.rightMargin: 90  // Exclude buttons area
+        anchors.rightMargin: 140  // Exclude the controls cluster
         onPressed: root.startSystemMove()
     }
 
-    // Right side: minimize and close buttons
+    // Right side: language toggle, minimize and close buttons
     Row {
         anchors.right: parent.right
         anchors.rightMargin: 8
         anchors.verticalCenter: parent.verticalCenter
         spacing: 8
+
+        // Language toggle (interim — to be replaced by Settings → Language, §1.1 S9)
+        Rectangle {
+            width: 40
+            height: 32
+            radius: Theme.radius
+            color: "transparent"
+
+            Text {
+                anchors.centerIn: parent
+                text: (I18n.language, I18n.language.toUpperCase())
+                color: Theme.textDim
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onEntered: parent.color = Qt.rgba(1, 1, 1, 0.05)
+                onExited: parent.color = "transparent"
+                onClicked: I18n.applyLanguage(I18n.language === "ar" ? "en" : "ar")
+            }
+        }
 
         // Minimize button
         Rectangle {

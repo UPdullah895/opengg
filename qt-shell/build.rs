@@ -17,5 +17,8 @@ fn main() {
         QmlFile::from("qml/pages/SettingsPage.qml"),
     ];
 
-    CxxQtBuilder::new_qml_module(QmlModule::new("com.opengg.app").qml_files(qml_files)).build();
+    CxxQtBuilder::new_qml_module(QmlModule::new("com.opengg.app").qml_files(qml_files))
+        // Rust cxx-qt QObjects (registered into the com.opengg.app module).
+        .files(["src/i18n.rs"])
+        .build();
 }

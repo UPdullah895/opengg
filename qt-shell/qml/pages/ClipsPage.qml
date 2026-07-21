@@ -10,7 +10,7 @@ Rectangle {
         spacing: 12
 
         Text {
-            text: "Clips"
+            text: (I18n.language, I18n.t("nav.clips"))
             color: Theme.text
             font.pixelSize: 28
             font.weight: Font.Bold

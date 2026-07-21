@@ -11,31 +11,31 @@ Rectangle {
     signal navigate(string page)
     property string currentPage: "home"
 
-    // Navigation items with SVG stroke icon paths
+    // Navigation items: stable id (used for routing), i18n key, SVG stroke path.
     property var navItems: [
         {
             id: "home",
-            label: qsTr("Home"),
+            tkey: "nav.home",
             d: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"
         },
         {
             id: "mixer",
-            label: qsTr("Mixer"),
+            tkey: "nav.mixer",
             d: "M4 21V14m0-4V3m8 18V12m0-4V3m8 18V16m0-4V3M1 14h6M9 8h6M17 16h6"
         },
         {
             id: "clips",
-            label: qsTr("Clips"),
+            tkey: "nav.clips",
             d: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M3 6h10a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2z"
         },
         {
             id: "devices",
-            label: qsTr("Devices"),
+            tkey: "nav.devices",
             d: "M3 18v-6a9 9 0 0 1 18 0v6M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"
         },
         {
             id: "settings",
-            label: qsTr("Settings"),
+            tkey: "nav.settings",
             d: "M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
         }
     ]
@@ -97,7 +97,9 @@ Rectangle {
                     }
 
                     Text {
-                        text: modelData.label
+                        // Reading I18n.language makes this binding re-evaluate live
+                        // when the language changes (invokables alone aren't tracked).
+                        text: (I18n.language, I18n.t(modelData.tkey))
                         color: navItem.active ? Theme.text : (navItem.hovered ? Theme.accent : Theme.textDim)
                         font.pixelSize: 14
                         font.weight: Font.Medium
