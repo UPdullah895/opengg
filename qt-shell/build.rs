@@ -1,18 +1,21 @@
-use cxx_qt_build::{CxxQtBuilder, QmlModule};
+use cxx_qt_build::{CxxQtBuilder, QmlFile, QmlModule};
 
 fn main() {
-    CxxQtBuilder::new_qml_module(
-        QmlModule::new("com.opengg.app").qml_files([
-            "qml/Main.qml",
-            "qml/Titlebar.qml",
-            "qml/Sidebar.qml",
-            "qml/Theme.qml",
-            "qml/pages/HomePage.qml",
-            "qml/pages/MixerPage.qml",
-            "qml/pages/ClipsPage.qml",
-            "qml/pages/DevicesPage.qml",
-            "qml/pages/SettingsPage.qml",
-        ]),
-    )
-    .build();
+    // Theme.qml uses `pragma Singleton`; it MUST be registered with `.singleton(true)`
+    // so the generated qmldir emits `singleton Theme ...`. Without this the `Theme`
+    // reference (e.g. `Theme.bg`) resolves to undefined at runtime and colors fall
+    // back to Qt defaults (white bg / black text).
+    let qml_files: Vec<QmlFile> = vec![
+        QmlFile::from("qml/Main.qml"),
+        QmlFile::from("qml/Titlebar.qml"),
+        QmlFile::from("qml/Sidebar.qml"),
+        QmlFile::from("qml/Theme.qml").singleton(true),
+        QmlFile::from("qml/pages/HomePage.qml"),
+        QmlFile::from("qml/pages/MixerPage.qml"),
+        QmlFile::from("qml/pages/ClipsPage.qml"),
+        QmlFile::from("qml/pages/DevicesPage.qml"),
+        QmlFile::from("qml/pages/SettingsPage.qml"),
+    ];
+
+    CxxQtBuilder::new_qml_module(QmlModule::new("com.opengg.app").qml_files(qml_files)).build();
 }

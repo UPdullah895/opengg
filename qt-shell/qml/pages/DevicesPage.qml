@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import com.opengg.app
 
 Rectangle {
     color: Theme.bg

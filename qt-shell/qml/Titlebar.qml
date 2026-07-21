@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import com.opengg.app
 
 Rectangle {
     id: titlebar
