@@ -15,6 +15,8 @@ pub mod qobject {
     extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
+        include!("cxx-qt-lib/qstringlist.h");
+        type QStringList = cxx_qt_lib::QStringList;
     }
 
     extern "RustQt" {
@@ -42,11 +44,17 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "languageName"]
         fn language_name(self: &Self, code: &QString) -> QString;
+
+        /// Codes of all loaded languages (English first, then alphabetical),
+        /// for the Settings language picker.
+        #[qinvokable]
+        #[cxx_name = "availableLanguages"]
+        fn available_languages(self: &Self) -> QStringList;
     }
 }
 
 use core::pin::Pin;
-use cxx_qt_lib::QString;
+use cxx_qt_lib::{QString, QStringList};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -114,6 +122,16 @@ impl qobject::I18n {
             Some(n) => QString::from(n),
             None => QString::from(&code),
         }
+    }
+
+    pub fn available_languages(&self) -> QStringList {
+        let mut codes: Vec<String> = self.catalogs.keys().cloned().collect();
+        codes.sort();
+        if let Some(pos) = codes.iter().position(|c| c == "en") {
+            let en = codes.remove(pos);
+            codes.insert(0, en);
+        }
+        codes.iter().map(|c| QString::from(c)).collect()
     }
 }
 
