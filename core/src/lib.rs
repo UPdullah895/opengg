@@ -14,4 +14,5 @@ pub mod clips;
 pub mod media;
 pub mod paths;
 pub mod settings;
+pub mod steam;
 pub mod storage;

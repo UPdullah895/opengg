@@ -25,3 +25,5 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 # Low-level FFI for Unix timestamp formatting in fmt_ts_local.
 libc = "0.2"
+# Async HTTP client for Steam Store API (steam detection moved from src-tauri).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
