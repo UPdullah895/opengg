@@ -8,6 +8,8 @@
 
 mod db;
 pub use db::*;
+mod listers;
+pub use listers::{get_clip_by_path, get_clips, get_clips_fast};
 
 use unicode_normalization::UnicodeNormalization;
 

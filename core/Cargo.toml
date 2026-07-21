@@ -21,3 +21,9 @@ open = "5"
 walkdir = "2"
 # Clip metadata / trim-state / ffprobe-cache database (matches src-tauri).
 rusqlite = { version = "0.31", features = ["bundled"] }
+# Async task spawning for ffmpeg/ffprobe calls (moved from src-tauri).
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+# HTTP client for potential future use, matches src-tauri version.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
+# Low-level FFI for Unix timestamp formatting in fmt_ts_local.
+libc = "0.2"

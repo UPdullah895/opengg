@@ -11,6 +11,7 @@
 //! pipewire/gstreamer/zbus except through this crate.
 
 pub mod clips;
+pub mod media;
 pub mod paths;
 pub mod settings;
 pub mod storage;

@@ -12,10 +12,28 @@ use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Manager};
 use crate::subprocess;
 
-// Clip DB layer now lives in opengg_core::clips (plan §2.1). Re-export the
-// public types (used by main.rs + as command return types) and import the
-// helpers the probe-driven listers still call locally.
+// Core business logic now lives in opengg_core (plan §2.1). Re-export public
+// types + functions that are used as command return types or by main.rs.
 pub use opengg_core::clips::{init_clips_db, ClipInfo, ClipMetaUpdate, TrimState};
+pub use opengg_core::media::{MediaInfo, MediaStream};
+
+// Import all core functions we'll wrap in thin Tauri commands.
+use opengg_core::media::{
+    analyze_media as core_analyze_media,
+    generate_waveform as core_generate_waveform,
+    generate_thumbnail as core_generate_thumbnail,
+    generate_thumbnails_batch as core_generate_thumbnails_batch,
+    take_screenshot as core_take_screenshot,
+    probe_clips as core_probe_clips,
+    calc_export_settings as core_calc_export_settings,
+};
+use opengg_core::clips::{
+    get_clip_by_path as core_get_clip_by_path,
+    get_clips as core_get_clips,
+    get_clips_fast as core_get_clips_fast,
+};
+
+// Still-local helpers (not moving to core).
 use opengg_core::clips::{
     get_meta_map, hash_str, open_db, probe_cache_get, probe_cache_set, VIDEO_EXTS,
 };
@@ -37,135 +55,9 @@ pub use audio::*;
 //  ★ EPIC 1: Media Analysis via ffprobe
 // ══════════════════════════════════════════════════════════════
 
-#[derive(Serialize)]
-pub struct MediaStream {
-    pub index: u32,
-    pub codec_type: String, // "video" | "audio" | "subtitle"
-    pub codec_name: String, // "h264", "aac", "opus", etc.
-    pub channels: u32,      // audio channel count (2=stereo)
-    pub sample_rate: String,
-    pub language: String,
-    pub title: String, // track title if set (e.g. "Game Audio", "Mic")
-}
-
-#[derive(Serialize)]
-pub struct MediaInfo {
-    pub duration: f64,
-    pub width: u32,
-    pub height: u32,
-    pub fps: f64,
-    pub video_codec: String,
-    pub streams: Vec<MediaStream>,
-    pub video_streams: u32,
-    pub audio_streams: u32,
-}
-
 #[command]
 pub async fn analyze_media(filepath: String) -> Result<MediaInfo, String> {
-    let output = run_command_output_async("ffprobe", &[
-        "-v", "quiet",
-        "-print_format", "json",
-        "-show_format",
-        "-show_streams",
-        &filepath,
-    ]).await?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "ffprobe failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("parse: {e}"))?;
-
-    let fmt = &json["format"];
-    let duration: f64 = fmt["duration"]
-        .as_str()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0);
-
-    let mut streams = Vec::new();
-    let mut width = 0u32;
-    let mut height = 0u32;
-    let mut fps = 0.0f64;
-    let mut video_codec = String::new();
-    let mut video_count = 0u32;
-    let mut audio_count = 0u32;
-
-    if let Some(arr) = json["streams"].as_array() {
-        for s in arr {
-            let codec_type = s["codec_type"].as_str().unwrap_or("").to_string();
-            let codec_name = s["codec_name"].as_str().unwrap_or("").to_string();
-            let idx = s["index"].as_u64().unwrap_or(0) as u32;
-            let tags = &s["tags"];
-            let lang = tags["language"].as_str().unwrap_or("").to_string();
-            let title = tags["title"].as_str().unwrap_or("").to_string();
-
-            match codec_type.as_str() {
-                "video" => {
-                    video_count += 1;
-                    if width == 0 {
-                        width = s["width"].as_u64().unwrap_or(0) as u32;
-                        height = s["height"].as_u64().unwrap_or(0) as u32;
-                        video_codec = codec_name.clone();
-                        // Parse fps from r_frame_rate "60/1" or "30000/1001"
-                        if let Some(rfr) = s["r_frame_rate"].as_str() {
-                            let parts: Vec<&str> = rfr.split('/').collect();
-                            if parts.len() == 2 {
-                                let n: f64 = parts[0].parse().unwrap_or(0.0);
-                                let d: f64 = parts[1].parse().unwrap_or(1.0);
-                                if d > 0.0 {
-                                    fps = n / d;
-                                }
-                            }
-                        }
-                    }
-                    streams.push(MediaStream {
-                        index: idx,
-                        codec_type,
-                        codec_name,
-                        channels: 0,
-                        sample_rate: String::new(),
-                        language: lang,
-                        title,
-                    });
-                }
-                "audio" => {
-                    audio_count += 1;
-                    let ch = s["channels"].as_u64().unwrap_or(2) as u32;
-                    let sr = s["sample_rate"].as_str().unwrap_or("48000").to_string();
-                    let track_title = if title.is_empty() {
-                        format!("Audio {audio_count}")
-                    } else {
-                        title
-                    };
-                    streams.push(MediaStream {
-                        index: idx,
-                        codec_type,
-                        codec_name,
-                        channels: ch,
-                        sample_rate: sr,
-                        language: lang,
-                        title: track_title,
-                    });
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Ok(MediaInfo {
-        duration,
-        width,
-        height,
-        fps,
-        video_codec,
-        streams,
-        video_streams: video_count,
-        audio_streams: audio_count,
-    })
+    core_analyze_media(filepath).await
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -249,56 +141,13 @@ pub async fn export_timeline(
 }
 
 /// Generate audio waveform peaks data for visualization.
-/// Uses ffmpeg to extract PCM samples, then computes peaks.
-/// Returns JSON array of peak values (0.0-1.0) for the given audio stream.
 #[command]
 pub async fn generate_waveform(
     filepath: String,
     stream_index: u32,
     num_peaks: u32,
 ) -> Result<Vec<f32>, String> {
-    let peaks_count = num_peaks.clamp(100, 2000);
-
-    // Extract raw PCM audio from the specified stream
-    let output = run_command_output_async("ffmpeg", &[
-        "-i", &filepath,
-        "-map", &format!("0:{stream_index}"),
-        "-ac", "1",
-        "-f", "s16le",
-        "-ar", "8000",
-        "-",
-    ]).await?;
-
-    if !output.status.success() || output.stdout.is_empty() {
-        return Ok(vec![0.0; peaks_count as usize]);
-    }
-
-    // Parse raw s16le samples
-    let samples: Vec<i16> = output
-        .stdout
-        .chunks_exact(2)
-        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect();
-
-    if samples.is_empty() {
-        return Ok(vec![0.0; peaks_count as usize]);
-    }
-
-    // Downsample to requested peak count
-    let chunk_size = (samples.len() / peaks_count as usize).max(1);
-    let peaks: Vec<f32> = (0..peaks_count as usize)
-        .map(|i| {
-            let start = i * chunk_size;
-            let end = (start + chunk_size).min(samples.len());
-            let max_abs = samples[start..end]
-                .iter()
-                .map(|s| s.unsigned_abs() as f32)
-                .fold(0.0f32, f32::max);
-            (max_abs / 32768.0).min(1.0)
-        })
-        .collect();
-
-    Ok(peaks)
+    core_generate_waveform(filepath, stream_index, num_peaks).await
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -942,225 +791,7 @@ pub async fn get_clips_count(folder: String) -> Result<usize, String> {
 
 #[command]
 pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
-    // Phase 3a+3b: cache-first ffprobe, parallel for uncached clips
-    use tokio::sync::Semaphore;
-    #[cfg(debug_assertions)]
-    let t_total = std::time::Instant::now();
-    let dirs = get_all_clip_dirs(&folder);
-    let meta = get_meta_map();
-    let td = thumb_dir();
-    let _ = std::fs::create_dir_all(&td);
-
-    // Collect all candidate files first (cheap filesystem scan)
-    struct Entry {
-        fp: String,
-        fname: String,
-        id: String,
-        filesize: u64,
-        created: String,
-        mtime: u64,
-        game_raw: String,
-        cn: String,
-        fav: bool,
-        game_tag: String,
-        thumbnail: String,
-    }
-    let mut entries: Vec<Entry> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for dir in &dirs {
-        if !dir.exists() {
-            continue;
-        }
-        for e in walkdir::WalkDir::new(dir)
-            .min_depth(1)
-            .into_iter()
-            .flatten()
-        {
-            let p = e.path().to_path_buf();
-            if !p.is_file() {
-                continue;
-            }
-            let ext = p
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            if !VIDEO_EXTS.contains(&ext.as_str()) {
-                continue;
-            }
-            let fp = p.to_string_lossy().to_string();
-            if seen.contains(&fp) {
-                continue;
-            }
-            seen.insert(fp.clone());
-            let m = match e.metadata() {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            let fname = p
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            let id = format!("{:x}", hash_str(&fp));
-            let mtime = m
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
-            let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
-            // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ to get full game name.
-            // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ to get prefix.
-            let game_raw = if let Some(pos) = stem.find("__") {
-                stem[..pos].replace(['-', '_'], " ")
-            } else {
-                stem.split('_')
-                    .next()
-                    .unwrap_or("Unknown")
-                    .replace('-', " ")
-            };
-            let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
-            let thumb = td.join(format!("{id}.jpg"));
-            let thumbnail = if thumb.exists() {
-                thumb.to_string_lossy().to_string()
-            } else {
-                String::new()
-            };
-            entries.push(Entry {
-                fp,
-                fname,
-                id,
-                filesize: m.len(),
-                created,
-                mtime,
-                game_raw,
-                cn,
-                fav,
-                game_tag,
-                thumbnail,
-            });
-        }
-    }
-    #[cfg(debug_assertions)]
-    let t_scan = t_total.elapsed().as_millis();
-
-    // Phase 3a: check probe cache; collect uncached for parallel probing
-    let db = open_db().ok();
-    struct CachedEntry {
-        entry_idx: usize,
-        dur: f64,
-        w: u32,
-        h: u32,
-    }
-    let mut cached: Vec<CachedEntry> = Vec::new();
-    let mut uncached_idxs: Vec<usize> = Vec::new();
-    for (i, e) in entries.iter().enumerate() {
-        if let Some(ref db) = db {
-            if let Some((dur, w, h)) = probe_cache_get(db, &e.fp, e.mtime) {
-                cached.push(CachedEntry {
-                    entry_idx: i,
-                    dur,
-                    w,
-                    h,
-                });
-                continue;
-            }
-        }
-        uncached_idxs.push(i);
-    }
-    #[cfg(debug_assertions)]
-    let t_cache = t_total.elapsed().as_millis();
-    #[cfg(debug_assertions)]
-    let n_uncached = uncached_idxs.len();
-
-    // Phase 3b: parallel ffprobe for uncached clips (max 4 concurrent)
-    // acquire().await blocks until a permit is free, properly limiting concurrency.
-    let sem = Arc::new(Semaphore::new(4));
-    let mut probe_tasks = Vec::new();
-    for idx in uncached_idxs {
-        let fp = entries[idx].fp.clone();
-        let sem = Arc::clone(&sem);
-        let task = tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
-            let fp2 = fp.clone();
-            let result =
-                tokio::task::spawn_blocking(move || probe_video(std::path::Path::new(&fp2)))
-                    .await
-                    .unwrap_or((0.0, 0, 0));
-            (idx, fp, result)
-        });
-        probe_tasks.push(task);
-    }
-    let mut probe_results: Vec<(usize, String, (f64, u32, u32))> = Vec::new();
-    for task in probe_tasks {
-        if let Ok(r) = task.await {
-            probe_results.push(r);
-        }
-    }
-    #[cfg(debug_assertions)]
-    let t_probe = t_total.elapsed().as_millis();
-    // Write new probe results to cache
-    if let Some(ref db) = db {
-        for (idx, fp, (dur, w, h)) in &probe_results {
-            probe_cache_set(db, fp, *dur, *w, *h, entries[*idx].mtime);
-        }
-    }
-
-    // Assemble final ClipInfo list
-    let mut probe_map: std::collections::HashMap<usize, (f64, u32, u32)> =
-        std::collections::HashMap::new();
-    for c in cached {
-        probe_map.insert(c.entry_idx, (c.dur, c.w, c.h));
-    }
-    for (idx, _, dwh) in probe_results {
-        probe_map.insert(idx, dwh);
-    }
-
-    let mut clips: Vec<ClipInfo> = entries
-        .into_iter()
-        .enumerate()
-        .map(|(i, e)| {
-            let (dur, w, h) = probe_map.get(&i).copied().unwrap_or((0.0, 0, 0));
-            let game = if e.game_tag.is_empty() {
-                e.game_raw
-            } else {
-                e.game_tag
-            };
-            ClipInfo {
-                id: e.id,
-                filename: e.fname,
-                filepath: e.fp,
-                filesize: e.filesize,
-                created: e.created,
-                created_ts: e.mtime,
-                duration: dur,
-                width: w,
-                height: h,
-                game,
-                custom_name: e.cn,
-                favorite: e.fav,
-                thumbnail: e.thumbnail,
-                probing: false,
-            }
-        })
-        .collect();
-
-    clips.sort_by(|a, b| {
-        b.created
-            .cmp(&a.created)
-            .then_with(|| b.created_ts.cmp(&a.created_ts))
-            .then_with(|| b.filename.cmp(&a.filename))
-    });
-    #[cfg(debug_assertions)]
-    {
-        let t_total_ms = t_total.elapsed().as_millis();
-        eprintln!("[perf] get_clips: scan={}ms cache={}ms ffprobe={}ms ({} uncached) assemble={}ms total={}ms clips={}",
-            t_scan, t_cache - t_scan, t_probe - t_cache, n_uncached,
-            t_total_ms - t_probe, t_total_ms, clips.len());
-    }
-    Ok(clips)
+    core_get_clips(folder).await
 }
 
 /// Fast clip list — skips ffprobe entirely for uncached clips.
@@ -1168,151 +799,7 @@ pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
 /// Call probe_clips() afterward to fill in missing metadata in the background.
 #[command]
 pub async fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
-    #[cfg(debug_assertions)]
-    let t_total = std::time::Instant::now();
-    let dirs = get_all_clip_dirs(&folder);
-    let meta = get_meta_map();
-    let td = thumb_dir();
-    let _ = std::fs::create_dir_all(&td);
-
-    struct Entry {
-        fp: String,
-        fname: String,
-        id: String,
-        filesize: u64,
-        created: String,
-        mtime: u64,
-        game_raw: String,
-        cn: String,
-        fav: bool,
-        game_tag: String,
-        thumbnail: String,
-    }
-    let mut entries: Vec<Entry> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for dir in &dirs {
-        if !dir.exists() {
-            continue;
-        }
-        for e in walkdir::WalkDir::new(dir)
-            .min_depth(1)
-            .into_iter()
-            .flatten()
-        {
-            let p = e.path().to_path_buf();
-            if !p.is_file() {
-                continue;
-            }
-            let ext = p
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            if !VIDEO_EXTS.contains(&ext.as_str()) {
-                continue;
-            }
-            let fp = p.to_string_lossy().to_string();
-            if seen.contains(&fp) {
-                continue;
-            }
-            seen.insert(fp.clone());
-            let m = match e.metadata() {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            let fname = p
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            let id = format!("{:x}", hash_str(&fp));
-            let mtime = m
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
-            let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
-            // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ to get full game name.
-            // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ to get prefix.
-            let game_raw = if let Some(pos) = stem.find("__") {
-                stem[..pos].replace(['-', '_'], " ")
-            } else {
-                stem.split('_')
-                    .next()
-                    .unwrap_or("Unknown")
-                    .replace('-', " ")
-            };
-            let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
-            let thumb = td.join(format!("{id}.jpg"));
-            let thumbnail = if thumb.exists() {
-                thumb.to_string_lossy().to_string()
-            } else {
-                String::new()
-            };
-            entries.push(Entry {
-                fp,
-                fname,
-                id,
-                filesize: m.len(),
-                created,
-                mtime,
-                game_raw,
-                cn,
-                fav,
-                game_tag,
-                thumbnail,
-            });
-        }
-    }
-
-    // Check probe cache — cached clips get real values, uncached get (0,0,0)
-    let db = open_db().ok();
-    let mut clips: Vec<ClipInfo> = entries
-        .into_iter()
-        .map(|e| {
-            let (dur, w, h) = db
-                .as_ref()
-                .and_then(|db| probe_cache_get(db, &e.fp, e.mtime))
-                .unwrap_or((0.0, 0, 0));
-            let game = if e.game_tag.is_empty() {
-                e.game_raw
-            } else {
-                e.game_tag
-            };
-            ClipInfo {
-                id: e.id,
-                filename: e.fname,
-                filepath: e.fp,
-                filesize: e.filesize,
-                created: e.created,
-                created_ts: e.mtime,
-                duration: dur,
-                width: w,
-                height: h,
-                game,
-                custom_name: e.cn,
-                favorite: e.fav,
-                thumbnail: e.thumbnail,
-                probing: false,
-            }
-        })
-        .collect();
-
-    clips.sort_by(|a, b| {
-        b.created
-            .cmp(&a.created)
-            .then_with(|| b.created_ts.cmp(&a.created_ts))
-            .then_with(|| b.filename.cmp(&a.filename))
-    });
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[perf] get_clips_fast: total={}ms clips={}",
-        t_total.elapsed().as_millis(),
-        clips.len()
-    );
-    Ok(clips)
+    core_get_clips_fast(folder).await
 }
 
 /// Probe duration/resolution for a list of files and write results to the SQLite cache.
@@ -1320,126 +807,13 @@ pub async fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
 /// Returns Vec of (filepath, duration, width, height).
 #[command]
 pub async fn probe_clips(filepaths: Vec<String>) -> Result<Vec<(String, f64, u32, u32)>, String> {
-    use tokio::sync::Semaphore;
-    if filepaths.is_empty() {
-        return Ok(vec![]);
-    }
-    #[cfg(debug_assertions)]
-    let t_start = std::time::Instant::now();
-    let sem = Arc::new(Semaphore::new(4));
-    let mut tasks = Vec::new();
-    for fp in filepaths {
-        let sem = Arc::clone(&sem);
-        tasks.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
-            let fp2 = fp.clone();
-            let (dur, w, h) =
-                tokio::task::spawn_blocking(move || probe_video(std::path::Path::new(&fp2)))
-                    .await
-                    .unwrap_or((0.0, 0, 0));
-            (fp, dur, w, h)
-        }));
-    }
-    let mut results = Vec::new();
-    for t in tasks {
-        if let Ok(r) = t.await {
-            results.push(r);
-        }
-    }
-    // Write to cache
-    if let Ok(db) = open_db() {
-        for (fp, dur, w, h) in &results {
-            let mtime = std::fs::metadata(fp)
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            probe_cache_set(&db, fp, *dur, *w, *h, mtime);
-        }
-    }
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[perf] probe_clips: {}ms ({} clips)",
-        t_start.elapsed().as_millis(),
-        results.len()
-    );
-    Ok(results
-        .into_iter()
-        .collect())
+    core_probe_clips(filepaths).await
 }
 
 /// Fetch metadata for a single file — used by the frontend file-watcher listener.
 #[command]
 pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, String> {
-    let p = PathBuf::from(&filepath);
-    if !p.is_file() {
-        return Ok(None);
-    }
-    let ext = p
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if !VIDEO_EXTS.contains(&ext.as_str()) {
-        return Ok(None);
-    }
-    let meta = get_meta_map();
-    let td = thumb_dir();
-    let _ = std::fs::create_dir_all(&td);
-    let m = p.metadata().map_err(|e| format!("{e}"))?;
-    let fname = p
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let fp = filepath.clone();
-    let id = format!("{:x}", hash_str(&fp));
-    let mtime = m
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
-    let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
-    let p_clone = p.clone();
-    let (dur, w, h) = tokio::task::spawn_blocking(move || probe_video(&p_clone))
-        .await
-        .map_err(|e| format!("spawn_blocking: {e}"))?;
-    let game_from_filename = stem
-        .split('_')
-        .next()
-        .unwrap_or("Unknown")
-        .replace('-', " ");
-    let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
-    let game = if game_tag.is_empty() {
-        game_from_filename
-    } else {
-        game_tag
-    };
-    let thumb = td.join(format!("{id}.jpg"));
-    let thumbnail = if thumb.exists() {
-        thumb.to_string_lossy().to_string()
-    } else {
-        String::new()
-    };
-    Ok(Some(ClipInfo {
-        id,
-        filename: fname,
-        filepath: fp,
-        filesize: m.len(),
-        created,
-        created_ts: mtime,
-        duration: dur,
-        width: w,
-        height: h,
-        game,
-        custom_name: cn,
-        favorite: fav,
-        thumbnail,
-        probing: false,
-    }))
+    core_get_clip_by_path(filepath).await
 }
 #[command]
 pub async fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Result<String, String> {
