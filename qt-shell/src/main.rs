@@ -1,4 +1,5 @@
 mod audio;
+mod device;
 mod i18n;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
