@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Manager};
-use crate::subprocess;
+// Central subprocess module (binary probing + logged spawns) now lives in core.
+use opengg_core::subprocess;
 
 // Core business logic now lives in opengg_core (plan §2.1). Re-export public
 // types + functions that are used as command return types or by main.rs.
@@ -3544,22 +3545,6 @@ async fn dbus_session() -> Result<&'static zbus::Connection, String> {
     }
 }
 
-pub(crate) async fn call_dbus<R: serde::de::DeserializeOwned + zbus::zvariant::Type>(
-    m: &str,
-    p: &str,
-    i: &str,
-    a: impl serde::Serialize + zbus::zvariant::Type,
-) -> Result<R, String> {
-    let c = dbus_session().await?;
-    let r: R = c
-        .call_method(Some("org.opengg.Daemon"), p, Some(i), m, &a)
-        .await
-        .map_err(|e| format!("{m}:{e}"))?
-        .body()
-        .deserialize()
-        .map_err(|e| format!("{m}:{e}"))?;
-    Ok(r)
-}
 pub(crate) async fn call_dbus_void(
     m: &str,
     p: &str,
@@ -3580,17 +3565,9 @@ pub(crate) async fn call_dbus_void(
 }
 /// Synchronous process runner — safe for sync contexts only.
 /// Async commands MUST use `run_cmd_async` to avoid blocking the Tokio runtime.
-pub(crate) fn run_cmd_sync(c: &str, a: &[&str]) -> Result<String, String> {
-    let o = subprocess::command(c)
-        .args(a)
-        .output()
-        .map_err(|e| format!("{c}:{e}"))?;
-    if o.status.success() {
-        Ok(String::from_utf8_lossy(&o.stdout).trim().into())
-    } else {
-        Err(String::from_utf8_lossy(&o.stderr).trim().into())
-    }
-}
+/// Moved to `opengg_core::subprocess` (shared with the Qt shell); re-exported
+/// here so existing `run_cmd_sync(...)` call sites resolve unchanged.
+pub(crate) use opengg_core::subprocess::run_cmd_sync;
 
 /// Asynchronous wrapper around `run_cmd_sync`.
 /// Delegates to `tokio::task::spawn_blocking` so the async runtime

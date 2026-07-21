@@ -10,6 +10,7 @@
 //! capability from here, and `qt-shell` must not depend on ffmpeg/sqlite/
 //! pipewire/gstreamer/zbus except through this crate.
 
+pub mod audio;
 pub mod clips;
 pub mod daemon;
 pub mod device;
@@ -20,3 +21,4 @@ pub mod recording;
 pub mod settings;
 pub mod steam;
 pub mod storage;
+pub mod subprocess;

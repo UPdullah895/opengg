@@ -157,6 +157,24 @@ pub fn tokio_command(bin: &str) -> tokio::process::Command {
     tokio::process::Command::new(bin)
 }
 
+/// Run a command synchronously and return its trimmed stdout.
+///
+/// Convenience runner used across the codebase: logs+spawns via `command()`,
+/// runs `.output()`, and on non-zero exit returns the trimmed stderr as the
+/// error string. (Moved from `frontend/src-tauri/src/commands.rs` so both the
+/// Tauri host and the Qt shell share one blocking subprocess primitive.)
+pub fn run_cmd_sync(c: &str, a: &[&str]) -> Result<String, String> {
+    let o = command(c)
+        .args(a)
+        .output()
+        .map_err(|e| format!("{c}:{e}"))?;
+    if o.status.success() {
+        Ok(String::from_utf8_lossy(&o.stdout).trim().into())
+    } else {
+        Err(String::from_utf8_lossy(&o.stderr).trim().into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

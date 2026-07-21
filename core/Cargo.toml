@@ -22,7 +22,11 @@ walkdir = "2"
 # Clip metadata / trim-state / ffprobe-cache database (matches src-tauri).
 rusqlite = { version = "0.31", features = ["bundled"] }
 # Async task spawning for ffmpeg/ffprobe calls (moved from src-tauri).
-tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+# "process" is required by the (currently unused, dead_code-allowed) async
+# runners in subprocess.rs (run_async / tokio_command) moved verbatim from src-tauri.
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "process"] }
+# Debug/info/warn logging in the moved audio + subprocess modules.
+log = "0.4"
 # Low-level FFI for Unix timestamp formatting in fmt_ts_local.
 libc = "0.2"
 # Async HTTP client for Steam Store API (steam detection moved from src-tauri).

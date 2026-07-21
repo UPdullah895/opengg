@@ -2,7 +2,6 @@
 
 mod commands;
 mod media_server;
-mod subprocess;
 mod vu_native;
 
 use std::collections::{HashMap, HashSet};
