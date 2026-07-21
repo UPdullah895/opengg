@@ -19,3 +19,5 @@ dirs = "5"
 open = "5"
 # Recursive clip-directory walking for storage stats.
 walkdir = "2"
+# Clip metadata / trim-state / ffprobe-cache database (matches src-tauri).
+rusqlite = { version = "0.31", features = ["bundled"] }

@@ -6,6 +6,9 @@
 //! initial slice is the pure text/search logic covered by
 //! `stores/replay.test.ts`.
 
+mod db;
+pub use db::*;
+
 use unicode_normalization::UnicodeNormalization;
 
 /// How ambiguous `YYYY/N/N` dates are read. Mirrors `DateFormat` in `replay.ts`.
