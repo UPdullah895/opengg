@@ -15,7 +15,7 @@ use crate::subprocess;
 // Core business logic now lives in opengg_core (plan §2.1). Re-export public
 // types + functions that are used as command return types or by main.rs.
 pub use opengg_core::clips::{init_clips_db, ClipInfo, ClipMetaUpdate, TrimState};
-pub use opengg_core::media::{MediaInfo, MediaStream};
+pub use opengg_core::media::MediaInfo;
 
 // Import all core functions we'll wrap in thin Tauri commands.
 use opengg_core::media::{
@@ -26,6 +26,10 @@ use opengg_core::media::{
     take_screenshot as core_take_screenshot,
     probe_clips as core_probe_clips,
     calc_export_settings as core_calc_export_settings,
+    // Helpers moved to core but still used by local export functions
+    count_audio_streams, get_audio_stream_global_indices, probe_resolution,
+    find_system_font_by_name, auto_name, probe_duration, date_from_stem,
+    fmt_ts_local, run_command_output_async,
 };
 use opengg_core::clips::{
     get_clip_by_path as core_get_clip_by_path,
@@ -35,7 +39,7 @@ use opengg_core::clips::{
 
 // Still-local helpers (not moving to core).
 use opengg_core::clips::{
-    get_meta_map, hash_str, open_db, probe_cache_get, probe_cache_set, VIDEO_EXTS,
+    get_meta_map, hash_str, open_db, probe_cache_get, VIDEO_EXTS,
 };
 
 pub(crate) const AU_PATH: &str = "/org/opengg/Daemon/Audio";
@@ -2034,150 +2038,16 @@ pub async fn get_storage_info(clip_directories: Vec<String>) -> Result<StorageIn
 pub use opengg_core::paths::{default_clips_dir, get_all_clip_dirs, shexp, thumb_dir};
 
 /// Count actual audio streams in a file via ffprobe
-fn count_audio_streams(path: &str) -> u32 {
-    get_audio_stream_global_indices(path).len() as u32
-}
 
 /// Get the global stream indices of all audio streams.
-fn get_audio_stream_global_indices(path: &str) -> Vec<u32> {
-    if let Ok(o) = Command::new("ffprobe")
-        .args([
-            "-v",
-            "quiet",
-            "-select_streams",
-            "a",
-            "-show_entries",
-            "stream=index",
-            "-of",
-            "csv=p=0",
-            path,
-        ])
-        .output()
-    {
-        if o.status.success() {
-            return String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter_map(|l| l.trim().parse::<u32>().ok())
-                .collect();
-        }
-    }
-    vec![0]
-}
 
 /// ★ Epic 5: Probe video resolution for normalized overlay sizing
-fn probe_resolution(path: &str) -> (u32, u32) {
-    if let Ok(o) = Command::new("ffprobe")
-        .args([
-            "-v",
-            "quiet",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-of",
-            "csv=s=x:p=0",
-            path,
-        ])
-        .output()
-    {
-        if o.status.success() {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            let parts: Vec<&str> = s.split('x').collect();
-            if parts.len() == 2 {
-                let w = parts[0].parse().unwrap_or(1920);
-                let h = parts[1].parse().unwrap_or(1080);
-                return (w, h);
-            }
-        }
-    }
-    (1920, 1080) // fallback
-}
 
 /// Resolve a font by user-chosen name (e.g. "Impact") to a system path.
 /// Falls back to the generic best-match font if the requested name is not found.
-fn find_system_font_by_name(hint: Option<&str>) -> String {
-    if let Some(name) = hint {
-        let lower = name.to_lowercase();
-        let candidates: &[&str] = match lower.as_str() {
-            "impact" => &[
-                "/usr/share/fonts/truetype/msttcorefonts/Impact.ttf",
-                "/usr/share/fonts/truetype/impact.ttf",
-                "/usr/share/fonts/impact.ttf",
-                "/usr/share/fonts/TTF/Impact.ttf",
-            ],
-            "tahoma" => &[
-                "/usr/share/fonts/truetype/msttcorefonts/Tahoma.ttf",
-                "/usr/share/fonts/truetype/tahoma.ttf",
-                "/usr/share/fonts/tahoma.ttf",
-            ],
-            "arial" | "liberation sans" => &[
-                "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
-                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-                "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-                "/usr/share/fonts/Liberation/LiberationSans-Regular.ttf",
-            ],
-            "dejavu sans" => &[
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            ],
-            _ => &[],
-        };
-        for p in candidates {
-            if Path::new(p).exists() {
-                return p.to_string();
-            }
-        }
-        // Unknown name: ask fontconfig
-        if let Ok(out) = Command::new("fc-match")
-            .args(["--format=%{file}", name])
-            .output()
-        {
-            if out.status.success() {
-                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !p.is_empty() && Path::new(&p).exists() {
-                    return p;
-                }
-            }
-        }
-    }
-    find_system_font()
-}
 
 /// Find a system font that supports Arabic/CJK/Latin characters.
 /// Tries common paths on Arch/Ubuntu/Fedora, falls back to fc-match.
-fn find_system_font() -> String {
-    let candidates = [
-        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/TTF/NotoSans-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    ];
-    for path in &candidates {
-        if std::path::Path::new(path).exists() {
-            return path.to_string();
-        }
-    }
-    // Fallback: use fc-match to find any available sans-serif font
-    if let Ok(output) = Command::new("fc-match")
-        .args(["--format=%{file}", "sans"])
-        .output()
-    {
-        if output.status.success() {
-            let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !p.is_empty() && std::path::Path::new(&p).exists() {
-                return p;
-            }
-        }
-    }
-    // Last resort
-    "sans".to_string()
-}
 
 /// Clear the thumbnail cache directory
 #[command]
@@ -2191,16 +2061,6 @@ pub fn settings_path_pub() -> PathBuf {
 // `resolve_clips_dir`, `default_clips_dir`, `shexp`, and `get_all_clip_dirs`
 // now live in opengg_core::paths (imported above).
 
-fn auto_name(input: &str, suffix: &str) -> String {
-    let p = Path::new(input);
-    let s = p.file_stem().unwrap_or_default().to_string_lossy();
-    let e = p.extension().unwrap_or_default().to_string_lossy();
-    p.parent()
-        .unwrap_or(Path::new("."))
-        .join(format!("{s}{suffix}.{e}"))
-        .to_string_lossy()
-        .into()
-}
 
 /// Diff current watched directories against the settings file and update the
 /// notify watcher accordingly (watch new dirs, unwatch removed ones).
@@ -2333,47 +2193,6 @@ pub async fn register_global_shortcuts(
     }
     Ok(())
 }
-fn probe_video(p: &Path) -> (f64, u32, u32) {
-    let d = probe_duration(&p.to_string_lossy());
-    let dm = Command::new("ffprobe")
-        .args([
-            "-v",
-            "quiet",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-of",
-            "csv=s=x:p=0",
-            &p.to_string_lossy(),
-        ])
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
-    let ps: Vec<&str> = dm.split('x').collect();
-    (
-        d,
-        ps.first().and_then(|s| s.parse().ok()).unwrap_or(0),
-        ps.get(1).and_then(|s| s.parse().ok()).unwrap_or(0),
-    )
-}
-fn probe_duration(p: &str) -> f64 {
-    Command::new("ffprobe")
-        .args([
-            "-v",
-            "quiet",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            p,
-        ])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
-        .unwrap_or(0.0)
-}
 // hash_str now lives in opengg_core::clips (imported at the top of this file).
 
 /// Extract "YYYY-MM-DD HH:MM" from a filename stem.
@@ -2381,94 +2200,10 @@ fn probe_duration(p: &str) -> f64 {
 ///   SteelSeries GG:        GameName__YYYY-MM-DD__HH-MM-SS  (double underscore)
 ///   gpu-screen-recorder:   Prefix_YYYY-MM-DD_HH-MM-SS      (single underscore)
 /// Returns None if neither pattern matches.
-fn date_from_stem(stem: &str) -> Option<String> {
-    let b = stem.as_bytes();
-    // SteelSeries: YYYY-MM-DD__HH-MM-SS (20 chars)
-    // Pattern positions: DDDD-DD-DD__DD-DD-DD
-    if b.len() >= 20 {
-        for i in 0..=b.len() - 20 {
-            let s = &b[i..i + 20];
-            if s[4] == b'-'
-                && s[7] == b'-'
-                && s[10] == b'_'
-                && s[11] == b'_'
-                && s[14] == b'-'
-                && s[17] == b'-'
-                && s[..4].iter().all(u8::is_ascii_digit)
-                && s[5..7].iter().all(u8::is_ascii_digit)
-                && s[8..10].iter().all(u8::is_ascii_digit)
-                && s[12..14].iter().all(u8::is_ascii_digit)
-                && s[15..17].iter().all(u8::is_ascii_digit)
-                && s[18..20].iter().all(u8::is_ascii_digit)
-            {
-                let t = std::str::from_utf8(&s[..20]).unwrap();
-                return Some(format!("{} {}:{}", &t[..10], &t[12..14], &t[15..17]));
-            }
-        }
-    }
-    // gpu-screen-recorder: YYYY-MM-DD_HH-MM-SS (19 chars)
-    // Pattern positions: DDDD-DD-DD_DD-DD-DD
-    if b.len() >= 19 {
-        for i in 0..=b.len() - 19 {
-            let s = &b[i..i + 19];
-            if s[4] == b'-'
-                && s[7] == b'-'
-                && s[10] == b'_'
-                && s[13] == b'-'
-                && s[16] == b'-'
-                && s[..4].iter().all(u8::is_ascii_digit)
-                && s[5..7].iter().all(u8::is_ascii_digit)
-                && s[8..10].iter().all(u8::is_ascii_digit)
-                && s[11..13].iter().all(u8::is_ascii_digit)
-                && s[14..16].iter().all(u8::is_ascii_digit)
-                && s[17..19].iter().all(u8::is_ascii_digit)
-            {
-                let t = std::str::from_utf8(&s[..19]).unwrap();
-                return Some(format!("{} {}:{}", &t[..10], &t[11..13], &t[14..16]));
-            }
-        }
-    }
-    None
-}
 
 /// Convert Unix timestamp to local-time "YYYY-MM-DD HH:MM" using libc::localtime_r.
-fn fmt_ts_local(s: i64) -> String {
-    #[cfg(unix)]
-    {
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        unsafe {
-            libc::localtime_r(&s, &mut tm);
-        }
-        return format!(
-            "{}-{:02}-{:02} {:02}:{:02}",
-            tm.tm_year + 1900,
-            tm.tm_mon + 1,
-            tm.tm_mday,
-            tm.tm_hour,
-            tm.tm_min
-        );
-    }
-    #[allow(unreachable_code)]
-    fmt_ts(s)
-}
 
 /// Accurate Unix-timestamp → "YYYY-MM-DD HH:MM" using Howard Hinnant's civil calendar algorithm.
-fn fmt_ts(s: i64) -> String {
-    let days = s / 86400;
-    let rem = s % 86400;
-    let (h, m) = (rem / 3600, (rem % 3600) / 60);
-    let z = days + 719468;
-    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let mth = if mp < 10 { mp + 3 } else { mp - 9 };
-    let yr = if mth <= 2 { y + 1 } else { y };
-    format!("{yr}-{mth:02}-{d:02} {h:02}:{m:02}")
-}
 #[allow(dead_code)]
 fn get_vol(n: &str) -> Option<f32> {
     let o = Command::new("pactl")
@@ -4224,21 +3959,6 @@ pub(crate) async fn run_cmd_async(c: &str, a: &[&str]) -> Result<String, String>
 /// Async wrapper around `std::process::Command::output()`.
 /// Use this for ffmpeg/ffprobe and other potentially long-running subprocesses
 /// so the Tokio runtime never blocks.
-pub(crate) async fn run_command_output_async(
-    cmd: &str,
-    args: &[&str],
-) -> Result<std::process::Output, String> {
-    let cmd = cmd.to_string();
-    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    tokio::task::spawn_blocking(move || {
-        subprocess::command(&cmd)
-            .args(&args)
-            .output()
-            .map_err(|e| format!("{cmd}: {e}"))
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking join: {e}"))?
-}
 
 // ═══ Devices ═══
 #[command] pub async fn get_devices() -> Result<String, String> { call_dbus("GetDevices", DV_PATH, DV_IFACE, ()).await }

@@ -420,10 +420,10 @@ pub fn calc_export_settings(
     .to_string())
 }
 
-// ═══ Private helpers ═══
+// ═══ Helpers (public for use by commands.rs and listers) ═══
 
 /// Count actual audio streams in a file via ffprobe
-fn count_audio_streams(path: &str) -> u32 {
+pub fn count_audio_streams(path: &str) -> u32 {
     get_audio_stream_global_indices(path).len() as u32
 }
 
@@ -608,7 +608,7 @@ pub fn probe_video(p: &Path) -> (f64, u32, u32) {
 }
 
 /// Probe a file for duration in seconds.
-fn probe_duration(p: &str) -> f64 {
+pub fn probe_duration(p: &str) -> f64 {
     Command::new("ffprobe")
         .args([
             "-v",
@@ -702,7 +702,7 @@ pub fn fmt_ts_local(s: i64) -> String {
 }
 
 /// Accurate Unix-timestamp → "YYYY-MM-DD HH:MM" using Howard Hinnant's civil calendar algorithm.
-fn fmt_ts(s: i64) -> String {
+pub fn fmt_ts(s: i64) -> String {
     let days = s / 86400;
     let rem = s % 86400;
     let (h, m) = (rem / 3600, (rem % 3600) / 60);
