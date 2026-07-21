@@ -48,6 +48,7 @@ pub mod qobject {
 use core::pin::Pin;
 use cxx_qt_lib::QString;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 pub struct I18nRust {
     language: QString,
@@ -61,11 +62,12 @@ pub struct I18nRust {
 impl Default for I18nRust {
     fn default() -> Self {
         let (catalogs, names, rtl_dirs) = load_catalogs();
-        // OPENGG_LANG allows launching directly in a given language (used for
-        // verification without needing UI input); defaults to English.
+        // Initial language: OPENGG_LANG (verification override) → persisted
+        // choice in the shared ui-settings.json → English.
         let initial = std::env::var("OPENGG_LANG")
             .ok()
             .filter(|c| catalogs.contains_key(c))
+            .or_else(|| read_settings_language(&settings_path()).filter(|c| catalogs.contains_key(c)))
             .unwrap_or_else(|| "en".to_string());
         let rtl = *rtl_dirs.get(&initial).unwrap_or(&false);
         Self {
@@ -101,6 +103,9 @@ impl qobject::I18n {
         let rtl = *self.rtl_dirs.get(&code).unwrap_or(&false);
         self.as_mut().set_language(QString::from(&code));
         self.as_mut().set_rtl(rtl);
+        // Persist to the shared ui-settings.json so the choice survives restart
+        // and stays compatible with the Tauri UI (R11 / Phase 1 acceptance).
+        write_settings_language(&settings_path(), &code, rtl);
     }
 
     pub fn language_name(&self, code: &QString) -> QString {
@@ -192,5 +197,97 @@ fn flatten(val: &serde_json::Value, prefix: String, out: &mut HashMap<String, St
                 _ => {}
             }
         }
+    }
+}
+
+/// Path to the UI settings file shared with the Tauri app
+/// (`$XDG_CONFIG_HOME/opengg/ui-settings.json`, falling back to `~/.config`).
+fn settings_path() -> PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
+        });
+    base.join("opengg").join("ui-settings.json")
+}
+
+/// Read `settings.language` from the shared settings file, if present.
+fn read_settings_language(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("settings")?
+        .get("language")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+/// Write `settings.language` and `settings.rtlMode` into the shared settings
+/// file, **preserving every other key** (reads the whole document, edits only
+/// those two fields, writes it back). Creates the file if absent.
+fn write_settings_language(path: &Path, code: &str, rtl: bool) {
+    let mut root: serde_json::Value = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .filter(|v: &serde_json::Value| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let obj = root.as_object_mut().expect("root is an object");
+    let settings = obj
+        .entry("settings")
+        .or_insert_with(|| serde_json::json!({}));
+    if !settings.is_object() {
+        *settings = serde_json::json!({});
+    }
+    let s = settings.as_object_mut().expect("settings is an object");
+    s.insert("language".into(), serde_json::Value::String(code.to_string()));
+    s.insert("rtlMode".into(), serde_json::Value::Bool(rtl));
+
+    if let Ok(text) = serde_json::to_string_pretty(&root) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, text);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_settings_language, write_settings_language};
+
+    #[test]
+    fn language_round_trips_and_preserves_other_keys() {
+        let dir = std::env::temp_dir().join(format!("opengg-i18n-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ui-settings.json");
+        std::fs::write(
+            &path,
+            r#"{"_schemaVersion":3,"settings":{"language":"en","tutorialSeen":true},"mixer":{"vol":7}}"#,
+        )
+        .unwrap();
+
+        write_settings_language(&path, "ar", true);
+
+        assert_eq!(read_settings_language(&path).as_deref(), Some("ar"));
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["settings"]["rtlMode"], serde_json::json!(true));
+        // untouched keys survive
+        assert_eq!(v["settings"]["tutorialSeen"], serde_json::json!(true));
+        assert_eq!(v["_schemaVersion"], serde_json::json!(3));
+        assert_eq!(v["mixer"]["vol"], serde_json::json!(7));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_file_is_created_with_settings() {
+        let dir = std::env::temp_dir().join(format!("opengg-i18n-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("ui-settings.json");
+
+        write_settings_language(&path, "ar", true);
+
+        assert_eq!(read_settings_language(&path).as_deref(), Some("ar"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
