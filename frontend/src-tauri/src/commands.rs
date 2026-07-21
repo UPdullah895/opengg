@@ -817,59 +817,7 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
 }
 #[command]
 pub async fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Result<String, String> {
-    let id = format!("{:x}", hash_str(&filepath));
-    let d = thumb_dir();
-    let _ = std::fs::create_dir_all(&d);
-    let out = d.join(format!("{id}.jpg"));
-    if out.exists() {
-        log::info!("Thumbnail cache hit: {} -> {}", filepath, out.display());
-        return Ok(out.to_string_lossy().to_string());
-    }
-    log::info!("Thumbnail generation started: {}", filepath);
-    #[cfg(debug_assertions)]
-    let t_start = std::time::Instant::now();
-    // Use caller-provided duration to skip redundant probe_duration ffprobe subprocess
-    let dur = duration
-        .filter(|&d| d > 0.0)
-        .unwrap_or_else(|| probe_duration(&filepath));
-    #[cfg(debug_assertions)]
-    let t_probe_ms = t_start.elapsed().as_millis();
-    let seek = if dur > 1.0 { dur * 0.1 } else { 0.0 };
-    // 480p thumbnails: ~853x480 at q:v 3 (~90KB each). Matches SteelSeries quality.
-    let r = run_command_output_async("ffmpeg", &[
-        "-ss", &format!("{seek:.2}"),
-        "-i", &filepath,
-        "-vframes", "1",
-        "-vf", "scale=-2:480",
-        "-q:v", "3",
-        "-y", &out.to_string_lossy(),
-    ]).await?;
-    #[cfg(debug_assertions)]
-    {
-        let fname = filepath
-            .rfind('/')
-            .map(|i| &filepath[i + 1..])
-            .unwrap_or(&filepath);
-        eprintln!(
-            "[perf] generate_thumbnail: probe={}ms ffmpeg={}ms total={}ms file={}",
-            t_probe_ms,
-            t_start.elapsed().as_millis() - t_probe_ms,
-            t_start.elapsed().as_millis(),
-            fname
-        );
-    }
-    if r.status.success() && out.exists() {
-        log::info!(
-            "Thumbnail generation completed: {} -> {}",
-            filepath,
-            out.display()
-        );
-        Ok(out.to_string_lossy().to_string())
-    } else {
-        let err = format!("ffmpeg: {}", String::from_utf8_lossy(&r.stderr));
-        log::warn!("Thumbnail generation failed: {} ({err})", filepath);
-        Err(err)
-    }
+    core_generate_thumbnail(filepath, duration).await
 }
 /// Phase 3d: Batch thumbnail generation — generates up to 3 concurrently.
 /// `durations`: optional per-filepath duration hints. When provided and non-zero,
@@ -879,61 +827,7 @@ pub async fn generate_thumbnails_batch(
     filepaths: Vec<String>,
     durations: Option<Vec<f64>>,
 ) -> Result<Vec<String>, String> {
-    use tokio::sync::Semaphore;
-    let sem = Arc::new(Semaphore::new(3));
-    let mut tasks = Vec::new();
-    for (i, filepath) in filepaths.into_iter().enumerate() {
-        let sem = Arc::clone(&sem);
-        let provided_dur = durations
-            .as_ref()
-            .and_then(|d| d.get(i).copied())
-            .filter(|&d| d > 0.0);
-        let task = tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
-            let fp = filepath.clone();
-            tokio::task::spawn_blocking(move || {
-                let id = format!("{:x}", hash_str(&fp));
-                let d = thumb_dir();
-                let _ = std::fs::create_dir_all(&d);
-                let out = d.join(format!("{id}.jpg"));
-                if out.exists() {
-                    return out.to_string_lossy().to_string();
-                }
-                let dur = provided_dur.unwrap_or_else(|| probe_duration(&fp));
-                let seek = if dur > 1.0 { dur * 0.1 } else { 0.0 };
-                let r = Command::new("ffmpeg")
-                    .args([
-                        "-ss",
-                        &format!("{seek:.2}"),
-                        "-i",
-                        &fp,
-                        "-vframes",
-                        "1",
-                        "-vf",
-                        "scale=-2:480",
-                        "-q:v",
-                        "3",
-                        "-y",
-                        &out.to_string_lossy(),
-                    ])
-                    .output();
-                match r {
-                    Ok(o) if o.status.success() && out.exists() => {
-                        out.to_string_lossy().to_string()
-                    }
-                    _ => String::new(),
-                }
-            })
-            .await
-            .unwrap_or_default()
-        });
-        tasks.push(task);
-    }
-    let mut results = Vec::new();
-    for task in tasks {
-        results.push(task.await.unwrap_or_default());
-    }
-    Ok(results)
+    core_generate_thumbnails_batch(filepaths, durations).await
 }
 
 // ClipMetaUpdate now lives in opengg_core::clips (re-exported at the top).
@@ -956,34 +850,7 @@ pub async fn take_screenshot(
     time_sec: f64,
     output_dir: Option<String>,
 ) -> Result<String, String> {
-    let pics_dir = match output_dir.as_deref().filter(|s| !s.is_empty()) {
-        Some(d) => PathBuf::from(shexp(d)),
-        None => dirs::picture_dir()
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures")),
-    };
-    let _ = std::fs::create_dir_all(&pics_dir);
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let out = pics_dir.join(format!("opengg_screenshot_{ts}.png"));
-
-    let r = run_command_output_async("ffmpeg", &[
-        "-ss", &format!("{time_sec:.3}"),
-        "-i", &filepath,
-        "-vframes", "1",
-        "-q:v", "2",
-        "-y", &out.to_string_lossy(),
-    ]).await?;
-
-    if r.status.success() && out.exists() {
-        Ok(out.to_string_lossy().to_string())
-    } else {
-        Err(format!(
-            "Screenshot failed: {}",
-            String::from_utf8_lossy(&r.stderr)
-        ))
-    }
+    core_take_screenshot(filepath, time_sec, output_dir).await
 }
 #[command]
 pub async fn delete_clip(filepath: String) -> Result<(), String> {
@@ -1368,20 +1235,7 @@ pub async fn calc_export_settings(
     width: u32,
     height: u32,
 ) -> Result<String, String> {
-    if duration_sec <= 0.0 {
-        return Err("Invalid duration".into());
-    }
-    let audio_kbps = 128.0;
-    let total_kbps = target_mb * 8192.0 / duration_sec;
-    let video_kbps = (total_kbps - audio_kbps).max(100.0);
-    Ok(serde_json::json!({
-        "resolution": format!("{width}x{height}"),
-        "video_bitrate_kbps": video_kbps as u32,
-        "audio_bitrate_kbps": audio_kbps as u32,
-        "total_bitrate_kbps": total_kbps as u32,
-        "codec": "H.264 (libx264)", "preset": "fast", "passes": 2
-    })
-    .to_string())
+    core_calc_export_settings(duration_sec, target_mb, width, height)
 }
 
 // ══════════════════════════════════════════════════════════════
