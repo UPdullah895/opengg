@@ -27,3 +27,7 @@ tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 libc = "0.2"
 # Async HTTP client for Steam Store API (steam detection moved from src-tauri).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
+# Blocking D-Bus client for daemon communication (project decision: blocking API in core).
+# Note: do NOT add "tokio" feature — core uses blocking API only; src-tauri's tokio-featured
+# zbus will unify at the workspace level when cargo resolves transitive deps.
+zbus = "4"

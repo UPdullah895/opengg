@@ -43,14 +43,11 @@ use opengg_core::clips::{
     get_meta_map, hash_str, open_db, probe_cache_get, VIDEO_EXTS,
 };
 
-pub(crate) const AU_PATH: &str = "/org/opengg/Daemon/Audio";
-pub(crate) const AU_IFACE: &str = "org.opengg.Daemon.Audio";
-pub(crate) const RP_PATH: &str = "/org/opengg/Daemon/Replay";
-pub(crate) const RP_IFACE: &str = "org.opengg.Daemon.Replay";
-pub(crate) const DV_PATH: &str = "/org/opengg/Daemon/Device";
-pub(crate) const DV_IFACE: &str = "org.opengg.Daemon.Device";
-pub(crate) const EX_PATH: &str = "/org/opengg/Daemon/Extensions";
-pub(crate) const EX_IFACE: &str = "org.opengg.Daemon.Extensions";
+// Re-export D-Bus path/iface consts from core so audio.rs and other local
+// commands can access them via `use super::{AU_PATH, AU_IFACE, ...}`.
+pub(crate) use opengg_core::daemon::{
+    AU_PATH, AU_IFACE, RP_PATH, RP_IFACE, EX_PATH, EX_IFACE,
+};
 
 mod audio;
 pub use audio::*;
@@ -3962,19 +3959,100 @@ pub(crate) async fn run_cmd_async(c: &str, a: &[&str]) -> Result<String, String>
 /// so the Tokio runtime never blocks.
 
 // ═══ Devices ═══
-#[command] pub async fn get_devices() -> Result<String, String> { call_dbus("GetDevices", DV_PATH, DV_IFACE, ()).await }
-#[command] pub async fn set_mouse_dpi(device_id: String, dpi: u32) -> Result<(), String> { call_dbus_void("SetDpi", DV_PATH, DV_IFACE, (device_id.as_str(), dpi)).await }
-#[command] pub async fn set_mouse_polling_rate(device_id: String, rate: u32) -> Result<(), String> { call_dbus_void("SetPollingRate", DV_PATH, DV_IFACE, (device_id.as_str(), rate)).await }
-#[command] pub async fn set_headset_sidetone(device_id: String, level: u32) -> Result<(), String> { call_dbus_void("SetSidetone", DV_PATH, DV_IFACE, (device_id.as_str(), level)).await }
-#[command] pub async fn set_headset_chatmix(device_id: String, level: u32) -> Result<(), String> { call_dbus_void("SetChatmix", DV_PATH, DV_IFACE, (device_id.as_str(), level)).await }
-#[command] pub async fn set_headset_inactive_time(device_id: String, minutes: u32) -> Result<(), String> { call_dbus_void("SetInactiveTime", DV_PATH, DV_IFACE, (device_id.as_str(), minutes)).await }
-#[command] pub async fn set_headset_mic_volume(device_id: String, level: u32) -> Result<(), String> { call_dbus_void("SetMicrophoneVolume", DV_PATH, DV_IFACE, (device_id.as_str(), level)).await }
-#[command] pub async fn set_headset_mic_mute_led(device_id: String, brightness: u32) -> Result<(), String> { call_dbus_void("SetMicMuteLedBrightness", DV_PATH, DV_IFACE, (device_id.as_str(), brightness)).await }
-#[command] pub async fn set_headset_volume_limiter(device_id: String, enabled: bool) -> Result<(), String> { call_dbus_void("SetVolumeLimiter", DV_PATH, DV_IFACE, (device_id.as_str(), enabled)).await }
-#[command] pub async fn set_headset_bt_powered_on(device_id: String, enabled: bool) -> Result<(), String> { call_dbus_void("SetBtWhenPoweredOn", DV_PATH, DV_IFACE, (device_id.as_str(), enabled)).await }
-#[command] pub async fn set_headset_bt_call_volume(device_id: String, level: u32) -> Result<(), String> { call_dbus_void("SetBtCallVolume", DV_PATH, DV_IFACE, (device_id.as_str(), level)).await }
-#[command] pub async fn set_headset_eq_preset(device_id: String, preset_idx: u32) -> Result<(), String> { call_dbus_void("SetEqPreset", DV_PATH, DV_IFACE, (device_id.as_str(), preset_idx)).await }
-#[command] pub async fn set_headset_eq_curve(device_id: String, bands_json: String) -> Result<(), String> { call_dbus_void("SetEqCurve", DV_PATH, DV_IFACE, (device_id.as_str(), bands_json.as_str())).await }
+// Device commands delegate to the blocking core implementation via spawn_blocking.
+// Project decision: the core client is blocking (sync cxx-qt compatibility); Tauri
+// wraps them async to avoid blocking the tokio runtime.
+
+#[command]
+pub async fn get_devices() -> Result<String, String> {
+    tokio::task::spawn_blocking(opengg_core::device::get_devices)
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_mouse_dpi(device_id: String, dpi: u32) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_mouse_dpi(device_id, dpi))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_mouse_polling_rate(device_id: String, rate: u32) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_mouse_polling_rate(device_id, rate))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_headset_sidetone(device_id: String, level: u32) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_headset_sidetone(device_id, level))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_headset_chatmix(device_id: String, level: u32) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_headset_chatmix(device_id, level))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_headset_inactive_time(device_id: String, minutes: u32) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_headset_inactive_time(device_id, minutes))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_headset_mic_volume(device_id: String, level: u32) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_headset_mic_volume(device_id, level))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_headset_mic_mute_led(device_id: String, brightness: u32) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_headset_mic_mute_led(device_id, brightness))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_headset_volume_limiter(device_id: String, enabled: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_headset_volume_limiter(device_id, enabled))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_headset_bt_powered_on(device_id: String, enabled: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_headset_bt_powered_on(device_id, enabled))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_headset_bt_call_volume(device_id: String, level: u32) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_headset_bt_call_volume(device_id, level))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_headset_eq_preset(device_id: String, preset_idx: u32) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_headset_eq_preset(device_id, preset_idx))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[command]
+pub async fn set_headset_eq_curve(device_id: String, bands_json: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || opengg_core::device::set_headset_eq_curve(device_id, bands_json))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
 
 // ═══ Job #3: Optimization & Features ═══
 
