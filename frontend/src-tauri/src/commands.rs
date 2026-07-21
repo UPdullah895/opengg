@@ -3025,123 +3025,24 @@ pub async fn list_user_locales() -> Result<Vec<UserLocale>, String> {
     opengg_core::settings::list_user_locales()
 }
 
-#[derive(Serialize)]
-pub struct StorageInfo {
-    pub clip_count: u64,
-    pub used_bytes: u64,
-    pub total_bytes: u64,
-    pub free_bytes: u64,
-}
+// StorageInfo + get_storage_info live in opengg_core::storage; the wrapper
+// wraps the synchronous core call in spawn_blocking.
+pub use opengg_core::storage::StorageInfo;
 
 /// Returns disk usage for the clips folder plus filesystem free/total space.
 #[command]
 pub async fn get_storage_info(clip_directories: Vec<String>) -> Result<StorageInfo, String> {
-    let (total_count, total_used, first_existing) = tokio::task::spawn_blocking(move || {
-        let mut total_count = 0u64;
-        let mut total_used = 0u64;
-        let mut first_existing: Option<PathBuf> = None;
-
-        for dir_str in &clip_directories {
-            let folder = PathBuf::from(shexp(dir_str));
-            if !folder.exists() {
-                continue;
-            }
-            if first_existing.is_none() {
-                first_existing = Some(folder.clone());
-            }
-            for e in walkdir::WalkDir::new(&folder)
-                .min_depth(1)
-                .into_iter()
-                .flatten()
-            {
-                let p = e.path().to_path_buf();
-                if !p.is_file() {
-                    continue;
-                }
-                let name = p
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_lowercase();
-                if name.ends_with(".mp4")
-                    || name.ends_with(".mkv")
-                    || name.ends_with(".webm")
-                    || name.ends_with(".mov")
-                {
-                    total_count += 1;
-                    if let Ok(meta) = e.metadata() {
-                        total_used += meta.len();
-                    }
-                }
-            }
-        }
-        (total_count, total_used, first_existing)
-    }).await.map_err(|e| format!("spawn_blocking: {e}"))?;
-
-    let fs_root = first_existing.unwrap_or_else(|| PathBuf::from("/"));
-    let (total_bytes, free_bytes) = get_fs_stats(&fs_root);
-
-    Ok(StorageInfo {
-        clip_count: total_count,
-        used_bytes: total_used,
-        total_bytes,
-        free_bytes,
-    })
-}
-
-#[cfg(unix)]
-fn get_fs_stats(path: &Path) -> (u64, u64) {
-    use std::os::unix::ffi::OsStrExt;
-    let mut stat: libc_statvfs = unsafe { std::mem::zeroed() };
-    let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap_or_default();
-    unsafe {
-        if libc_statvfs_call(cpath.as_ptr(), &mut stat) == 0 {
-            let bsize = stat.f_frsize as u64;
-            return (stat.f_blocks * bsize, stat.f_bfree * bsize);
-        }
-    }
-    (0, 0)
-}
-#[cfg(not(unix))]
-fn get_fs_stats(_path: &PathBuf) -> (u64, u64) {
-    (0, 0)
-}
-
-// Thin statvfs wrapper to avoid adding libc as a direct dep.
-#[cfg(unix)]
-#[repr(C)]
-struct libc_statvfs {
-    f_bsize: u64,
-    f_frsize: u64,
-    f_blocks: u64,
-    f_bfree: u64,
-    f_bavail: u64,
-    f_files: u64,
-    f_ffree: u64,
-    f_favail: u64,
-    f_fsid: u64,
-    f_flag: u64,
-    f_namemax: u64,
-    __spare: [u64; 6],
-}
-#[cfg(unix)]
-extern "C" {
-    fn statvfs(path: *const std::ffi::c_char, buf: *mut libc_statvfs) -> std::ffi::c_int;
-}
-#[cfg(unix)]
-unsafe fn libc_statvfs_call(
-    path: *const std::ffi::c_char,
-    buf: *mut libc_statvfs,
-) -> std::ffi::c_int {
-    unsafe { statvfs(path, buf) }
+    tokio::task::spawn_blocking(move || opengg_core::storage::get_storage_info(&clip_directories))
+        .await
+        .map_err(|e| format!("spawn_blocking: {e}"))
 }
 
 // ═══ Helpers ═══
-fn thumb_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("opengg/thumbnails")
-}
+// Shared path helpers now live in opengg_core::paths; re-exported so existing
+// `commands::shexp` / `commands::default_clips_dir` call sites (main.rs) keep working.
+pub use opengg_core::paths::{
+    default_clips_dir, get_all_clip_dirs, resolve_clips_dir, shexp, thumb_dir,
+};
 
 /// Count actual audio streams in a file via ffprobe
 fn count_audio_streams(path: &str) -> u32 {
@@ -3292,79 +3193,15 @@ fn find_system_font() -> String {
 /// Clear the thumbnail cache directory
 #[command]
 pub async fn clear_thumbnail_cache() -> Result<u32, String> {
-    let td = thumb_dir();
-    let mut count = 0u32;
-    if td.exists() {
-        // Count files before deleting
-        if let Ok(entries) = std::fs::read_dir(&td) {
-            count = entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_file())
-                .count() as u32;
-        }
-        std::fs::remove_dir_all(&td).map_err(|e| format!("remove: {e}"))?;
-    }
-    std::fs::create_dir_all(&td).map_err(|e| format!("create: {e}"))?;
-    Ok(count)
-}
-fn resolve_clips_dir(f: &str) -> PathBuf {
-    if !f.is_empty() {
-        return PathBuf::from(shexp(f));
-    }
-    let sp = settings_path();
-    if sp.exists() {
-        if let Ok(j) = std::fs::read_to_string(&sp) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) {
-                if let Some(arr) = v["settings"]["clip_directories"].as_array() {
-                    if let Some(first) = arr.first() {
-                        if let Some(f) = first.as_str() {
-                            return PathBuf::from(shexp(f));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    default_clips_dir()
-}
-pub fn default_clips_dir() -> PathBuf {
-    dirs::video_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap().join("Videos"))
-        .join("OpenGG")
-}
-pub fn shexp(p: &str) -> String {
-    if p.starts_with("~/") {
-        if let Some(h) = dirs::home_dir() {
-            return p.replacen("~", &h.to_string_lossy(), 1);
-        }
-    }
-    p.into()
+    opengg_core::storage::clear_thumbnail_cache()
 }
 pub fn settings_path_pub() -> PathBuf {
     settings_path()
 }
 
-/// Returns all directories to scan for clips: all entries from `clip_directories` in settings.
-fn get_all_clip_dirs(primary: &str) -> Vec<PathBuf> {
-    let sp = settings_path();
-    if let Ok(j) = std::fs::read_to_string(&sp) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) {
-            if let Some(arr) = v["settings"]["clip_directories"].as_array() {
-                let dirs: Vec<PathBuf> = arr
-                    .iter()
-                    .filter_map(|s| s.as_str())
-                    .map(|p| PathBuf::from(shexp(p)))
-                    .collect::<std::collections::HashSet<_>>()
-                    .into_iter()
-                    .collect();
-                if !dirs.is_empty() {
-                    return dirs;
-                }
-            }
-        }
-    }
-    vec![resolve_clips_dir(primary)]
-}
+// `resolve_clips_dir`, `default_clips_dir`, `shexp`, and `get_all_clip_dirs`
+// now live in opengg_core::paths (imported above).
+
 fn auto_name(input: &str, suffix: &str) -> String {
     let p = Path::new(input);
     let s = p.file_stem().unwrap_or_default().to_string_lossy();

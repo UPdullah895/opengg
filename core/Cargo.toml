@@ -17,3 +17,5 @@ unicode-normalization = "0.1"
 # XDG config-dir resolution + "open folder in file manager" for settings IO.
 dirs = "5"
 open = "5"
+# Recursive clip-directory walking for storage stats.
+walkdir = "2"
