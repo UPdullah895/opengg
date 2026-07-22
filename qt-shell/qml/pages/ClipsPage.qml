@@ -14,6 +14,9 @@ Rectangle {
         ? JSON.parse(ClipsController.clipsJson)
         : []
 
+    // Clip currently open in the player overlay (null = closed).
+    property var playerClip: null
+
     Component.onCompleted: ClipsController.refresh()
 
     // ── formatting helpers ────────────────────────────────────────────────
@@ -276,10 +279,19 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        // Playback wired in the VideoPlayer slice (plan S5).
+                        onClicked: page.playerClip = modelData
                     }
                 }
             }
         }
+    }
+
+    // ── Player overlay ────────────────────────────────────────────────────
+    VideoPlayer {
+        anchors.fill: parent
+        visible: page.playerClip !== null
+        source: page.playerClip ? "file://" + page.playerClip.filepath : ""
+        title: page.playerClip ? page.displayName(page.playerClip) : ""
+        onClosed: page.playerClip = null
     }
 }
