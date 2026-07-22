@@ -16,6 +16,15 @@ Rectangle {
 
     // Clip currently open in the player overlay (null = closed).
     property var playerClip: null
+    // Clips targeted by the rename / delete dialogs (null = dialog closed).
+    property var renameTarget: null
+    property var deleteTarget: null
+
+    function applyRename() {
+        if (renameTarget && nameField.text.trim().length > 0)
+            ClipsController.setCustomName(renameTarget.filepath, nameField.text.trim())
+        renameTarget = null
+    }
 
     // ── Toolbar filter/sort state ─────────────────────────────────────────
     property string searchText: ""
@@ -475,16 +484,6 @@ Rectangle {
                                 }
                             }
 
-                            // Favorite star
-                            Text {
-                                anchors.left: parent.left
-                                anchors.top: parent.top
-                                anchors.margins: 6
-                                visible: !!modelData.favorite
-                                text: "★"
-                                color: "#fbbf24"
-                                font.pixelSize: 15
-                            }
                         }
 
                         // Info strip
@@ -520,12 +519,73 @@ Rectangle {
                         }
                     }
 
+                    // Opens the player (sits below the action buttons).
                     MouseArea {
                         id: cardArea
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: page.playerClip = modelData
+                    }
+
+                    // Card-level hover — stays true over the action buttons too.
+                    HoverHandler { id: cardHover }
+
+                    // Favorite toggle (top-left): shown on hover or when favorited.
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.margins: 6
+                        width: 26; height: 26; radius: 13
+                        visible: cardHover.hovered || !!modelData.favorite
+                        color: favArea.containsMouse ? "#aa000000" : "#66000000"
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.favorite ? "★" : "☆"
+                            color: modelData.favorite ? "#fbbf24" : "#ffffff"
+                            font.pixelSize: 15
+                        }
+                        MouseArea {
+                            id: favArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: ClipsController.setFavorite(modelData.filepath, !modelData.favorite)
+                        }
+                    }
+
+                    // Rename + delete (top-right): shown on hover.
+                    Row {
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 6
+                        spacing: 4
+                        visible: cardHover.hovered
+
+                        Rectangle {
+                            width: 26; height: 26; radius: 13
+                            color: renameArea.containsMouse ? Theme.accent : "#66000000"
+                            Text { anchors.centerIn: parent; text: "✎"; color: "#ffffff"; font.pixelSize: 13 }
+                            MouseArea {
+                                id: renameArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: page.renameTarget = modelData
+                            }
+                        }
+                        Rectangle {
+                            width: 26; height: 26; radius: 13
+                            color: delArea.containsMouse ? "#dc2626" : "#66000000"
+                            Text { anchors.centerIn: parent; text: "🗑"; color: "#ffffff"; font.pixelSize: 12 }
+                            MouseArea {
+                                id: delArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: page.deleteTarget = modelData
+                            }
+                        }
                     }
                 }
             }
@@ -539,5 +599,175 @@ Rectangle {
         source: page.playerClip ? "file://" + page.playerClip.filepath : ""
         title: page.playerClip ? page.displayName(page.playerClip) : ""
         onClosed: page.playerClip = null
+    }
+
+    // ── Rename dialog ─────────────────────────────────────────────────────
+    Rectangle {
+        anchors.fill: parent
+        color: "#cc0b0d13"
+        visible: page.renameTarget !== null
+        MouseArea { anchors.fill: parent; onClicked: page.renameTarget = null }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: 380
+            implicitHeight: rcol.implicitHeight + 32
+            radius: Theme.radius
+            color: Theme.surface
+            border.width: 1
+            border.color: Theme.border
+            MouseArea { anchors.fill: parent }   // absorb backdrop clicks
+
+            Column {
+                id: rcol
+                anchors.fill: parent
+                anchors.margins: 16
+                spacing: 12
+
+                Text {
+                    text: "Rename clip"
+                    color: Theme.text
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                }
+
+                Rectangle {
+                    width: parent.width
+                    implicitHeight: 34
+                    radius: Theme.radius
+                    color: Theme.bg
+                    border.width: 1
+                    border.color: nameField.activeFocus ? Theme.accent : Theme.border
+                    TextField {
+                        id: nameField
+                        anchors.fill: parent
+                        leftPadding: 10
+                        rightPadding: 10
+                        verticalAlignment: TextInput.AlignVCenter
+                        color: Theme.text
+                        font.pixelSize: 13
+                        background: Item {}
+                        selectByMouse: true
+                        onAccepted: page.applyRename()
+                    }
+                }
+
+                Row {
+                    anchors.right: parent.right
+                    spacing: 8
+                    Rectangle {
+                        width: 84; height: 32; radius: Theme.radius
+                        color: cancelR.containsMouse ? Theme.border : "transparent"
+                        border.width: 1
+                        border.color: Theme.border
+                        Text { anchors.centerIn: parent; text: "Cancel"; color: Theme.text; font.pixelSize: 13 }
+                        MouseArea {
+                            id: cancelR
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: page.renameTarget = null
+                        }
+                    }
+                    Rectangle {
+                        width: 84; height: 32; radius: Theme.radius
+                        color: Theme.accent
+                        Text { anchors.centerIn: parent; text: "Save"; color: "#ffffff"; font.pixelSize: 13 }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: page.applyRename()
+                        }
+                    }
+                }
+            }
+        }
+
+        // Prefill + focus the field whenever a new target opens.
+        Connections {
+            target: page
+            function onRenameTargetChanged() {
+                if (page.renameTarget) {
+                    nameField.text = page.displayName(page.renameTarget)
+                    nameField.forceActiveFocus()
+                    nameField.selectAll()
+                }
+            }
+        }
+    }
+
+    // ── Delete confirmation ───────────────────────────────────────────────
+    Rectangle {
+        anchors.fill: parent
+        color: "#cc0b0d13"
+        visible: page.deleteTarget !== null
+        MouseArea { anchors.fill: parent; onClicked: page.deleteTarget = null }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: 400
+            implicitHeight: dcol.implicitHeight + 32
+            radius: Theme.radius
+            color: Theme.surface
+            border.width: 1
+            border.color: Theme.border
+            MouseArea { anchors.fill: parent }
+
+            Column {
+                id: dcol
+                anchors.fill: parent
+                anchors.margins: 16
+                spacing: 12
+
+                Text {
+                    text: "Delete clip?"
+                    color: Theme.text
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    width: parent.width
+                    text: page.deleteTarget
+                          ? "This permanently deletes “" + page.displayName(page.deleteTarget) + "” from disk."
+                          : ""
+                    color: Theme.textDim
+                    font.pixelSize: 13
+                    wrapMode: Text.WordWrap
+                }
+
+                Row {
+                    anchors.right: parent.right
+                    spacing: 8
+                    Rectangle {
+                        width: 84; height: 32; radius: Theme.radius
+                        color: cancelD.containsMouse ? Theme.border : "transparent"
+                        border.width: 1
+                        border.color: Theme.border
+                        Text { anchors.centerIn: parent; text: "Cancel"; color: Theme.text; font.pixelSize: 13 }
+                        MouseArea {
+                            id: cancelD
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: page.deleteTarget = null
+                        }
+                    }
+                    Rectangle {
+                        width: 84; height: 32; radius: Theme.radius
+                        color: "#dc2626"
+                        Text { anchors.centerIn: parent; text: "Delete"; color: "#ffffff"; font.pixelSize: 13 }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (page.deleteTarget)
+                                    ClipsController.deleteClip(page.deleteTarget.filepath)
+                                page.deleteTarget = null
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
