@@ -17,6 +17,46 @@ Rectangle {
     // Clip currently open in the player overlay (null = closed).
     property var playerClip: null
 
+    // ── Toolbar filter/sort state ─────────────────────────────────────────
+    property string searchText: ""
+    property string sortMode: "newest"   // newest | oldest | longest | shortest
+    property string gameFilter: ""        // "" = all games
+
+    // Distinct game names present in the library (for the filter dropdown).
+    property var gameList: {
+        var seen = {}
+        for (var i = 0; i < clips.length; i++) {
+            var g = clips[i].game || "Unknown"
+            seen[g] = true
+        }
+        return ["All games"].concat(Object.keys(seen).sort())
+    }
+
+    // Clips after search + game filter + sort — the grid's actual model.
+    property var filteredClips: {
+        var q = searchText.toLowerCase()
+        var out = clips.filter(function (c) {
+            if (gameFilter && (c.game || "Unknown") !== gameFilter)
+                return false
+            if (q.length > 0) {
+                var name = displayName(c).toLowerCase()
+                var game = (c.game || "").toLowerCase()
+                if (name.indexOf(q) < 0 && game.indexOf(q) < 0)
+                    return false
+            }
+            return true
+        }).slice()
+        if (sortMode === "newest")
+            out.sort(function (a, b) { return (b.createdTs || 0) - (a.createdTs || 0) })
+        else if (sortMode === "oldest")
+            out.sort(function (a, b) { return (a.createdTs || 0) - (b.createdTs || 0) })
+        else if (sortMode === "longest")
+            out.sort(function (a, b) { return (b.duration || 0) - (a.duration || 0) })
+        else if (sortMode === "shortest")
+            out.sort(function (a, b) { return (a.duration || 0) - (b.duration || 0) })
+        return out
+    }
+
     Component.onCompleted: ClipsController.refresh()
 
     // ── formatting helpers ────────────────────────────────────────────────
@@ -72,7 +112,9 @@ Rectangle {
                 Text {
                     id: countLabel
                     anchors.centerIn: parent
-                    text: page.clips.length + (page.clips.length === 1 ? " clip" : " clips")
+                    text: page.filteredClips.length === page.clips.length
+                          ? page.clips.length + (page.clips.length === 1 ? " clip" : " clips")
+                          : page.filteredClips.length + " of " + page.clips.length
                     color: Theme.textDim
                     font.pixelSize: 12
                 }
@@ -102,6 +144,186 @@ Rectangle {
                     cursorShape: Qt.PointingHandCursor
                     enabled: !ClipsController.loading
                     onClicked: ClipsController.refresh()
+                }
+            }
+        }
+
+        // ── Toolbar: search + sort + game filter ──────────────────────────
+        RowLayout {
+            Layout.fillWidth: true
+            visible: page.clips.length > 0
+            spacing: 10
+
+            // Search
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.maximumWidth: 360
+                implicitHeight: 32
+                radius: Theme.radius
+                color: Theme.surface
+                border.width: 1
+                border.color: searchField.activeFocus ? Theme.accent : Theme.border
+
+                TextField {
+                    id: searchField
+                    anchors.fill: parent
+                    leftPadding: 10
+                    rightPadding: 10
+                    verticalAlignment: TextInput.AlignVCenter
+                    color: Theme.text
+                    font.pixelSize: 13
+                    placeholderText: "Search clips…"
+                    placeholderTextColor: Theme.textDim
+                    selectByMouse: true
+                    background: Item {}
+                    onTextChanged: page.searchText = text
+                }
+            }
+
+            Item { Layout.fillWidth: true }
+
+            // Game filter
+            ComboBox {
+                id: gameBox
+                implicitWidth: 170
+                implicitHeight: 32
+                model: page.gameList
+                currentIndex: 0
+                onActivated: page.gameFilter = (currentIndex === 0 ? "" : currentText)
+                // reset selection if the game list changes out from under us
+                Connections {
+                    target: page
+                    function onGameListChanged() {
+                        if (gameBox.currentIndex >= page.gameList.length)
+                            gameBox.currentIndex = 0
+                    }
+                }
+                font.pixelSize: 13
+                background: Rectangle {
+                    radius: Theme.radius
+                    color: Theme.surface
+                    border.width: 1
+                    border.color: Theme.border
+                }
+                contentItem: Text {
+                    leftPadding: 10
+                    rightPadding: gameBox.indicator.width + 6
+                    text: gameBox.displayText
+                    color: Theme.text
+                    font: gameBox.font
+                    elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
+                }
+                indicator: Text {
+                    x: gameBox.width - width - 8
+                    y: (gameBox.height - height) / 2
+                    text: "▾"
+                    color: Theme.textDim
+                    font.pixelSize: 11
+                }
+                popup: Popup {
+                    y: gameBox.height + 2
+                    width: gameBox.width
+                    implicitHeight: Math.min(contentItem.implicitHeight + 2, 320)
+                    padding: 1
+                    background: Rectangle {
+                        radius: Theme.radius
+                        color: Theme.surface
+                        border.width: 1
+                        border.color: Theme.border
+                    }
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: gameBox.popup.visible ? gameBox.delegateModel : null
+                        ScrollBar.vertical: ScrollBar {}
+                    }
+                }
+                delegate: ItemDelegate {
+                    width: gameBox.width
+                    height: 30
+                    contentItem: Text {
+                        text: modelData
+                        color: Theme.text
+                        font.pixelSize: 13
+                        elide: Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    highlighted: gameBox.highlightedIndex === index
+                    background: Rectangle {
+                        color: highlighted ? Theme.border : "transparent"
+                    }
+                }
+            }
+
+            // Sort
+            ComboBox {
+                id: sortBox
+                implicitWidth: 130
+                implicitHeight: 32
+                textRole: "label"
+                valueRole: "value"
+                model: [
+                    { label: "Newest",   value: "newest" },
+                    { label: "Oldest",   value: "oldest" },
+                    { label: "Longest",  value: "longest" },
+                    { label: "Shortest", value: "shortest" }
+                ]
+                currentIndex: 0
+                onActivated: page.sortMode = currentValue
+                font.pixelSize: 13
+                background: Rectangle {
+                    radius: Theme.radius
+                    color: Theme.surface
+                    border.width: 1
+                    border.color: Theme.border
+                }
+                contentItem: Text {
+                    leftPadding: 10
+                    rightPadding: sortBox.indicator.width + 6
+                    text: sortBox.displayText
+                    color: Theme.text
+                    font: sortBox.font
+                    elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
+                }
+                indicator: Text {
+                    x: sortBox.width - width - 8
+                    y: (sortBox.height - height) / 2
+                    text: "▾"
+                    color: Theme.textDim
+                    font.pixelSize: 11
+                }
+                popup: Popup {
+                    y: sortBox.height + 2
+                    width: sortBox.width
+                    implicitHeight: contentItem.implicitHeight + 2
+                    padding: 1
+                    background: Rectangle {
+                        radius: Theme.radius
+                        color: Theme.surface
+                        border.width: 1
+                        border.color: Theme.border
+                    }
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: sortBox.popup.visible ? sortBox.delegateModel : null
+                    }
+                }
+                delegate: ItemDelegate {
+                    width: sortBox.width
+                    height: 30
+                    contentItem: Text {
+                        text: modelData.label
+                        color: Theme.text
+                        font.pixelSize: 13
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    highlighted: sortBox.highlightedIndex === index
+                    background: Rectangle {
+                        color: highlighted ? Theme.border : "transparent"
+                    }
                 }
             }
         }
@@ -150,12 +372,36 @@ Rectangle {
             }
         }
 
+        // ── No-matches state (library non-empty, filters exclude all) ─────
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: page.clips.length > 0 && page.filteredClips.length === 0
+            ColumnLayout {
+                anchors.centerIn: parent
+                spacing: 8
+                Text {
+                    text: "No clips match"
+                    color: Theme.text
+                    font.pixelSize: 16
+                    font.weight: Font.Bold
+                    Layout.alignment: Qt.AlignHCenter
+                }
+                Text {
+                    text: "Try a different search or game filter."
+                    color: Theme.textDim
+                    font.pixelSize: 13
+                    Layout.alignment: Qt.AlignHCenter
+                }
+            }
+        }
+
         // ── Clip grid ─────────────────────────────────────────────────────
         GridView {
             id: grid
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: page.clips.length > 0
+            visible: page.filteredClips.length > 0
             clip: true
             cacheBuffer: 400
 
@@ -163,7 +409,7 @@ Rectangle {
             cellWidth: width / columns
             cellHeight: cellWidth * 0.5625 + 62  // 16:9 thumb + info strip
 
-            model: page.clips
+            model: page.filteredClips
 
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
