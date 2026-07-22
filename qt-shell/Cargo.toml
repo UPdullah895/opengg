@@ -16,9 +16,9 @@ cxx-qt-lib = { version = "0.9", features = ["full"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 # Shared business logic incl. the daemon D-Bus client (plan §2.2/§2.3).
 # DeviceController now uses opengg_core::device; AudioController still has a
-# local zbus client (TODO(core): migrate audio.rs to opengg_core::audio next).
+# All daemon D-Bus + pactl access goes through opengg_core (plan §2.3); qt-shell
+# no longer depends on zbus directly.
 opengg-core = { path = "../core" }
-zbus = "4"
 
 [build-dependencies]
 cxx-qt-build = "0.9"
