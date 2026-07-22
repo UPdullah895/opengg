@@ -808,7 +808,9 @@ pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
 /// Call probe_clips() afterward to fill in missing metadata in the background.
 #[command]
 pub async fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
-    core_get_clips_fast(folder).await
+    tokio::task::spawn_blocking(move || core_get_clips_fast(folder))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
 }
 
 /// Probe duration/resolution for a list of files and write results to the SQLite cache.

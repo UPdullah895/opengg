@@ -12,12 +12,12 @@ path = "src/main.rs"
 cxx = "1"
 cxx-qt = "0.9"
 cxx-qt-lib = { version = "0.9", features = ["full"] }
-# preserve_order keeps the shared ui-settings.json key order stable on rewrite.
+# preserve_order keeps the shared ui-settings.json key order stable on rewrite;
+# also used to serialize clip lists for the QML side.
 serde_json = { version = "1", features = ["preserve_order"] }
-# Shared business logic incl. the daemon D-Bus client (plan §2.2/§2.3).
-# DeviceController now uses opengg_core::device; AudioController still has a
-# All daemon D-Bus + pactl access goes through opengg_core (plan §2.3); qt-shell
-# no longer depends on zbus directly.
+# Shared business logic: daemon D-Bus client, pactl, clips DB, media, paths, etc.
+# (plan §2.2/§2.3). All daemon/pactl/SQLite access goes through opengg_core;
+# qt-shell no longer depends on zbus directly.
 opengg-core = { path = "../core" }
 
 [build-dependencies]

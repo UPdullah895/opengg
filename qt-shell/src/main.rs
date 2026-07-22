@@ -1,4 +1,5 @@
 mod audio;
+mod clips;
 mod device;
 mod i18n;
 

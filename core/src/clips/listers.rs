@@ -307,7 +307,7 @@ pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
 /// Fast clip list — skips ffprobe entirely for uncached clips.
 /// Uncached clips get duration=0, width=0, height=0 so the grid can appear immediately.
 /// Call probe_clips() afterward to fill in missing metadata in the background.
-pub async fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
+pub fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
     #[cfg(debug_assertions)]
     let t_total = std::time::Instant::now();
     let dirs = get_all_clip_dirs(&folder);
