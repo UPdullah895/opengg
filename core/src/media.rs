@@ -198,7 +198,9 @@ pub async fn generate_waveform(
 /// Generate a thumbnail image at 480p height from a video clip.
 /// Caches results in `~/.local/share/opengg/thumbnails/`.
 /// Uses the 10% point in the video, or the provided duration hint to skip ffprobe.
-pub async fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Result<String, String> {
+/// Synchronous (blocking-in-core rule, plan §2.2/§2.3) — async callers (Tauri) wrap
+/// in `spawn_blocking`; the qt-shell caller runs it on its own worker thread.
+pub fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Result<String, String> {
     let id = format!("{:x}", hash_str(&filepath));
     let d = thumb_dir();
     let _ = std::fs::create_dir_all(&d);
@@ -216,14 +218,17 @@ pub async fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Resu
     let t_probe_ms = t_start.elapsed().as_millis();
     let seek = if dur > 1.0 { dur * 0.1 } else { 0.0 };
     // 480p thumbnails: ~853x480 at q:v 3 (~90KB each). Matches SteelSeries quality.
-    let r = run_command_output_async("ffmpeg", &[
-        "-ss", &format!("{seek:.2}"),
-        "-i", &filepath,
-        "-vframes", "1",
-        "-vf", "scale=-2:480",
-        "-q:v", "3",
-        "-y", &out.to_string_lossy(),
-    ]).await?;
+    let r = Command::new("ffmpeg")
+        .args([
+            "-ss", &format!("{seek:.2}"),
+            "-i", &filepath,
+            "-vframes", "1",
+            "-vf", "scale=-2:480",
+            "-q:v", "3",
+            "-y", &out.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|e| format!("ffmpeg: {e}"))?;
     #[cfg(debug_assertions)]
     {
         let fname = filepath

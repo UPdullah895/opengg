@@ -828,7 +828,9 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
 }
 #[command]
 pub async fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Result<String, String> {
-    core_generate_thumbnail(filepath, duration).await
+    tokio::task::spawn_blocking(move || core_generate_thumbnail(filepath, duration))
+        .await
+        .map_err(|e| format!("spawn_blocking join: {e}"))?
 }
 /// Phase 3d: Batch thumbnail generation — generates up to 3 concurrently.
 /// `durations`: optional per-filepath duration hints. When provided and non-zero,

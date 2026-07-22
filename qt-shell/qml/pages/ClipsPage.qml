@@ -457,13 +457,21 @@ Rectangle {
                                 source: modelData.thumbnail ? "file://" + modelData.thumbnail : ""
                             }
 
-                            // Placeholder when no thumbnail
+                            // Placeholder when no thumbnail; kicks off async
+                            // generation once (deduped on the Rust side across
+                            // reloads/re-mounts) so the image pops in when ready.
                             Text {
                                 anchors.centerIn: parent
                                 visible: !modelData.thumbnail
                                 text: "▶"
                                 color: Theme.border
                                 font.pixelSize: 34
+
+                                Component.onCompleted: {
+                                    if (!modelData.thumbnail && modelData.filepath) {
+                                        ClipsController.requestThumbnail(modelData.filepath)
+                                    }
+                                }
                             }
 
                             // Duration pill
