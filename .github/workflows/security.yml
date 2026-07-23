@@ -51,7 +51,7 @@ jobs:
     continue-on-error: false
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2.0.20
+      - uses: EmbarkStudios/cargo-deny-action@v2.1.1
         with:
           log-level: warn
           manifest-path: ./daemon/Cargo.toml
@@ -63,7 +63,7 @@ jobs:
     continue-on-error: false
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2.0.20
+      - uses: EmbarkStudios/cargo-deny-action@v2.1.1
         with:
           log-level: warn
           manifest-path: ./frontend/src-tauri/Cargo.toml
