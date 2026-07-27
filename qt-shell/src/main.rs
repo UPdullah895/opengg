@@ -2,6 +2,7 @@ mod audio;
 mod clips;
 mod device;
 mod i18n;
+mod recording;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
 

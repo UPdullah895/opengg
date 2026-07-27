@@ -20,7 +20,13 @@ fn main() {
 
     CxxQtBuilder::new_qml_module(QmlModule::new("com.opengg.app").qml_files(qml_files))
         // Rust cxx-qt QObjects (registered into the com.opengg.app module).
-        .files(["src/i18n.rs", "src/audio.rs", "src/device.rs", "src/clips.rs"])
+        .files([
+            "src/i18n.rs",
+            "src/audio.rs",
+            "src/device.rs",
+            "src/clips.rs",
+            "src/recording.rs",
+        ])
         // Qt Multimedia (MediaPlayer/VideoOutput) for the clip player — the
         // GStreamer backend is the PoC-validated Wayland-native path (plan §7).
         .qt_module("Multimedia")

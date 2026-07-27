@@ -13,14 +13,20 @@ Rectangle {
         ? JSON.parse(AudioController.channelsJson)
         : []
 
-    Component.onCompleted: AudioController.refresh()
+    Component.onCompleted: {
+        AudioController.refresh()
+        RecordingController.refresh()
+    }
 
-    // Light polling so external volume changes show up live.
+    // Light polling so external volume/recording state changes show up live.
     Timer {
         interval: 2000
         running: true
         repeat: true
-        onTriggered: AudioController.refresh()
+        onTriggered: {
+            AudioController.refresh()
+            RecordingController.refresh()
+        }
     }
 
     ScrollView {
@@ -38,6 +44,98 @@ Rectangle {
                 color: Theme.text
                 font.pixelSize: 26
                 font.weight: Font.Bold
+            }
+
+            // ── Recording card ───────────────────────────────────────────
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 680
+                radius: Theme.radius
+                color: Theme.surface
+                border.width: 1
+                border.color: Theme.border
+                implicitHeight: recCol.implicitHeight + 40
+
+                ColumnLayout {
+                    id: recCol
+                    anchors.fill: parent
+                    anchors.margins: 20
+                    spacing: 12
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "Replay Buffer"
+                            color: Theme.text
+                            font.pixelSize: 18
+                            font.weight: Font.DemiBold
+                            Layout.fillWidth: true
+                        }
+                        Rectangle {
+                            width: 8; height: 8; radius: 4
+                            color: RecordingController.running ? "#22c55e" : "#6b7280"
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+                        Text {
+                            text: RecordingController.statusText
+                            color: Theme.textDim
+                            font.pixelSize: 12
+                        }
+                    }
+
+                    Text {
+                        visible: RecordingController.error.length > 0
+                        text: RecordingController.error
+                        color: Theme.accent
+                        font.pixelSize: 12
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+
+                    Row {
+                        spacing: 10
+
+                        Rectangle {
+                            width: 120; height: 34; radius: Theme.radius
+                            color: RecordingController.running ? "#dc2626" : Theme.accent
+                            Text {
+                                anchors.centerIn: parent
+                                text: RecordingController.running ? "Stop" : "Start"
+                                color: "#ffffff"
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: RecordingController.running
+                                           ? RecordingController.stop()
+                                           : RecordingController.start()
+                            }
+                        }
+
+                        Rectangle {
+                            width: 120; height: 34; radius: Theme.radius
+                            visible: RecordingController.running
+                            color: saveArea.containsMouse ? Theme.border : Theme.surface
+                            border.width: 1
+                            border.color: Theme.border
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Save clip"
+                                color: Theme.text
+                                font.pixelSize: 13
+                            }
+                            MouseArea {
+                                id: saveArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: RecordingController.save()
+                            }
+                        }
+                    }
+                }
             }
 
             // ── Audio channels card ────────────────────────────────────────
