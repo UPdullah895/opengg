@@ -15,6 +15,7 @@ pub mod clips;
 pub mod daemon;
 pub mod device;
 pub mod extensions;
+pub mod gsr;
 pub mod media;
 pub mod paths;
 pub mod recording;

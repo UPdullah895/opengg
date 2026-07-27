@@ -321,7 +321,6 @@ fn main() {
             ));
             app.manage(EarBlastState::default());
             app.manage(ExportProcess::default());
-            app.manage(GsrProcess(Mutex::new(None)));
             app.manage(JalvProcesses(Mutex::new(std::collections::HashMap::new())));
             app.manage(RouteState::new());
 
@@ -779,32 +778,6 @@ pub struct WatcherHandle(pub Mutex<Option<notify::RecommendedWatcher>>);
 
 /// Per-session authentication token for media server requests.
 pub struct MediaServerToken(pub String);
-
-/// Spawn parameters retained so restart-on-save and hot-reload can respawn identically.
-pub struct GsrSpawnParams {
-    pub output_dir: String,
-    pub replay_secs: u32,
-    pub fps: u32,
-    pub quality: String,
-    pub bitrate_kbps: Option<u32>,
-    pub monitor_target: String,
-    pub audio_sources: Vec<String>,
-    /// The resolved, ordered capture targets actually passed to GSR via `-a` (after
-    /// existence-filtering / default fallback). The muxed file's audio stream order matches
-    /// this, so it's used to title each audio track with a friendly name on save.
-    pub audio_targets: Vec<String>,
-}
-
-/// Managed state for the GPU Screen Recorder child process.
-/// Stores the child, original spawn params, and a shared stderr buffer so we can
-/// diagnose crashes and surface actionable errors to the user.
-pub struct GsrState {
-    pub child: std::process::Child,
-    pub params: GsrSpawnParams,
-    pub stderr_log: Arc<Mutex<Vec<String>>>,
-}
-
-pub struct GsrProcess(pub Mutex<Option<GsrState>>);
 
 /// jalv LV2-host subprocesses keyed by channel name (e.g. "Game", "Chat").
 /// Each entry is (Child, ChildStdin) — stdin is kept open for runtime parameter updates.
