@@ -1,12 +1,14 @@
-//! ClipsController — a QML singleton exposing the local clip library from
-//! `opengg_core::clips` (SQLite metadata + filesystem scan; the "fast" lister,
-//! no ffprobe).
+//! ClipsController — a `QAbstractListModel`-backed QML singleton exposing the
+//! local clip library from `opengg_core::clips` (SQLite metadata + filesystem
+//! scan; the "fast" lister, no ffprobe).
 //!
 //! Boundary (plan §2.2/§2.3): all clip DB + path resolution lives in
-//! `opengg_core`; this is pure presentation glue over
-//! `opengg_core::clips::get_clips_fast`. Clips are handed to QML as a JSON
-//! string (parsed with `JSON.parse`); the `QAbstractListModel` upgrade is a
-//! later Phase 2/3 step (plan C-model note §2.2).
+//! `opengg_core`; this is pure presentation glue. Search/sort/game-filter are
+//! now server-side state (setSearchText/setGameFilter/setSortMode) instead of
+//! QML-side array juggling: `all_clips` holds the full unfiltered scan,
+//! `view` holds indices into it after filtering+sorting, and row_count()/
+//! data() read through `view`. This is the plan's "C-model" upgrade,
+//! replacing the earlier JSON-array-parsed-in-QML approach (clipsJson).
 //!
 //! Thumbnails: rather than a full `QQuickAsyncImageProvider` C++ shim (no
 //! cxx-qt-lib binding for it in 0.9), `requestThumbnail` uses the documented
@@ -18,22 +20,73 @@
 
 #[cxx_qt::bridge]
 pub mod qobject {
-    extern "C++" {
+    unsafe extern "C++" {
+        include!(<QtCore/QAbstractListModel>);
+        /// Base for the clip list model.
+        type QAbstractListModel;
+
+        include!("cxx-qt-lib/qmodelindex.h");
+        type QModelIndex = cxx_qt_lib::QModelIndex;
+
+        include!("cxx-qt-lib/qvariant.h");
+        type QVariant = cxx_qt_lib::QVariant;
+
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
+
+        include!("cxx-qt-lib/qstringlist.h");
+        type QStringList = cxx_qt_lib::QStringList;
+
+        include!("cxx-qt-lib/qbytearray.h");
+        type QByteArray = cxx_qt_lib::QByteArray;
+
+        include!("cxx-qt-lib/qhash.h");
+        /// QHash<i32, QByteArray> from cxx_qt_lib
+        type QHash_i32_QByteArray = cxx_qt_lib::QHash<cxx_qt_lib::QHashPair_i32_QByteArray>;
     }
 
-    extern "RustQt" {
+    /// Roles exposed to QML for each row — see `role_names()`.
+    #[qenum(ClipsController)]
+    enum ClipRoles {
+        FilePath,
+        Thumbnail,
+        Duration,
+        Title,
+        Game,
+        Filesize,
+        Favorite,
+    }
+
+    unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
         #[qml_singleton]
-        // Raw clips JSON (Vec<ClipInfo> serialized); parsed in QML with
-        // JSON.parse. A QAbstractListModel is the Phase 3 upgrade (plan §2.2).
-        #[qproperty(QString, clips_json, cxx_name = "clipsJson")]
+        #[base = QAbstractListModel]
         #[qproperty(bool, loading)]
         #[qproperty(QString, error)]
         #[qproperty(i32, count)]
+        #[qproperty(i32, total_count, cxx_name = "totalCount")]
+        #[qproperty(QStringList, game_list, cxx_name = "gameList")]
         type ClipsController = super::ClipsControllerRust;
+
+        #[cxx_override]
+        #[cxx_name = "rowCount"]
+        fn row_count(self: &Self, _parent: &QModelIndex) -> i32;
+
+        #[cxx_override]
+        fn data(self: &Self, index: &QModelIndex, role: i32) -> QVariant;
+
+        #[cxx_override]
+        #[cxx_name = "roleNames"]
+        fn role_names(self: &Self) -> QHash_i32_QByteArray;
+
+        #[inherit]
+        #[cxx_name = "beginResetModel"]
+        fn begin_reset_model(self: Pin<&mut Self>);
+
+        #[inherit]
+        #[cxx_name = "endResetModel"]
+        fn end_reset_model(self: Pin<&mut Self>);
 
         /// Rescan the clip library (fast path: DB + filesystem, no ffprobe).
         #[qinvokable]
@@ -57,10 +110,25 @@ pub mod qobject {
 
         /// Generate a cached thumbnail for a clip on a background worker
         /// thread (no-op if already cached or already in flight), then
-        /// rescan so `clipsJson` picks up the new thumbnail path.
+        /// rescan so the thumbnail role picks up the new path.
         #[qinvokable]
         #[cxx_name = "requestThumbnail"]
         fn request_thumbnail(self: Pin<&mut Self>, filepath: &QString);
+
+        /// Free-text search over title + game (case-insensitive substring).
+        #[qinvokable]
+        #[cxx_name = "setSearchText"]
+        fn set_search_text(self: Pin<&mut Self>, text: &QString);
+
+        /// Restrict to one game; empty string = all games.
+        #[qinvokable]
+        #[cxx_name = "setGameFilter"]
+        fn set_game_filter(self: Pin<&mut Self>, game: &QString);
+
+        /// One of "newest" | "oldest" | "longest" | "shortest".
+        #[qinvokable]
+        #[cxx_name = "setSortMode"]
+        fn set_sort_mode(self: Pin<&mut Self>, mode: &QString);
     }
 
     impl cxx_qt::Threading for ClipsController {}
@@ -68,18 +136,26 @@ pub mod qobject {
 
 use core::pin::Pin;
 use cxx_qt::{CxxQtType, Threading};
-use cxx_qt_lib::QString;
-use opengg_core::clips::ClipMetaUpdate;
+use cxx_qt_lib::{QByteArray, QHash, QHashPair_i32_QByteArray, QModelIndex, QString, QStringList, QVariant};
+use opengg_core::clips::{ClipInfo, ClipMetaUpdate};
+use qobject::{ClipRoles, QHash_i32_QByteArray};
 use std::collections::HashSet;
 use std::sync::mpsc::{self, Sender};
 use std::sync::OnceLock;
 
 #[derive(Default)]
 pub struct ClipsControllerRust {
-    clips_json: QString,
+    all_clips: Vec<ClipInfo>,
+    /// Indices into `all_clips` after filter+sort — what the model exposes.
+    view: Vec<usize>,
+    search_text: String,
+    game_filter: String,
+    sort_mode: String,
     loading: bool,
     error: QString,
     count: i32,
+    total_count: i32,
+    game_list: QStringList,
     /// Filepaths currently queued/generating on the thumbnail worker thread.
     thumbs_in_flight: HashSet<String>,
 }
@@ -108,32 +184,172 @@ fn thumb_worker() -> &'static Sender<ThumbJob> {
     })
 }
 
+/// Display title fallback chain, mirrors the old QML displayName(): custom
+/// name, else game, else filename, else "Untitled".
+fn title_for(clip: &ClipInfo) -> String {
+    if !clip.custom_name.is_empty() {
+        clip.custom_name.clone()
+    } else if !clip.game.is_empty() {
+        clip.game.clone()
+    } else if !clip.filename.is_empty() {
+        clip.filename.clone()
+    } else {
+        "Untitled".to_string()
+    }
+}
+
+/// Compute the filtered+sorted row order (indices into `clips`). Ported
+/// directly from the old QML `filteredClips` computed property.
+fn compute_view(clips: &[ClipInfo], search: &str, game_filter: &str, sort_mode: &str) -> Vec<usize> {
+    let search = search.to_lowercase();
+    let mut indices: Vec<usize> = clips
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            if !game_filter.is_empty() {
+                let g = if c.game.is_empty() { "Unknown" } else { c.game.as_str() };
+                if g != game_filter {
+                    return false;
+                }
+            }
+            if !search.is_empty() {
+                let title = title_for(c).to_lowercase();
+                let game = c.game.to_lowercase();
+                if !title.contains(&search) && !game.contains(&search) {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    match sort_mode {
+        "oldest" => indices.sort_by_key(|&i| clips[i].created_ts),
+        "longest" => indices.sort_by(|&a, &b| {
+            clips[b]
+                .duration
+                .partial_cmp(&clips[a].duration)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        "shortest" => indices.sort_by(|&a, &b| {
+            clips[a]
+                .duration
+                .partial_cmp(&clips[b].duration)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        _ => indices.sort_by_key(|&i| std::cmp::Reverse(clips[i].created_ts)), // "newest" default
+    }
+
+    indices
+}
+
 impl qobject::ClipsController {
-    /// Rescan the library and republish clipsJson/count/error. Shared by
-    /// refresh() and every mutation invokable.
+    fn row_count(&self, _parent: &QModelIndex) -> i32 {
+        self.view.len() as i32
+    }
+
+    fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
+        let row = index.row();
+        if row < 0 {
+            return QVariant::default();
+        }
+        let Some(&real_idx) = self.view.get(row as usize) else {
+            return QVariant::default();
+        };
+        let Some(clip) = self.all_clips.get(real_idx) else {
+            return QVariant::default();
+        };
+        let role = ClipRoles { repr: role };
+        match role {
+            ClipRoles::FilePath => QVariant::from(&QString::from(clip.filepath.as_str())),
+            ClipRoles::Thumbnail => QVariant::from(&QString::from(clip.thumbnail.as_str())),
+            ClipRoles::Duration => QVariant::from(&clip.duration),
+            ClipRoles::Title => QVariant::from(&QString::from(title_for(clip).as_str())),
+            ClipRoles::Game => QVariant::from(&QString::from(clip.game.as_str())),
+            ClipRoles::Filesize => QVariant::from(&clip.filesize),
+            ClipRoles::Favorite => QVariant::from(&clip.favorite),
+            _ => QVariant::default(),
+        }
+    }
+
+    fn role_names(&self) -> QHash_i32_QByteArray {
+        let mut roles = QHash::<QHashPair_i32_QByteArray>::default();
+        roles.insert(ClipRoles::FilePath.repr, QByteArray::from("filepath"));
+        roles.insert(ClipRoles::Thumbnail.repr, QByteArray::from("thumbnail"));
+        roles.insert(ClipRoles::Duration.repr, QByteArray::from("duration"));
+        roles.insert(ClipRoles::Title.repr, QByteArray::from("title"));
+        roles.insert(ClipRoles::Game.repr, QByteArray::from("game"));
+        roles.insert(ClipRoles::Filesize.repr, QByteArray::from("filesize"));
+        roles.insert(ClipRoles::Favorite.repr, QByteArray::from("favorite"));
+        roles
+    }
+
+    /// Rescan the library, rebuild the game list, and reapply the current
+    /// filter/sort. Shared by refresh() and every mutation invokable.
     fn reload(mut self: Pin<&mut Self>) {
         self.as_mut().set_loading(true);
         // Empty folder → core resolves configured clip_directories or the
         // default (~/Videos/OpenGG) via resolve_clips_dir/get_all_clip_dirs.
         match opengg_core::clips::get_clips_fast(String::new()) {
             Ok(clips) => {
-                let count = clips.len() as i32;
-                let json = serde_json::to_string(&clips).unwrap_or_else(|_| "[]".into());
-                self.as_mut().set_clips_json(QString::from(&json));
-                self.as_mut().set_count(count);
+                self.as_mut().rust_mut().all_clips = clips;
                 self.as_mut().set_error(QString::default());
             }
             Err(e) => {
-                self.as_mut().set_clips_json(QString::from("[]"));
-                self.as_mut().set_count(0);
+                self.as_mut().rust_mut().all_clips = Vec::new();
                 self.as_mut().set_error(QString::from(&e));
             }
         }
+        self.as_mut().update_game_list();
+        self.as_mut().apply_filter();
         self.as_mut().set_loading(false);
+    }
+
+    fn update_game_list(mut self: Pin<&mut Self>) {
+        let mut games: Vec<String> = self
+            .all_clips
+            .iter()
+            .map(|c| if c.game.is_empty() { "Unknown".to_string() } else { c.game.clone() })
+            .collect();
+        games.sort();
+        games.dedup();
+        let list: QStringList = std::iter::once(QString::from("All games"))
+            .chain(games.iter().map(|g| QString::from(g.as_str())))
+            .collect();
+        self.as_mut().set_game_list(list);
+    }
+
+    /// Recompute `view` from the current search/game/sort state and reset
+    /// the model. Called after every reload() and every filter-state change.
+    fn apply_filter(mut self: Pin<&mut Self>) {
+        let indices = compute_view(&self.all_clips, &self.search_text, &self.game_filter, &self.sort_mode);
+        let total = self.all_clips.len() as i32;
+        self.as_mut().begin_reset_model();
+        self.as_mut().rust_mut().view = indices;
+        self.as_mut().end_reset_model();
+        let count = self.view.len() as i32;
+        self.as_mut().set_count(count);
+        self.as_mut().set_total_count(total);
     }
 
     pub fn refresh(self: Pin<&mut Self>) {
         self.reload();
+    }
+
+    pub fn set_search_text(mut self: Pin<&mut Self>, text: &QString) {
+        self.as_mut().rust_mut().search_text = text.to_string();
+        self.apply_filter();
+    }
+
+    pub fn set_game_filter(mut self: Pin<&mut Self>, game: &QString) {
+        self.as_mut().rust_mut().game_filter = game.to_string();
+        self.apply_filter();
+    }
+
+    pub fn set_sort_mode(mut self: Pin<&mut Self>, mode: &QString) {
+        self.as_mut().rust_mut().sort_mode = mode.to_string();
+        self.apply_filter();
     }
 
     fn meta_update(filepath: String) -> ClipMetaUpdate {

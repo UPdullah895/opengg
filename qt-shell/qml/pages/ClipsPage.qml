@@ -4,17 +4,17 @@ import QtQuick.Layouts
 import com.opengg.app
 
 // Clips — the local clip library, read live from opengg_core::clips (SQLite +
-// filesystem scan) via ClipsController. Grid of clip cards with cached
-// thumbnails; per-clip actions + the video player land in later Phase 2 slices.
+// filesystem scan) via ClipsController, which is itself the QAbstractListModel
+// (roles: filepath/thumbnail/duration/title/game/filesize/favorite). Search,
+// game filter, and sort are server-side state (setSearchText/setGameFilter/
+// setSortMode) — QML no longer parses JSON or filters/sorts an array locally.
 Rectangle {
     id: page
     color: Theme.bg
 
-    property var clips: ClipsController.clipsJson
-        ? JSON.parse(ClipsController.clipsJson)
-        : []
-
-    // Clip currently open in the player overlay (null = closed).
+    // Clip currently open in the player overlay (null = closed). Each target
+    // is a small {filepath, title} object built from the delegate's role
+    // context properties at the point of interaction.
     property var playerClip: null
     // Clips targeted by the rename / delete dialogs (null = dialog closed).
     property var renameTarget: null
@@ -24,46 +24,6 @@ Rectangle {
         if (renameTarget && nameField.text.trim().length > 0)
             ClipsController.setCustomName(renameTarget.filepath, nameField.text.trim())
         renameTarget = null
-    }
-
-    // ── Toolbar filter/sort state ─────────────────────────────────────────
-    property string searchText: ""
-    property string sortMode: "newest"   // newest | oldest | longest | shortest
-    property string gameFilter: ""        // "" = all games
-
-    // Distinct game names present in the library (for the filter dropdown).
-    property var gameList: {
-        var seen = {}
-        for (var i = 0; i < clips.length; i++) {
-            var g = clips[i].game || "Unknown"
-            seen[g] = true
-        }
-        return ["All games"].concat(Object.keys(seen).sort())
-    }
-
-    // Clips after search + game filter + sort — the grid's actual model.
-    property var filteredClips: {
-        var q = searchText.toLowerCase()
-        var out = clips.filter(function (c) {
-            if (gameFilter && (c.game || "Unknown") !== gameFilter)
-                return false
-            if (q.length > 0) {
-                var name = displayName(c).toLowerCase()
-                var game = (c.game || "").toLowerCase()
-                if (name.indexOf(q) < 0 && game.indexOf(q) < 0)
-                    return false
-            }
-            return true
-        }).slice()
-        if (sortMode === "newest")
-            out.sort(function (a, b) { return (b.createdTs || 0) - (a.createdTs || 0) })
-        else if (sortMode === "oldest")
-            out.sort(function (a, b) { return (a.createdTs || 0) - (b.createdTs || 0) })
-        else if (sortMode === "longest")
-            out.sort(function (a, b) { return (b.duration || 0) - (a.duration || 0) })
-        else if (sortMode === "shortest")
-            out.sort(function (a, b) { return (a.duration || 0) - (b.duration || 0) })
-        return out
     }
 
     Component.onCompleted: ClipsController.refresh()
@@ -88,9 +48,6 @@ Rectangle {
             return (mb / 1024).toFixed(1) + " GB"
         return Math.round(mb) + " MB"
     }
-    function displayName(clip) {
-        return clip.customName || clip.custom_name || clip.game || clip.filename || "Untitled"
-    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -110,7 +67,7 @@ Rectangle {
             }
 
             Rectangle {
-                visible: page.clips.length > 0
+                visible: ClipsController.totalCount > 0
                 radius: 10
                 color: Theme.surface
                 border.width: 1
@@ -121,9 +78,9 @@ Rectangle {
                 Text {
                     id: countLabel
                     anchors.centerIn: parent
-                    text: page.filteredClips.length === page.clips.length
-                          ? page.clips.length + (page.clips.length === 1 ? " clip" : " clips")
-                          : page.filteredClips.length + " of " + page.clips.length
+                    text: ClipsController.count === ClipsController.totalCount
+                          ? ClipsController.totalCount + (ClipsController.totalCount === 1 ? " clip" : " clips")
+                          : ClipsController.count + " of " + ClipsController.totalCount
                     color: Theme.textDim
                     font.pixelSize: 12
                 }
@@ -160,7 +117,7 @@ Rectangle {
         // ── Toolbar: search + sort + game filter ──────────────────────────
         RowLayout {
             Layout.fillWidth: true
-            visible: page.clips.length > 0
+            visible: ClipsController.totalCount > 0
             spacing: 10
 
             // Search
@@ -185,7 +142,7 @@ Rectangle {
                     placeholderTextColor: Theme.textDim
                     selectByMouse: true
                     background: Item {}
-                    onTextChanged: page.searchText = text
+                    onTextChanged: ClipsController.setSearchText(text)
                 }
             }
 
@@ -196,14 +153,14 @@ Rectangle {
                 id: gameBox
                 implicitWidth: 170
                 implicitHeight: 32
-                model: page.gameList
+                model: ClipsController.gameList
                 currentIndex: 0
-                onActivated: page.gameFilter = (currentIndex === 0 ? "" : currentText)
+                onActivated: ClipsController.setGameFilter(currentIndex === 0 ? "" : currentText)
                 // reset selection if the game list changes out from under us
                 Connections {
-                    target: page
+                    target: ClipsController
                     function onGameListChanged() {
-                        if (gameBox.currentIndex >= page.gameList.length)
+                        if (gameBox.currentIndex >= ClipsController.gameList.length)
                             gameBox.currentIndex = 0
                     }
                 }
@@ -279,7 +236,7 @@ Rectangle {
                     { label: "Shortest", value: "shortest" }
                 ]
                 currentIndex: 0
-                onActivated: page.sortMode = currentValue
+                onActivated: ClipsController.setSortMode(currentValue)
                 font.pixelSize: 13
                 background: Rectangle {
                     radius: Theme.radius
@@ -360,7 +317,7 @@ Rectangle {
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: page.clips.length === 0 && !ClipsController.loading
+            visible: ClipsController.totalCount === 0 && !ClipsController.loading
                      && ClipsController.error.length === 0
             ColumnLayout {
                 anchors.centerIn: parent
@@ -385,7 +342,7 @@ Rectangle {
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: page.clips.length > 0 && page.filteredClips.length === 0
+            visible: ClipsController.totalCount > 0 && ClipsController.count === 0
             ColumnLayout {
                 anchors.centerIn: parent
                 spacing: 8
@@ -410,7 +367,7 @@ Rectangle {
             id: grid
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: page.filteredClips.length > 0
+            visible: ClipsController.count > 0
             clip: true
             cacheBuffer: 400
 
@@ -418,7 +375,7 @@ Rectangle {
             cellWidth: width / columns
             cellHeight: cellWidth * 0.5625 + 62  // 16:9 thumb + info strip
 
-            model: page.filteredClips
+            model: ClipsController
 
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
@@ -453,8 +410,8 @@ Rectangle {
                                 fillMode: Image.PreserveAspectCrop
                                 asynchronous: true
                                 cache: true
-                                visible: !!modelData.thumbnail
-                                source: modelData.thumbnail ? "file://" + modelData.thumbnail : ""
+                                visible: !!thumbnail
+                                source: thumbnail ? "file://" + thumbnail : ""
                             }
 
                             // Placeholder when no thumbnail; kicks off async
@@ -462,14 +419,14 @@ Rectangle {
                             // reloads/re-mounts) so the image pops in when ready.
                             Text {
                                 anchors.centerIn: parent
-                                visible: !modelData.thumbnail
+                                visible: !thumbnail
                                 text: "▶"
                                 color: Theme.border
                                 font.pixelSize: 34
 
                                 Component.onCompleted: {
-                                    if (!modelData.thumbnail && modelData.filepath) {
-                                        ClipsController.requestThumbnail(modelData.filepath)
+                                    if (!thumbnail && filepath) {
+                                        ClipsController.requestThumbnail(filepath)
                                     }
                                 }
                             }
@@ -486,7 +443,7 @@ Rectangle {
                                 Text {
                                     id: durText
                                     anchors.centerIn: parent
-                                    text: page.fmtDuration(modelData.duration)
+                                    text: page.fmtDuration(duration)
                                     color: "#ffffff"
                                     font.pixelSize: 11
                                 }
@@ -502,7 +459,7 @@ Rectangle {
 
                             Text {
                                 Layout.fillWidth: true
-                                text: page.displayName(modelData)
+                                text: title
                                 color: Theme.text
                                 font.pixelSize: 13
                                 font.weight: Font.Medium
@@ -512,14 +469,14 @@ Rectangle {
                                 Layout.fillWidth: true
                                 spacing: 6
                                 Text {
-                                    text: modelData.game || "Unknown"
+                                    text: game || "Unknown"
                                     color: Theme.textDim
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
                                 }
                                 Text {
-                                    text: page.fmtSize(modelData.filesize)
+                                    text: page.fmtSize(filesize)
                                     color: Theme.textDim
                                     font.pixelSize: 11
                                 }
@@ -533,7 +490,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: page.playerClip = modelData
+                        onClicked: page.playerClip = { filepath: filepath, title: title }
                     }
 
                     // Card-level hover — stays true over the action buttons too.
@@ -545,12 +502,12 @@ Rectangle {
                         anchors.top: parent.top
                         anchors.margins: 6
                         width: 26; height: 26; radius: 13
-                        visible: cardHover.hovered || !!modelData.favorite
+                        visible: cardHover.hovered || !!favorite
                         color: favArea.containsMouse ? "#aa000000" : "#66000000"
                         Text {
                             anchors.centerIn: parent
-                            text: modelData.favorite ? "★" : "☆"
-                            color: modelData.favorite ? "#fbbf24" : "#ffffff"
+                            text: favorite ? "★" : "☆"
+                            color: favorite ? "#fbbf24" : "#ffffff"
                             font.pixelSize: 15
                         }
                         MouseArea {
@@ -558,7 +515,7 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: ClipsController.setFavorite(modelData.filepath, !modelData.favorite)
+                            onClicked: ClipsController.setFavorite(filepath, !favorite)
                         }
                     }
 
@@ -579,7 +536,7 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: page.renameTarget = modelData
+                                onClicked: page.renameTarget = { filepath: filepath, title: title }
                             }
                         }
                         Rectangle {
@@ -591,7 +548,7 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: page.deleteTarget = modelData
+                                onClicked: page.deleteTarget = { filepath: filepath, title: title }
                             }
                         }
                     }
@@ -605,7 +562,7 @@ Rectangle {
         anchors.fill: parent
         visible: page.playerClip !== null
         source: page.playerClip ? "file://" + page.playerClip.filepath : ""
-        title: page.playerClip ? page.displayName(page.playerClip) : ""
+        title: page.playerClip ? page.playerClip.title : ""
         onClosed: page.playerClip = null
     }
 
@@ -696,7 +653,7 @@ Rectangle {
             target: page
             function onRenameTargetChanged() {
                 if (page.renameTarget) {
-                    nameField.text = page.displayName(page.renameTarget)
+                    nameField.text = page.renameTarget.title
                     nameField.forceActiveFocus()
                     nameField.selectAll()
                 }
@@ -736,7 +693,7 @@ Rectangle {
                 Text {
                     width: parent.width
                     text: page.deleteTarget
-                          ? "This permanently deletes “" + page.displayName(page.deleteTarget) + "” from disk."
+                          ? "This permanently deletes “" + page.deleteTarget.title + "” from disk."
                           : ""
                     color: Theme.textDim
                     font.pixelSize: 13
