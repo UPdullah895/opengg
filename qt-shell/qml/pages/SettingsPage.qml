@@ -3,143 +3,174 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import com.opengg.app
 
-// Settings page — first real panel (Language). Other panels (§1.1 S9) follow.
+// Settings page — left nav (mirrors SettingsPage.vue's navGroups) + a
+// StackLayout of per-section panels on the right.
 Rectangle {
+    id: page
     color: Theme.bg
 
-    // Helper: reading I18n.language makes labels re-evaluate on language change.
-    function tr(key) { return (I18n.language, I18n.t(key)) }
+    // Keys: key (Section id), label i18n key under settings.sections.*, built true
+    // once real content exists (see qml/pages/settings/*Panel.qml).
+    readonly property var navGroups: [
+        {
+            labelKey: "general",
+            items: [
+                { key: "general", built: true },
+                { key: "language", built: true },
+                { key: "shortcuts", built: true },
+            ],
+        },
+        {
+            labelKey: "audioEngine",
+            items: [
+                { key: "mixerRouting", built: false },
+            ],
+        },
+        {
+            labelKey: "moments",
+            items: [
+                { key: "captureSound", built: false },
+                { key: "trackManagement", built: false },
+                { key: "storage", built: false },
+                { key: "notifications", built: true },
+            ],
+        },
+        {
+            labelKey: "extensions",
+            items: [
+                { key: "extensions", built: false },
+                { key: "store", built: false },
+            ],
+        },
+        {
+            labelKey: "",
+            items: [
+                { key: "about", built: false },
+            ],
+        },
+    ]
 
-    ScrollView {
+    property string active: "general"
+
+    RowLayout {
         anchors.fill: parent
-        contentWidth: availableWidth
+        spacing: 0
 
-        ColumnLayout {
-            width: Math.min(parent.width, 720)
-            x: 32
-            y: 28
-            spacing: 20
+        // ── Left nav ──
+        Rectangle {
+            Layout.preferredWidth: 196
+            Layout.fillHeight: true
+            color: Theme.bg
+            border.width: 0
 
-            // Page title
-            Text {
-                text: (I18n.language, I18n.t("nav.settings"))
-                color: Theme.text
-                font.pixelSize: 26
-                font.weight: Font.Bold
+            Rectangle {
+                anchors.right: parent.right
+                width: 1
+                height: parent.height
+                color: Theme.border
             }
 
-            // ── Language section card ──────────────────────────────────────
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 640
-                radius: Theme.radius
-                color: Theme.surface
-                border.width: 1
-                border.color: Theme.border
-                implicitHeight: langCol.implicitHeight + 40
+            ScrollView {
+                anchors.fill: parent
+                contentWidth: availableWidth
 
                 ColumnLayout {
-                    id: langCol
-                    anchors.fill: parent
-                    anchors.margins: 20
-                    spacing: 14
+                    width: parent.width
+                    spacing: 2
 
-                    Text {
-                        text: (I18n.language, I18n.t("settings.language.title"))
-                        color: Theme.text
-                        font.pixelSize: 18
-                        font.weight: Font.DemiBold
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 16
-
-                        Text {
-                            text: (I18n.language, I18n.t("settings.language.selectLanguage"))
-                            color: Theme.textDim
-                            font.pixelSize: 14
+                    Repeater {
+                        model: page.navGroups
+                        ColumnLayout {
+                            required property var modelData
                             Layout.fillWidth: true
-                        }
+                            spacing: 0
 
-                        ComboBox {
-                            id: langCombo
-                            Layout.preferredWidth: 200
-                            model: I18n.availableLanguages()
-                            currentIndex: Math.max(0, model.indexOf(I18n.language))
-                            displayText: I18n.languageName(I18n.language)
-                            onActivated: (index) => I18n.applyLanguage(model[index])
-
-                            contentItem: Text {
-                                leftPadding: 12
-                                rightPadding: 12
-                                text: langCombo.displayText
-                                color: Theme.text
-                                font.pixelSize: 14
-                                verticalAlignment: Text.AlignVCenter
-                                elide: Text.ElideRight
+                            Text {
+                                visible: modelData.labelKey.length > 0
+                                text: modelData.labelKey.length > 0
+                                    ? (I18n.language, I18n.t("settings.groups." + modelData.labelKey)) : ""
+                                color: Theme.textDim
+                                font.pixelSize: 10
+                                font.weight: Font.Black
+                                Layout.leftMargin: 16
+                                Layout.topMargin: 12
+                                Layout.bottomMargin: 5
                             }
 
-                            background: Rectangle {
-                                implicitHeight: 38
-                                radius: Theme.radius
-                                color: Theme.bg
-                                border.width: 1
-                                border.color: langCombo.activeFocus ? Theme.accent : Theme.border
-                            }
+                            Repeater {
+                                model: modelData.items
+                                Rectangle {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 34
+                                    property bool isActive: page.active === modelData.key
+                                    color: isActive ? Qt.rgba(0.914, 0.271, 0.376, 0.12)
+                                         : navArea.containsMouse ? Qt.rgba(0.914, 0.271, 0.376, 0.08) : "transparent"
 
-                            delegate: ItemDelegate {
-                                width: langCombo.width
-                                highlighted: langCombo.highlightedIndex === index
-                                contentItem: Text {
-                                    text: I18n.languageName(modelData)
-                                    color: highlighted ? Theme.accent : Theme.text
-                                    font.pixelSize: 14
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                background: Rectangle {
-                                    color: highlighted ? Qt.rgba(0.914, 0.271, 0.376, 0.1) : Theme.surface
-                                }
-                            }
+                                    Rectangle {
+                                        anchors.right: parent.right
+                                        width: 2
+                                        height: parent.height
+                                        color: isActive ? Theme.accent : "transparent"
+                                    }
 
-                            popup: Popup {
-                                y: langCombo.height + 4
-                                width: langCombo.width
-                                implicitHeight: contentItem.implicitHeight
-                                padding: 4
-                                contentItem: ListView {
-                                    clip: true
-                                    implicitHeight: contentHeight
-                                    model: langCombo.popup.visible ? langCombo.delegateModel : null
-                                    currentIndex: langCombo.highlightedIndex
-                                }
-                                background: Rectangle {
-                                    radius: Theme.radius
-                                    color: Theme.surface
-                                    border.width: 1
-                                    border.color: Theme.border
+                                    Text {
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 16
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: (I18n.language, I18n.t("settings.sections." + modelData.key))
+                                        color: isActive ? Theme.accent : (navArea.containsMouse ? Theme.accent : Theme.textDim)
+                                        font.pixelSize: 13
+                                    }
+
+                                    MouseArea {
+                                        id: navArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: page.active = modelData.key
+                                    }
                                 }
                             }
                         }
-                    }
-
-                    Text {
-                        text: (I18n.language, I18n.t("settings.language.hint"))
-                        color: Theme.textDim
-                        font.pixelSize: 12
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
                     }
                 }
             }
+        }
 
-            // Placeholder note for the remaining panels
-            Text {
-                text: "More settings panels — Phase 1+"
-                color: Theme.textDim
-                font.pixelSize: 12
-                Layout.topMargin: 4
+        // ── Content ──
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentWidth: availableWidth
+
+            ColumnLayout {
+                width: parent.width
+                x: 28
+                y: 24
+
+                Loader {
+                    Layout.preferredWidth: 680
+                    sourceComponent: {
+                        switch (page.active) {
+                        case "general": return generalPanel
+                        case "language": return languagePanel
+                        case "shortcuts": return shortcutsPanel
+                        case "notifications": return notificationsPanel
+                        default: return comingSoonPanel
+                        }
+                    }
+                }
             }
         }
+    }
+
+    Component { id: generalPanel; GeneralPanel {} }
+    Component { id: languagePanel; LanguagePanel {} }
+    Component { id: shortcutsPanel; ShortcutsPanel {} }
+    Component { id: notificationsPanel; NotificationsPanel {} }
+    Component {
+        id: comingSoonPanel
+        ComingSoonPanel { sectionTitle: I18n.t("settings.sections." + page.active) }
     }
 }

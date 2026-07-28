@@ -15,7 +15,14 @@ fn main() {
         QmlFile::from("qml/pages/ClipsPage.qml"),
         QmlFile::from("qml/pages/DevicesPage.qml"),
         QmlFile::from("qml/pages/SettingsPage.qml"),
+        QmlFile::from("qml/pages/settings/GeneralPanel.qml"),
+        QmlFile::from("qml/pages/settings/LanguagePanel.qml"),
+        QmlFile::from("qml/pages/settings/NotificationsPanel.qml"),
+        QmlFile::from("qml/pages/settings/ShortcutsPanel.qml"),
+        QmlFile::from("qml/pages/settings/ComingSoonPanel.qml"),
         QmlFile::from("qml/components/VideoPlayer.qml"),
+        QmlFile::from("qml/components/InfoIcon.qml"),
+        QmlFile::from("qml/components/ToggleSwitch.qml"),
     ];
 
     CxxQtBuilder::new_qml_module(QmlModule::new("com.opengg.app").qml_files(qml_files))
@@ -26,6 +33,8 @@ fn main() {
             "src/device.rs",
             "src/clips.rs",
             "src/recording.rs",
+            "src/settings.rs",
+            "src/system.rs",
             "src/theme.rs",
         ])
         // Qt Multimedia (MediaPlayer/VideoOutput) for the clip player — the
