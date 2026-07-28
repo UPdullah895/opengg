@@ -26,10 +26,12 @@ pub mod qobject {
         /// Set `settings.<key>` (or `settings.<a>.<b>` for one nested level) to
         /// `value_json` (a JSON-encoded scalar/array/object), save, and refresh.
         #[qinvokable]
+        #[cxx_name = "setValue"]
         fn set_value(self: Pin<&mut Self>, key: QString, value_json: QString);
 
         /// Restore the built-in default keyboard shortcut bindings.
         #[qinvokable]
+        #[cxx_name = "resetShortcuts"]
         fn reset_shortcuts(self: Pin<&mut Self>);
     }
 }

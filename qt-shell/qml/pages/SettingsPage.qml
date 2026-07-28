@@ -45,7 +45,7 @@ Rectangle {
         {
             labelKey: "",
             items: [
-                { key: "about", built: false },
+                { key: "about", built: true },
             ],
         },
     ]
@@ -159,6 +159,7 @@ Rectangle {
                         case "notifications": return notificationsPanel
                         case "storage": return storagePanel
                         case "trackManagement": return trackManagementPanel
+                        case "about": return aboutPanel
                         default: return comingSoonPanel
                         }
                     }
@@ -173,6 +174,7 @@ Rectangle {
     Component { id: notificationsPanel; NotificationsPanel {} }
     Component { id: storagePanel; StoragePanel {} }
     Component { id: trackManagementPanel; TrackManagementPanel {} }
+    Component { id: aboutPanel; AboutPanel {} }
     Component {
         id: comingSoonPanel
         ComingSoonPanel { sectionTitle: I18n.t("settings.sections." + page.active) }

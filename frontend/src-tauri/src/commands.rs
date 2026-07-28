@@ -9,8 +9,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Manager};
-// Central subprocess module (binary probing + logged spawns) now lives in core.
-use opengg_core::subprocess;
 
 // Core business logic now lives in opengg_core (plan §2.1). Re-export public
 // types + functions that are used as command return types or by main.rs.
@@ -3202,132 +3200,21 @@ pub async fn get_steam_games() -> Result<Vec<SteamGameEntry>, String> {
 //  ★ EPIC 6: Dependency Probing & Graceful Degradation
 // ══════════════════════════════════════════════════════════════
 
-#[derive(Serialize, Clone, Debug)]
-pub struct DependencyStatus {
-    pub binary: String,
-    pub available: bool,
-    pub feature: String,
-}
+pub use opengg_core::system::{DependencyStatus, DeviceAccessStatus, DistroInfo};
 
 #[command]
 pub fn get_dependency_status() -> Result<Vec<DependencyStatus>, String> {
-    // X11-only tools are irrelevant on Wayland — don't probe or list them there,
-    // so we don't ask Wayland users to install dependencies they can't use.
-    let on_wayland = std::env::var("XDG_SESSION_TYPE")
-        .map(|v| v.eq_ignore_ascii_case("wayland"))
-        .unwrap_or(false)
-        || std::env::var_os("WAYLAND_DISPLAY").is_some();
-    const X11_ONLY: &[&str] = &["xdotool"];
-
-    let deps = vec![
-        ("gpu-screen-recorder", "recording"),
-        ("ffmpeg", "export"),
-        ("ffprobe", "mediaInfo"),
-        ("pactl", "audioMixer"),
-        ("pw-link", "audioRouting"),
-        ("jalv", "equalizer"),
-        ("headsetcontrol", "headset"),
-        ("xdotool", "windowTools"),
-    ];
-
-    let mut results = Vec::new();
-    for (binary, feature) in deps {
-        if on_wayland && X11_ONLY.contains(&binary) { continue; }
-        results.push(DependencyStatus {
-            binary: binary.to_string(),
-            available: subprocess::is_available(binary),
-            feature: feature.to_string(),
-        });
-    }
-
-    Ok(results)
-}
-
-#[derive(Serialize, Clone, Debug)]
-pub struct DistroInfo {
-    pub id: String,
-    pub id_like: String,
+    Ok(opengg_core::system::get_dependency_status())
 }
 
 #[command]
 pub fn get_distro_info() -> Result<DistroInfo, String> {
-    let os_release_paths = ["/etc/os-release", "/usr/lib/os-release"];
-    let mut content = String::new();
-
-    for path in &os_release_paths {
-        match std::fs::read_to_string(path) {
-            Ok(data) => {
-                content = data;
-                break;
-            }
-            Err(_) => continue,
-        }
-    }
-
-    let mut id = String::new();
-    let mut id_like = String::new();
-
-    for line in content.lines() {
-        let line = line.trim();
-        if let Some(value) = line.strip_prefix("ID=") {
-            id = value.trim_matches('"').trim_matches('\'').to_string();
-        } else if let Some(value) = line.strip_prefix("ID_LIKE=") {
-            id_like = value.trim_matches('"').trim_matches('\'').to_string();
-        }
-    }
-
-    Ok(DistroInfo { id, id_like })
-}
-
-#[derive(Serialize, Clone, Debug)]
-pub struct DeviceAccessStatus {
-    pub ratbagd_available: bool,
-    pub in_input_group: bool,
-    pub in_audio_group: bool,
-    pub in_video_group: bool,
-    pub udev_rules_present: bool,
+    Ok(opengg_core::system::get_distro_info())
 }
 
 #[command]
 pub fn get_device_access_status() -> Result<DeviceAccessStatus, String> {
-    let mut status = DeviceAccessStatus {
-        ratbagd_available: false,
-        in_input_group: false,
-        in_audio_group: false,
-        in_video_group: false,
-        udev_rules_present: false,
-    };
-
-    // Check if ratbagd service is available on the system bus
-    #[cfg(unix)]
-    {
-        match subprocess::run("busctl", &["--system", "list", "--no-pager"]) {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                status.ratbagd_available = stdout.contains("org.freedesktop.ratbag1");
-            }
-            Err(_) => {
-                status.ratbagd_available = false;
-            }
-        }
-    }
-
-    // Check group membership via `id -Gn`
-    #[cfg(unix)]
-    {
-        if let Ok(output) = std::process::Command::new("id").args(["-Gn"]).output() {
-            let group_str = String::from_utf8_lossy(&output.stdout);
-            status.in_input_group = group_str.contains("input");
-            status.in_audio_group = group_str.contains("audio");
-            status.in_video_group = group_str.contains("video");
-        }
-    }
-
-    // Check if udev rules are installed
-    status.udev_rules_present = std::path::Path::new("/etc/udev/rules.d/99-opengg.rules").exists()
-        || std::path::Path::new("/usr/lib/udev/rules.d/99-opengg.rules").exists();
-
-    Ok(status)
+    Ok(opengg_core::system::get_device_access_status())
 }
 
 // ═══════════════════════════════════════════════════════════════

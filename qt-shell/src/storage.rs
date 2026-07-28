@@ -22,6 +22,7 @@ pub mod qobject {
 
         /// Delete all cached clip thumbnails; returns the number removed.
         #[qinvokable]
+        #[cxx_name = "clearThumbnailCache"]
         fn clear_thumbnail_cache(self: &Self) -> i32;
     }
 }
