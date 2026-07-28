@@ -26,6 +26,7 @@ fn main() {
             "src/device.rs",
             "src/clips.rs",
             "src/recording.rs",
+            "src/theme.rs",
         ])
         // Qt Multimedia (MediaPlayer/VideoOutput) for the clip player — the
         // GStreamer backend is the PoC-validated Wayland-native path (plan §7).

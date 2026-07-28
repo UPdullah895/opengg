@@ -23,3 +23,4 @@ pub mod settings;
 pub mod steam;
 pub mod storage;
 pub mod subprocess;
+pub mod system;

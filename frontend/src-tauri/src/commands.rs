@@ -1861,25 +1861,13 @@ fn get_vol(n: &str) -> Option<f32> {
 //  ★ EPIC 2: Crash-log directory opener
 // ══════════════════════════════════════════════════════════════
 
-/// Returns the directory where per-session log files live.
-/// Mirrors main::logs_dir — kept as a standalone helper so commands can call it
-/// without pulling main into the module graph.
-pub fn crash_log_dir() -> PathBuf {
-    // Same compile-time path resolution as main::LOGS_DIR — lands at <repo>/Logs.
-    const LOGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Logs");
-    let p = PathBuf::from(LOGS_DIR);
-    let _ = std::fs::create_dir_all(&p);
-    p.canonicalize().unwrap_or(p)
-}
-
 /// Opens the OS file manager at the crash-log directory so the user can
 /// retrieve logs for bug reports.
 #[command]
 pub async fn open_crash_logs_folder() -> Result<(), String> {
-    let dir = crash_log_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{e}"))?;
-    open::that(&dir).map_err(|e| format!("{e}"))?;
-    Ok(())
+    tokio::task::spawn_blocking(opengg_core::system::open_crash_logs_folder)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 
@@ -1900,44 +1888,17 @@ pub async fn set_run_in_background(app: AppHandle, val: bool) -> Result<(), Stri
 /// Returns true if the XDG autostart entry for OpenGG exists.
 #[command]
 pub async fn get_autostart() -> Result<bool, String> {
-    let desktop = dirs::home_dir()
-        .ok_or_else(|| "no home dir".to_string())?
-        .join(".config/autostart/opengg.desktop");
-    Ok(desktop.exists())
+    tokio::task::spawn_blocking(opengg_core::system::get_autostart)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Creates or removes the XDG autostart `.desktop` entry.
 #[command]
 pub async fn set_autostart(enable: bool) -> Result<(), String> {
-    let dir = dirs::home_dir()
-        .ok_or_else(|| "no home dir".to_string())?
-        .join(".config/autostart");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{e}"))?;
-    let desktop = dir.join("opengg.desktop");
-
-    if enable {
-        let exe = std::env::current_exe().map_err(|e| format!("{e}"))?;
-        let exe_parent = exe.parent().unwrap_or(std::path::Path::new("/"));
-        let content = format!(
-            "[Desktop Entry]\n\
-            Type=Application\n\
-            Name=OpenGG\n\
-            Exec=env OPENGG_AUTOSTART=1 \"{}\"\n\
-            Path={}\n\
-            Terminal=false\n\
-            Icon=opengg\n\
-            Hidden=false\n\
-            NoDisplay=false\n\
-            StartupNotify=false\n\
-            X-GNOME-Autostart-enabled=true\n",
-            exe.display(),
-            exe_parent.display()
-        );
-        std::fs::write(&desktop, content).map_err(|e| format!("{e}"))?;
-    } else if desktop.exists() {
-        std::fs::remove_file(&desktop).map_err(|e| format!("{e}"))?;
-    }
-    Ok(())
+    tokio::task::spawn_blocking(move || opengg_core::system::set_autostart(enable))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Returns a list of connected monitors via Tauri's built-in monitor enumeration.

@@ -1,25 +1,30 @@
 pragma Singleton
 import QtQuick
+import com.opengg.app
 
+// Thin read-only mirror of ThemeController (the mutable/persisted source —
+// see qt-shell/src/theme.rs), kept as a stable `Theme.xxx` surface so every
+// existing call site is unaffected by the switch to a live theme.json-backed
+// controller.
 QtObject {
     // Accent color for highlights and active states
-    readonly property string accent: "#E94560"
+    readonly property string accent: ThemeController.accent
 
     // Primary background color
-    readonly property string bg: "#0f1117"
+    readonly property string bg: ThemeController.bg
 
     // Surface/card background color
-    readonly property string surface: "#171923"
+    readonly property string surface: ThemeController.surface
 
     // Border color for dividers and edges
-    readonly property string border: "#2a2d3a"
+    readonly property string border: ThemeController.border
 
     // Primary text color
-    readonly property string text: "#e2e8f0"
+    readonly property string text: ThemeController.text
 
     // Dimmed/secondary text color
-    readonly property string textDim: "#94a3b8"
+    readonly property string textDim: ThemeController.textDim
 
     // Border radius constant
-    readonly property int radius: 6
+    readonly property int radius: ThemeController.radius
 }

@@ -22,6 +22,8 @@ ApplicationWindow {
     LayoutMirroring.enabled: I18n.rtl
     LayoutMirroring.childrenInherit: true
 
+    Component.onCompleted: ThemeController.reload()
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
