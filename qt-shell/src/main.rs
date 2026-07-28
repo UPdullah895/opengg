@@ -4,6 +4,7 @@ mod device;
 mod i18n;
 mod recording;
 mod settings;
+mod storage;
 mod system;
 mod theme;
 

@@ -31,7 +31,7 @@ Rectangle {
             items: [
                 { key: "captureSound", built: false },
                 { key: "trackManagement", built: false },
-                { key: "storage", built: false },
+                { key: "storage", built: true },
                 { key: "notifications", built: true },
             ],
         },
@@ -157,6 +157,7 @@ Rectangle {
                         case "language": return languagePanel
                         case "shortcuts": return shortcutsPanel
                         case "notifications": return notificationsPanel
+                        case "storage": return storagePanel
                         default: return comingSoonPanel
                         }
                     }
@@ -169,6 +170,7 @@ Rectangle {
     Component { id: languagePanel; LanguagePanel {} }
     Component { id: shortcutsPanel; ShortcutsPanel {} }
     Component { id: notificationsPanel; NotificationsPanel {} }
+    Component { id: storagePanel; StoragePanel {} }
     Component {
         id: comingSoonPanel
         ComingSoonPanel { sectionTitle: I18n.t("settings.sections." + page.active) }

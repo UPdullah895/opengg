@@ -19,6 +19,7 @@ fn main() {
         QmlFile::from("qml/pages/settings/LanguagePanel.qml"),
         QmlFile::from("qml/pages/settings/NotificationsPanel.qml"),
         QmlFile::from("qml/pages/settings/ShortcutsPanel.qml"),
+        QmlFile::from("qml/pages/settings/StoragePanel.qml"),
         QmlFile::from("qml/pages/settings/ComingSoonPanel.qml"),
         QmlFile::from("qml/components/VideoPlayer.qml"),
         QmlFile::from("qml/components/InfoIcon.qml"),
@@ -34,6 +35,7 @@ fn main() {
             "src/clips.rs",
             "src/recording.rs",
             "src/settings.rs",
+            "src/storage.rs",
             "src/system.rs",
             "src/theme.rs",
         ])
