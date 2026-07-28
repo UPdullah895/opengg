@@ -9,6 +9,8 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
+use serde::Serialize;
+
 use crate::paths::shexp;
 
 /// Parameters for spawning GPU Screen Recorder (passed once at start, used for restarts).
@@ -851,5 +853,421 @@ pub fn map_gsr_target_for_wayland(target: &str) -> String {
         // Connector names: pass through unchanged for direct KMS capture
         // Pattern: DP-*, HDMI-*, eDP-*, LVDS-*, etc. (any alphanumeric-hyphenated connector)
         other => other.to_string(),
+    }
+}
+
+/// A connected monitor, as reported by `gpu-screen-recorder --list-monitors`.
+#[derive(Serialize, Clone, Debug)]
+pub struct MonitorInfo {
+    pub name: String,
+    pub label: String,
+}
+
+/// Returns a list of connected monitors via gpu-screen-recorder's own enumeration —
+/// NOT Tauri's/Qt's windowing-toolkit monitor APIs, which return EDID model names
+/// ("BenQ GW2780", "MASI251K03") that are NOT valid GSR `-w` targets and cause an
+/// immediate GSR crash if passed. `--list-monitors` returns the exact X11/Wayland
+/// connector names (e.g. "DP-1", "HDMI-A-1", "screen") its `-w` flag accepts.
+pub fn list_monitors() -> Vec<MonitorInfo> {
+    let output = std::process::Command::new("gpu-screen-recorder")
+        .arg("--list-monitors")
+        .output();
+
+    let stdout = match output {
+        Ok(o) if !o.stdout.is_empty() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => String::new(),
+    };
+
+    let mut monitors: Vec<MonitorInfo> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|name| {
+            // "screen" is GSR's "capture all outputs / entire desktop" pseudo-target.
+            let label = if name == "screen" {
+                "Entire Desktop".to_string()
+            } else {
+                name.to_string()
+            };
+            MonitorInfo {
+                name: name.to_string(),
+                label,
+            }
+        })
+        .collect();
+
+    if monitors.is_empty() {
+        // GSR not installed, not in PATH, or no displays detected — safe fallback.
+        monitors.push(MonitorInfo {
+            name: "screen".into(),
+            label: "Entire Desktop".into(),
+        });
+    }
+
+    monitors
+}
+
+/// Resolve distro family from ID and ID_LIKE fields (GSR's own distro-family
+/// resolver — a slightly wider Arch-derivative list than
+/// `crate::system::get_dependency_status`'s install-hint resolver, since GSR's
+/// driver-install hints benefit from covering popular Arch derivatives directly).
+fn resolve_distro_family(id: &str, id_like: &str) -> &'static str {
+    match id {
+        "arch" | "manjaro" | "endeavouros" | "garuda" | "cachyos" => return "arch",
+        "debian" | "ubuntu" => return "debian",
+        "fedora" | "rhel" | "centos" => return "fedora",
+        _ => {}
+    }
+    let id_like_lower = id_like.to_lowercase();
+    if id_like_lower.contains("arch") {
+        return "arch";
+    }
+    if id_like_lower.contains("debian") || id_like_lower.contains("ubuntu") {
+        return "debian";
+    }
+    if id_like_lower.contains("fedora") || id_like_lower.contains("rhel") || id_like_lower.contains("centos") {
+        return "fedora";
+    }
+    "unknown"
+}
+
+/// Detect the host Linux distribution by reading /etc/os-release.
+fn detect_distro() -> &'static str {
+    let info = crate::system::get_distro_info();
+    resolve_distro_family(&info.id, &info.id_like)
+}
+
+/// A single actionable fix that the UI can present with a copy button.
+#[derive(Serialize, Clone, Debug)]
+pub struct DiagnosticFix {
+    pub command: String,
+    pub description: String,
+}
+
+/// A single diagnostic item with optional fix guidance.
+#[derive(Serialize, Clone, Debug)]
+pub struct DiagnosticItem {
+    pub message: String,
+    pub severity: String,
+    pub fix: Option<DiagnosticFix>,
+}
+
+/// Structured result from the GSR pre-flight diagnostic suite.
+#[derive(Serialize, Clone, Debug)]
+pub struct GsrDiagnosticResult {
+    pub ok: bool,
+    pub gsr_installed: bool,
+    pub gsr_version: Option<String>,
+    pub in_render_group: bool,
+    pub in_video_group: bool,
+    pub gpu_encoder_available: bool,
+    pub audio_sources_ok: bool,
+    pub missing_audio_sources: Vec<String>,
+    pub items: Vec<DiagnosticItem>,
+    pub report: String,
+}
+
+/// Run a comprehensive pre-flight check before attempting to start GSR.
+/// Returns a structured report the UI can turn into actionable messages.
+pub fn gsr_diagnostics(audio_sources: Vec<String>, monitor_target: String) -> GsrDiagnosticResult {
+    let distro = detect_distro();
+
+    let mut result = GsrDiagnosticResult {
+        ok: true,
+        gsr_installed: false,
+        gsr_version: None,
+        in_render_group: false,
+        in_video_group: false,
+        gpu_encoder_available: false,
+        audio_sources_ok: true,
+        missing_audio_sources: Vec::new(),
+        items: Vec::new(),
+        report: String::new(),
+    };
+
+    // Distro-specific install commands
+    // For arch family: prefer pacman; AUR -git variant available for testing
+    // For debian/fedora/unknown: use Flatpak (universal, PPA is deprecated)
+    let (gsr_install_cmd, install_desc) = match distro {
+        "arch" => (
+            "sudo pacman -S gpu-screen-recorder",
+            "gpu-screen-recorder is available in the Arch repos. If not available, try the AUR: yay -S gpu-screen-recorder-git",
+        ),
+        "fedora" => (
+            "flatpak install flathub com.dec05eba.gpu_screen_recorder",
+            "Use Flatpak for a reliable cross-distro installation.",
+        ),
+        _ => (
+            "flatpak install flathub com.dec05eba.gpu_screen_recorder",
+            "Use Flatpak for a reliable cross-distro installation.",
+        ),
+    };
+    let driver_hint = match distro {
+        "arch" => "Install proprietary GPU drivers (e.g. sudo pacman -S nvidia-utils or mesa-va-drivers) for hardware encoding.",
+        "fedora" => "Install proprietary GPU drivers (e.g. sudo dnf install mesa-va-drivers) for hardware encoding.",
+        _ => "Install proprietary GPU drivers (e.g. sudo apt install mesa-va-drivers) for hardware encoding.",
+    };
+
+    // 1. Binary presence + version
+    // Prefer --version (plain output) but fall back to --help if it doesn't work
+    let gsr_version_output = std::process::Command::new("gpu-screen-recorder")
+        .arg("--version")
+        .output();
+
+    match gsr_version_output {
+        Ok(o) if o.status.success() => {
+            result.gsr_installed = true;
+            // --version output is plain: "5.13.9"
+            let text = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            // Extract version matching ^\d+\.\d+ pattern
+            if let Some(cap) = text.split('\n').next() {
+                if cap.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                    result.gsr_version = Some(cap.to_string());
+                }
+            }
+        }
+        _ => {
+            // --version failed; try --help as fallback (less reliable)
+            if let Ok(o) = std::process::Command::new("gpu-screen-recorder")
+                .arg("--help")
+                .output()
+            {
+                if o.status.success() {
+                    result.gsr_installed = true;
+                    // Help output starts with "usage:" — no version in first line
+                    let text = String::from_utf8_lossy(&o.stdout);
+                    for line in text.lines() {
+                        if line.contains("version") || line.contains("Version") {
+                            if let Some(ver) = line.split_whitespace().find_map(|w| {
+                                if w.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+                                    && w.contains('.')
+                                {
+                                    Some(w.to_string())
+                                } else {
+                                    None
+                                }
+                            }) {
+                                result.gsr_version = Some(ver);
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                result.ok = false;
+                result.items.push(DiagnosticItem {
+                    message: "gpu-screen-recorder not found in PATH. Install it via your package manager.".into(),
+                    severity: "error".into(),
+                    fix: Some(DiagnosticFix {
+                        command: gsr_install_cmd.into(),
+                        description: install_desc.into(),
+                    }),
+                });
+            }
+        }
+    }
+
+    // 2. Group membership
+    if let Ok(o) = std::process::Command::new("id").args(["-Gn"]).output() {
+        let group_str = String::from_utf8_lossy(&o.stdout);
+        result.in_render_group = group_str.contains("render");
+        result.in_video_group = group_str.contains("video");
+    }
+    if !result.in_render_group {
+        result.ok = false;
+        result.items.push(DiagnosticItem {
+            message: "Your user is not in the 'render' group. Run: sudo usermod -aG render,video $USER — then re-login.".into(),
+            severity: "error".into(),
+            fix: Some(DiagnosticFix {
+                command: "sudo usermod -aG render,video $USER".into(),
+                description: "Add your user to the required groups, then re-login.".into(),
+            }),
+        });
+    }
+    if !result.in_video_group {
+        result.items.push(DiagnosticItem {
+            message: "Your user is not in the 'video' group. Some capture modes may fail. Run: sudo usermod -aG video $USER — then re-login.".into(),
+            severity: "warning".into(),
+            fix: Some(DiagnosticFix {
+                command: "sudo usermod -aG video $USER".into(),
+                description: "Add your user to the video group, then re-login.".into(),
+            }),
+        });
+    }
+
+    // 3. GPU encoder probe (ffmpeg -encoders is the most portable check)
+    if let Ok(o) = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output()
+    {
+        let enc = String::from_utf8_lossy(&o.stdout);
+        result.gpu_encoder_available =
+            enc.contains("h264_vaapi") || enc.contains("h264_nvenc") || enc.contains("h264_amf");
+    }
+    if !result.gpu_encoder_available {
+        result.items.push(DiagnosticItem {
+            message: "No GPU encoder (h264_vaapi / h264_nvenc / h264_amf) detected. GSR may fall back to software encoding or fail.".into(),
+            severity: "warning".into(),
+            fix: Some(DiagnosticFix {
+                command: "".into(),
+                description: driver_hint.into(),
+            }),
+        });
+    }
+
+    // 4. Audio monitor sources
+    let sources_short = std::process::Command::new("pactl")
+        .args(["list", "sources", "short"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    for src in &audio_sources {
+        // Use the SAME resolver as the recorder so hardware inputs (alsa_input.*) and
+        // output monitors (*.monitor) validate identically and aren't falsely flagged.
+        let cap = resolve_capture_source(src);
+        // GSR resolves default_output/default_input itself — always treat as present.
+        if cap.contains("default") {
+            continue;
+        }
+        // pactl `list sources short` is tab-separated: "<id>\t<name>\t..." — match the name
+        // column exactly so a substring of a longer node name can't give a false positive.
+        let present = sources_short
+            .lines()
+            .any(|l| l.split('\t').nth(1) == Some(cap.as_str()));
+        if !present {
+            result.audio_sources_ok = false;
+            result.missing_audio_sources.push(cap);
+        }
+    }
+    if !result.audio_sources_ok {
+        // The virtual engine is optional — missing channel monitors is informational, not a
+        // blocker. Recording falls back to the real default devices (default_output/input).
+        let missing = result.missing_audio_sources.join(", ");
+        result.items.push(DiagnosticItem {
+            message: format!("Virtual audio sources not found ({missing}). Recording will use your default output + microphone. Create the Virtual Audio Engine for per-channel capture."),
+            severity: "info".into(),
+            fix: None,
+        });
+    }
+
+    // ── Build the copyable diagnostic report (session, monitors, resolved target,
+    //    and a REAL test capture's stderr) so failures on other machines are visible. ──
+    result.report = build_gsr_report(&result, &monitor_target);
+
+    result
+}
+
+/// Normalize a saved gsrMonitorTarget the same way `start_gsr_replay` does, then apply the
+/// Wayland mapping — so the diagnostic tests exactly what a real recording would use.
+fn resolve_gsr_target(monitor_target: &str) -> String {
+    let connector = monitor_target.split('|').next().unwrap_or("").trim().to_string();
+    let looks_invalid = connector.is_empty()
+        || connector.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+        || connector.contains(' ');
+    let base = if looks_invalid { "screen".to_string() } else { connector };
+    let base = match base.as_str() {
+        "focused" => get_focused_window_monitor().unwrap_or_else(|| "focused".to_string()),
+        "" => "screen".to_string(),
+        other => other.to_string(),
+    };
+    map_gsr_target_for_wayland(&base)
+}
+
+/// Spawn gpu-screen-recorder for ~1.3s against `target`, then SIGINT it, capturing the real
+/// stderr + exit status. This reproduces the exact failure a recording would hit.
+fn gsr_test_capture(target: &str) -> String {
+    let tmp = std::env::temp_dir().join("opengg_gsr_diag_test.mp4");
+    let mut cmd = std::process::Command::new("gpu-screen-recorder");
+    cmd.args(["-w", target, "-f", "30", "-c", "mp4", "-o"]);
+    cmd.arg(&tmp);
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::null());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return format!("test capture failed to spawn gpu-screen-recorder: {e}"),
+    };
+    let stderr_buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    if let Some(stderr) = child.stderr.take() {
+        let buf = Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                buf.lock().unwrap().push(line);
+            }
+        });
+    }
+    // Give it time to either crash or reach a steady recording state.
+    std::thread::sleep(std::time::Duration::from_millis(1300));
+    let outcome = match child.try_wait() {
+        Ok(Some(status)) => format!("EXITED EARLY with {status:?} (failure)"),
+        Ok(None) => {
+            // Still running → capture works. Stop it cleanly.
+            let _ = std::process::Command::new("kill")
+                .args(["-SIGINT", &child.id().to_string()])
+                .output();
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let _ = child.kill();
+            let _ = child.wait();
+            "OK — capture ran for ~1.3s without crashing".to_string()
+        }
+        Err(e) => format!("could not poll test process: {e}"),
+    };
+    let _ = std::fs::remove_file(&tmp);
+    let tail = {
+        let b = stderr_buf.lock().unwrap();
+        b.iter().rev().take(20).rev().cloned().collect::<Vec<_>>().join("\n")
+    };
+    if tail.is_empty() {
+        format!("Result: {outcome}\n(stderr was empty)")
+    } else {
+        format!("Result: {outcome}\nstderr:\n{tail}")
+    }
+}
+
+/// Assemble the full copyable diagnostic dump.
+fn build_gsr_report(result: &GsrDiagnosticResult, monitor_target: &str) -> String {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "(unset)".into());
+    let wayland = if std::env::var_os("WAYLAND_DISPLAY").is_some() { "yes" } else { "no" };
+    let xdg_desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "(unset)".into());
+    let monitors = list_monitors_raw();
+    let resolved = resolve_gsr_target(monitor_target);
+    let test = gsr_test_capture(&resolved);
+
+    format!(
+        "=== OpenGG GPU Screen Recorder Diagnostics ===\n\
+         distro: {distro}\n\
+         session type: {session}   wayland: {wayland}   desktop: {xdg_desktop}\n\
+         gpu-screen-recorder installed: {installed}  version: {version}\n\
+         groups: render={render} video={video}\n\
+         gpu encoder (vaapi/nvenc/amf) available: {enc}\n\
+         configured monitor target: {target:?}\n\
+         resolved capture target: {resolved:?}\n\
+         detected monitors (gpu-screen-recorder --list-monitors):\n{monitors}\n\
+         audio sources requested: {audio:?}  (missing: {missing:?})\n\
+         --- real test capture ---\n{test}\n",
+        distro = detect_distro(),
+        session = session,
+        wayland = wayland,
+        xdg_desktop = xdg_desktop,
+        installed = result.gsr_installed,
+        version = result.gsr_version.clone().unwrap_or_else(|| "(unknown)".into()),
+        render = result.in_render_group,
+        video = result.in_video_group,
+        enc = result.gpu_encoder_available,
+        target = monitor_target,
+        resolved = resolved,
+        monitors = monitors,
+        audio = "(see settings)",
+        missing = result.missing_audio_sources,
+        test = test,
+    )
+}
+
+/// Raw `gpu-screen-recorder --list-monitors` output (newline-joined), for the report.
+fn list_monitors_raw() -> String {
+    match std::process::Command::new("gpu-screen-recorder").arg("--list-monitors").output() {
+        Ok(o) if !o.stdout.is_empty() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Ok(o) => format!("(none; exit={:?})", o.status.code()),
+        Err(e) => format!("(failed to run: {e})"),
     }
 }

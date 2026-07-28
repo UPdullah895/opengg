@@ -22,6 +22,12 @@ pub mod qobject {
         #[qproperty(bool, running)]
         #[qproperty(QString, status_text, cxx_name = "statusText")]
         #[qproperty(QString, error)]
+        #[qproperty(QString, monitors_json, cxx_name = "monitorsJson")]
+        #[qproperty(QString, audio_sinks_json, cxx_name = "audioSinksJson")]
+        #[qproperty(QString, capture_sources_json, cxx_name = "captureSourcesJson")]
+        #[qproperty(QString, session_type, cxx_name = "sessionType")]
+        #[qproperty(QString, diagnostics_json, cxx_name = "diagnosticsJson")]
+        #[qproperty(bool, diagnostics_running, cxx_name = "diagnosticsRunning")]
         type RecordingController = super::RecordingControllerRust;
 
         /// Poll the current GSR process state (also clears a stale crash).
@@ -39,10 +45,30 @@ pub mod qobject {
         /// Flush the replay buffer to a saved clip.
         #[qinvokable]
         fn save(self: Pin<&mut Self>);
+
+        /// Stop (if running) and restart the replay buffer with the current
+        /// ui-settings.json GSR config — called after a GSR setting changes.
+        #[qinvokable]
+        fn restart(self: Pin<&mut Self>);
+
+        /// Re-enumerate monitors/audio sinks/capture sources/session type for
+        /// the Capture & Sound settings panel's live dropdowns.
+        #[qinvokable]
+        #[cxx_name = "refreshDevices"]
+        fn refresh_devices(self: Pin<&mut Self>);
+
+        /// Run the GSR pre-flight diagnostic suite (spawns a real ~1.3s test
+        /// capture) on a background thread, then publish `diagnosticsJson`.
+        #[qinvokable]
+        #[cxx_name = "runDiagnostics"]
+        fn run_diagnostics(self: Pin<&mut Self>, audio_sources_json: QString, monitor_target: QString);
     }
+
+    impl cxx_qt::Threading for RecordingController {}
 }
 
 use core::pin::Pin;
+use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 
 #[derive(Default)]
@@ -50,6 +76,12 @@ pub struct RecordingControllerRust {
     running: bool,
     status_text: QString,
     error: QString,
+    monitors_json: QString,
+    audio_sinks_json: QString,
+    capture_sources_json: QString,
+    session_type: QString,
+    diagnostics_json: QString,
+    diagnostics_running: bool,
 }
 
 struct GsrParams {
@@ -172,5 +204,60 @@ impl qobject::RecordingController {
             }
         }
         self.apply_status();
+    }
+
+    pub fn restart(mut self: Pin<&mut Self>) {
+        let p = load_params();
+        if let Err(e) = opengg_core::gsr::restart_gsr_replay(
+            p.output_dir,
+            p.replay_secs,
+            p.fps,
+            p.quality,
+            p.bitrate_kbps,
+            p.monitor_target,
+            p.audio_sources,
+        ) {
+            eprintln!("RecordingController::restart: {e}");
+            self.as_mut().set_error(QString::from(&e));
+        }
+        self.apply_status();
+    }
+
+    pub fn refresh_devices(mut self: Pin<&mut Self>) {
+        let monitors = opengg_core::gsr::list_monitors();
+        let sinks = opengg_core::audio::list_audio_sinks().unwrap_or_default();
+        let sources = opengg_core::audio::list_capture_sources().unwrap_or_default();
+        let session = opengg_core::audio::get_session_type();
+
+        self.as_mut().set_monitors_json(QString::from(
+            &serde_json::to_string(&monitors).unwrap_or_else(|_| "[]".into()),
+        ));
+        self.as_mut().set_audio_sinks_json(QString::from(
+            &serde_json::to_string(&sinks).unwrap_or_else(|_| "[]".into()),
+        ));
+        self.as_mut().set_capture_sources_json(QString::from(
+            &serde_json::to_string(&sources).unwrap_or_else(|_| "[]".into()),
+        ));
+        self.as_mut().set_session_type(QString::from(&session));
+    }
+
+    pub fn run_diagnostics(
+        mut self: Pin<&mut Self>,
+        audio_sources_json: QString,
+        monitor_target: QString,
+    ) {
+        self.as_mut().set_diagnostics_running(true);
+        let audio_sources: Vec<String> =
+            serde_json::from_str(&audio_sources_json.to_string()).unwrap_or_default();
+        let monitor_target = monitor_target.to_string();
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = opengg_core::gsr::gsr_diagnostics(audio_sources, monitor_target);
+            let json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".into());
+            let _ = qt_thread.queue(move |mut controller| {
+                controller.as_mut().set_diagnostics_json(QString::from(&json));
+                controller.as_mut().set_diagnostics_running(false);
+            });
+        });
     }
 }

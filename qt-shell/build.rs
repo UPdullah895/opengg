@@ -22,10 +22,12 @@ fn main() {
         QmlFile::from("qml/pages/settings/StoragePanel.qml"),
         QmlFile::from("qml/pages/settings/TrackManagementPanel.qml"),
         QmlFile::from("qml/pages/settings/AboutPanel.qml"),
+        QmlFile::from("qml/pages/settings/CaptureSoundPanel.qml"),
         QmlFile::from("qml/pages/settings/ComingSoonPanel.qml"),
         QmlFile::from("qml/components/VideoPlayer.qml"),
         QmlFile::from("qml/components/InfoIcon.qml"),
         QmlFile::from("qml/components/ToggleSwitch.qml"),
+        QmlFile::from("qml/components/RecorderInstallHelper.qml"),
     ];
 
     CxxQtBuilder::new_qml_module(QmlModule::new("com.opengg.app").qml_files(qml_files))
