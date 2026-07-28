@@ -38,8 +38,8 @@ Rectangle {
         {
             labelKey: "extensions",
             items: [
-                { key: "extensions", built: false },
-                { key: "store", built: false },
+                { key: "extensions", built: true },
+                { key: "store", built: true },
             ],
         },
         {
@@ -162,6 +162,8 @@ Rectangle {
                         case "about": return aboutPanel
                         case "captureSound": return captureSoundPanel
                         case "mixerRouting": return mixerRoutingPanel
+                        case "extensions": return extensionsPanel
+                        case "store": return storePanel
                         default: return comingSoonPanel
                         }
                     }
@@ -179,6 +181,8 @@ Rectangle {
     Component { id: aboutPanel; AboutPanel {} }
     Component { id: captureSoundPanel; CaptureSoundPanel {} }
     Component { id: mixerRoutingPanel; MixerRoutingPanel {} }
+    Component { id: extensionsPanel; ExtensionsPanel {} }
+    Component { id: storePanel; StorePanel {} }
     Component {
         id: comingSoonPanel
         ComingSoonPanel { sectionTitle: I18n.t("settings.sections." + page.active) }

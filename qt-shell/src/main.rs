@@ -1,6 +1,7 @@
 mod audio;
 mod clips;
 mod device;
+mod extensions;
 mod i18n;
 mod recording;
 mod settings;
