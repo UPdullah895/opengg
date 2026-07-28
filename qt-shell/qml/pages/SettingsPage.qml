@@ -30,7 +30,7 @@ Rectangle {
             labelKey: "moments",
             items: [
                 { key: "captureSound", built: false },
-                { key: "trackManagement", built: false },
+                { key: "trackManagement", built: true },
                 { key: "storage", built: true },
                 { key: "notifications", built: true },
             ],
@@ -158,6 +158,7 @@ Rectangle {
                         case "shortcuts": return shortcutsPanel
                         case "notifications": return notificationsPanel
                         case "storage": return storagePanel
+                        case "trackManagement": return trackManagementPanel
                         default: return comingSoonPanel
                         }
                     }
@@ -171,6 +172,7 @@ Rectangle {
     Component { id: shortcutsPanel; ShortcutsPanel {} }
     Component { id: notificationsPanel; NotificationsPanel {} }
     Component { id: storagePanel; StoragePanel {} }
+    Component { id: trackManagementPanel; TrackManagementPanel {} }
     Component {
         id: comingSoonPanel
         ComingSoonPanel { sectionTitle: I18n.t("settings.sections." + page.active) }

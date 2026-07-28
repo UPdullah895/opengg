@@ -20,6 +20,7 @@ fn main() {
         QmlFile::from("qml/pages/settings/NotificationsPanel.qml"),
         QmlFile::from("qml/pages/settings/ShortcutsPanel.qml"),
         QmlFile::from("qml/pages/settings/StoragePanel.qml"),
+        QmlFile::from("qml/pages/settings/TrackManagementPanel.qml"),
         QmlFile::from("qml/pages/settings/ComingSoonPanel.qml"),
         QmlFile::from("qml/components/VideoPlayer.qml"),
         QmlFile::from("qml/components/InfoIcon.qml"),
