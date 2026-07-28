@@ -21,6 +21,8 @@ pub mod qobject {
         // a QAbstractListModel is the Phase 3 upgrade (plan §2.2).
         #[qproperty(QString, channels_json, cxx_name = "channelsJson")]
         #[qproperty(bool, connected)]
+        #[qproperty(bool, virtual_audio_ready, cxx_name = "virtualAudioReady")]
+        #[qproperty(bool, checking_virtual_audio, cxx_name = "checkingVirtualAudio")]
         type AudioController = super::AudioControllerRust;
 
         /// Fetch the current channel list from the daemon.
@@ -36,6 +38,21 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "setMute"]
         fn set_mute(self: Pin<&mut Self>, channel: &QString, muted: bool);
+
+        /// Re-check whether OpenGG's virtual sinks/sources are present.
+        #[qinvokable]
+        #[cxx_name = "refreshVirtualAudioStatus"]
+        fn refresh_virtual_audio_status(self: Pin<&mut Self>);
+
+        /// Create OpenGG's virtual audio sinks (idempotent).
+        #[qinvokable]
+        #[cxx_name = "createVirtualAudio"]
+        fn create_virtual_audio(self: Pin<&mut Self>);
+
+        /// Tear down OpenGG's virtual audio sinks and restore OS defaults.
+        #[qinvokable]
+        #[cxx_name = "removeVirtualAudio"]
+        fn remove_virtual_audio(self: Pin<&mut Self>);
     }
 }
 
@@ -46,6 +63,8 @@ use cxx_qt_lib::QString;
 pub struct AudioControllerRust {
     channels_json: QString,
     connected: bool,
+    virtual_audio_ready: bool,
+    checking_virtual_audio: bool,
 }
 
 impl qobject::AudioController {
@@ -68,5 +87,22 @@ impl qobject::AudioController {
     pub fn set_mute(mut self: Pin<&mut Self>, channel: &QString, muted: bool) {
         let _ = opengg_core::audio::set_mute(channel.to_string(), muted);
         self.as_mut().refresh();
+    }
+
+    pub fn refresh_virtual_audio_status(mut self: Pin<&mut Self>) {
+        self.as_mut().set_checking_virtual_audio(true);
+        let ready = opengg_core::audio::check_virtual_audio_status().unwrap_or(false);
+        self.as_mut().set_virtual_audio_ready(ready);
+        self.as_mut().set_checking_virtual_audio(false);
+    }
+
+    pub fn create_virtual_audio(mut self: Pin<&mut Self>) {
+        let _ = opengg_core::audio::create_virtual_audio();
+        self.as_mut().refresh_virtual_audio_status();
+    }
+
+    pub fn remove_virtual_audio(mut self: Pin<&mut Self>) {
+        let _ = opengg_core::audio::remove_virtual_audio();
+        self.as_mut().refresh_virtual_audio_status();
     }
 }

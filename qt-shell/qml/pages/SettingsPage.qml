@@ -23,7 +23,7 @@ Rectangle {
         {
             labelKey: "audioEngine",
             items: [
-                { key: "mixerRouting", built: false },
+                { key: "mixerRouting", built: true },
             ],
         },
         {
@@ -161,6 +161,7 @@ Rectangle {
                         case "trackManagement": return trackManagementPanel
                         case "about": return aboutPanel
                         case "captureSound": return captureSoundPanel
+                        case "mixerRouting": return mixerRoutingPanel
                         default: return comingSoonPanel
                         }
                     }
@@ -177,6 +178,7 @@ Rectangle {
     Component { id: trackManagementPanel; TrackManagementPanel {} }
     Component { id: aboutPanel; AboutPanel {} }
     Component { id: captureSoundPanel; CaptureSoundPanel {} }
+    Component { id: mixerRoutingPanel; MixerRoutingPanel {} }
     Component {
         id: comingSoonPanel
         ComingSoonPanel { sectionTitle: I18n.t("settings.sections." + page.active) }
