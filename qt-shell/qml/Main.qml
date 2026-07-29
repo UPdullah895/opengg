@@ -25,6 +25,8 @@ ApplicationWindow {
     Component.onCompleted: {
         ThemeController.reload()
         SettingsController.refresh()
+        if (ScreenshotController.active && ScreenshotController.page.length > 0)
+            root.currentPage = ScreenshotController.page
     }
 
     // First-launch guided tour: waits for the first real settingsJson load, then
@@ -37,10 +39,47 @@ ApplicationWindow {
             if (root.tourChecked)
                 return
             root.tourChecked = true
+            // In a screenshot run the tour would cover whatever page we were
+            // asked to capture, so it is suppressed unless --with-tour asked
+            // for it explicitly (in which case it is started unconditionally,
+            // regardless of tutorialSeen).
+            if (ScreenshotController.active) {
+                if (ScreenshotController.withTour)
+                    TourController.start()
+                return
+            }
             var s = JSON.parse(SettingsController.settingsJson || "{}")
             var seen = !!(s.settings && s.settings.tutorialSeen)
             if (!seen)
                 tourStartTimer.start()
+        }
+    }
+
+    // ── Dev-only headless capture (UI-fidelity plan Phase 0) ──────────────
+    // Renders offscreen, grabs the window to a PNG, quits. Never runs unless
+    // --screenshot was passed. `grabToImage` needs a live scene graph, so this
+    // hangs off the settle Timer rather than Component.onCompleted.
+    Timer {
+        running: ScreenshotController.active
+        interval: ScreenshotController.delayMs
+        onTriggered: {
+            var ok = captureRoot.grabToImage(function (result) {
+                var path = ScreenshotController.outputPath
+                if (result.saveToFile(path))
+                    ScreenshotController.report(true, path)
+                else
+                    ScreenshotController.report(false, "saveToFile rejected " + path)
+                Qt.callLater(Qt.quit)
+            })
+            // grabToImage returns false when the item has no renderable size or
+            // no scene graph — surface that instead of hanging until timeout.
+            if (!ok) {
+                ScreenshotController.report(false,
+                    "grabToImage refused; visible=" + root.visible
+                    + " captureRoot=" + captureRoot.width + "x" + captureRoot.height
+                    + " win=" + root.width + "x" + root.height)
+                Qt.callLater(Qt.quit)
+            }
         }
     }
     Timer { id: tourStartTimer; interval: 700; onTriggered: TourController.start() }
@@ -52,39 +91,49 @@ ApplicationWindow {
         function onNavigateRequested(page) { root.currentPage = page }
     }
 
-    ColumnLayout {
+    // Explicit QML-declared capture root. `Window.contentItem` cannot be used:
+    // it is constructed by QQuickWindow in C++ and therefore has no associated
+    // QQmlEngine, which makes `grabToImage()` refuse it outright (silently, with
+    // no warning). Everything visible must live inside this Item so screenshots
+    // capture the whole UI.
+    Item {
+        id: captureRoot
         anchors.fill: parent
-        spacing: 0
 
-        Titlebar {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 40
-        }
-
-        RowLayout {
+        ColumnLayout {
+            anchors.fill: parent
             spacing: 0
-            Layout.fillWidth: true
-            Layout.fillHeight: true
 
-            Sidebar {
-                Layout.fillHeight: true
-                currentPage: root.currentPage
-                onNavigate: (p) => root.currentPage = p
+            Titlebar {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 40
             }
 
-            StackLayout {
+            RowLayout {
+                spacing: 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: ["home", "mixer", "clips", "devices", "settings"].indexOf(root.currentPage)
 
-                HomePage {}
-                MixerPage {}
-                ClipsPage {}
-                DevicesPage {}
-                SettingsPage {}
+                Sidebar {
+                    Layout.fillHeight: true
+                    currentPage: root.currentPage
+                    onNavigate: (p) => root.currentPage = p
+                }
+
+                StackLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    currentIndex: ["home", "mixer", "clips", "devices", "settings"].indexOf(root.currentPage)
+
+                    HomePage {}
+                    MixerPage {}
+                    ClipsPage {}
+                    DevicesPage {}
+                    SettingsPage {}
+                }
             }
         }
-    }
 
-    TourOverlay {}
+        TourOverlay {}
+    }
 }

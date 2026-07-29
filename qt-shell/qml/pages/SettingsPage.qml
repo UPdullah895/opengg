@@ -52,6 +52,13 @@ Rectangle {
 
     property string active: "general"
 
+    // Dev-only: let `--screenshot --page settings --panel <key>` open a specific
+    // panel so each one can be captured headlessly (UI-fidelity plan Phase 0).
+    Component.onCompleted: {
+        if (ScreenshotController.active && ScreenshotController.panel.length > 0)
+            page.active = ScreenshotController.panel
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 0

@@ -6,6 +6,7 @@ mod eq;
 mod extensions;
 mod i18n;
 mod recording;
+mod screenshot;
 mod settings;
 mod storage;
 mod system;

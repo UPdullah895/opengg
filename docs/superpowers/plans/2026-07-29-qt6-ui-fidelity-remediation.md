@@ -56,6 +56,34 @@ single highest-leverage item in the plan.
 **Acceptance:** I can produce a before/after image pair for any page without
 asking the maintainer to give up their screen.
 
+### Phase 0 outcome (landed)
+
+`make ui-shots` captures all 16 targets (5 pages + 11 settings panels + the
+tour overlay) headlessly. Two implementation notes worth keeping:
+
+- **`Window.contentItem` cannot be grabbed.** It is constructed by
+  `QQuickWindow` in C++ and so has no associated `QQmlEngine`;
+  `grabToImage()` refuses such items and returns `false` *silently* — no
+  `qmlWarning`, which made this look like a platform/scene-graph problem for
+  several iterations. `Main.qml` now has an explicit QML-declared
+  `Item { id: captureRoot }` wrapping the whole UI. Anything added outside it
+  will be invisible to screenshots.
+- **`QT_QPA_PLATFORM=offscreen` works** once the above is fixed — the earlier
+  "no scene graph" hypothesis was wrong. No Xvfb, no nested compositor, and no
+  GPU are needed (this machine has none of the first two available anyway).
+
+The first captures immediately confirmed two defects and found a third:
+
+- **D5 is worse than "wrong style": the emoji do not render at all.** The mixer's
+  mute buttons and several other controls draw as tofu boxes (`□`) because no
+  installed font covers those codepoints. This is a broken UI, not a stylistic
+  difference — it raises Phase 2 from "fidelity" to "correctness".
+- D6 confirmed on the Clips grid: no favorite/selection/kebab affordances, and
+  metadata renders as plain text rather than the Vue original's pills.
+- **New (D8): `--clips-grid-cols` is ignored.** `theme.json` specifies `4`;
+  `ClipsPage.qml` hardcodes `Math.floor(width / 260)` and rendered 3. Layout
+  tokens need the same treatment as color tokens in Phase 1.
+
 ---
 
 ## Phase 1 — Theme token parity (root-cause fix; unblocks 2–4)

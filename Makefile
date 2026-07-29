@@ -15,7 +15,7 @@ ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
 FRONTEND := $(ROOT)/frontend
 
-.PHONY: dev daemon ui build setup clean install install-service install-desktop lint check help new-extension validate-extension
+.PHONY: dev daemon ui build setup clean install install-service install-desktop lint check help new-extension validate-extension ui-shots
 
 # ── Default ──────────────────────────────────────────────────────
 help:
@@ -109,6 +109,13 @@ check:
 lint:
 	cd $(DAEMON) && cargo clippy -- -W clippy::all
 	cd $(FRONTEND) && npx vue-tsc --noEmit
+
+# ── UI screenshots (qt-shell, headless) ──────────────────────────
+# Renders every page + settings panel to PNG under QT_QPA_PLATFORM=offscreen.
+# Never opens a window on your desktop. Use ONLY=<page> to capture just one.
+ui-shots:
+	cd $(ROOT)/qt-shell && cargo build
+	$(ROOT)/qt-shell/tools/ui-shots.sh
 
 # ── Clean ────────────────────────────────────────────────────────
 clean:

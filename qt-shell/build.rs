@@ -50,6 +50,7 @@ fn main() {
             "src/extensions.rs",
             "src/eq.rs",
             "src/recording.rs",
+            "src/screenshot.rs",
             "src/settings.rs",
             "src/storage.rs",
             "src/system.rs",
