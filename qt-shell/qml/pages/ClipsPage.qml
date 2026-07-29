@@ -16,6 +16,8 @@ Rectangle {
     // is a small {filepath, title} object built from the delegate's role
     // context properties at the point of interaction.
     property var playerClip: null
+    // Clip currently open in the trim editor overlay (null = closed).
+    property var editorClip: null
     // Clips targeted by the rename / delete dialogs (null = dialog closed).
     property var renameTarget: null
     property var deleteTarget: null
@@ -532,6 +534,18 @@ Rectangle {
 
                         Rectangle {
                             width: 26; height: 26; radius: 13
+                            color: editArea.containsMouse ? Theme.accent : "#66000000"
+                            Text { anchors.centerIn: parent; text: "✂"; color: "#ffffff"; font.pixelSize: 13 }
+                            MouseArea {
+                                id: editArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: page.editorClip = { filepath: filepath, title: title }
+                            }
+                        }
+                        Rectangle {
+                            width: 26; height: 26; radius: 13
                             color: renameArea.containsMouse ? Theme.accent : "#66000000"
                             Text { anchors.centerIn: parent; text: "✎"; color: "#ffffff"; font.pixelSize: 13 }
                             MouseArea {
@@ -567,6 +581,16 @@ Rectangle {
         source: page.playerClip ? "file://" + page.playerClip.filepath : ""
         title: page.playerClip ? page.playerClip.title : ""
         onClosed: page.playerClip = null
+    }
+
+    // ── Trim editor overlay ───────────────────────────────────────────────
+    TrimEditor {
+        anchors.fill: parent
+        visible: page.editorClip !== null
+        source: page.editorClip ? "file://" + page.editorClip.filepath : ""
+        filepath: page.editorClip ? page.editorClip.filepath : ""
+        title: page.editorClip ? page.editorClip.title : ""
+        onClosed: page.editorClip = null
     }
 
     // ── Rename dialog ─────────────────────────────────────────────────────

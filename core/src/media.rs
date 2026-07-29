@@ -585,6 +585,84 @@ pub fn auto_name(input: &str, suffix: &str) -> String {
         .into()
 }
 
+/// Lossless trim via stream copy. `on_progress` is called with (percent, stage);
+/// percent is capped at 95 until the process actually exits (byte-size estimate only).
+pub fn trim_clip<F: Fn(f64, &str)>(
+    input_path: &str,
+    start_sec: f64,
+    end_sec: f64,
+    output_path: &str,
+    on_progress: F,
+) -> Result<String, String> {
+    let dur = end_sec - start_sec;
+    if dur <= 0.0 {
+        return Err("Invalid trim range".into());
+    }
+    let mut out = if output_path.is_empty() {
+        auto_name(input_path, "_trim")
+    } else {
+        output_path.to_string()
+    };
+    if out == input_path {
+        out = auto_name(input_path, "_trim");
+    }
+
+    let input_size = std::fs::metadata(input_path).map(|m| m.len()).unwrap_or(0);
+    let input_dur = probe_duration(input_path);
+    let estimated_size = if input_dur > 0.0 && input_size > 0 {
+        (input_size as f64 * (dur / input_dur)).max(1.0)
+    } else {
+        0.0
+    };
+
+    on_progress(0.0, "copying");
+    let mut child = Command::new("ffmpeg")
+        .args([
+            "-i",
+            input_path,
+            "-ss",
+            &format!("{start_sec:.3}"),
+            "-to",
+            &format!("{end_sec:.3}"),
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            "-y",
+            &out,
+        ])
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("ffmpeg: {e}"))?;
+
+    let mut last_pct = 0.0f64;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    on_progress(100.0, "done");
+                    return Ok(out);
+                } else {
+                    on_progress(-1.0, "error");
+                    return Err("FFmpeg trim failed".into());
+                }
+            }
+            Ok(None) => {
+                if estimated_size > 0.0 {
+                    let current_size = std::fs::metadata(&out).map(|m| m.len() as f64).unwrap_or(0.0);
+                    let pct = ((current_size / estimated_size) * 100.0).min(95.0);
+                    if pct > last_pct {
+                        last_pct = pct;
+                        on_progress(pct, "copying");
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Err(e) => return Err(format!("ffmpeg wait: {e}")),
+        }
+    }
+}
+
 /// Probe a video file for duration, width, height.
 pub fn probe_video(p: &Path) -> (f64, u32, u32) {
     let d = probe_duration(&p.to_string_lossy());
