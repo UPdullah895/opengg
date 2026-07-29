@@ -31,7 +31,7 @@ ColumnLayout {
     readonly property var bandLabels: ["32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
     property var bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     property real preamp: 0
-    property bool enabled: false
+    property bool eqEnabled: false   // NOT `enabled`: that shadows Item.enabled
     property string activePreset: "Default"
 
     readonly property var presets: ({
@@ -43,10 +43,10 @@ ColumnLayout {
     readonly property var presetNames: ["Default", "Gaming", "Movies", "Music"]
 
     function applyToEngine() {
-        if (root.enabled) EqController.applyEq(root.channel, JSON.stringify(root.bands))
+        if (root.eqEnabled) EqController.applyEq(root.channel, JSON.stringify(root.bands))
     }
     function setEnabled(v) {
-        root.enabled = v
+        root.eqEnabled = v
         if (v) {
             EqController.startEngine(root.channel)
             root.applyToEngine()
@@ -142,7 +142,7 @@ ColumnLayout {
         }
 
         ToggleSwitch {
-            checked: root.enabled
+            checked: root.eqEnabled
             onToggled: (v) => root.setEnabled(v)
         }
     }
@@ -150,7 +150,7 @@ ColumnLayout {
     ColumnLayout {
         Layout.fillWidth: true
         spacing: 10
-        opacity: root.enabled ? 1.0 : 0.45
+        opacity: root.eqEnabled ? 1.0 : 0.45
 
         RowLayout {
             Layout.fillWidth: true
@@ -176,7 +176,7 @@ ColumnLayout {
                         Layout.preferredHeight: 110
                         from: -12; to: 12
                         value: root.bands[bandCol.index]
-                        enabled: root.enabled
+                        enabled: root.eqEnabled
                         onMoved: root.setBand(bandCol.index, Math.round(value))
 
                         background: Rectangle {
@@ -230,7 +230,7 @@ ColumnLayout {
                 value: root.preamp
                 suffix: " dB"
                 sliderColor: root.accentColor
-                enabled: root.enabled
+                enabled: root.eqEnabled
                 onMoved: (v) => root.setPreamp(Math.round(v))
             }
 

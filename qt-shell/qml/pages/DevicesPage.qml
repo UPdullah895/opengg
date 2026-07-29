@@ -121,8 +121,12 @@ Rectangle {
                                     font.pixelSize: 12
                                 }
                                 Text {
+                                    // `visible: false` does NOT stop a `text`
+                                    // binding from evaluating, so the undefined
+                                    // guard has to live in the expression too.
                                     visible: modelData.capabilities !== undefined
-                                    text: modelData.capabilities.length + " capabilities"
+                                    text: (modelData.capabilities ? modelData.capabilities.length : 0)
+                                          + " capabilities"
                                     color: Theme.textDim
                                     font.pixelSize: 12
                                 }

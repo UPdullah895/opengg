@@ -80,9 +80,46 @@ The first captures immediately confirmed two defects and found a third:
   difference — it raises Phase 2 from "fidelity" to "correctness".
 - D6 confirmed on the Clips grid: no favorite/selection/kebab affordances, and
   metadata renders as plain text rather than the Vue original's pills.
-- **New (D8): `--clips-grid-cols` is ignored.** `theme.json` specifies `4`;
-  `ClipsPage.qml` hardcodes `Math.floor(width / 260)` and rendered 3. Layout
-  tokens need the same treatment as color tokens in Phase 1.
+- **New (D8): the clips grid ignored the user's column setting.** Corrected from
+  the first draft of this finding: `--clips-grid-cols` is vestigial in the *Vue*
+  UI too (defined in `:root`, read by nothing), so the real source is
+  `settings.clipsPerRow` (a 2–5 slider). `ClipsPage.qml` hardcoded
+  `Math.floor(width / 260)`, which happened to equal the user's `clipsPerRow: 3`
+  at 1280px — the defect was invisible precisely because it coincided.
+
+- **New (D9), found while fixing D8 — the most consequential item here: Qt log
+  output was never reaching stderr at all.** This Qt build has journald
+  support, so `qWarning`/`console.log`/QML `TypeError`s go to the journal and
+  stderr looks pristine. Every "verified: clean build, empty runtime log, zero
+  QML warnings" claim made across this migration was therefore checking
+  nothing. `QT_FORCE_STDERR_LOGGING=1` is required (`QT_LOGGING_TO_CONSOLE` is
+  the deprecated spelling). Two live defects were hiding behind it:
+  - `DevicesPage.qml:125` threw `TypeError: Cannot read property 'length' of
+    undefined` **36 times per session**. `visible:` guarded the undefined
+    access but the `text:` binding evaluates regardless of visibility.
+  - `GraphicEQ.qml` declared `property bool enabled: false`, shadowing
+    `Item.enabled` (`qt.qml.propertyCache: overrides a member of the base
+    object`). Renamed to `eqEnabled`, matching `DspControls.qml`'s
+    `nrEnabled`/`gateEnabled` convention.
+
+  `ui-shots.sh` now sets that variable and greps each capture for
+  TypeError/ReferenceError/binding-loop/shadowing, reporting `WARN` and exiting
+  non-zero. A warning can no longer hide behind a successfully written PNG.
+
+### Phase 1 outcome (landed)
+
+`theme.rs` now exposes 19 tokens (was 7), resolved by a pure, unit-tested
+`resolve(&Value) -> Resolved` function; 7 tests pin the dark and light palettes
+to `App.vue`'s exact values so the two UIs cannot silently drift again, and
+cover generic override, px/bare-number parsing, and non-positive/garbage
+rejection. `Theme.qml` adds `accentAlpha(pct)` and `scrim(pct)`.
+
+Light mode was verified end-to-end via an isolated `XDG_CONFIG_HOME` (never
+touching the real `~/.config/opengg`) with a blue `--accent` override — the full
+palette flips correctly. **That capture also proves D4 visually**: with a blue
+accent, the active sidebar item and the Mixer tab pill still render *pink*,
+because their tints are the hardcoded `Qt.rgba(0.914, 0.271, 0.376, α)`. Phase 3
+fixes those.
 
 ---
 

@@ -48,9 +48,13 @@ ApplicationWindow {
                     TourController.start()
                 return
             }
+            // settingsJson IS the inner `settings` object (see settings.rs
+            // refresh(), which publishes v["settings"]) — there is no extra
+            // `.settings` hop. Reading `s.settings.tutorialSeen` here made
+            // `seen` permanently false, so the tour re-launched on every start
+            // even after "don't show again".
             var s = JSON.parse(SettingsController.settingsJson || "{}")
-            var seen = !!(s.settings && s.settings.tutorialSeen)
-            if (!seen)
+            if (!s.tutorialSeen)
                 tourStartTimer.start()
         }
     }

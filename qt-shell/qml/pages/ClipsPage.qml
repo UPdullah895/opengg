@@ -22,6 +22,19 @@ Rectangle {
     property var renameTarget: null
     property var deleteTarget: null
 
+    // Live ui-settings.json `settings` object (drives the grid column count).
+    // `settingsJson` is ALREADY that inner object — settings.rs's refresh()
+    // publishes `v["settings"]`, not the whole envelope — so parse it directly,
+    // matching NotificationsPanel.qml. Adding a `.settings` hop here silently
+    // yielded {} and made the grid fall back to the theme default.
+    property var settings: JSON.parse(SettingsController.settingsJson || "{}")
+    Connections {
+        target: SettingsController
+        function onSettingsJsonChanged() {
+            page.settings = JSON.parse(SettingsController.settingsJson || "{}")
+        }
+    }
+
     function applyRename() {
         if (renameTarget && nameField.text.trim().length > 0)
             ClipsController.setCustomName(renameTarget.filepath, nameField.text.trim())
@@ -376,7 +389,14 @@ Rectangle {
             clip: true
             cacheBuffer: 400
 
-            readonly property int columns: Math.max(1, Math.floor(width / 260))
+            // Column count comes from `settings.clipsPerRow` (the 2–5 slider in
+            // ClipsPage.vue's toolbar), NOT from a width breakpoint — a
+            // width-based count ignored the user's choice entirely. Note that
+            // theme.json's `--clips-grid-cols` is vestigial in the Vue UI too
+            // (defined in :root, read by nothing), so it is deliberately not
+            // wired up here; Theme.clipsGridCols only supplies the fallback.
+            readonly property int columns: Math.max(2, Math.min(5,
+                page.settings.clipsPerRow || Theme.clipsGridCols))
             cellWidth: width / columns
             cellHeight: cellWidth * 0.5625 + 62  // 16:9 thumb + info strip
 
