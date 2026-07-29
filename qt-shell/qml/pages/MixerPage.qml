@@ -15,6 +15,15 @@ Rectangle {
         ? JSON.parse(AudioController.vuLevelsJson)
         : {}
 
+    // Current volume (0..150) for a named channel, or 100 if not found yet
+    // (matches ChatMix's usage: `audio.channelMap['Game']?.volume ?? 100`).
+    function volumeFor(name) {
+        for (const ch of page.channels) {
+            if (ch.name === name) return ch.volume
+        }
+        return 100
+    }
+
     function vuDb(name) {
         return name in page.vuLevels ? page.vuLevels[name] : -60
     }
@@ -310,6 +319,114 @@ Rectangle {
             }
 
             Item { Layout.fillWidth: true } // push strips to the leading edge
+        }
+
+        // ChatMix — Game/Chat balance slider. Balance is derived from the
+        // actual channel volumes (not a separate stored ref), matching
+        // ChatMix.vue's two-way-sync design: dragging it calls setVolume on
+        // both channels, and it re-centers correctly if either volume is
+        // changed by any other route (fader drag, Ear Blast ducking, etc).
+        Rectangle {
+            id: chatMixBar
+            visible: page.activeTab === "mixer" && AudioController.virtualAudioReady
+            Layout.fillWidth: true
+            Layout.preferredWidth: 480
+            radius: Theme.radius
+            color: Theme.surface
+            border.width: 1
+            border.color: Theme.border
+            implicitHeight: chatMixCol.implicitHeight + 24
+
+            readonly property real gameVol: page.volumeFor("Game")
+            readonly property real chatVol: page.volumeFor("Chat")
+            readonly property real balance: Math.max(-100, Math.min(100, chatVol - gameVol))
+            readonly property int gameLevel: Math.round(Math.max(0, 100 - Math.max(0, balance)))
+            readonly property int chatLevel: Math.round(Math.max(0, 100 - Math.max(0, -balance)))
+
+            ColumnLayout {
+                id: chatMixCol
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 8
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: (I18n.language, I18n.t("chatMix.title"))
+                        color: Theme.textDim
+                        font.pixelSize: 11
+                        font.weight: Font.Bold
+                        Layout.fillWidth: true
+                    }
+                    Rectangle {
+                        width: 20; height: 20; radius: Theme.radius
+                        color: "transparent"
+                        Text { anchors.centerIn: parent; text: "↺"; color: Theme.textDim; font.pixelSize: 13 }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                AudioController.setVolume("Game", 100)
+                                AudioController.setVolume("Chat", 100)
+                            }
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 12
+
+                    Text {
+                        text: (I18n.language, I18n.t("chatMix.game")) + "  " + chatMixBar.gameLevel + "%"
+                        color: page.channelColors.Game
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                    }
+
+                    Slider {
+                        id: chatMixSlider
+                        Layout.fillWidth: true
+                        from: -100; to: 100
+                        value: chatMixBar.balance
+                        onMoved: {
+                            const g = Math.round(Math.max(0, 100 - Math.max(0, value)))
+                            const c = Math.round(Math.max(0, 100 - Math.max(0, -value)))
+                            AudioController.setVolume("Game", g)
+                            AudioController.setVolume("Chat", c)
+                        }
+
+                        background: Rectangle {
+                            x: chatMixSlider.leftPadding
+                            y: chatMixSlider.topPadding + chatMixSlider.availableHeight / 2 - height / 2
+                            width: chatMixSlider.availableWidth
+                            height: 6
+                            radius: 3
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop { position: 0.0; color: page.channelColors.Game }
+                                GradientStop { position: 0.5; color: Theme.border }
+                                GradientStop { position: 1.0; color: page.channelColors.Chat }
+                            }
+                        }
+                        handle: Rectangle {
+                            x: chatMixSlider.leftPadding + chatMixSlider.visualPosition * (chatMixSlider.availableWidth - width)
+                            y: chatMixSlider.topPadding + chatMixSlider.availableHeight / 2 - height / 2
+                            width: 18; height: 18; radius: 9
+                            color: Theme.text
+                            border.width: 2
+                            border.color: Theme.accent
+                        }
+                    }
+
+                    Text {
+                        text: chatMixBar.chatLevel + "%  " + (I18n.language, I18n.t("chatMix.chat"))
+                        color: page.channelColors.Chat
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                    }
+                }
+            }
         }
 
         // Per-channel EQ/DSP tab content. Each panel is a static child kept
