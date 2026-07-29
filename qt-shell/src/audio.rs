@@ -20,6 +20,10 @@ pub mod qobject {
         // Raw channels JSON from the daemon (parsed in QML with JSON.parse);
         // a QAbstractListModel is the Phase 3 upgrade (plan §2.2).
         #[qproperty(QString, channels_json, cxx_name = "channelsJson")]
+        // Every live audio-producing app (routed or not — `channel: ""` means
+        // unrouted/Master), refreshed alongside channelsJson. Used to drive
+        // the Mixer page's "route an app to a channel" UI.
+        #[qproperty(QString, apps_json, cxx_name = "appsJson")]
         #[qproperty(bool, connected)]
         #[qproperty(bool, virtual_audio_ready, cxx_name = "virtualAudioReady")]
         #[qproperty(bool, checking_virtual_audio, cxx_name = "checkingVirtualAudio")]
@@ -48,6 +52,18 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "setMute"]
         fn set_mute(self: Pin<&mut Self>, channel: &QString, muted: bool);
+
+        /// Route one app's audio stream to a channel ("Master" = system
+        /// default). Runs on a background thread (retries can take up to
+        /// ~1.5s) and refreshes on completion, success or not.
+        #[qinvokable]
+        #[cxx_name = "routeApp"]
+        fn route_app(self: Pin<&mut Self>, app_id: i32, channel: &QString, binary: &QString);
+
+        /// Route an app back to the system default sink ("unroute").
+        #[qinvokable]
+        #[cxx_name = "unrouteApp"]
+        fn unroute_app(self: Pin<&mut Self>, app_id: i32, binary: &QString);
 
         /// Re-check whether OpenGG's virtual sinks/sources are present.
         #[qinvokable]
@@ -106,6 +122,7 @@ use std::sync::{mpsc, Arc};
 #[derive(Default)]
 pub struct AudioControllerRust {
     channels_json: QString,
+    apps_json: QString,
     connected: bool,
     virtual_audio_ready: bool,
     checking_virtual_audio: bool,
@@ -125,6 +142,32 @@ impl qobject::AudioController {
             }
             Err(_) => self.as_mut().set_connected(false),
         }
+        if let Ok(j) = opengg_core::audio::get_apps() {
+            self.as_mut().set_apps_json(QString::from(&j));
+        }
+    }
+
+    pub fn route_app(self: Pin<&mut Self>, app_id: i32, channel: &QString, binary: &QString) {
+        let channel = channel.to_string();
+        let binary = binary.to_string();
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            if let Err(e) = opengg_core::audio::route_app(app_id as u32, channel, binary) {
+                eprintln!("routeApp: {e}");
+            }
+            let _ = qt_thread.queue(|mut controller| controller.as_mut().refresh());
+        });
+    }
+
+    pub fn unroute_app(self: Pin<&mut Self>, app_id: i32, binary: &QString) {
+        let binary = binary.to_string();
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            if let Err(e) = opengg_core::audio::unroute_app(app_id as u32, binary) {
+                eprintln!("unrouteApp: {e}");
+            }
+            let _ = qt_thread.queue(|mut controller| controller.as_mut().refresh());
+        });
     }
 
     pub fn set_volume(mut self: Pin<&mut Self>, channel: &QString, volume: i32) {

@@ -14,12 +14,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 use crate::daemon::{call_dbus, call_dbus_void, AU_IFACE, AU_PATH};
 use crate::subprocess::run_cmd_sync;
 
 const ROUTING_BLACKLIST: &[&str] = &[
     "plasmashell", "kwin_wayland", "kwin_x11", "swaync", "sway",
     "xdg-desktop-portal", "xdg-desktop-portal-gnome", "xdg-desktop-portal-kde",
+    "wireplumber", "pipewire", "pipewire-pulse", "opengg", "peak detect",
 ];
 
 const VIRTUAL_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
@@ -1221,6 +1224,337 @@ fn current_sink_volume_pct(sink: &str) -> Option<u32> {
 fn current_sink_muted(sink: &str) -> Option<bool> {
     let out = run_cmd_sync("pactl", &["get-sink-mute", sink]).ok()?;
     Some(out.trim().ends_with("yes"))
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  ★ PER-APP ROUTING — ported from the Tauri host's `route_app` + `Router`
+//  + `RouteState` (frontend/src-tauri/src/commands/audio.rs, src/main.rs).
+//  Fully portable to core: `RouteState` has zero Tauri coupling (plain
+//  Mutex<HashMap> state), and the only AppHandle usage in the original
+//  (`app.emit("audio-mixer-refresh", ())`) is dropped here — callers
+//  refresh their own view after a successful `route_app` the same way
+//  every other mutating AudioController method already does.
+//
+//  Dropped from the port (dead code in the original, `#[allow(dead_code)]`
+//  there too): `route_via_pw_metadata`, `get_pw_node_id_for_sink`,
+//  `unload_null_sink_module`, `unlink_virtual_sink_from_all` — none of
+//  these are on the live `pactl move-sink-input` code path.
+// ══════════════════════════════════════════════════════════════════════
+
+const ROUTE_COOLDOWN_SECS: u64 = 5;
+const FAIL_THRESHOLD: u32 = 3;
+const FAIL_WINDOW_SECS: u64 = 30;
+const FAIL_COOLDOWN_SECS: u64 = 30;
+
+/// Tracks routing attempts, successes, and failures per app to prevent the
+/// infinite re-routing loop that spawns pactl/pw-metadata thousands of
+/// times per second and eventually OOM-kills the system.
+struct RouteState {
+    /// routing-key → last routing attempt time. Prevents retry during cooldown.
+    /// KEY = stable app identity (binary, lowercased) when known, else the stream id —
+    /// keying by binary (not the volatile PipeWire object.serial / sink-input index) is
+    /// what makes these guards actually work: a flood of short-lived streams from one
+    /// app shares ONE key, so the cooldown + circuit breaker can finally engage.
+    cooldown: Mutex<HashMap<String, SystemTime>>,
+    /// routing-key → (channel, success_time). Tracks successfully routed apps.
+    routed: Mutex<HashMap<String, (String, SystemTime)>>,
+    /// routing-key → (fail_count, first_fail_time). Circuit breaker for repeated failures.
+    fail_counts: Mutex<HashMap<String, (u32, SystemTime)>>,
+}
+
+impl RouteState {
+    fn new() -> Self {
+        Self {
+            cooldown: Mutex::new(HashMap::new()),
+            routed: Mutex::new(HashMap::new()),
+            fail_counts: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn is_on_cooldown(&self, key: &str) -> bool {
+        let map = self.cooldown.lock().unwrap();
+        map.get(key).is_some_and(|t| {
+            SystemTime::now().duration_since(*t).unwrap_or(Duration::MAX)
+                < Duration::from_secs(ROUTE_COOLDOWN_SECS)
+        })
+    }
+
+    fn record_attempt(&self, key: &str) {
+        self.cooldown.lock().unwrap().insert(key.to_string(), SystemTime::now());
+    }
+
+    fn record_success(&self, key: &str, channel: String) {
+        self.routed.lock().unwrap().insert(key.to_string(), (channel, SystemTime::now()));
+        self.fail_counts.lock().unwrap().remove(key);
+    }
+
+    fn is_already_routed(&self, key: &str, channel: &str) -> bool {
+        let map = self.routed.lock().unwrap();
+        map.get(key).is_some_and(|(ch, _)| ch == channel)
+    }
+
+    /// Records a failure and returns `true` if the circuit breaker is now
+    /// open (this app should be blocked from further attempts).
+    fn record_failure(&self, key: &str) -> bool {
+        let mut map = self.fail_counts.lock().unwrap();
+        let now = SystemTime::now();
+        let entry = map.entry(key.to_string()).or_insert((0, now));
+        if now.duration_since(entry.1).unwrap_or(Duration::MAX) > Duration::from_secs(FAIL_WINDOW_SECS) {
+            *entry = (1, now);
+        } else {
+            entry.0 += 1;
+        }
+        if entry.0 >= FAIL_THRESHOLD {
+            self.cooldown
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), now + Duration::from_secs(FAIL_COOLDOWN_SECS));
+            true
+        } else {
+            false
+        }
+    }
+
+    fn is_circuit_open(&self, key: &str) -> bool {
+        let map = self.fail_counts.lock().unwrap();
+        let now = SystemTime::now();
+        map.get(key).is_some_and(|(count, first)| {
+            *count >= FAIL_THRESHOLD
+                && now.duration_since(*first).unwrap_or(Duration::MAX) <= Duration::from_secs(FAIL_COOLDOWN_SECS)
+        })
+    }
+}
+
+fn route_state() -> &'static RouteState {
+    static STATE: OnceLock<RouteState> = OnceLock::new();
+    STATE.get_or_init(RouteState::new)
+}
+
+/// Build a map of pactl sink-input index → every PipeWire node id it's
+/// known by (a stream can be identified by several id-shaped properties).
+fn build_si_map() -> Result<HashMap<u32, Vec<u32>>, String> {
+    let j = run_cmd_sync("pactl", &["-f", "json", "list", "sink-inputs"])?;
+    let sis: Vec<serde_json::Value> = serde_json::from_str(&j).map_err(|e| format!("parse sink-inputs: {e}"))?;
+    let mut map = HashMap::new();
+    for si in sis {
+        let idx = si["index"].as_u64().unwrap_or(0) as u32;
+        let p = &si["properties"];
+
+        let mut pw_ids = Vec::new();
+        for key in [
+            "object.serial",
+            "object.id",
+            "node.id",
+            "pipewire.access.portal.app_id",
+            "pipewire.client.access",
+        ] {
+            if let Some(s) = p[key].as_str() {
+                if let Ok(id) = s.parse::<u32>() {
+                    pw_ids.push(id);
+                }
+            }
+        }
+        if let Some(s) = p["media.name"].as_str() {
+            if let Ok(id) = s.parse::<u32>() {
+                pw_ids.push(id);
+            }
+        }
+
+        map.insert(idx, pw_ids);
+    }
+    Ok(map)
+}
+
+/// Check whether a sink-input index currently exists in the system.
+fn validate_sink_input_exists(si_idx: u32) -> bool {
+    if let Ok(j) = run_cmd_sync("pactl", &["-f", "json", "list", "sink-inputs"]) {
+        if let Ok(sis) = serde_json::from_str::<Vec<serde_json::Value>>(&j) {
+            return sis.iter().any(|si| si["index"].as_u64() == Some(si_idx as u64));
+        }
+    }
+    false
+}
+
+/// Cross-reference PipeWire node ID → pactl sink-input index using the full SI map.
+fn find_pactl_si_for_pw_id(pw_id: u32) -> Result<u32, String> {
+    let map = build_si_map()?;
+    for (idx, pw_ids) in &map {
+        if pw_ids.contains(&pw_id) {
+            return Ok(*idx);
+        }
+    }
+    Err(format!("no pactl si for PW#{pw_id}"))
+}
+
+/// Translate an incoming app id to a pactl sink-input index. The id may
+/// already BE a pactl sink-input index, or it may be a PipeWire node.id —
+/// e.g. when the daemon supplied a node id. Returns `None` if the id maps
+/// to no current sink-input (e.g. a source-output / mic capture, which
+/// cannot be moved to a playback sink).
+fn resolve_pactl_si_index(app_id: u32) -> Option<u32> {
+    if validate_sink_input_exists(app_id) {
+        return Some(app_id);
+    }
+    find_pactl_si_for_pw_id(app_id).ok()
+}
+
+/// Ensure a channel's virtual sink exists (creating it with a 600ms
+/// settling time + default-sink loopback links if not), so a freshly
+/// created channel is immediately audible.
+fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
+    if let Ok(o) = Command::new("pactl").args(["list", "sinks", "short"]).output() {
+        if String::from_utf8_lossy(&o.stdout).contains(name) {
+            return Ok(());
+        }
+    }
+    let display_name = live_display_name(ch);
+    let c = Command::new("pactl")
+        .args([
+            "load-module",
+            "module-null-sink",
+            &format!("sink_name={name}"),
+            &format!(
+                "sink_properties=node.description={} node.nick={} device.description={} media.name={}",
+                sink_prop_value(&display_name),
+                sink_prop_value(&display_name),
+                sink_prop_value(&display_name),
+                sink_prop_value(&display_name),
+            ),
+            "channels=2",
+            "channel_map=front-left,front-right",
+        ])
+        .output()
+        .map_err(|e| format!("{e}"))?;
+    if !c.status.success() {
+        return Err(String::from_utf8_lossy(&c.stderr).to_string());
+    }
+    std::thread::sleep(Duration::from_millis(600));
+
+    if let Ok(def) = run_cmd_sync("pactl", &["get-default-sink"]) {
+        for p in ["FL", "FR"] {
+            if !get_linked_device_for_monitor(name, p).is_empty() {
+                continue; // already linked to something — skip to avoid duplicates
+            }
+            let _ = Command::new("pw-link")
+                .args([&format!("{name}:monitor_{p}"), &format!("{def}:playback_{p}")])
+                .output();
+        }
+    }
+    log::info!("ensure_sink_exists: sink '{name}' ready");
+    Ok(())
+}
+
+/// Confirm a moved sink-input actually landed on the target sink, with retry
+/// (WirePlumber can take a moment to apply the move).
+fn verify_stream_routed(si_idx: u32, sink_idx: u32) -> bool {
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(120));
+        }
+        let Ok(j) = run_cmd_sync("pactl", &["-f", "json", "list", "sink-inputs"]) else { continue };
+        let Ok(sis) = serde_json::from_str::<Vec<serde_json::Value>>(&j) else { continue };
+        if let Some(si) = sis.iter().find(|si| si["index"].as_u64() == Some(si_idx as u64)) {
+            if si["sink"].as_u64() == Some(sink_idx as u64) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn resolve_route_sink_name(channel: &str) -> Result<String, String> {
+    if channel == "default" || channel == "Master" {
+        run_cmd_sync("pactl", &["get-default-sink"])
+    } else {
+        let name = format!("OpenGG_{channel}");
+        ensure_sink_exists(&name, channel)?;
+        Ok(name)
+    }
+}
+
+/// Move the stream to the target sink via `pactl move-sink-input` and
+/// confirm it actually landed there (with retry). Both indices are pactl
+/// integer indices.
+fn move_and_verify(app_id: u32, channel: &str, si_idx: u32, sink_idx: u32) -> Result<(), String> {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        match run_cmd_sync("pactl", &["move-sink-input", &si_idx.to_string(), &sink_idx.to_string()]) {
+            Ok(_) => {
+                if verify_stream_routed(si_idx, sink_idx) {
+                    log::info!("route_app[{app_id}→{channel}]: moved sink-input #{si_idx} → sink #{sink_idx} (verified)");
+                    return Ok(());
+                }
+                log::debug!("route_app[{app_id}→{channel}]: move ok but not on target yet (attempt {}/3)", attempt + 1);
+            }
+            Err(e) => log::debug!("route_app[{app_id}→{channel}]: move-sink-input failed (attempt {}/3): {e}", attempt + 1),
+        }
+    }
+    Err(format!("route_app: failed to move id {app_id} ({si_idx}→{channel}) after retries"))
+}
+
+/// Route one app's audio stream to a channel ("default"/"Master" routes back
+/// to the system default sink). Guarded by a per-app cooldown + circuit
+/// breaker (see `RouteState`) so a flood of short-lived streams from one app
+/// can't spam `pactl`/D-Bus thousands of times per second.
+///
+/// `binary` is used as the stable routing-guard key (falls back to `app_id`
+/// if empty — matches the Tauri original, which keys by binary specifically
+/// so hundreds of short-lived streams from one app share a single guard).
+pub fn route_app(app_id: u32, channel: String, binary: String) -> Result<(), String> {
+    let key = if binary.trim().is_empty() { app_id.to_string() } else { binary.to_lowercase() };
+    let state = route_state();
+
+    if is_blacklisted_binary(&binary) {
+        return Err(format!("route_app: {app_id} ({binary}) is blacklisted — system processes cannot be routed"));
+    }
+    if state.is_already_routed(&key, &channel) {
+        return Ok(());
+    }
+    if state.is_on_cooldown(&key) {
+        return Err(format!("route_app: {key} is on cooldown ({ROUTE_COOLDOWN_SECS}s)"));
+    }
+    if state.is_circuit_open(&key) {
+        return Err(format!("route_app: {key} circuit breaker open (too many failures)"));
+    }
+
+    state.record_attempt(&key);
+
+    let result = (|| -> Result<(), String> {
+        // Strategy 0: D-Bus daemon (preferred — single source of truth)
+        if call_dbus_void("RouteApp", AU_PATH, AU_IFACE, (app_id, channel.as_str())).is_ok() {
+            return Ok(());
+        }
+        let sink_name = resolve_route_sink_name(&channel)?;
+        let sink_idx = get_sink_index_by_name(&sink_name)?;
+        let si_idx = resolve_pactl_si_index(app_id).ok_or_else(|| {
+            format!("route_app: id {app_id} is not a movable sink-input — not routing to {channel}")
+        })?;
+        move_and_verify(app_id, &channel, si_idx, sink_idx)
+    })();
+
+    match result {
+        Ok(()) => {
+            state.record_success(&key, channel);
+            Ok(())
+        }
+        Err(e) => {
+            if state.record_failure(&key) {
+                log::warn!(
+                    "route_app: '{key}' circuit breaker OPEN after {FAIL_THRESHOLD} failures in {FAIL_WINDOW_SECS}s — suppressing further attempts for {FAIL_COOLDOWN_SECS}s"
+                );
+            } else {
+                log::debug!("route_app: id={app_id} ('{key}') → failed: {e}");
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Route an app back to the system default sink ("unroute").
+pub fn unroute_app(app_id: u32, binary: String) -> Result<(), String> {
+    route_app(app_id, "default".to_string(), binary)
 }
 
 #[cfg(test)]

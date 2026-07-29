@@ -14,6 +14,20 @@ Rectangle {
     property var vuLevels: AudioController.vuLevelsJson
         ? JSON.parse(AudioController.vuLevelsJson)
         : {}
+    // Every live audio-producing app (routed or not), used to build the
+    // "route an app to a channel" UI — derived client-side the same way
+    // audio.ts's `channelMap` computed groups `allApps` by `channel`,
+    // rather than trusting channels_json's own per-channel apps field.
+    property var apps: AudioController.appsJson
+        ? JSON.parse(AudioController.appsJson)
+        : []
+    readonly property var routeTargets: ["Master", "Game", "Chat", "Media", "Aux"]
+
+    function appsForChannel(name) {
+        if (name === "Master")
+            return page.apps.filter(a => !a.locked && (!a.channel || a.channel === "" || a.channel === "Master"))
+        return page.apps.filter(a => a.channel === name)
+    }
 
     // Current volume (0..150) for a named channel, or 100 if not found yet
     // (matches ChatMix's usage: `audio.channelMap['Game']?.volume ?? 100`).
@@ -319,6 +333,127 @@ Rectangle {
             }
 
             Item { Layout.fillWidth: true } // push strips to the leading edge
+        }
+
+        // App routing — click an app pill to expand an inline channel
+        // picker. Deliberately NOT a port of DropZone.vue's custom
+        // pointer-drag-with-ghost-element system (a from-scratch, high-risk
+        // rebuild for comparatively little functional gain over click-to-
+        // route); this reuses only proven primitives (Rectangle/MouseArea/
+        // Flow), consistent with this migration's "boring primitive over
+        // fragile fidelity" pattern elsewhere (GraphicEQ's discrete sliders
+        // instead of an SVG bezier curve, the card-scoped confirm overlay
+        // instead of a QQC2 Popup).
+        Rectangle {
+            id: routingCard
+            visible: page.activeTab === "mixer" && page.apps.length > 0
+            Layout.fillWidth: true
+            radius: Theme.radius
+            color: Theme.surface
+            border.width: 1
+            border.color: Theme.border
+            implicitHeight: routingCol.implicitHeight + 24
+
+            // Id of the app pill whose channel picker is currently open, or
+            // -1 if none. Only one open at a time.
+            property int expandedAppId: -1
+
+            ColumnLayout {
+                id: routingCol
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 10
+
+                Text {
+                    text: "APP ROUTING"
+                    color: Theme.textDim
+                    font.pixelSize: 11
+                    font.weight: Font.Bold
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Repeater {
+                        model: page.apps.filter(a => !a.locked)
+
+                        ColumnLayout {
+                            id: appDelegate
+                            required property var modelData
+                            spacing: 4
+
+                            Rectangle {
+                                id: pill
+                                readonly property bool expanded: routingCard.expandedAppId === appDelegate.modelData.id
+                                implicitWidth: pillRow.implicitWidth + 16
+                                implicitHeight: 26
+                                radius: 13
+                                color: pill.expanded ? Theme.accent : Theme.bg
+                                border.width: 1
+                                border.color: Theme.border
+
+                                RowLayout {
+                                    id: pillRow
+                                    anchors.centerIn: parent
+                                    spacing: 6
+                                    Rectangle {
+                                        width: 6; height: 6; radius: 3
+                                        color: page.channelColors[appDelegate.modelData.channel || "Master"] || Theme.textDim
+                                    }
+                                    Text {
+                                        text: appDelegate.modelData.name + " · " + (appDelegate.modelData.channel || "Master")
+                                        color: pill.expanded ? "#fff" : Theme.text
+                                        font.pixelSize: 11
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: routingCard.expandedAppId = pill.expanded ? -1 : appDelegate.modelData.id
+                                }
+                            }
+
+                            RowLayout {
+                                visible: pill.expanded
+                                spacing: 4
+                                Repeater {
+                                    model: page.routeTargets
+                                    Rectangle {
+                                        id: targetBtn
+                                        required property string modelData
+                                        readonly property bool isCurrent: (appDelegate.modelData.channel || "Master") === modelData
+                                        implicitWidth: targetText.implicitWidth + 14
+                                        implicitHeight: 22
+                                        radius: Theme.radius
+                                        color: targetBtn.isCurrent ? Theme.accent : "transparent"
+                                        border.width: 1
+                                        border.color: Theme.border
+                                        Text {
+                                            id: targetText
+                                            anchors.centerIn: parent
+                                            text: targetBtn.modelData
+                                            color: targetBtn.isCurrent ? "#fff" : Theme.textDim
+                                            font.pixelSize: 10
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                if (targetBtn.modelData === "Master")
+                                                    AudioController.unrouteApp(appDelegate.modelData.id, appDelegate.modelData.binary)
+                                                else
+                                                    AudioController.routeApp(appDelegate.modelData.id, targetBtn.modelData, appDelegate.modelData.binary)
+                                                routingCard.expandedAppId = -1
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // ChatMix — Game/Chat balance slider. Balance is derived from the
