@@ -4,22 +4,27 @@ import QtQuick.Layouts
 import com.opengg.app
 
 // Settings → Audio Engine (Mixer Routing). QML port of MixerRoutingSettings.vue.
-//
-// Omitted from this port: the Ear Blast Protection card. Its enforcement engine
-// (per-channel VU-threshold detection + auto-ducking) lives entirely client-side
-// in the Tauri host (frontend/src-tauri/src/commands/audio.rs — EarBlastState +
-// check_ear_blast(), driven by the Tauri VU polling loop). qt-shell has no VU
-// streaming yet (see MixerPage.qml — plain channel strips, no live meters), so
-// there is no engine for these settings to drive; shipping the toggle/threshold
-// controls here would silently write JSON nobody reads. Revisit once VU
-// streaming + the ear-blast engine are ported to core (tracked in the migration
-// plan doc's deferred-scope list, "audioEngine" nav group).
 ColumnLayout {
     id: root
     spacing: 20
 
     property bool confirmOpen: false
     property string confirmKind: "remove" // "remove" | "reset" | "create"
+
+    // Ear Blast Protection config, mirrored from AudioController.earBlastJson
+    // (mixer.earBlast in the settings envelope — see audio.rs's header note).
+    property var eb: AudioController.earBlastJson
+        ? JSON.parse(AudioController.earBlastJson)
+        : { enabled: false, channels: ["Game"], threshold: 85, target: 60 }
+
+    function setEb(key, value) {
+        AudioController.setEarBlast(key, JSON.stringify(value))
+    }
+    function toggleEbChannel(ch) {
+        const cur = root.eb.channels || []
+        const next = cur.includes(ch) ? cur.filter(c => c !== ch) : [...cur, ch]
+        root.setEb("channels", next)
+    }
 
     readonly property var confirmText: ({
         remove: {
@@ -58,6 +63,119 @@ ColumnLayout {
         color: Theme.text
         font.pixelSize: 22
         font.weight: Font.Bold
+    }
+
+    // ── Ear Blast Protection card ──
+    Rectangle {
+        id: ebCard
+        Layout.fillWidth: true
+        Layout.preferredWidth: 680
+        radius: Theme.radius
+        color: Theme.surface
+        border.width: 1
+        border.color: Theme.border
+        implicitHeight: ebCol.implicitHeight + 40
+
+        ColumnLayout {
+            id: ebCol
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 14
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Text { text: "🛡️"; font.pixelSize: 14 }
+                Text {
+                    text: (I18n.language, I18n.t("settings.earBlast.title"))
+                    color: Theme.text
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                }
+                InfoIcon { tooltipText: I18n.t("settings.earBlast.desc") }
+                Item { Layout.fillWidth: true }
+                ToggleSwitch {
+                    checked: !!root.eb.enabled
+                    onToggled: (v) => root.setEb("enabled", v)
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
+
+            ColumnLayout {
+                spacing: 6
+                Text {
+                    text: (I18n.language, I18n.t("settings.earBlast.channels"))
+                    color: Theme.textDim
+                    font.pixelSize: 12
+                }
+                RowLayout {
+                    spacing: 6
+                    Repeater {
+                        model: ["Master", "Game", "Chat", "Media", "Aux", "Mic"]
+                        Rectangle {
+                            required property string modelData
+                            readonly property bool active: (root.eb.channels || []).includes(modelData)
+                            width: pillText.implicitWidth + 20
+                            height: 26
+                            radius: 13
+                            color: active ? Theme.accent : "transparent"
+                            border.width: 1
+                            border.color: active ? Theme.accent : Theme.border
+                            Text {
+                                id: pillText
+                                anchors.centerIn: parent
+                                text: parent.modelData
+                                color: parent.active ? "#fff" : Theme.textDim
+                                font.pixelSize: 11
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.toggleEbChannel(parent.modelData)
+                            }
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 24
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+                    Text {
+                        text: (I18n.language, I18n.t("settings.earBlast.threshold"))
+                        color: Theme.textDim
+                        font.pixelSize: 12
+                    }
+                    HSlider {
+                        Layout.fillWidth: true
+                        from: 1; to: 100
+                        suffix: "%"
+                        value: root.eb.threshold !== undefined ? root.eb.threshold : 85
+                        onMoved: root.setEb("threshold", Math.round(value))
+                    }
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+                    Text {
+                        text: (I18n.language, I18n.t("settings.earBlast.target"))
+                        color: Theme.textDim
+                        font.pixelSize: 12
+                    }
+                    HSlider {
+                        Layout.fillWidth: true
+                        from: 0; to: 100
+                        suffix: "%"
+                        value: root.eb.target !== undefined ? root.eb.target : 60
+                        onMoved: root.setEb("target", Math.round(value))
+                    }
+                }
+            }
+        }
     }
 
     // ── Danger Zone card ──
@@ -259,5 +377,8 @@ ColumnLayout {
         }
     }
 
-    Component.onCompleted: AudioController.refreshVirtualAudioStatus()
+    Component.onCompleted: {
+        AudioController.refreshVirtualAudioStatus()
+        AudioController.refreshEarBlast()
+    }
 }

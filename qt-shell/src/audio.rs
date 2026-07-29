@@ -27,6 +27,12 @@ pub mod qobject {
         // dB, -60..0). Only populated while `vuRunning` — see startVuStream.
         #[qproperty(QString, vu_levels_json, cxx_name = "vuLevelsJson")]
         #[qproperty(bool, vu_running, cxx_name = "vuRunning")]
+        // Ear Blast Protection config (`{enabled, channels, threshold,
+        // target}`) — lives at the top-level `mixer.earBlast` envelope key,
+        // not under `"settings"`, so it's read/written here rather than via
+        // SettingsController (same reasoning as ExtensionsController's
+        // modules/extensionConsents — see that file's header comment).
+        #[qproperty(QString, ear_blast_json, cxx_name = "earBlastJson")]
         type AudioController = super::AudioControllerRust;
 
         /// Fetch the current channel list from the daemon.
@@ -74,6 +80,17 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "stopVuStream"]
         fn stop_vu_stream(self: Pin<&mut Self>);
+
+        /// Reload `earBlastJson` from the `ui-settings.json` envelope.
+        #[qinvokable]
+        #[cxx_name = "refreshEarBlast"]
+        fn refresh_ear_blast(self: Pin<&mut Self>);
+
+        /// Set `mixer.earBlast.<key>` to `value_json` (a JSON-encoded
+        /// scalar/array), save, and refresh.
+        #[qinvokable]
+        #[cxx_name = "setEarBlast"]
+        fn set_ear_blast(self: Pin<&mut Self>, key: &QString, value_json: &QString);
     }
 
     impl cxx_qt::Threading for AudioController {}
@@ -96,6 +113,7 @@ pub struct AudioControllerRust {
     vu_running: bool,
     vu_flag: Arc<AtomicBool>,
     vu_gen: Arc<AtomicU64>,
+    ear_blast_json: QString,
 }
 
 impl qobject::AudioController {
@@ -175,10 +193,36 @@ impl qobject::AudioController {
             drop(tx); // only reader threads' clones keep `rx` alive now
 
             let mut levels: HashMap<String, f32> = HashMap::with_capacity(6);
+
+            // Ear Blast Protection: checked against every live level on
+            // every iteration (see opengg_core::ear_blast::check), same as
+            // the Tauri original's check_ear_blast call from its VU emitter
+            // task. Config is re-read from disk periodically (not every
+            // iteration — that's 30 JSON-file reads/sec for no benefit) so
+            // toggling it in Settings takes effect within ~1s without
+            // resetting the per-channel duck/restore state on every read.
+            let mut eb_state = opengg_core::ear_blast::EarBlastState::default();
+            let (eb_en, eb_ch, eb_th, eb_ta) = opengg_core::ear_blast::load_config();
+            eb_state.set_config(eb_en, eb_ch, eb_th, eb_ta);
+            let mut eb_reload_counter = 0u32;
+
             while running.load(Ordering::Relaxed) && gen.load(Ordering::Relaxed) == my_gen {
                 while let Ok((ch, db)) = rx.try_recv() {
                     levels.insert(ch, db);
                 }
+
+                eb_reload_counter += 1;
+                if eb_reload_counter >= 30 {
+                    eb_reload_counter = 0;
+                    let (en, ch, th, ta) = opengg_core::ear_blast::load_config();
+                    eb_state.set_config(en, ch, th, ta);
+                }
+                if eb_state.enabled {
+                    for (ch, db) in &levels {
+                        opengg_core::ear_blast::check(&mut eb_state, ch, *db);
+                    }
+                }
+
                 let json = serde_json::to_string(&levels).unwrap_or_else(|_| "{}".into());
                 let _ = qt_thread.queue(move |mut controller| {
                     controller.as_mut().set_vu_levels_json(QString::from(&json));
@@ -195,4 +239,41 @@ impl qobject::AudioController {
         self.vu_flag.store(false, Ordering::Relaxed);
         self.as_mut().set_vu_running(false);
     }
+
+    pub fn refresh_ear_blast(mut self: Pin<&mut Self>) {
+        let v = load_settings_envelope();
+        let eb = v
+            .get("mixer")
+            .and_then(|m| m.get("earBlast"))
+            .cloned()
+            .unwrap_or_else(default_ear_blast);
+        let json = serde_json::to_string(&eb).unwrap_or_else(|_| "{}".into());
+        self.as_mut().set_ear_blast_json(QString::from(&json));
+    }
+
+    pub fn set_ear_blast(mut self: Pin<&mut Self>, key: &QString, value_json: &QString) {
+        let mut v = load_settings_envelope();
+        if !v["mixer"].is_object() {
+            v["mixer"] = serde_json::json!({});
+        }
+        if !v["mixer"]["earBlast"].is_object() {
+            v["mixer"]["earBlast"] = default_ear_blast();
+        }
+        let parsed: serde_json::Value =
+            serde_json::from_str(&value_json.to_string()).unwrap_or(serde_json::Value::Null);
+        v["mixer"]["earBlast"][key.to_string()] = parsed;
+        if let Ok(s) = serde_json::to_string(&v) {
+            let _ = opengg_core::settings::save_ui_settings(&s);
+        }
+        self.as_mut().refresh_ear_blast();
+    }
+}
+
+fn load_settings_envelope() -> serde_json::Value {
+    let raw = opengg_core::settings::load_ui_settings().unwrap_or_default();
+    serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+fn default_ear_blast() -> serde_json::Value {
+    serde_json::json!({ "enabled": false, "channels": ["Game"], "threshold": 85, "target": 60 })
 }
