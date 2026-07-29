@@ -197,7 +197,10 @@ impl qobject::RecordingController {
 
     pub fn save(mut self: Pin<&mut Self>) {
         match opengg_core::gsr::save_gsr_replay(false) {
-            Ok(_) => self.as_mut().set_error(QString::default()),
+            Ok(r) => {
+                self.as_mut().set_error(QString::default());
+                notify_clip_saved(&r.game_title, &r.filename, r.filesize_mb, r.success);
+            }
             Err(e) => {
                 eprintln!("RecordingController::save: {e}");
                 self.as_mut().set_error(QString::from(&e));
@@ -260,4 +263,27 @@ impl qobject::RecordingController {
             });
         });
     }
+}
+
+/// Fire the clip-saved desktop notification, reading the same
+/// `settings.enableClipNotifications`/`notificationStyle`/`notificationDuration`
+/// keys the (already-shipped) NotificationsPanel.qml writes.
+fn notify_clip_saved(game: &str, filename: &str, filesize_mb: f64, success: bool) {
+    let raw = opengg_core::settings::load_ui_settings().unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    let s = &v["settings"];
+
+    let enabled = s["enableClipNotifications"].as_bool().unwrap_or(true);
+    let mode = s["notificationStyle"].as_str().unwrap_or("auto");
+    let duration_secs = s["notificationDuration"].as_u64();
+
+    opengg_core::notify::show_clip_notification(
+        game,
+        filename,
+        filesize_mb,
+        success,
+        enabled,
+        mode,
+        duration_secs,
+    );
 }

@@ -18,6 +18,7 @@ pub mod ear_blast;
 pub mod extensions;
 pub mod gsr;
 pub mod media;
+pub mod notify;
 pub mod paths;
 pub mod recording;
 pub mod settings;
