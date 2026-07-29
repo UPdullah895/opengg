@@ -29,6 +29,19 @@ Rectangle {
     }
 
     property string activeTab: "mixer"
+    // Overdrive — expands fader range from 100% to 150%. Client-side UI
+    // state only (matches MixerPage.vue's overdriveEnabled ref: not
+    // persisted). Disabling it clamps any channel currently above 100%
+    // back down, mirroring clampChannelsTo100().
+    property bool overdriveEnabled: false
+    readonly property var mixerChannelNames: ["Master", "Game", "Chat", "Media", "Aux", "Mic"]
+    onOverdriveEnabledChanged: {
+        if (overdriveEnabled) return
+        for (const modelData of page.channels) {
+            if (page.mixerChannelNames.includes(modelData.name) && modelData.volume > 100)
+                AudioController.setVolume(modelData.name, 100)
+        }
+    }
     readonly property var tabs: [
         { id: "mixer", label: "Mixer" },
         { id: "game", label: "Game" },
@@ -111,6 +124,36 @@ Rectangle {
                     }
                 }
             }
+
+            // Overdrive — unlocks faders beyond 100% (up to 150%).
+            Rectangle {
+                visible: page.activeTab === "mixer"
+                width: 30; height: 30
+                radius: Theme.radius
+                color: page.overdriveEnabled ? Qt.rgba(0.961, 0.620, 0.043, 0.15) : "transparent"
+                border.width: 1
+                border.color: page.overdriveEnabled ? "#f59e0b" : Theme.border
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "⚡"
+                    font.pixelSize: 14
+                }
+                MouseArea {
+                    id: overdriveArea
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    hoverEnabled: true
+                    onClicked: page.overdriveEnabled = !page.overdriveEnabled
+                }
+                ToolTip {
+                    visible: overdriveArea.containsMouse
+                    text: page.overdriveEnabled
+                        ? "Overdrive ON — faders go to 150%"
+                        : "Enable Overdrive (faders up to 150%)"
+                    delay: 300
+                }
+            }
         }
 
         // Row of channel strips
@@ -148,10 +191,10 @@ Rectangle {
                             Layout.alignment: Qt.AlignHCenter
                         }
 
-                        // Volume %
+                        // Volume % (orange once overdrive pushes it past 100%)
                         Text {
                             text: Math.round(modelData.volume) + "%"
-                            color: Theme.textDim
+                            color: modelData.volume > 100 ? "#f59e0b" : Theme.textDim
                             font.pixelSize: 12
                             Layout.alignment: Qt.AlignHCenter
                         }
@@ -166,7 +209,7 @@ Rectangle {
                                 id: fader
                                 orientation: Qt.Vertical
                                 Layout.fillHeight: true
-                                from: 0; to: 100
+                                from: 0; to: page.overdriveEnabled ? 150 : 100
                                 value: modelData.volume
                                 onMoved: AudioController.setVolume(modelData.name, Math.round(value))
 
@@ -184,7 +227,7 @@ Rectangle {
                                         height: (1 - fader.visualPosition) * parent.height
                                         y: parent.height - height
                                         radius: 3
-                                        color: Theme.accent
+                                        color: modelData.volume > 100 ? "#f59e0b" : Theme.accent
                                     }
                                 }
                                 handle: Rectangle {
@@ -193,7 +236,7 @@ Rectangle {
                                     width: 20; height: 20; radius: 10
                                     color: Theme.text
                                     border.width: 2
-                                    border.color: Theme.accent
+                                    border.color: modelData.volume > 100 ? "#f59e0b" : Theme.accent
                                 }
                             }
 

@@ -128,7 +128,12 @@ impl qobject::AudioController {
     }
 
     pub fn set_volume(mut self: Pin<&mut Self>, channel: &QString, volume: i32) {
-        let vol = volume.clamp(0, 100) as u32;
+        // 150 (not 100) so the Mixer page's Overdrive toggle can push faders
+        // past unity gain, matching ChannelStrip.vue's `maxVol` (100 normally,
+        // 150 with overdrive) — the QML slider's own `to:` already enforces
+        // the lower 100 cap when overdrive is off, this just avoids silently
+        // clamping the legitimate 100-150 range back down.
+        let vol = volume.clamp(0, 150) as u32;
         let _ = opengg_core::audio::set_volume(channel.to_string(), vol);
         self.as_mut().refresh();
     }
