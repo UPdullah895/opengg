@@ -382,6 +382,9 @@ Rectangle {
 
             model: ClipsController
 
+            Component.onCompleted: TourController.registerTarget("clips-grid", grid)
+            Component.onDestruction: TourController.unregisterTarget("clips-grid")
+
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
             delegate: Item {

@@ -22,7 +22,35 @@ ApplicationWindow {
     LayoutMirroring.enabled: I18n.rtl
     LayoutMirroring.childrenInherit: true
 
-    Component.onCompleted: ThemeController.reload()
+    Component.onCompleted: {
+        ThemeController.reload()
+        SettingsController.refresh()
+    }
+
+    // First-launch guided tour: waits for the first real settingsJson load, then
+    // starts the tour once (a short delay so the window has settled) unless the
+    // user already dismissed it with "don't show again" (settings.tutorialSeen).
+    property bool tourChecked: false
+    Connections {
+        target: SettingsController
+        function onSettingsJsonChanged() {
+            if (root.tourChecked)
+                return
+            root.tourChecked = true
+            var s = JSON.parse(SettingsController.settingsJson || "{}")
+            var seen = !!(s.settings && s.settings.tutorialSeen)
+            if (!seen)
+                tourStartTimer.start()
+        }
+    }
+    Timer { id: tourStartTimer; interval: 700; onTriggered: TourController.start() }
+
+    // The tour drives page navigation through the same currentPage model used
+    // by Sidebar's `navigate` signal (no router in this shell either).
+    Connections {
+        target: TourController
+        function onNavigateRequested(page) { root.currentPage = page }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -57,4 +85,6 @@ ApplicationWindow {
             }
         }
     }
+
+    TourOverlay {}
 }

@@ -319,5 +319,55 @@ ColumnLayout {
         }
     }
 
+    // ── Guided tour ──────────────────────────────────────────────────────
+    Rectangle {
+        Layout.fillWidth: true
+        Layout.preferredWidth: 680
+        radius: Theme.radius
+        color: Theme.surface
+        border.width: 1
+        border.color: Theme.border
+        implicitHeight: tourCol.implicitHeight + 40
+
+        ColumnLayout {
+            id: tourCol
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 12
+
+            RowLayout {
+                spacing: 8
+                Text {
+                    text: (I18n.language, I18n.t("settings.tour.title"))
+                    color: Theme.text
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                }
+                InfoIcon { tooltipText: I18n.t("settings.tour.desc") }
+            }
+
+            Rectangle {
+                id: replayTourBtn
+                width: 160; height: 34
+                radius: Theme.radius
+                color: Theme.accent
+                Text {
+                    anchors.centerIn: parent
+                    text: (I18n.language, I18n.t("settings.tour.replay"))
+                    color: "#ffffff"
+                    font.pixelSize: 13
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: TourController.start()
+                }
+
+                Component.onCompleted: TourController.registerTarget("settings-replay", replayTourBtn)
+                Component.onDestruction: TourController.unregisterTarget("settings-replay")
+            }
+        }
+    }
+
     Component.onCompleted: SettingsController.refresh()
 }

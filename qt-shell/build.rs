@@ -10,6 +10,8 @@ fn main() {
         QmlFile::from("qml/Titlebar.qml"),
         QmlFile::from("qml/Sidebar.qml"),
         QmlFile::from("qml/Theme.qml").singleton(true),
+        QmlFile::from("qml/TourController.qml").singleton(true),
+        QmlFile::from("qml/TourOverlay.qml"),
         QmlFile::from("qml/pages/HomePage.qml"),
         QmlFile::from("qml/pages/MixerPage.qml"),
         QmlFile::from("qml/pages/ClipsPage.qml"),

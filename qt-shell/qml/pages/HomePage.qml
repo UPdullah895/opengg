@@ -34,10 +34,14 @@ Rectangle {
         contentWidth: availableWidth
 
         ColumnLayout {
+            id: dashboardCol
             width: Math.min(parent.width, 760)
             x: 32
             y: 28
             spacing: 20
+
+            Component.onCompleted: TourController.registerTarget("home-dashboard", dashboardCol)
+            Component.onDestruction: TourController.unregisterTarget("home-dashboard")
 
             Text {
                 text: (I18n.language, I18n.t("nav.home"))
@@ -48,6 +52,7 @@ Rectangle {
 
             // ── Recording card ───────────────────────────────────────────
             Rectangle {
+                id: recorderCard
                 Layout.fillWidth: true
                 Layout.preferredWidth: 680
                 radius: Theme.radius
@@ -55,6 +60,9 @@ Rectangle {
                 border.width: 1
                 border.color: Theme.border
                 implicitHeight: recCol.implicitHeight + 40
+
+                Component.onCompleted: TourController.registerTarget("home-recorder", recorderCard)
+                Component.onDestruction: TourController.unregisterTarget("home-recorder")
 
                 ColumnLayout {
                     id: recCol

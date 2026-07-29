@@ -116,6 +116,9 @@ Rectangle {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: sidebar.navigate(modelData.id)
                 }
+
+                Component.onCompleted: TourController.registerTarget("nav-" + modelData.id, navItem)
+                Component.onDestruction: TourController.unregisterTarget("nav-" + modelData.id)
             }
         }
 

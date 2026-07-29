@@ -181,11 +181,15 @@ Rectangle {
 
         // Row of channel strips
         RowLayout {
+            id: stripsRow
             visible: page.activeTab === "mixer"
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.maximumHeight: 420
             spacing: 16
+
+            Component.onCompleted: TourController.registerTarget("mixer-channels", stripsRow)
+            Component.onDestruction: TourController.unregisterTarget("mixer-channels")
 
             Repeater {
                 model: page.channels

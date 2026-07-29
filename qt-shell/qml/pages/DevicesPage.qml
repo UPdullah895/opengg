@@ -12,7 +12,11 @@ Rectangle {
         ? JSON.parse(DeviceController.devicesJson)
         : []
 
-    Component.onCompleted: DeviceController.refresh()
+    Component.onCompleted: {
+        DeviceController.refresh()
+        TourController.registerTarget("devices-list", page)
+    }
+    Component.onDestruction: TourController.unregisterTarget("devices-list")
     Timer { interval: 3000; running: true; repeat: true; onTriggered: DeviceController.refresh() }
 
     function iconFor(type) {
