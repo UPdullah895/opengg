@@ -31,6 +31,9 @@ fn main() {
         QmlFile::from("qml/components/InfoIcon.qml"),
         QmlFile::from("qml/components/ToggleSwitch.qml"),
         QmlFile::from("qml/components/RecorderInstallHelper.qml"),
+        QmlFile::from("qml/components/HSlider.qml"),
+        QmlFile::from("qml/components/GraphicEQ.qml"),
+        QmlFile::from("qml/components/DspControls.qml"),
     ];
 
     CxxQtBuilder::new_qml_module(QmlModule::new("com.opengg.app").qml_files(qml_files))
@@ -41,6 +44,7 @@ fn main() {
             "src/device.rs",
             "src/clips.rs",
             "src/extensions.rs",
+            "src/eq.rs",
             "src/recording.rs",
             "src/settings.rs",
             "src/storage.rs",

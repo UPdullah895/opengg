@@ -28,6 +28,20 @@ Rectangle {
         return db > -3 ? "#ef4444" : db > -12 ? "#f59e0b" : baseColor
     }
 
+    property string activeTab: "mixer"
+    readonly property var tabs: [
+        { id: "mixer", label: "Mixer" },
+        { id: "game", label: "Game" },
+        { id: "chat", label: "Chat" },
+        { id: "media", label: "Media" },
+        { id: "aux", label: "Aux" },
+        { id: "mic", label: "Mic" },
+    ]
+    readonly property var channelColors: ({
+        Master: "#94A3B8", Game: "#E94560", Chat: "#3B82F6",
+        Media: "#10B981", Aux: "#A855F7", Mic: "#F59E0B",
+    })
+
     Component.onCompleted: AudioController.refresh()
     Timer { interval: 2000; running: true; repeat: true; onTriggered: AudioController.refresh() }
 
@@ -66,8 +80,42 @@ Rectangle {
             }
         }
 
+        // Tab bar — Mixer (fader strips) + one tab per EQ/DSP channel.
+        RowLayout {
+            Layout.fillWidth: false
+            spacing: 4
+
+            Repeater {
+                model: page.tabs
+                Rectangle {
+                    id: tabBtn
+                    required property var modelData
+                    property bool isActive: page.activeTab === modelData.id
+                    width: tabLabel.implicitWidth + 24
+                    height: 30
+                    radius: Theme.radius
+                    color: isActive ? Theme.surface : "transparent"
+
+                    Text {
+                        id: tabLabel
+                        anchors.centerIn: parent
+                        text: tabBtn.modelData.label
+                        color: tabBtn.isActive ? Theme.text : Theme.textDim
+                        font.pixelSize: 12
+                        font.weight: tabBtn.isActive ? Font.DemiBold : Font.Normal
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: page.activeTab = tabBtn.modelData.id
+                    }
+                }
+            }
+        }
+
         // Row of channel strips
         RowLayout {
+            visible: page.activeTab === "mixer"
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.maximumHeight: 420
@@ -219,6 +267,53 @@ Rectangle {
             }
 
             Item { Layout.fillWidth: true } // push strips to the leading edge
+        }
+
+        // Per-channel EQ/DSP tab content. Each panel is a static child kept
+        // alive for the whole session (not a Loader) so its jalv engine and
+        // band/toggle state survive switching tabs — only visibility toggles.
+        ScrollView {
+            visible: page.activeTab !== "mixer"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentWidth: availableWidth
+
+            ColumnLayout {
+                width: parent.width
+                spacing: 20
+
+                GraphicEQ {
+                    Layout.fillWidth: true
+                    visible: page.activeTab === "game"
+                    channel: "Game"
+                    accentColor: page.channelColors.Game
+                }
+                GraphicEQ {
+                    Layout.fillWidth: true
+                    visible: page.activeTab === "media"
+                    channel: "Media"
+                    accentColor: page.channelColors.Media
+                }
+                GraphicEQ {
+                    Layout.fillWidth: true
+                    visible: page.activeTab === "aux"
+                    channel: "Aux"
+                    accentColor: page.channelColors.Aux
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: page.activeTab === "chat"
+                    spacing: 24
+                    GraphicEQ { Layout.fillWidth: true; channel: "Chat"; accentColor: page.channelColors.Chat }
+                    DspControls { Layout.fillWidth: true; channel: "Chat"; accentColor: page.channelColors.Chat }
+                }
+                DspControls {
+                    Layout.fillWidth: true
+                    visible: page.activeTab === "mic"
+                    channel: "Mic"
+                    accentColor: page.channelColors.Mic
+                }
+            }
         }
     }
 }
