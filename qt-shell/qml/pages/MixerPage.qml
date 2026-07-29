@@ -11,9 +11,34 @@ Rectangle {
     property var channels: AudioController.channelsJson
         ? JSON.parse(AudioController.channelsJson)
         : []
+    property var vuLevels: AudioController.vuLevelsJson
+        ? JSON.parse(AudioController.vuLevelsJson)
+        : {}
+
+    function vuDb(name) {
+        return name in page.vuLevels ? page.vuLevels[name] : -60
+    }
+    // 0..1 fill fraction from a -60..0 dB range, matching ChannelStrip.vue.
+    function vuFrac(name) {
+        const db = page.vuDb(name)
+        return Math.max(0, Math.min(1, (db + 60) / 60))
+    }
+    function vuColor(name, baseColor) {
+        const db = page.vuDb(name)
+        return db > -3 ? "#ef4444" : db > -12 ? "#f59e0b" : baseColor
+    }
 
     Component.onCompleted: AudioController.refresh()
     Timer { interval: 2000; running: true; repeat: true; onTriggered: AudioController.refresh() }
+
+    // The VU stream spawns a real pw-cat subprocess per channel — only run
+    // it while this page is actually the visible one. StackLayout sets
+    // `visible: false` on inactive children, so this is a cheap, correct
+    // gate without reaching into Main.qml's currentPage.
+    onVisibleChanged: {
+        if (visible) AudioController.startVuStream()
+        else AudioController.stopVuStream()
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -83,41 +108,77 @@ Rectangle {
                             Layout.alignment: Qt.AlignHCenter
                         }
 
-                        // Vertical fader
-                        Slider {
-                            id: fader
-                            orientation: Qt.Vertical
+                        // Vertical fader + VU meter
+                        RowLayout {
                             Layout.alignment: Qt.AlignHCenter
                             Layout.fillHeight: true
-                            from: 0; to: 100
-                            value: modelData.volume
-                            onMoved: AudioController.setVolume(modelData.name, Math.round(value))
+                            spacing: 8
 
-                            background: Rectangle {
-                                x: fader.leftPadding + fader.availableWidth / 2 - width / 2
-                                y: fader.topPadding
-                                width: 6
-                                height: fader.availableHeight
-                                radius: 3
-                                color: Theme.border
-                                Rectangle {
-                                    // vertical slider: visualPosition is 0 at the top (max),
-                                    // so the filled level from the bottom is (1 - visualPosition).
-                                    width: parent.width
-                                    height: (1 - fader.visualPosition) * parent.height
-                                    y: parent.height - height
+                            Slider {
+                                id: fader
+                                orientation: Qt.Vertical
+                                Layout.fillHeight: true
+                                from: 0; to: 100
+                                value: modelData.volume
+                                onMoved: AudioController.setVolume(modelData.name, Math.round(value))
+
+                                background: Rectangle {
+                                    x: fader.leftPadding + fader.availableWidth / 2 - width / 2
+                                    y: fader.topPadding
+                                    width: 6
+                                    height: fader.availableHeight
                                     radius: 3
-                                    color: Theme.accent
+                                    color: Theme.border
+                                    Rectangle {
+                                        // vertical slider: visualPosition is 0 at the top (max),
+                                        // so the filled level from the bottom is (1 - visualPosition).
+                                        width: parent.width
+                                        height: (1 - fader.visualPosition) * parent.height
+                                        y: parent.height - height
+                                        radius: 3
+                                        color: Theme.accent
+                                    }
+                                }
+                                handle: Rectangle {
+                                    x: fader.leftPadding + fader.availableWidth / 2 - width / 2
+                                    y: fader.topPadding + fader.visualPosition * (fader.availableHeight - height)
+                                    width: 20; height: 20; radius: 10
+                                    color: Theme.text
+                                    border.width: 2
+                                    border.color: Theme.accent
                                 }
                             }
-                            handle: Rectangle {
-                                x: fader.leftPadding + fader.availableWidth / 2 - width / 2
-                                y: fader.topPadding + fader.visualPosition * (fader.availableHeight - height)
-                                width: 20; height: 20; radius: 10
-                                color: Theme.text
-                                border.width: 2
-                                border.color: Theme.accent
+
+                            // Live VU bar — fills from the bottom, -60..0 dB.
+                            Rectangle {
+                                Layout.fillHeight: true
+                                Layout.topMargin: fader.topPadding
+                                Layout.bottomMargin: fader.bottomPadding
+                                width: 5
+                                radius: 3
+                                color: Theme.bg
+                                border.width: 1
+                                border.color: Theme.border
+
+                                Rectangle {
+                                    width: parent.width
+                                    height: page.vuFrac(modelData.name) * parent.height
+                                    y: parent.height - height
+                                    radius: 3
+                                    color: page.vuColor(modelData.name, Theme.accent)
+                                    visible: AudioController.vuRunning
+                                }
                             }
+                        }
+
+                        // dB readout
+                        Text {
+                            text: AudioController.vuRunning
+                                ? (page.vuDb(modelData.name) <= -59.9 ? "—" : page.vuDb(modelData.name).toFixed(1) + " dB")
+                                : ""
+                            color: Theme.textDim
+                            font.pixelSize: 9
+                            Layout.alignment: Qt.AlignHCenter
                         }
 
                         // Mute
