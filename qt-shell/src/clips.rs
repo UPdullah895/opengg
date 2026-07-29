@@ -129,6 +129,14 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "setSortMode"]
         fn set_sort_mode(self: Pin<&mut Self>, mode: &QString);
+
+        /// Start the background clip-directory filesystem watcher (idempotent
+        /// — safe to call more than once, only the first call spawns it).
+        /// Auto-refreshes the gallery when a clip file is added or removed on
+        /// disk, instead of requiring a manual refresh.
+        #[qinvokable]
+        #[cxx_name = "startWatcher"]
+        fn start_watcher(self: Pin<&mut Self>);
     }
 
     impl cxx_qt::Threading for ClipsController {}
@@ -413,5 +421,17 @@ impl qobject::ClipsController {
         }
         let qt_thread = self.qt_thread();
         let _ = thumb_worker().send((fp, qt_thread));
+    }
+
+    pub fn start_watcher(self: Pin<&mut Self>) {
+        static STARTED: OnceLock<()> = OnceLock::new();
+        let qt_thread = self.qt_thread();
+        STARTED.get_or_init(|| {
+            opengg_core::watcher::spawn_clip_watcher(move || {
+                let _ = qt_thread.queue(|mut controller| {
+                    controller.as_mut().refresh();
+                });
+            });
+        });
     }
 }

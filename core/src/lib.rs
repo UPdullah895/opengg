@@ -27,3 +27,4 @@ pub mod storage;
 pub mod subprocess;
 pub mod system;
 pub mod vu;
+pub mod watcher;

@@ -26,7 +26,10 @@ Rectangle {
         renameTarget = null
     }
 
-    Component.onCompleted: ClipsController.refresh()
+    Component.onCompleted: {
+        ClipsController.refresh()
+        ClipsController.startWatcher()
+    }
 
     // ── formatting helpers ────────────────────────────────────────────────
     function fmtDuration(sec) {
