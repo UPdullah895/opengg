@@ -143,7 +143,7 @@ ColumnLayout {
                         width: 140; height: 30
                         radius: Theme.radius
                         property bool isRecordingThis: root.recordingKey === modelData
-                        color: isRecordingThis ? Qt.rgba(0.914, 0.271, 0.376, 0.15) : Theme.bg
+                        color: isRecordingThis ? Theme.accentAlpha(15) : Theme.bg
                         border.width: 1
                         border.color: isRecordingThis ? Theme.accent : Theme.border
 

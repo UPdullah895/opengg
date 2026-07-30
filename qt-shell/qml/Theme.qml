@@ -58,6 +58,10 @@ QtObject {
     // Secondary highlight  (--purple)
     readonly property string purple: ThemeController.purple
 
+    // Fader tint past 100%. The Vue UI hardcodes this at ChannelStrip.vue:253
+    // rather than using a CSS var; tokenised so this shell has no bare literal.
+    readonly property string overdrive: ThemeController.overdrive
+
     // ── Layout ────────────────────────────────────────────────────────────
     readonly property int radius: ThemeController.radius          // --radius
     readonly property int radiusLg: ThemeController.radiusLg      // --radius-lg
@@ -75,6 +79,12 @@ QtObject {
     // tinted highlights silently stop following the user's chosen accent color.
     function accentAlpha(pct) {
         return Qt.alpha(Theme.accent, pct / 100)
+    }
+
+    // Translucent version of any token — the general form of accentAlpha, for
+    // danger/success tints (Vue: color-mix(in srgb, var(--danger) 8%, transparent)).
+    function tint(color, pct) {
+        return Qt.alpha(color, pct / 100)
     }
 
     // Modal backdrop. The Vue UI uses plain black at varying alpha

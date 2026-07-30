@@ -9,7 +9,7 @@ import com.opengg.app
 // is a Phase 5 concern. Includes the end-of-media reset (PoC gap #6).
 Rectangle {
     id: root
-    color: "#cc0b0d13"           // dim backdrop
+    color: Theme.scrim(80)           // dim backdrop
     property string source: ""
     property string title: ""
     signal closed()

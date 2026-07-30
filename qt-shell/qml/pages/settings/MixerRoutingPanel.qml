@@ -187,7 +187,7 @@ ColumnLayout {
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
-        border.color: "#ef4444"
+        border.color: Theme.danger
         implicitHeight: dzCol.implicitHeight + 40
 
         ColumnLayout {
@@ -201,7 +201,7 @@ ColumnLayout {
                 Icon { name: "alert-triangle"; size: 14}
                 Text {
                     text: (I18n.language, I18n.t("settings.dangerZone.title"))
-                    color: "#ef4444"
+                    color: Theme.danger
                     font.pixelSize: 16
                     font.weight: Font.DemiBold
                 }
@@ -293,7 +293,7 @@ ColumnLayout {
                     width: 32; height: 32; radius: Theme.radius
                     color: "transparent"
                     border.width: 1
-                    border.color: "#ef4444"
+                    border.color: Theme.danger
                     Icon { anchors.centerIn: parent; name: "trash"; size: 13}
                     MouseArea {
                         anchors.fill: parent
@@ -316,7 +316,7 @@ ColumnLayout {
             visible: root.confirmOpen
             z: 1000
             radius: parent.radius
-            color: Qt.rgba(0, 0, 0, 0.65)
+            color: Theme.scrim(65)
 
             MouseArea {
                 anchors.fill: parent
@@ -368,7 +368,7 @@ ColumnLayout {
                         }
                         Rectangle {
                             width: 100; height: 30; radius: Theme.radius
-                            color: root.confirmKind === "create" ? Theme.accent : "#ef4444"
+                            color: root.confirmKind === "create" ? Theme.accent : Theme.danger
                             Text { anchors.centerIn: parent; text: I18n.t("common.confirmDelete"); color: "#fff"; font.pixelSize: 12; font.weight: Font.DemiBold }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.runConfirmed() }
                         }

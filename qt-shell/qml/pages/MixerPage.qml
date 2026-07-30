@@ -48,7 +48,7 @@ Rectangle {
     }
     function vuColor(name, baseColor) {
         const db = page.vuDb(name)
-        return db > -3 ? "#ef4444" : db > -12 ? "#f59e0b" : baseColor
+        return db > -3 ? Theme.danger : db > -12 ? Theme.overdrive : baseColor
     }
 
     property string activeTab: "mixer"
@@ -106,7 +106,7 @@ Rectangle {
             }
             Rectangle {
                 width: 8; height: 8; radius: 4
-                color: AudioController.connected ? "#22c55e" : "#ef4444"
+                color: AudioController.connected ? Theme.success : Theme.danger
                 Layout.alignment: Qt.AlignVCenter
             }
             Text {
@@ -153,9 +153,9 @@ Rectangle {
                 visible: page.activeTab === "mixer"
                 width: 30; height: 30
                 radius: Theme.radius
-                color: page.overdriveEnabled ? Qt.rgba(0.961, 0.620, 0.043, 0.15) : "transparent"
+                color: page.overdriveEnabled ? Theme.tint(Theme.overdrive, 15) : "transparent"
                 border.width: 1
-                border.color: page.overdriveEnabled ? "#f59e0b" : Theme.border
+                border.color: page.overdriveEnabled ? Theme.overdrive : Theme.border
 
                 Icon {
                     anchors.centerIn: parent
@@ -220,7 +220,7 @@ Rectangle {
                         // Volume % (orange once overdrive pushes it past 100%)
                         Text {
                             text: Math.round(modelData.volume) + "%"
-                            color: modelData.volume > 100 ? "#f59e0b" : Theme.textDim
+                            color: modelData.volume > 100 ? Theme.overdrive : Theme.textDim
                             font.pixelSize: 12
                             Layout.alignment: Qt.AlignHCenter
                         }
@@ -253,7 +253,7 @@ Rectangle {
                                         height: (1 - fader.visualPosition) * parent.height
                                         y: parent.height - height
                                         radius: 3
-                                        color: modelData.volume > 100 ? "#f59e0b" : Theme.accent
+                                        color: modelData.volume > 100 ? Theme.overdrive : Theme.accent
                                     }
                                 }
                                 handle: Rectangle {
@@ -262,7 +262,7 @@ Rectangle {
                                     width: 20; height: 20; radius: 10
                                     color: Theme.text
                                     border.width: 2
-                                    border.color: modelData.volume > 100 ? "#f59e0b" : Theme.accent
+                                    border.color: modelData.volume > 100 ? Theme.overdrive : Theme.accent
                                 }
                             }
 

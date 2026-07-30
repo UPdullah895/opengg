@@ -237,6 +237,38 @@ Mechanical, but do it *after* Phase 1 so there is somewhere correct to sweep to.
 allowlisted literals; changing the accent in Settings visibly retints every
 highlight, verified by a Phase-0 screenshot pair.
 
+### Phase 3 outcome (landed)
+
+56 hex literals + 33 `Qt.rgba(...)` literals tokenised. **D4 is fixed and
+visually verified**: the same isolated blue-accent light-mode capture that
+exposed it now shows the sidebar's active item and the settings nav tinting
+blue instead of staying pink.
+
+`tools/check-colors.sh` (wired into `make lint` via `make lint-qml`) guards all
+three defect classes — bare hex, literal `Qt.rgba`, and emoji-as-icon — and
+**immediately earned its keep**: it found 9 more emoji sites that the earlier
+`text: "…"`-shaped grep had missed because they were in a glyph *map*
+(`iconGlyphs`), a ternary, or a helper function. Those needed 11 more icons
+(sun/moon, eye/eye-off, the five IconPicker track types, mouse) before they
+could be replaced.
+
+Corrections to the audit, from reading the Vue source rather than assuming:
+
+- **The overdrive amber `#f59e0b` was right all along.** `ChannelStrip.vue:253`
+  uses exactly that value; it simply wasn't a CSS var. Now `Theme.overdrive`,
+  so the shell has no bare literal even where Vue does.
+- The `#F59E0B` on `MixerPage.qml:78` is *not* overdrive — it is Mic's channel
+  identity colour, part of a 6-colour palette copied verbatim from
+  `MixerPage.vue:62-63`, which hardcodes it too. Allowlisted, and the sweep was
+  made line-aware so it didn't clobber it.
+- `--clips-grid-cols`/`--titlebar-h`/`--sidebar-w` are now consumed rather than
+  merely exposed (`Sidebar.qml`, `Main.qml`).
+
+One deliberate, documented divergence: `CaptureSoundSettings.vue:332` prefixes
+diagnostics with the text glyphs `✗`/`⚠`; the shell uses the vector equivalents
+instead, because unreliable glyph coverage is precisely what produced tofu boxes
+here. `✓` and `•` stay as text, matching the original.
+
 ---
 
 ## Phase 4 — Per-component fidelity pass

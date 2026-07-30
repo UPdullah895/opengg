@@ -15,7 +15,7 @@ ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
 FRONTEND := $(ROOT)/frontend
 
-.PHONY: dev daemon ui build setup clean install install-service install-desktop lint check help new-extension validate-extension ui-shots
+.PHONY: dev daemon ui build setup clean install install-service install-desktop lint check help new-extension validate-extension ui-shots lint-qml
 
 # ── Default ──────────────────────────────────────────────────────
 help:
@@ -109,6 +109,12 @@ check:
 lint:
 	cd $(DAEMON) && cargo clippy -- -W clippy::all
 	cd $(FRONTEND) && npx vue-tsc --noEmit
+	$(MAKE) lint-qml
+
+# Guards qt-shell/qml against bare colour literals, frozen Qt.rgba tints and
+# emoji-as-icons — the three defect classes from the UI-fidelity plan.
+lint-qml:
+	$(ROOT)/qt-shell/tools/check-colors.sh
 
 # ── UI screenshots (qt-shell, headless) ──────────────────────────
 # Renders every page + settings panel to PNG under QT_QPA_PLATFORM=offscreen.

@@ -5,7 +5,7 @@ import com.opengg.app
 
 Rectangle {
     id: sidebar
-    width: 200
+    width: Theme.sidebarW    // --sidebar-w
     color: Theme.bg
 
     signal navigate(string page)
@@ -66,7 +66,7 @@ Rectangle {
                 radius: Theme.radius
                 property bool active: sidebar.currentPage === modelData.id
                 property bool hovered: navMouse.containsMouse
-                color: (active || hovered) ? Qt.rgba(0.914, 0.271, 0.376, 0.1) : "transparent"
+                color: (active || hovered) ? Theme.accentAlpha(10) : "transparent"
                 border.width: active ? 1 : 0
                 border.color: Theme.accent
 

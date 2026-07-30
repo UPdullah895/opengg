@@ -82,12 +82,12 @@ Item {
     // ── Spotlight: four dim panels around the target, or a full dim ──
     Rectangle {
         visible: overlay.anchored
-        color: "#9e000000"
+        color: Theme.scrim(62)
         x: 0; y: 0; width: parent.width; height: Math.max(0, overlay.targetY - overlay.pad)
     }
     Rectangle {
         visible: overlay.anchored
-        color: "#9e000000"
+        color: Theme.scrim(62)
         x: 0
         y: overlay.targetY - overlay.pad + overlay.targetH + overlay.pad * 2
         width: parent.width
@@ -95,7 +95,7 @@ Item {
     }
     Rectangle {
         visible: overlay.anchored
-        color: "#9e000000"
+        color: Theme.scrim(62)
         x: 0
         y: overlay.targetY - overlay.pad
         width: Math.max(0, overlay.targetX - overlay.pad)
@@ -103,7 +103,7 @@ Item {
     }
     Rectangle {
         visible: overlay.anchored
-        color: "#9e000000"
+        color: Theme.scrim(62)
         x: overlay.targetX - overlay.pad + overlay.targetW + overlay.pad * 2
         y: overlay.targetY - overlay.pad
         width: Math.max(0, parent.width - x)
@@ -112,7 +112,7 @@ Item {
     Rectangle {
         visible: !overlay.anchored
         anchors.fill: parent
-        color: "#9e000000"
+        color: Theme.scrim(62)
     }
 
     // Highlight ring around the target (clicks pass through it).
@@ -125,7 +125,7 @@ Item {
         radius: 10
         color: "transparent"
         border.width: 2
-        border.color: overlay.satisfied ? "#22c55e" : Theme.accent
+        border.color: overlay.satisfied ? Theme.success : Theme.accent
     }
 
     // ── Card ──────────────────────────────────────────────────────────────
@@ -176,7 +176,7 @@ Item {
                     Rectangle {
                         width: 6; height: 6; radius: 3
                         color: index === TourController.stepIndex ? Theme.accent
-                             : index < TourController.stepIndex ? Qt.rgba(0.914, 0.271, 0.376, 0.55)
+                             : index < TourController.stepIndex ? Theme.accentAlpha(55)
                              : Theme.border
                     }
                 }
@@ -284,14 +284,14 @@ Item {
                 width: parent.width; height: 32
                 radius: 8
                 color: overlay.satisfied
-                    ? Qt.rgba(0.133, 0.773, 0.369, 0.12)
-                    : Qt.rgba(0.914, 0.271, 0.376, 0.1)
+                    ? Theme.tint(Theme.success, 12)
+                    : Theme.accentAlpha(10)
                 border.width: 1
-                border.color: overlay.satisfied ? "#22c55e" : Theme.accent
+                border.color: overlay.satisfied ? Theme.success : Theme.accent
                 Text {
                     anchors.centerIn: parent
                     text: overlay.satisfied ? I18n.t("tour.controls.done") : overlay.actionText
-                    color: overlay.satisfied ? "#22c55e" : Theme.accent
+                    color: overlay.satisfied ? Theme.success : Theme.accent
                     font.pixelSize: 12
                     font.weight: Font.Bold
                 }

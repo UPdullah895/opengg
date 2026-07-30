@@ -110,7 +110,7 @@ ApplicationWindow {
 
             Titlebar {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 40
+                Layout.preferredHeight: Theme.titlebarH   // --titlebar-h
             }
 
             RowLayout {

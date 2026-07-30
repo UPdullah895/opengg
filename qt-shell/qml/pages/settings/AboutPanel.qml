@@ -100,7 +100,7 @@ ColumnLayout {
                 Layout.alignment: Qt.AlignHCenter
                 width: 48; height: 48
                 radius: 24
-                color: Qt.rgba(0.914, 0.271, 0.376, 0.12)
+                color: Theme.accentAlpha(12)
                 border.width: 2
                 border.color: Theme.accent
                 Icon {
@@ -327,11 +327,11 @@ ColumnLayout {
                             spacing: 10
                             Rectangle {
                                 width: 20; height: 20; radius: 10
-                                color: depRow.modelData.available ? Qt.rgba(0.063, 0.725, 0.506, 0.15) : Qt.rgba(0.937, 0.267, 0.267, 0.15)
+                                color: depRow.modelData.available ? Theme.tint(Theme.success, 15) : Theme.tint(Theme.danger, 15)
                                 Text {
                                     anchors.centerIn: parent
                                     text: depRow.modelData.available ? "✓" : "✗"
-                                    color: depRow.modelData.available ? "#10b981" : "#ef4444"
+                                    color: depRow.modelData.available ? Theme.success : Theme.danger
                                     font.pixelSize: 11
                                     font.weight: Font.Bold
                                 }
@@ -345,10 +345,10 @@ ColumnLayout {
                             Rectangle {
                                 visible: !depRow.modelData.available
                                 width: 22; height: 22; radius: 11
-                                color: Qt.rgba(0.937, 0.267, 0.267, 0.15)
+                                color: Theme.tint(Theme.danger, 15)
                                 border.width: 1
-                                border.color: Qt.rgba(0.937, 0.267, 0.267, 0.3)
-                                Text { anchors.centerIn: parent; text: "?"; color: "#ef4444"; font.pixelSize: 11; font.weight: Font.Bold }
+                                border.color: Theme.tint(Theme.danger, 30)
+                                Text { anchors.centerIn: parent; text: "?"; color: Theme.danger; font.pixelSize: 11; font.weight: Font.Bold }
                                 MouseArea {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
@@ -468,11 +468,11 @@ ColumnLayout {
                             spacing: 10
                             Rectangle {
                                 width: 20; height: 20; radius: 10
-                                color: accessRow.modelData.status ? Qt.rgba(0.063, 0.725, 0.506, 0.15) : Qt.rgba(0.937, 0.267, 0.267, 0.15)
+                                color: accessRow.modelData.status ? Theme.tint(Theme.success, 15) : Theme.tint(Theme.danger, 15)
                                 Text {
                                     anchors.centerIn: parent
                                     text: accessRow.modelData.status ? "✓" : "✗"
-                                    color: accessRow.modelData.status ? "#10b981" : "#ef4444"
+                                    color: accessRow.modelData.status ? Theme.success : Theme.danger
                                     font.pixelSize: 11
                                     font.weight: Font.Bold
                                 }
@@ -486,10 +486,10 @@ ColumnLayout {
                             Rectangle {
                                 visible: !accessRow.modelData.status
                                 width: 22; height: 22; radius: 11
-                                color: Qt.rgba(0.937, 0.267, 0.267, 0.15)
+                                color: Theme.tint(Theme.danger, 15)
                                 border.width: 1
-                                border.color: Qt.rgba(0.937, 0.267, 0.267, 0.3)
-                                Text { anchors.centerIn: parent; text: "?"; color: "#ef4444"; font.pixelSize: 11; font.weight: Font.Bold }
+                                border.color: Theme.tint(Theme.danger, 30)
+                                Text { anchors.centerIn: parent; text: "?"; color: Theme.danger; font.pixelSize: 11; font.weight: Font.Bold }
                                 MouseArea {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor

@@ -29,7 +29,7 @@ ColumnLayout {
 
     function addTrack() {
         const idx = root.trackDefs.length
-        const next = root.trackDefs.concat([{ id: "A" + idx, name: "Audio " + idx, color: "#64748b", icon: "game", visible: true }])
+        const next = root.trackDefs.concat([{ id: "A" + idx, name: "Audio " + idx, color: Theme.textDim, icon: "game", visible: true }])
         root.writeTracks(next)
     }
 
@@ -42,8 +42,9 @@ ColumnLayout {
     // startup for unknown reasons (Popup- and ComboBox-based versions both hung,
     // even with a bare empty Popup). Inlined here as a plain cycling button instead.
     readonly property var iconIds: ["video", "game", "chat", "mic", "media", "overlay"]
-    readonly property var iconGlyphs: ({
-        video: "🎬", game: "🎮", chat: "💬", mic: "🎙", media: "📺", overlay: "🗂"
+    readonly property var trackIcons: ({
+        video: "track-video", game: "track-game", chat: "headphones",
+        mic: "track-mic", media: "track-media", overlay: "track-overlay"
     })
     function nextIcon(current) {
         const i = root.iconIds.indexOf(current)
@@ -98,10 +99,9 @@ ColumnLayout {
                         color: "transparent"
                         border.width: 1
                         border.color: Theme.border
-                        Text {
+                        Icon {
                             anchors.centerIn: parent
-                            text: tRow.modelData.visible ? "👁" : "🚫"
-                            font.pixelSize: 13
+                            name: tRow.modelData.visible ? "eye" : "eye-off"; size: 14
                         }
                         MouseArea {
                             anchors.fill: parent
@@ -156,10 +156,9 @@ ColumnLayout {
                         color: Theme.bg
                         border.width: 1
                         border.color: Theme.border
-                        Text {
+                        Icon {
                             anchors.centerIn: parent
-                            text: root.iconGlyphs[tRow.modelData.icon] || "🎮"
-                            font.pixelSize: 14
+                            name: root.trackIcons[tRow.modelData.icon] || "track-game"; size: 16
                         }
                         MouseArea {
                             anchors.fill: parent

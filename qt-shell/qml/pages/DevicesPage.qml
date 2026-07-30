@@ -19,9 +19,10 @@ Rectangle {
     Component.onDestruction: TourController.unregisterTarget("devices-list")
     Timer { interval: 3000; running: true; repeat: true; onTriggered: DeviceController.refresh() }
 
+    // DeviceCard.vue only branches headset vs. everything else, so there is
+    // no separate keyboard/gamepad glyph in the original to port.
     function iconFor(type) {
-        return type === "mouse" ? "🖱️" : type === "headset" ? "🎧"
-             : type === "keyboard" ? "⌨️" : "🎮"
+        return type === "headset" ? "headphones" : "mouse"
     }
 
     ScrollView {
@@ -45,7 +46,7 @@ Rectangle {
                 }
                 Rectangle {
                     width: 8; height: 8; radius: 4
-                    color: DeviceController.connected ? "#22c55e" : "#ef4444"
+                    color: DeviceController.connected ? Theme.success : Theme.danger
                     Layout.alignment: Qt.AlignVCenter
                 }
                 Text {
@@ -75,9 +76,10 @@ Rectangle {
                         anchors.margins: 16
                         spacing: 16
 
-                        Text {
-                            text: page.iconFor(modelData.deviceType)
-                            font.pixelSize: 30
+                        Icon {
+                            name: page.iconFor(modelData.deviceType)
+                            size: 26
+                            color: Theme.textDim
                             Layout.alignment: Qt.AlignTop
                         }
 

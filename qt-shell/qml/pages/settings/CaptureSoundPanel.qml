@@ -120,7 +120,7 @@ ColumnLayout {
                 }
                 Rectangle {
                     radius: 8
-                    color: Qt.rgba(0.914, 0.271, 0.376, 0.15)
+                    color: Theme.accentAlpha(15)
                     implicitWidth: betaText.implicitWidth + 12
                     implicitHeight: 18
                     Text { id: betaText; anchors.centerIn: parent; text: "Beta"; color: Theme.accent; font.pixelSize: 9; font.weight: Font.Bold }
@@ -157,7 +157,7 @@ ColumnLayout {
                             width: qualityCombo.width
                             highlighted: qualityCombo.highlightedIndex === index
                             contentItem: Text { text: modelData.label; color: highlighted ? Theme.accent : Theme.text; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: highlighted ? Qt.rgba(0.914, 0.271, 0.376, 0.1) : Theme.surface }
+                            background: Rectangle { color: highlighted ? Theme.accentAlpha(10) : Theme.surface }
                         }
                         popup: Popup {
                             y: qualityCombo.height + 4
@@ -197,7 +197,7 @@ ColumnLayout {
                             width: fpsCombo.width
                             highlighted: fpsCombo.highlightedIndex === index
                             contentItem: Text { text: modelData.label; color: highlighted ? Theme.accent : Theme.text; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: highlighted ? Qt.rgba(0.914, 0.271, 0.376, 0.1) : Theme.surface }
+                            background: Rectangle { color: highlighted ? Theme.accentAlpha(10) : Theme.surface }
                         }
                         popup: Popup {
                             y: fpsCombo.height + 4
@@ -231,7 +231,7 @@ ColumnLayout {
                             width: replayCombo.width
                             highlighted: replayCombo.highlightedIndex === index
                             contentItem: Text { text: modelData.label; color: highlighted ? Theme.accent : Theme.text; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: highlighted ? Qt.rgba(0.914, 0.271, 0.376, 0.1) : Theme.surface }
+                            background: Rectangle { color: highlighted ? Theme.accentAlpha(10) : Theme.surface }
                         }
                         popup: Popup {
                             y: replayCombo.height + 4
@@ -271,7 +271,7 @@ ColumnLayout {
                             width: monitorCombo.width
                             highlighted: monitorCombo.highlightedIndex === index
                             contentItem: Text { text: modelData.label; color: highlighted ? Theme.accent : Theme.text; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: highlighted ? Qt.rgba(0.914, 0.271, 0.376, 0.1) : Theme.surface }
+                            background: Rectangle { color: highlighted ? Theme.accentAlpha(10) : Theme.surface }
                         }
                         popup: Popup {
                             y: monitorCombo.height + 4
@@ -286,7 +286,7 @@ ColumnLayout {
                 Text {
                     visible: root.isWayland && root.monitorOptions.some(o => o.value === "focused")
                     text: I18n.t("settings.captureGsr.waylandHint")
-                    color: "#f59e0b"
+                    color: Theme.overdrive
                     font.pixelSize: 11
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
@@ -350,7 +350,7 @@ ColumnLayout {
 
                         Text {
                             text: diagResults.result.ok ? I18n.t("settings.captureGsr.diagnosticsOk") : I18n.t("settings.captureGsr.diagnosticsFail")
-                            color: diagResults.result.ok ? "#10b981" : "#ef4444"
+                            color: diagResults.result.ok ? Theme.success : Theme.danger
                             font.pixelSize: 12
                             font.weight: Font.DemiBold
                         }
@@ -362,12 +362,32 @@ ColumnLayout {
                                 required property var modelData
                                 Layout.fillWidth: true
                                 spacing: 2
-                                Text {
-                                    text: (diagItem.modelData.severity === "error" ? "✗ " : diagItem.modelData.severity === "warning" ? "⚠ " : "ℹ ") + diagItem.modelData.message
-                                    color: diagItem.modelData.severity === "error" ? "#ef4444" : (diagItem.modelData.severity === "warning" ? "#f59e0b" : Theme.textDim)
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
+                                // CaptureSoundSettings.vue:332 prefixes these with
+                                // the text glyphs "✗"/"⚠". Deliberate divergence:
+                                // we already have the vector equivalents, and
+                                // glyph coverage is exactly what made emoji
+                                // render as tofu boxes elsewhere in this shell.
+                                RowLayout {
                                     Layout.fillWidth: true
+                                    spacing: 6
+                                    readonly property string sev: diagItem.modelData.severity
+                                    readonly property color sevColor: sev === "error" ? Theme.danger
+                                                                    : sev === "warning" ? Theme.overdrive
+                                                                    : Theme.textDim
+                                    Icon {
+                                        name: parent.sev === "error" ? "x"
+                                            : parent.sev === "warning" ? "alert-triangle" : "info"
+                                        size: 12
+                                        color: parent.sevColor
+                                        Layout.alignment: Qt.AlignTop
+                                    }
+                                    Text {
+                                        text: diagItem.modelData.message
+                                        color: parent.sevColor
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
                                 }
                                 Text {
                                     visible: !!(diagItem.modelData.fix && diagItem.modelData.fix.command)
@@ -431,7 +451,7 @@ ColumnLayout {
                 visible: root.deps.some(d => d.feature === "export" && !d.available)
                 Layout.fillWidth: true
                 spacing: 8
-                Icon { name: "alert-triangle"; size: 13; color: "#ef4444"}
+                Icon { name: "alert-triangle"; size: 13; color: Theme.danger}
                 Text {
                     text: I18n.t("settings.deps.missingFfmpeg")
                     color: Theme.text
@@ -523,7 +543,7 @@ ColumnLayout {
                             width: sourceCombo.width
                             highlighted: sourceCombo.highlightedIndex === index
                             contentItem: Text { text: modelData.label; color: highlighted ? Theme.accent : Theme.text; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: highlighted ? Qt.rgba(0.914, 0.271, 0.376, 0.1) : Theme.surface }
+                            background: Rectangle { color: highlighted ? Theme.accentAlpha(10) : Theme.surface }
                         }
                         popup: Popup {
                             y: sourceCombo.height + 4

@@ -11,7 +11,7 @@ import com.opengg.app
 // stream-copy export via EditorController.
 Rectangle {
     id: root
-    color: "#cc0b0d13"
+    color: Theme.scrim(80)
     property string source: ""
     property string filepath: ""
     property string title: ""
@@ -338,7 +338,7 @@ Rectangle {
                     Text {
                         visible: !EditorController.exportRunning && EditorController.exportError.length > 0
                         text: EditorController.exportError
-                        color: "#ef4444"
+                        color: Theme.danger
                         font.pixelSize: 12
                         anchors.verticalCenter: parent.verticalCenter
                     }

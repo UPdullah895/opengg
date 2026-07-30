@@ -79,7 +79,7 @@ ColumnLayout {
                         required property var modelData
                         width: 110; height: 60
                         radius: Theme.radius
-                        color: root.style === modelData.value ? Qt.rgba(0.914, 0.271, 0.376, 0.12) : Theme.bg
+                        color: root.style === modelData.value ? Theme.accentAlpha(12) : Theme.bg
                         border.width: 1
                         border.color: root.style === modelData.value ? Theme.accent : Theme.border
 

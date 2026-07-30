@@ -42,6 +42,7 @@ pub mod qobject {
         #[qproperty(QString, danger)]
         #[qproperty(QString, success)]
         #[qproperty(QString, purple)]
+        #[qproperty(QString, overdrive)]
         // ── Layout ──
         #[qproperty(i32, radius)]
         #[qproperty(i32, radius_lg, cxx_name = "radiusLg")]
@@ -79,6 +80,7 @@ pub struct ThemeControllerRust {
     danger: QString,
     success: QString,
     purple: QString,
+    overdrive: QString,
     radius: i32,
     radius_lg: i32,
     clips_grid_cols: i32,
@@ -133,6 +135,9 @@ const ACCENT: &str = "#E94560";
 const DANGER: &str = "#dc2626";
 const SUCCESS: &str = "#10b981";
 const PURPLE: &str = "#a855f7";
+/// Fader tint past 100%. Hardcoded (not a CSS var) in the Vue UI at
+/// `ChannelStrip.vue:253` — tokenised here so the shell has no bare literal.
+const OVERDRIVE: &str = "#f59e0b";
 
 const RADIUS: i32 = 6;
 const RADIUS_LG: i32 = 10;
@@ -158,6 +163,7 @@ pub struct Resolved {
     pub danger: String,
     pub success: String,
     pub purple: String,
+    pub overdrive: String,
     pub radius: i32,
     pub radius_lg: i32,
     pub clips_grid_cols: i32,
@@ -208,6 +214,7 @@ pub fn resolve(v: &Value) -> Resolved {
         danger: color(c, "--danger", DANGER),
         success: color(c, "--success", SUCCESS),
         purple: color(c, "--purple", PURPLE),
+        overdrive: color(c, "--overdrive", OVERDRIVE),
         radius: parse_len(l["--radius"].as_str(), RADIUS),
         radius_lg: parse_len(l["--radius-lg"].as_str(), RADIUS_LG),
         clips_grid_cols: parse_len(l["--clips-grid-cols"].as_str(), CLIPS_GRID_COLS),
@@ -233,6 +240,7 @@ impl Default for ThemeControllerRust {
             danger: QString::default(),
             success: QString::default(),
             purple: QString::default(),
+            overdrive: QString::default(),
             radius: RADIUS,
             radius_lg: RADIUS_LG,
             clips_grid_cols: CLIPS_GRID_COLS,
@@ -260,6 +268,7 @@ impl ThemeControllerRust {
         self.danger = QString::from(&r.danger);
         self.success = QString::from(&r.success);
         self.purple = QString::from(&r.purple);
+        self.overdrive = QString::from(&r.overdrive);
         self.radius = r.radius;
         self.radius_lg = r.radius_lg;
         self.clips_grid_cols = r.clips_grid_cols;
@@ -288,6 +297,7 @@ impl qobject::ThemeController {
         self.as_mut().set_danger(QString::from(&r.danger));
         self.as_mut().set_success(QString::from(&r.success));
         self.as_mut().set_purple(QString::from(&r.purple));
+        self.as_mut().set_overdrive(QString::from(&r.overdrive));
         self.as_mut().set_radius(r.radius);
         self.as_mut().set_radius_lg(r.radius_lg);
         self.as_mut().set_clips_grid_cols(r.clips_grid_cols);
@@ -338,6 +348,7 @@ mod tests {
         assert_eq!(r.danger, "#dc2626", "--danger");
         assert_eq!(r.success, "#10b981", "--success");
         assert_eq!(r.purple, "#a855f7", "--purple");
+        assert_eq!(r.overdrive, "#f59e0b", "overdrive (ChannelStrip.vue:253)");
         assert_eq!(r.radius, 6, "--radius");
         assert_eq!(r.radius_lg, 10, "--radius-lg");
         assert_eq!(r.clips_grid_cols, 4, "--clips-grid-cols");
@@ -366,6 +377,7 @@ mod tests {
         assert_eq!(r.danger, "#dc2626");
         assert_eq!(r.success, "#10b981");
         assert_eq!(r.purple, "#a855f7");
+        assert_eq!(r.overdrive, "#f59e0b");
         assert_eq!(r.radius, 6);
     }
 

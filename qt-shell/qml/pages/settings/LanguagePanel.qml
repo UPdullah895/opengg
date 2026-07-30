@@ -84,7 +84,7 @@ ColumnLayout {
                             verticalAlignment: Text.AlignVCenter
                         }
                         background: Rectangle {
-                            color: highlighted ? Qt.rgba(0.914, 0.271, 0.376, 0.1) : Theme.surface
+                            color: highlighted ? Theme.accentAlpha(10) : Theme.surface
                         }
                     }
 

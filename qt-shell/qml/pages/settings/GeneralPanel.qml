@@ -52,9 +52,8 @@ ColumnLayout {
                 InfoIcon { tooltipText: I18n.t("settings.general.themeHint") }
                 Item { Layout.fillWidth: true }
 
-                Text {
-                    text: ThemeController.darkMode ? "🌙" : "☀️"
-                    font.pixelSize: 16
+                Icon {
+                    name: ThemeController.darkMode ? "moon" : "sun"; size: 15
                     MouseArea {
                         anchors.fill: parent
                         anchors.margins: -6
@@ -147,7 +146,7 @@ ColumnLayout {
                                 width: 90; height: 30
                                 radius: Theme.radius
                                 property bool active: (root.s.defaultClickAction || "preview") === modelData.value
-                                color: active ? Qt.rgba(0.914, 0.271, 0.376, 0.12) : Theme.bg
+                                color: active ? Theme.accentAlpha(12) : Theme.bg
                                 border.width: 1
                                 border.color: active ? Theme.accent : Theme.border
                                 Text {
@@ -189,7 +188,7 @@ ColumnLayout {
                                 width: 100; height: 30
                                 radius: Theme.radius
                                 property bool active: (root.s.dateFormat || "YMD") === modelData.value
-                                color: active ? Qt.rgba(0.914, 0.271, 0.376, 0.12) : Theme.bg
+                                color: active ? Theme.accentAlpha(12) : Theme.bg
                                 border.width: 1
                                 border.color: active ? Theme.accent : Theme.border
                                 Text {

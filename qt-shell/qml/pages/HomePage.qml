@@ -81,7 +81,7 @@ Rectangle {
                         }
                         Rectangle {
                             width: 8; height: 8; radius: 4
-                            color: RecordingController.running ? "#22c55e" : "#6b7280"
+                            color: RecordingController.running ? Theme.success : Theme.textMuted
                             Layout.alignment: Qt.AlignVCenter
                         }
                         Text {
@@ -105,7 +105,7 @@ Rectangle {
 
                         Rectangle {
                             width: 120; height: 34; radius: Theme.radius
-                            color: RecordingController.running ? "#dc2626" : Theme.accent
+                            color: RecordingController.running ? Theme.danger : Theme.accent
                             Text {
                                 anchors.centerIn: parent
                                 text: RecordingController.running ? "Stop" : "Start"
@@ -174,7 +174,7 @@ Rectangle {
                         // Live connection dot
                         Rectangle {
                             width: 8; height: 8; radius: 4
-                            color: AudioController.connected ? "#22c55e" : "#ef4444"
+                            color: AudioController.connected ? Theme.success : Theme.danger
                             Layout.alignment: Qt.AlignVCenter
                         }
                         Text {

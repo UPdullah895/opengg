@@ -64,7 +64,7 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onEntered: parent.color = Qt.rgba(1, 1, 1, 0.05)
+                onEntered: parent.color = Theme.bgHover
                 onExited: parent.color = "transparent"
                 onClicked: I18n.applyLanguage(I18n.language === "ar" ? "en" : "ar")
             }
@@ -87,7 +87,7 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onEntered: parent.color = Qt.rgba(1, 1, 1, 0.05)
+                onEntered: parent.color = Theme.bgHover
                 onExited: parent.color = "transparent"
                 onClicked: root.showMinimized()
             }
@@ -110,7 +110,7 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onEntered: parent.color = Qt.rgba(1, 1, 1, 0.05)
+                onEntered: parent.color = Theme.bgHover
                 onExited: parent.color = "transparent"
                 onClicked: Qt.callLater(root.close)
             }

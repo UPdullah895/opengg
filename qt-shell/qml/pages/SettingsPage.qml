@@ -111,8 +111,8 @@ Rectangle {
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 34
                                     property bool isActive: page.active === modelData.key
-                                    color: isActive ? Qt.rgba(0.914, 0.271, 0.376, 0.12)
-                                         : navArea.containsMouse ? Qt.rgba(0.914, 0.271, 0.376, 0.08) : "transparent"
+                                    color: isActive ? Theme.accentAlpha(12)
+                                         : navArea.containsMouse ? Theme.accentAlpha(8) : "transparent"
 
                                     Rectangle {
                                         anchors.right: parent.right

@@ -166,7 +166,7 @@ ColumnLayout {
                 }
                 Rectangle {
                     radius: 4
-                    color: Qt.rgba(0.914, 0.271, 0.376, 0.15)
+                    color: Theme.accentAlpha(15)
                     width: betaText.implicitWidth + 12
                     height: 18
                     Text { id: betaText; anchors.centerIn: parent; text: "Beta"; color: Theme.accent; font.pixelSize: 10; font.weight: Font.DemiBold }
@@ -270,7 +270,7 @@ ColumnLayout {
                                 Rectangle {
                                     visible: root.needsConsent(extRow.modelData)
                                     radius: 4
-                                    color: Qt.rgba(0.914, 0.271, 0.376, 0.12)
+                                    color: Theme.accentAlpha(12)
                                     width: consentBadge.implicitWidth + 12
                                     height: 18
                                     Text {
@@ -331,7 +331,7 @@ ColumnLayout {
             visible: root.consentOpen
             z: 1000
             radius: parent.radius
-            color: Qt.rgba(0, 0, 0, 0.65)
+            color: Theme.scrim(65)
 
             MouseArea {
                 anchors.fill: parent

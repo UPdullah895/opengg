@@ -66,7 +66,7 @@ QtObject {
         "alert-triangle": { d: "M 10.29 3.86L 1.82 18a 2 2 0 0 0 1.71 3 h 16.94a 2 2 0 0 0 1.71 -3 L 13.71 3.86a 2 2 0 0 0 -3.42 0 zM 12 9L 12 13M 12 17L 12.01 17", sw: 2 },
         "info": { d: "M 2 12A 10 10 0 0 1 22 12 A 10 10 0 0 1 2 12 ZM 12 8L 12 12M 12 16L 12.01 16", sw: 2 },
         // MixerRoutingSettings.vue create-virtual-audio
-        "check-square": { d: "M 9 11 L 12 14 L 22 4 M21 12v7a2 2 0 0 1 -2 2H5a2 2 0 0 1 -2 -2V5a2 2 0 0 1 2 -2h11", sw: 2 },
+        "check-square": { d: "M 9 11L 12 14L 22 4M 21 12v 7a 2 2 0 0 1 -2 2 H 5a 2 2 0 0 1 -2 -2 V 5a 2 2 0 0 1 2 -2 h 11", sw: 2 },
         // StoreSettings.vue
         "package": { d: "M 6 2 3 6v 14a 2 2 0 0 0 2 2 h 14a 2 2 0 0 0 2 -2 V 6l -3 -4zM 3 6L 21 6M 11 15A 1 1 0 0 1 13 15 A 1 1 0 0 1 11 15 Z", sw: 2 },
         // ICON_BOLT — also the mixer's Overdrive indicator
@@ -81,6 +81,25 @@ QtObject {
         "film": { d: "M 4.18 2L 19.82 2A 2.18 2.18 0 0 1 22 4.18 L 22 19.82A 2.18 2.18 0 0 1 19.82 22 L 4.18 22A 2.18 2.18 0 0 1 2 19.82 L 2 4.18A 2.18 2.18 0 0 1 4.18 2 ZM 7 2L 7 22M 17 2L 17 22M 2 12L 22 12M 2 7L 7 7M 2 17L 7 17M 17 17L 22 17M 17 7L 22 7", sw: 2 },
         // ICON_GAMEPAD
         "gamepad": { d: "M 6 12L 10 12M 8 10L 8 14M 15 13L 15.01 13M 18 11L 18.01 11M 4 6L 20 6A 2 2 0 0 1 22 8 L 22 16A 2 2 0 0 1 20 18 L 4 18A 2 2 0 0 1 2 16 L 2 8A 2 2 0 0 1 4 6 Z", sw: 2 },
+
+        // ── Appearance toggle (GeneralSettings.vue:113-114) ──
+        "sun": { d: "M 7 12A 5 5 0 0 1 17 12 A 5 5 0 0 1 7 12 ZM 12 1L 12 3M 12 21L 12 23M 4.22 4.22L 5.64 5.64M 18.36 18.36L 19.78 19.78M 1 12L 3 12M 21 12L 23 12M 4.22 19.78L 5.64 18.36M 18.36 5.64L 19.78 4.22", sw: 2 },
+        "moon": { d: "M 21 12.79A 9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79 z", sw: 2 },
+
+        // ── Track visibility (TrackManagementSettings.vue:46-52) ──
+        "eye": { d: "M 1 12s 4 -8 11 -8 11 8 11 8 -4 8 -11 8 -11 -8 -11 -8zM 9 12A 3 3 0 0 1 15 12 A 3 3 0 0 1 9 12 Z", sw: 2 },
+        "eye-off": { d: "M 17.94 17.94A 10.07 10.07 0 0 1 12 20 c -7 0 -11 -8 -11 -8a 18.45 18.45 0 0 1 5.06 -5.94 M 9.9 4.24A 9.12 9.12 0 0 1 12 4 c 7 0 11 8 11 8a 18.5 18.5 0 0 1 -2.16 3.19 m -6.72 -1.07a 3 3 0 1 1 -4.24 -4.24 M 1 1L 23 23", sw: 2 },
+
+        // ── Timeline track types (IconPicker.vue ICONS) ──
+        "track-video": { d: "M 15 10l 4.553 -2.276A 1 1 0 0 1 21 8.618 v 6.764a 1 1 0 0 1 -1.447 .894 L 15 14M 3 6h 10a 2 2 0 0 1 2 2 v 8a 2 2 0 0 1 -2 2 H 3a 2 2 0 0 1 -2 -2 V 8a 2 2 0 0 1 2 -2 z", sw: 2 },
+        "track-game": { d: "M 6 11h 4m -2 -2v 4m 7 -1h .01M 18 11h .01M 2 6a 2 2 0 0 1 2 -2 h 16a 2 2 0 0 1 2 2 v 10a 4 4 0 0 1 -4 4 H 6a 4 4 0 0 1 -4 -4 V 6z", sw: 2 },
+        "track-mic": { d: "M 12 1a 3 3 0 0 0 -3 3 v 8a 3 3 0 0 0 6 0 V 4a 3 3 0 0 0 -3 -3 zM 19 10v 2a 7 7 0 0 1 -14 0 v -2M 12 19v 3M 8 23h 8", sw: 2 },
+        "track-media": { d: "M 9 18V 5l 12 -2v 13M 9 19c 0 1.1 -1.34 2 -3 2s -3 -.9 -3 -2 1.34 -2 3 -2 3 .9 3 2zm 12 -3c 0 1.1 -1.34 2 -3 2s -3 -.9 -3 -2 1.34 -2 3 -2 3 .9 3 2z", sw: 2 },
+        "track-overlay": { d: "M 12 2L 2 7l 10 5 10 -5 -10 -5zM 2 17l 10 5 10 -5M 2 12l 10 5 10 -5", sw: 2 },
+
+        // DeviceCard.vue's non-headset branch (it only distinguishes headset vs
+        // everything else, so there is no separate keyboard glyph to port).
+        "mouse": { d: "M 12 2A 7 7 0 0 1 19 9 L 19 15A 7 7 0 0 1 5 15 L 5 9A 7 7 0 0 1 12 2 ZM 12 2L 12 10", sw: 2 },
         // ClipCard.vue favourite (filled when active)
         "heart": { d: "M 20.84 4.61a 5.5 5.5 0 0 0 -7.78 0 L 12 5.67l -1.06 -1.06a 5.5 5.5 0 0 0 -7.78 7.78 l 1.06 1.06L 12 21.23l 7.78 -7.78 1.06 -1.06a 5.5 5.5 0 0 0 0 -7.78 z", sw: 2 }
     })

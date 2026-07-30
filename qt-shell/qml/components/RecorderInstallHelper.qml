@@ -48,7 +48,7 @@ ColumnLayout {
         Icon { name: "check"; size: 15; color: Theme.success }
         Text {
             text: (I18n.language, I18n.t("settings.recorderInstall.installed"))
-            color: "#10b981"
+            color: Theme.success
             font.pixelSize: 13
             font.weight: Font.DemiBold
         }
@@ -59,9 +59,9 @@ ColumnLayout {
         visible: root.isMissing
         Layout.fillWidth: true
         radius: Theme.radius
-        color: Qt.rgba(0.937, 0.267, 0.267, 0.08)
+        color: Theme.tint(Theme.danger, 8)
         border.width: 1
-        border.color: Qt.rgba(0.937, 0.267, 0.267, 0.28)
+        border.color: Theme.tint(Theme.danger, 28)
         implicitHeight: missCol.implicitHeight + (root.compact ? 20 : 24)
 
         ColumnLayout {
@@ -72,7 +72,7 @@ ColumnLayout {
 
             RowLayout {
                 spacing: 8
-                Icon { name: "alert-triangle"; size: 14; color: "#ef4444"}
+                Icon { name: "alert-triangle"; size: 14; color: Theme.danger}
                 Text {
                     text: (I18n.language, I18n.t("settings.recorderInstall.notFound"))
                     color: Theme.text

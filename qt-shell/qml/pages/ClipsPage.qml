@@ -315,7 +315,7 @@ Rectangle {
             Layout.fillWidth: true
             visible: ClipsController.error.length > 0
             radius: Theme.radius
-            color: "#3a1a1f"
+            color: Theme.tint(Theme.danger, 10)
             border.width: 1
             border.color: Theme.accent
             implicitHeight: 40
@@ -427,7 +427,7 @@ Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: width * 0.5625
                             radius: Theme.radius
-                            color: "#0b0d13"
+                            color: Theme.bgDeep
                             clip: true
 
                             // Cached thumbnail if present
@@ -462,7 +462,7 @@ Rectangle {
                                 anchors.bottom: parent.bottom
                                 anchors.margins: 6
                                 radius: 3
-                                color: "#cc000000"
+                                color: Theme.scrim(80)
                                 implicitWidth: durText.implicitWidth + 10
                                 implicitHeight: 18
                                 Text {
@@ -528,7 +528,7 @@ Rectangle {
                         anchors.margins: 6
                         width: 26; height: 26; radius: 13
                         visible: cardHover.hovered || !!favorite
-                        color: favArea.containsMouse ? "#aa000000" : "#66000000"
+                        color: favArea.containsMouse ? Theme.scrim(67) : Theme.scrim(40)
                         // ClipCard.vue uses a heart (filled when favourited),
                         // not a star.
                         Icon {
@@ -557,7 +557,7 @@ Rectangle {
 
                         Rectangle {
                             width: 26; height: 26; radius: 13
-                            color: editArea.containsMouse ? Theme.accent : "#66000000"
+                            color: editArea.containsMouse ? Theme.accent : Theme.scrim(40)
                             Icon { anchors.centerIn: parent; name: "scissors"; size: 13; color: "#ffffff"}
                             MouseArea {
                                 id: editArea
@@ -569,7 +569,7 @@ Rectangle {
                         }
                         Rectangle {
                             width: 26; height: 26; radius: 13
-                            color: renameArea.containsMouse ? Theme.accent : "#66000000"
+                            color: renameArea.containsMouse ? Theme.accent : Theme.scrim(40)
                             Icon { anchors.centerIn: parent; name: "edit"; size: 13; color: "#ffffff"}
                             MouseArea {
                                 id: renameArea
@@ -581,7 +581,7 @@ Rectangle {
                         }
                         Rectangle {
                             width: 26; height: 26; radius: 13
-                            color: delArea.containsMouse ? "#dc2626" : "#66000000"
+                            color: delArea.containsMouse ? Theme.danger : Theme.scrim(40)
                             Icon { anchors.centerIn: parent; name: "trash"; size: 13; color: "#ffffff"}
                             MouseArea {
                                 id: delArea
@@ -619,7 +619,7 @@ Rectangle {
     // ── Rename dialog ─────────────────────────────────────────────────────
     Rectangle {
         anchors.fill: parent
-        color: "#cc0b0d13"
+        color: Theme.scrim(80)
         visible: page.renameTarget !== null
         MouseArea { anchors.fill: parent; onClicked: page.renameTarget = null }
 
@@ -714,7 +714,7 @@ Rectangle {
     // ── Delete confirmation ───────────────────────────────────────────────
     Rectangle {
         anchors.fill: parent
-        color: "#cc0b0d13"
+        color: Theme.scrim(80)
         visible: page.deleteTarget !== null
         MouseArea { anchors.fill: parent; onClicked: page.deleteTarget = null }
 
@@ -769,7 +769,7 @@ Rectangle {
                     }
                     Rectangle {
                         width: 84; height: 32; radius: Theme.radius
-                        color: "#dc2626"
+                        color: Theme.danger
                         Text { anchors.centerIn: parent; text: "Delete"; color: "#ffffff"; font.pixelSize: 13 }
                         MouseArea {
                             anchors.fill: parent
