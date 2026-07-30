@@ -80,8 +80,13 @@ Rectangle {
             ScrollView {
                 anchors.fill: parent
                 contentWidth: availableWidth
+                // See HomePage.qml's ScrollView for why this is explicit —
+                // QQC2's automatic contentHeight inference doesn't reliably
+                // track a ColumnLayout's implicitHeight.
+                contentHeight: navCol.implicitHeight
 
                 ColumnLayout {
+                    id: navCol
                     width: parent.width
                     spacing: 2
 
@@ -173,8 +178,16 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             contentWidth: availableWidth
+            // See HomePage.qml's ScrollView for why this is explicit — QQC2's
+            // automatic contentHeight inference doesn't reliably track a
+            // ColumnLayout child positioned with an explicit x/y offset, so
+            // long panels (Storage, Extensions, Capture & Sound) could look
+            // like they had nothing to scroll even when their content
+            // overflowed the window.
+            contentHeight: settingsContentCol.implicitHeight + settingsContentCol.y * 2
 
             ColumnLayout {
+                id: settingsContentCol
                 width: parent.width
                 x: 28
                 y: 24

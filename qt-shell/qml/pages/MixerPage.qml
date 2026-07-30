@@ -484,8 +484,14 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             contentWidth: availableWidth
+            // See HomePage.qml's ScrollView for why this is explicit — QQC2's
+            // automatic contentHeight inference doesn't reliably track a
+            // ColumnLayout's implicitHeight, which left the EQ/DSP tabs
+            // unscrollable on shorter windows.
+            contentHeight: eqDspCol.implicitHeight
 
             ColumnLayout {
+                id: eqDspCol
                 width: parent.width
                 spacing: 20
 

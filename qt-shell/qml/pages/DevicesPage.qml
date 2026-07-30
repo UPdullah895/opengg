@@ -28,8 +28,15 @@ Rectangle {
     ScrollView {
         anchors.fill: parent
         contentWidth: availableWidth
+        // See HomePage.qml's ScrollView for why this is explicit: QQC2's
+        // automatic contentHeight inference doesn't reliably track a
+        // ColumnLayout child positioned with an explicit x/y offset, so the
+        // page could look like it has nothing to scroll even when the
+        // device list overflows the window.
+        contentHeight: devicesCol.implicitHeight + devicesCol.y * 2
 
         ColumnLayout {
+            id: devicesCol
             width: Math.min(parent.width, 760)
             x: 32
             y: 28

@@ -191,6 +191,13 @@ Rectangle {
     ScrollView {
         anchors.fill: parent
         contentWidth: availableWidth
+        // QQC2 ScrollView's automatic contentHeight inference doesn't pick
+        // up `dashboardCol`'s explicit `y` offset, and — more importantly —
+        // doesn't reliably re-track a ColumnLayout's implicitHeight as it
+        // grows (verified live: expanding "14 more updates" to all 15 cards
+        // produced no scrollbar at all and the Flickable didn't scroll).
+        // Bound explicitly instead of relying on inference.
+        contentHeight: dashboardCol.implicitHeight + dashboardCol.y * 2
 
         ColumnLayout {
             id: dashboardCol
