@@ -58,12 +58,7 @@ ColumnLayout {
         }
     }
 
-    Text {
-        text: (I18n.language, I18n.t("settings.sections.mixerRouting"))
-        color: Theme.text
-        font.pixelSize: 22
-        font.weight: Font.Bold
-    }
+    SettingsHeading { titleText: (I18n.language, I18n.t("settings.sections.mixerRouting")) }
 
     // ── Ear Blast Protection card ──
     Rectangle {
@@ -106,7 +101,7 @@ ColumnLayout {
             ColumnLayout {
                 spacing: 6
                 Text {
-                    text: (I18n.language, I18n.t("settings.earBlast.channels"))
+                    text: (I18n.language, I18n.t("settings.earBlast.channels").toUpperCase())
                     color: Theme.textDim
                     font.pixelSize: 12
                 }
@@ -119,15 +114,17 @@ ColumnLayout {
                             readonly property bool active: (root.eb.channels || []).includes(modelData)
                             width: pillText.implicitWidth + 20
                             height: 26
-                            radius: 13
-                            color: active ? Theme.accent : "transparent"
+                            // MixerRoutingSettings.vue styles the selected pill as
+                            // an accent OUTLINE with accent text, not a filled chip.
+                            radius: Theme.radius
+                            color: active ? Theme.accentAlpha(10) : "transparent"
                             border.width: 1
                             border.color: active ? Theme.accent : Theme.border
                             Text {
                                 id: pillText
                                 anchors.centerIn: parent
                                 text: parent.modelData
-                                color: parent.active ? "#fff" : Theme.textDim
+                                color: parent.active ? Theme.accent : Theme.textDim
                                 font.pixelSize: 11
                             }
                             MouseArea {
@@ -147,7 +144,7 @@ ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 4
                     Text {
-                        text: (I18n.language, I18n.t("settings.earBlast.threshold"))
+                        text: (I18n.language, I18n.t("settings.earBlast.threshold").toUpperCase())
                         color: Theme.textDim
                         font.pixelSize: 12
                     }
@@ -163,7 +160,7 @@ ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 4
                     Text {
-                        text: (I18n.language, I18n.t("settings.earBlast.target"))
+                        text: (I18n.language, I18n.t("settings.earBlast.target").toUpperCase())
                         color: Theme.textDim
                         font.pixelSize: 12
                     }

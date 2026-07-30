@@ -84,12 +84,7 @@ ColumnLayout {
     }
     function estRamMb() { return Math.ceil(root.estFileMb() * 1.2) }
 
-    Text {
-        text: (I18n.language, I18n.t("settings.captureSound.title"))
-        color: Theme.text
-        font.pixelSize: 22
-        font.weight: Font.Bold
-    }
+    SettingsHeading { titleText: (I18n.language, I18n.t("settings.captureSound.title")) }
 
     // ── GSR settings card ──
     Rectangle {

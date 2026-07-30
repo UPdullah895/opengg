@@ -71,12 +71,7 @@ ColumnLayout {
         return root.accessItems.filter(i => !i.status)
     }
 
-    Text {
-        text: (I18n.language, I18n.t("settings.sections.about"))
-        color: Theme.text
-        font.pixelSize: 22
-        font.weight: Font.Bold
-    }
+    SettingsHeading { titleText: (I18n.language, I18n.t("settings.sections.about")) }
 
     // ── Hero card ──
     Rectangle {

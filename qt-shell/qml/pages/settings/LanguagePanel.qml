@@ -8,12 +8,7 @@ import com.opengg.app
 ColumnLayout {
     spacing: 20
 
-    Text {
-        text: (I18n.language, I18n.t("settings.sections.language"))
-        color: Theme.text
-        font.pixelSize: 22
-        font.weight: Font.Bold
-    }
+    SettingsHeading { titleText: (I18n.language, I18n.t("settings.sections.language")) }
 
     Rectangle {
         Layout.fillWidth: true

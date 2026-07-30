@@ -80,12 +80,7 @@ ColumnLayout {
         function onSettingsJsonChanged() { root.s = JSON.parse(SettingsController.settingsJson || "{}") }
     }
 
-    Text {
-        text: (I18n.language, I18n.t("settings.extensions.title"))
-        color: Theme.text
-        font.pixelSize: 22
-        font.weight: Font.Bold
-    }
+    SettingsHeading { titleText: (I18n.language, I18n.t("settings.extensions.title")) }
 
     // ── Core Modules card ──
     Rectangle {

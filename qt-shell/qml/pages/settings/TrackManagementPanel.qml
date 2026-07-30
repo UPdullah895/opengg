@@ -51,12 +51,7 @@ ColumnLayout {
         return root.iconIds[(i + 1) % root.iconIds.length]
     }
 
-    Text {
-        text: (I18n.language, I18n.t("settings.timelineTracks.title"))
-        color: Theme.text
-        font.pixelSize: 22
-        font.weight: Font.Bold
-    }
+    SettingsHeading { titleText: (I18n.language, I18n.t("settings.timelineTracks.title")) }
 
     Rectangle {
         Layout.fillWidth: true

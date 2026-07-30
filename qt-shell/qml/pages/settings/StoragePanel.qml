@@ -59,12 +59,7 @@ ColumnLayout {
         }
     }
 
-    Text {
-        text: (I18n.language, I18n.t("settings.storage.title"))
-        color: Theme.text
-        font.pixelSize: 22
-        font.weight: Font.Bold
-    }
+    SettingsHeading { titleText: (I18n.language, I18n.t("settings.storage.title")) }
 
     // ── Directories card ──
     Rectangle {

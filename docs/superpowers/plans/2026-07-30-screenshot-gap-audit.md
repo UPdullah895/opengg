@@ -124,3 +124,63 @@ not "restored".
 
 Verification for every item is a `make ui-shots` capture compared against the
 corresponding maintainer screenshot — not a clean build.
+
+---
+
+# Round 2 — Devices + all nine settings panels
+
+Second batch of maintainer screenshots (Devices, Language, Shortcuts, Audio
+Engine, Capture & Sound, Timeline Tracks, Storage, Notifications, Extensions,
+About). Audited the same way: screen against screen, then read back against the
+Vue source.
+
+## G7 — Devices: the shipping app is a "Coming Soon" placeholder ⚠ DECISION NEEDED
+
+`DevicesPage.vue` renders a **hardcoded placeholder**: a large stroke-1.2
+headphones glyph, `devices.comingSoon` ("Devices — Coming Soon") and
+`devices.comingSoonDesc`, above an optional device-access banner. There is no
+device list.
+
+The QML page renders a **live device list** from the daemon (name, type, model,
+battery, chatmix, capability count). So the port is *ahead* of the original
+here, and "matching the screenshot" would mean deleting working UI.
+
+**This is a product call, not a defect** — flagged rather than actioned. Options:
+(a) keep the live list (QML leads), (b) match the placeholder exactly, (c) keep
+the list behind the existing `modules.deviceManager` toggle and show the
+placeholder when it is off. (c) preserves both and is probably what the
+placeholder was standing in for.
+
+## G8 — Settings panels: per-panel deltas
+
+Fixed this pass (applies to all eleven panels):
+
+- **Heading rule.** Every Vue settings page renders its title above a
+  full-width divider; the port had a bare `Text` in each panel. Added
+  `components/SettingsHeading.qml` and converted all 12 panels.
+- **Ear Blast channel pills** were filled accent chips; the original is an
+  accent *outline* with accent text. Also uppercased the sub-labels
+  ("PROTECTED CHANNELS", "TRIGGER THRESHOLD", "TARGET VOLUME").
+
+Still open, by panel:
+
+| Panel | Delta |
+|---|---|
+| **Audio Engine** | Card order is inverted — Danger Zone is **first** in the original. Danger Zone has no descriptive paragraph there (the port invented one) and puts its two actions as label + right-aligned icon button rows. Ear Blast title is preceded by a headphones icon. |
+| **Language** | Rows are full-width cards: accent 2-letter code, then the name, then an `LTR`/`RTL` badge right-aligned; selected row gets an accent border + tint. Two icon buttons (open-folder, refresh) sit top-right of the card. |
+| **Shortcuts** | Needs a right-aligned **keycap** control per row (bordered, monospace, e.g. `Alt+F10`, `Ctrl+Shift+Z`, `—` when unset), divider lines between rows, and a "Reset to Defaults" button top-right that disables when already default. |
+| **Capture & Sound** | 4-column control grid (QUALITY / FPS / REPLAY BUFFER / MONITOR TARGET) with a bitrate spinbox beneath Quality; `Est. RAM … | File: …` top-right; "Run Diagnostics" as an outlined button with a check-circle icon. Audio Capture Devices rows need a drag handle, `TRACK n` label, device dropdown, × remove, and an accent "+ Add Track". |
+| **Timeline Tracks** | Rows need eye toggle + colour swatch + name field + icon-type button + × remove; an **icon-picker popup** (3×2 grid, active highlighted); and a **"Live Preview"** card rendering each track as a coloured bar with a coloured left edge and icon + name. |
+| **Storage** | Uppercase group labels; folder-icon rows with × ; outlined "+ Add Clip Path"/"+ Add Directory" buttons; a **Disk Usage** card with two accent stat boxes (CLIPS / USED) and a trash action; a **Steam Library** card ("connected — N games", refresh button, scrollable list with per-game icon thumbnails). |
+| **Notifications** | Style picker is **five large icon+label option buttons in a row** (globe / monitor / monitor / bell / ban), selected = accent border + accent text + tint. The port uses small rows. Position is a separate card. |
+| **Extensions** | **Modules** card (3 toggle rows with bold name + description). GSR card with an accent "▶ How to install?" expander. Extensions list rows need a rounded coloured icon tile, name + dim version, description, and a right-aligned toggle. Footer note "Changes apply immediately — no restart required." |
+| **About** | Hero card: accent logo, "OpenGG", a `v0.1.5` accent-tint pill, bold tagline, dim description. "Project Goals" rows prefixed with an accent ▶. "Connect With Us" full-width bordered GitHub/Discord rows. Dependency/device-access cards use a green ✓ badge + monospace text. |
+
+## Method note
+
+Round 1 found 6 defect classes from my own greps. These two rounds of
+screenshots found ~20 more, several structural. The lesson is already recorded
+in memory, but restating it here because it governs the remaining work:
+**parity claims require screen-by-screen comparison against reference images,
+not code inspection.** Every remaining task's acceptance criterion is a
+`make ui-shots` capture placed next to the corresponding reference screenshot.
