@@ -295,6 +295,25 @@ This plan is about making what exists *look* right, not re-litigating scope.
 
 ---
 
+### Phase 4 progress
+
+**Landed (commit `7b8f9c2`)** — Titlebar and ClipCard:
+
+- Titlebar was missing the accent-filled OpenGG **logo** and the **"Beta" pill**
+  entirely; it showed the wordmark alone. The logo's matrix transform is baked
+  into its coordinates so it is an ordinary `Icons` entry.
+- `ClipCard.qml` extracted and rebuilt against `ClipCard.vue`. Restored: film
+  placeholder, capture-time badge, heart favourite, kebab, and the
+  size/resolution/date pills + right-aligned game label. `ClipInfo` already
+  carried `created`/`width`/`height` — they were simply never exposed as model
+  roles, which is why the card had no way to render them.
+
+**Remaining** (tasks #32, #33): ChannelStrip, DeviceCard, HomePage, the three
+large settings panels, TourOverlay; the trimmed-badge model role; and Clips
+multi-select, which is tracked separately because it is a missing *feature*
+(replay.ts has `selectMode`/`toggleSelect` and a bulk toolbar) rather than a
+visual gap.
+
 ## Sequencing & risk
 
 Phases 1→2→3 are strictly ordered (each unblocks the next) and are largely
