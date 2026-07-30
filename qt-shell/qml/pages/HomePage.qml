@@ -3,15 +3,70 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import com.opengg.app
 
-// Home — live audio channels from the openggd daemon (real D-Bus data).
+// Dashboard — QML port of HomePage.vue.
+//
+// REWRITE, not a restyle. The previous version of this file was invented UI (a
+// "Replay Buffer" card with a Start button, plus a list of channel sliders) and
+// shared no structure with the real dashboard, which is a four-card stat grid
+// above a changelog feed. See
+// docs/superpowers/plans/2026-07-30-screenshot-gap-audit.md G1.
+//
+// Not yet ported: the click-to-expand popover on each card (quick mixer strips,
+// recorder settings rows, recent clips, device list) and the dismissible
+// GSR-missing banner. Those are interactive layers over this resting state and
+// are tracked separately so this lands as a reviewable whole.
 Rectangle {
     id: page
     color: Theme.bg
 
-    // Re-parses whenever the daemon pushes new JSON (NOTIFYing property).
-    property var channels: AudioController.channelsJson
-        ? JSON.parse(AudioController.channelsJson)
-        : []
+    // Card badge colours are hardcoded in HomePage.vue's scoped CSS
+    // (.card-icon.accent/.red/.green/.purple), exactly like the channel identity
+    // palette in MixerPage. Note that `.accent` there is BLUE (#3b82f6), not the
+    // theme accent — a naming quirk in the original, preserved deliberately.
+    readonly property var cardColors: ({
+        mixer: "#3b82f6", recorder: "#EF4444", clips: "#10b981", devices: "#a855f7"
+    })
+
+    readonly property var cards: [
+        {
+            key: "mixer", icon: "sliders",
+            label: I18n.t("dashboard.audioMixer"),
+            value: I18n.t("dashboard.channelSummary"),
+            sub: I18n.t("dashboard.channelList")
+        },
+        {
+            key: "recorder", icon: "record",
+            label: I18n.t("dashboard.recorder"),
+            value: RecordingController.running ? I18n.t("dashboard.active")
+                                               : I18n.t("dashboard.idle"),
+            sub: RecordingController.statusText
+        },
+        {
+            key: "clips", icon: "video",
+            label: I18n.t("dashboard.clipsCard"),
+            value: String(ClipsController.totalCount),
+            sub: I18n.t("dashboard.videoClipsSaved")
+        },
+        {
+            key: "devices", icon: "headphones",
+            label: I18n.t("dashboard.devices"),
+            value: I18n.t("dashboard.scan"),
+            sub: I18n.t("dashboard.devicesSub")
+        }
+    ]
+
+    // Changelog entries. `I18n.tRaw` returns the raw catalog subtree: the
+    // flattened catalog keeps string leaves only, so array-valued locale content
+    // was unreachable from QML until it was added (mirrors vue-i18n's `tm()`).
+    readonly property var updates: {
+        try {
+            var a = JSON.parse(I18n.tRaw("dashboard.changelog"))
+            return Array.isArray(a) ? a : []
+        } catch (e) {
+            return []
+        }
+    }
+    property bool showAllUpdates: false
 
     Component.onCompleted: {
         AudioController.refresh()
@@ -35,239 +90,214 @@ Rectangle {
 
         ColumnLayout {
             id: dashboardCol
-            width: Math.min(parent.width, 760)
+            width: page.width - 64
             x: 32
             y: 28
-            spacing: 20
+            spacing: 18
 
             Component.onCompleted: TourController.registerTarget("home-dashboard", dashboardCol)
             Component.onDestruction: TourController.unregisterTarget("home-dashboard")
 
-            Text {
-                // HomePage.vue's heading is dashboard.title ("Dashboard"), not the nav label.
-                text: (I18n.language, I18n.t("dashboard.title"))
-                color: Theme.text
-                font.pixelSize: 26
-                font.weight: Font.Bold
+            // ── Title row ─────────────────────────────────────────────────
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+
+                Text {
+                    text: (I18n.language, I18n.t("dashboard.title"))
+                    color: Theme.text
+                    font.pixelSize: 26
+                    font.weight: Font.Bold
+                }
+                // Replays the guided tour, as in HomePage.vue's title row.
+                Rectangle {
+                    width: 22; height: 22; radius: 11
+                    color: tourBtn.containsMouse ? Theme.accentAlpha(15) : "transparent"
+                    Layout.alignment: Qt.AlignVCenter
+                    Icon {
+                        anchors.centerIn: parent
+                        name: "info"
+                        size: 14
+                        color: tourBtn.containsMouse ? Theme.accent : Theme.textMuted
+                    }
+                    MouseArea {
+                        id: tourBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: TourController.start()
+                    }
+                }
+                Item { Layout.fillWidth: true }
             }
 
-            // ── Recording card ───────────────────────────────────────────
-            Rectangle {
-                id: recorderCard
+            // ── Four-card stat grid ───────────────────────────────────────
+            GridLayout {
                 Layout.fillWidth: true
-                Layout.preferredWidth: 680
-                radius: Theme.radius
-                color: Theme.surface
-                border.width: 1
-                border.color: Theme.border
-                implicitHeight: recCol.implicitHeight + 40
+                columns: 4
+                columnSpacing: 14
+                rowSpacing: 14
 
-                Component.onCompleted: TourController.registerTarget("home-recorder", recorderCard)
-                Component.onDestruction: TourController.unregisterTarget("home-recorder")
+                Repeater {
+                    model: page.cards
 
-                ColumnLayout {
-                    id: recCol
-                    anchors.fill: parent
-                    anchors.margins: 20
-                    spacing: 12
+                    Rectangle {
+                        id: statCard
+                        required property var modelData
+                        readonly property color badge: page.cardColors[modelData.key]
 
-                    RowLayout {
                         Layout.fillWidth: true
-                        Text {
-                            text: "Replay Buffer"
-                            color: Theme.text
-                            font.pixelSize: 18
-                            font.weight: Font.DemiBold
-                            Layout.fillWidth: true
-                        }
-                        Rectangle {
-                            width: 8; height: 8; radius: 4
-                            color: RecordingController.running ? Theme.success : Theme.textMuted
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                        Text {
-                            text: RecordingController.statusText
-                            color: Theme.textDim
-                            font.pixelSize: 12
-                        }
-                    }
+                        Layout.preferredHeight: 118
+                        radius: Theme.radiusLg
+                        color: Theme.surface
+                        border.width: 1
+                        border.color: cardHover.hovered ? Theme.accent : Theme.border
 
-                    Text {
-                        visible: RecordingController.error.length > 0
-                        text: RecordingController.error
-                        color: Theme.accent
-                        font.pixelSize: 12
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
+                        HoverHandler { id: cardHover }
 
-                    Row {
-                        spacing: 10
+                        // Registered so the tour can spotlight the recorder card.
+                        Component.onCompleted: {
+                            if (modelData.key === "recorder")
+                                TourController.registerTarget("home-recorder", statCard)
+                        }
 
-                        Rectangle {
-                            width: 120; height: 34; radius: Theme.radius
-                            color: RecordingController.running ? Theme.danger : Theme.accent
-                            Text {
-                                anchors.centerIn: parent
-                                text: RecordingController.running ? "Stop" : "Start"
-                                color: "#ffffff"
-                                font.pixelSize: 13
-                                font.weight: Font.DemiBold
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 18
+                            spacing: 0
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    text: statCard.modelData.label.toUpperCase()
+                                    color: Theme.textDim
+                                    font.pixelSize: 11
+                                    font.weight: Font.Bold
+                                    Layout.fillWidth: true
+                                }
+                                Rectangle {
+                                    width: 36; height: 36
+                                    radius: Theme.radius
+                                    color: Theme.tint(statCard.badge, 10)
+                                    Icon {
+                                        anchors.centerIn: parent
+                                        name: statCard.modelData.icon
+                                        size: 18
+                                        color: statCard.badge
+                                    }
+                                }
                             }
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: RecordingController.running
-                                           ? RecordingController.stop()
-                                           : RecordingController.start()
-                            }
-                        }
 
-                        Rectangle {
-                            width: 120; height: 34; radius: Theme.radius
-                            visible: RecordingController.running
-                            color: saveArea.containsMouse ? Theme.border : Theme.surface
-                            border.width: 1
-                            border.color: Theme.border
+                            Item { Layout.fillHeight: true }
+
                             Text {
-                                anchors.centerIn: parent
-                                text: "Save clip"
+                                text: statCard.modelData.value
                                 color: Theme.text
-                                font.pixelSize: 13
+                                font.pixelSize: 22
+                                font.weight: Font.Bold
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
                             }
-                            MouseArea {
-                                id: saveArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: RecordingController.save()
+                            Text {
+                                text: statCard.modelData.sub
+                                color: Theme.textMuted
+                                font.pixelSize: 11
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
                             }
                         }
                     }
                 }
             }
 
-            // ── Audio channels card ────────────────────────────────────────
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 680
-                radius: Theme.radius
-                color: Theme.surface
-                border.width: 1
-                border.color: Theme.border
-                implicitHeight: mixCol.implicitHeight + 40
+            // ── Latest Engine Updates ─────────────────────────────────────
+            Text {
+                text: (I18n.language, I18n.t("dashboard.latestUpdates"))
+                color: Theme.text
+                font.pixelSize: 15
+                font.weight: Font.Bold
+                Layout.topMargin: 6
+            }
 
-                ColumnLayout {
-                    id: mixCol
-                    anchors.fill: parent
-                    anchors.margins: 20
-                    spacing: 16
+            Repeater {
+                model: page.showAllUpdates ? page.updates.length
+                                           : Math.min(1, page.updates.length)
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Text {
-                            text: (I18n.language, I18n.t("nav.mixer"))
-                            color: Theme.text
-                            font.pixelSize: 18
-                            font.weight: Font.DemiBold
-                            Layout.fillWidth: true
-                        }
-                        // Live connection dot
-                        Rectangle {
-                            width: 8; height: 8; radius: 4
-                            color: AudioController.connected ? Theme.success : Theme.danger
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                        Text {
-                            text: AudioController.connected ? "daemon connected" : "daemon offline"
-                            color: Theme.textDim
-                            font.pixelSize: 12
-                        }
-                    }
+                Rectangle {
+                    id: updateCard
+                    required property int index
+                    readonly property var entry: page.updates[index]
 
-                    // One row per channel
-                    Repeater {
-                        model: page.channels
+                    Layout.fillWidth: true
+                    radius: Theme.radiusLg
+                    color: Theme.surface
+                    border.width: 1
+                    border.color: Theme.border
+                    implicitHeight: upCol.implicitHeight + 32
+
+                    ColumnLayout {
+                        id: upCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 16
+                        spacing: 8
 
                         RowLayout {
-                            required property var modelData
                             Layout.fillWidth: true
-                            spacing: 14
-
                             Text {
-                                text: modelData.name
-                                color: Theme.text
-                                font.pixelSize: 14
-                                Layout.preferredWidth: 70
-                            }
-
-                            // Mute toggle
-                            Rectangle {
-                                width: 32; height: 28
-                                radius: Theme.radius
-                                color: modelData.muted ? Theme.accentAlpha(15) : "transparent"
-                                border.width: 1
-                                border.color: modelData.muted ? Theme.accent : Theme.border
-                                Icon {
-                                    anchors.centerIn: parent
-                                    name: modelData.muted ? "volume-x" : "volume-1"
-                                    size: 15
-                                    color: modelData.muted ? Theme.accent : Theme.textDim
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: AudioController.setMute(modelData.name, !modelData.muted)
-                                }
-                            }
-
-                            Slider {
-                                id: chSlider
-                                Layout.fillWidth: true
-                                from: 0; to: 100
-                                value: modelData.volume
-                                onMoved: AudioController.setVolume(modelData.name, Math.round(value))
-
-                                background: Rectangle {
-                                    x: chSlider.leftPadding
-                                    y: chSlider.topPadding + chSlider.availableHeight / 2 - height / 2
-                                    width: chSlider.availableWidth
-                                    height: 4
-                                    radius: 2
-                                    color: Theme.border
-                                    Rectangle {
-                                        width: parent.width * chSlider.visualPosition
-                                        height: parent.height
-                                        radius: 2
-                                        color: Theme.accent
-                                    }
-                                }
-                                handle: Rectangle {
-                                    x: chSlider.leftPadding + chSlider.visualPosition * (chSlider.availableWidth - width)
-                                    y: chSlider.topPadding + chSlider.availableHeight / 2 - height / 2
-                                    width: 16; height: 16; radius: 8
-                                    color: Theme.text
-                                    border.width: 2
-                                    border.color: Theme.accent
-                                }
-                            }
-
-                            Text {
-                                text: Math.round(modelData.volume) + "%"
-                                color: Theme.textDim
+                                text: updateCard.entry ? updateCard.entry.version : ""
+                                color: Theme.accent
                                 font.pixelSize: 13
-                                Layout.preferredWidth: 40
-                                horizontalAlignment: Text.AlignRight
+                                font.weight: Font.Bold
+                                Layout.fillWidth: true
+                            }
+                            Text {
+                                text: updateCard.entry ? updateCard.entry.date : ""
+                                color: Theme.textMuted
+                                font.pixelSize: 11
+                            }
+                        }
+
+                        Repeater {
+                            model: updateCard.entry ? updateCard.entry.items : []
+                            RowLayout {
+                                required property string modelData
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Text {
+                                    text: "•"
+                                    color: Theme.accent
+                                    font.pixelSize: 13
+                                    Layout.alignment: Qt.AlignTop
+                                }
+                                Text {
+                                    text: modelData
+                                    color: Theme.textDim
+                                    font.pixelSize: 12
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
                             }
                         }
                     }
+                }
+            }
 
-                    Text {
-                        visible: page.channels.length === 0
-                        text: "No channels — is openggd running?"
-                        color: Theme.textDim
-                        font.pixelSize: 13
-                    }
+            Text {
+                visible: page.updates.length > 1
+                text: page.showAllUpdates
+                      ? (I18n.language, I18n.t("dashboard.showLess"))
+                      : (page.updates.length - 1) + " more updates"
+                color: Theme.accent
+                font.pixelSize: 12
+                font.weight: Font.Bold
+                Layout.bottomMargin: 24
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: page.showAllUpdates = !page.showAllUpdates
                 }
             }
         }

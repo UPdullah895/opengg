@@ -45,6 +45,16 @@ pub mod qobject {
         #[cxx_name = "languageName"]
         fn language_name(self: &Self, code: &QString) -> QString;
 
+        /// Raw catalog subtree at a dotted key, serialized as JSON for QML to
+        /// parse — the analogue of vue-i18n's `tm()`. Needed because `flatten`
+        /// only keeps string leaves, so ARRAY-valued content (the dashboard
+        /// changelog, and any future list) is otherwise unreachable from QML.
+        /// Returns "null" when the key is absent in both the active language
+        /// and the English fallback.
+        #[qinvokable]
+        #[cxx_name = "tRaw"]
+        fn translate_raw(self: &Self, key: &QString) -> QString;
+
         /// Codes of all loaded languages (English first, then alphabetical),
         /// for the Settings language picker.
         #[qinvokable]
@@ -63,13 +73,15 @@ pub struct I18nRust {
     rtl: bool,
     // Non-property internal state: flattened catalogs + metadata.
     catalogs: HashMap<String, HashMap<String, String>>,
+    /// Unflattened parsed catalogs, so `tRaw` can return arrays/objects.
+    trees: HashMap<String, serde_json::Value>,
     names: HashMap<String, String>,
     rtl_dirs: HashMap<String, bool>,
 }
 
 impl Default for I18nRust {
     fn default() -> Self {
-        let (catalogs, names, rtl_dirs) = load_catalogs();
+        let (catalogs, trees, names, rtl_dirs) = load_catalogs();
         // Initial language: OPENGG_LANG (verification override) → persisted
         // choice in the shared ui-settings.json → English.
         let initial = std::env::var("OPENGG_LANG")
@@ -82,6 +94,7 @@ impl Default for I18nRust {
             language: QString::from(&initial),
             rtl,
             catalogs,
+            trees,
             names,
             rtl_dirs,
         }
@@ -100,6 +113,23 @@ impl qobject::I18n {
         match value {
             Some(v) => QString::from(v),
             None => QString::from(&key),
+        }
+    }
+
+    pub fn translate_raw(&self, key: &QString) -> QString {
+        let key = key.to_string();
+        let lang = self.language.to_string();
+        let lookup = |code: &str| -> Option<&serde_json::Value> {
+            let mut node = self.trees.get(code)?;
+            for part in key.split('.') {
+                node = node.get(part)?;
+            }
+            Some(node)
+        };
+        let node = lookup(&lang).or_else(|| lookup("en"));
+        match node.and_then(|n| serde_json::to_string(n).ok()) {
+            Some(json) => QString::from(&json),
+            None => QString::from("null"),
         }
     }
 
@@ -137,6 +167,7 @@ impl qobject::I18n {
 
 type Catalogs = (
     HashMap<String, HashMap<String, String>>,
+    HashMap<String, serde_json::Value>,
     HashMap<String, String>,
     HashMap<String, bool>,
 );
@@ -148,6 +179,7 @@ fn load_catalogs() -> Catalogs {
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/locales").to_string());
 
     let mut catalogs = HashMap::new();
+    let mut trees = HashMap::new();
     let mut names = HashMap::new();
     let mut rtl_dirs = HashMap::new();
 
@@ -187,11 +219,12 @@ fn load_catalogs() -> Catalogs {
 
             names.insert(code.clone(), name);
             rtl_dirs.insert(code.clone(), is_rtl);
+            trees.insert(code.clone(), val);
             catalogs.insert(code, flat);
         }
     }
 
-    (catalogs, names, rtl_dirs)
+    (catalogs, trees, names, rtl_dirs)
 }
 
 /// Flatten nested catalog objects into dotted keys ("nav" -> "home" => "nav.home").

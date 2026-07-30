@@ -27,6 +27,12 @@ ApplicationWindow {
         SettingsController.refresh()
         if (ScreenshotController.active && ScreenshotController.page.length > 0)
             root.currentPage = ScreenshotController.page
+        // --with-tour opens the overlay directly. This used to hang off
+        // SettingsController's change signal, which never arrives in a capture
+        // run — so every `--with-tour` screenshot silently produced a plain
+        // page instead of the tour.
+        if (ScreenshotController.active && ScreenshotController.withTour)
+            TourController.start()
     }
 
     // First-launch guided tour: waits for the first real settingsJson load, then
@@ -43,11 +49,9 @@ ApplicationWindow {
             // asked to capture, so it is suppressed unless --with-tour asked
             // for it explicitly (in which case it is started unconditionally,
             // regardless of tutorialSeen).
-            if (ScreenshotController.active) {
-                if (ScreenshotController.withTour)
-                    TourController.start()
+            // Capture runs handle the tour in Component.onCompleted above.
+            if (ScreenshotController.active)
                 return
-            }
             // settingsJson IS the inner `settings` object (see settings.rs
             // refresh(), which publishes v["settings"]) — there is no extra
             // `.settings` hop. Reading `s.settings.tutorialSeen` here made

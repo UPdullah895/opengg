@@ -25,7 +25,9 @@ fail=0
 #   channel palette - Master/Game/Chat/Media/Aux/Mic identity colours, copied
 #                     verbatim from MixerPage.vue:62-63 which hardcodes them too.
 ALLOW_HEX='"#ffffff"|"#fff"|"#000000"'
-CHANNEL_LINE='Master:|Media:'
+#   dashboard cards - .card-icon.accent/.red/.green/.purple badge colours,
+#                     likewise hardcoded in HomePage.vue's scoped CSS.
+CHANNEL_LINE='Master:|Media:|mixer: "#3b82f6"'
 
 hits=$(grep -rnE '"#[0-9a-fA-F]{3,8}"' qml/ \
         | grep -vE "$ALLOW_HEX" \
