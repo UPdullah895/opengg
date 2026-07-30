@@ -73,12 +73,42 @@ Rectangle {
         { id: "aux", label: "Aux" },
         { id: "mic", label: "Mic" },
     ]
+    // MixerPage.vue renders SIX strips: Master + the five daemon channels.
+    // Master is not returned by the daemon — audio.ts synthesizes it (volume
+    // defaults to 100, unmuted), so this does the same.
+    readonly property var stripChannels: {
+        var out = []
+        var byName = {}
+        for (var i = 0; i < page.channels.length; i++)
+            byName[page.channels[i].name] = page.channels[i]
+        var master = byName["Master"] || { name: "Master", volume: 100, muted: false }
+        out.push(master)
+        for (var j = 0; j < page.mixerChannelNames.length; j++) {
+            var n = page.mixerChannelNames[j]
+            if (n !== "Master" && byName[n])
+                out.push(byName[n])
+        }
+        return out
+    }
+
+    readonly property var channelIcons: ({
+        Master: "volume-2", Game: "gamepad", Chat: "headphones",
+        Media: "play", Aux: "music", Mic: "mic"
+    })
+
+    property var outputDevices: JSON.parse(AudioController.outputDevicesJson || "[]")
+    property var inputDevices: (JSON.parse(AudioController.inputDevicesJson || "[]"))
+        .map(function (d) { return d.label || d.value || d })
+
     readonly property var channelColors: ({
         Master: "#94A3B8", Game: "#E94560", Chat: "#3B82F6",
         Media: "#10B981", Aux: "#A855F7", Mic: "#F59E0B",
     })
 
-    Component.onCompleted: AudioController.refresh()
+    Component.onCompleted: {
+        AudioController.refresh()
+        AudioController.refreshDevices()
+    }
     Timer { interval: 2000; running: true; repeat: true; onTriggered: AudioController.refresh() }
 
     // The VU stream spawns a real pw-cat subprocess per channel — only run
@@ -192,151 +222,28 @@ Rectangle {
             Component.onDestruction: TourController.unregisterTarget("mixer-channels")
 
             Repeater {
-                model: page.channels
+                model: page.stripChannels
 
-                // One channel strip
-                Rectangle {
+                ChannelStrip {
                     required property var modelData
-                    Layout.preferredWidth: 130
+                    Layout.preferredWidth: 132
                     Layout.fillHeight: true
-                    radius: Theme.radius
-                    color: Theme.surface
-                    border.width: 1
-                    border.color: Theme.border
 
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: 10
+                    name: modelData.name
+                    volume: modelData.volume
+                    muted: !!modelData.muted
+                    channelColor: page.channelColors[modelData.name] || Theme.accent
+                    iconName: page.channelIcons[modelData.name] || "volume-2"
+                    vuDb: page.vuDb(modelData.name)
+                    maxVolume: page.overdriveEnabled ? 150 : 100
+                    devices: modelData.name === "Mic" ? page.inputDevices : page.outputDevices
+                    selectedDevice: ""
 
-                        // Channel name
-                        Text {
-                            text: modelData.name
-                            color: Theme.text
-                            font.pixelSize: 15
-                            font.weight: Font.DemiBold
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-
-                        // Volume % (orange once overdrive pushes it past 100%)
-                        Text {
-                            text: Math.round(modelData.volume) + "%"
-                            color: modelData.volume > 100 ? Theme.overdrive : Theme.textDim
-                            font.pixelSize: 12
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-
-                        // Vertical fader + VU meter
-                        RowLayout {
-                            Layout.alignment: Qt.AlignHCenter
-                            Layout.fillHeight: true
-                            spacing: 8
-
-                            Slider {
-                                id: fader
-                                orientation: Qt.Vertical
-                                Layout.fillHeight: true
-                                from: 0; to: page.overdriveEnabled ? 150 : 100
-                                value: modelData.volume
-                                onMoved: AudioController.setVolume(modelData.name, Math.round(value))
-
-                                background: Rectangle {
-                                    x: fader.leftPadding + fader.availableWidth / 2 - width / 2
-                                    y: fader.topPadding
-                                    width: 6
-                                    height: fader.availableHeight
-                                    radius: 3
-                                    color: Theme.border
-                                    Rectangle {
-                                        // vertical slider: visualPosition is 0 at the top (max),
-                                        // so the filled level from the bottom is (1 - visualPosition).
-                                        width: parent.width
-                                        height: (1 - fader.visualPosition) * parent.height
-                                        y: parent.height - height
-                                        radius: 3
-                                        color: modelData.volume > 100 ? Theme.overdrive : Theme.accent
-                                    }
-                                }
-                                handle: Rectangle {
-                                    x: fader.leftPadding + fader.availableWidth / 2 - width / 2
-                                    y: fader.topPadding + fader.visualPosition * (fader.availableHeight - height)
-                                    width: 20; height: 20; radius: 10
-                                    color: Theme.text
-                                    border.width: 2
-                                    border.color: modelData.volume > 100 ? Theme.overdrive : Theme.accent
-                                }
-                            }
-
-                            // Live VU bar — fills from the bottom, -60..0 dB.
-                            Rectangle {
-                                Layout.fillHeight: true
-                                Layout.topMargin: fader.topPadding
-                                Layout.bottomMargin: fader.bottomPadding
-                                width: 5
-                                radius: 3
-                                color: Theme.bg
-                                border.width: 1
-                                border.color: Theme.border
-
-                                Rectangle {
-                                    width: parent.width
-                                    height: page.vuFrac(modelData.name) * parent.height
-                                    y: parent.height - height
-                                    radius: 3
-                                    color: page.vuColor(modelData.name, Theme.accent)
-                                    visible: AudioController.vuRunning
-                                }
-                            }
-                        }
-
-                        // dB readout
-                        Text {
-                            text: AudioController.vuRunning
-                                ? (page.vuDb(modelData.name) <= -59.9 ? "—" : page.vuDb(modelData.name).toFixed(1) + " dB")
-                                : ""
-                            color: Theme.textDim
-                            font.pixelSize: 9
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-
-                        // Mute
-                        Rectangle {
-                            Layout.alignment: Qt.AlignHCenter
-                            width: 40; height: 30
-                            radius: Theme.radius
-                            color: modelData.muted ? Theme.accentAlpha(15) : "transparent"
-                            border.width: 1
-                            border.color: modelData.muted ? Theme.accent : Theme.border
-                            Icon {
-                                anchors.centerIn: parent
-                                name: modelData.muted ? "volume-x" : "volume-1"
-                                size: 16
-                                color: modelData.muted ? Theme.accent : Theme.textDim
-                            }
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: AudioController.setMute(modelData.name, !modelData.muted)
-                            }
-                        }
-
-                        // Routed apps
-                        Text {
-                            text: modelData.apps && modelData.apps.length > 0
-                                ? modelData.apps.map(a => a.name).join(", ")
-                                : "—"
-                            color: Theme.textDim
-                            font.pixelSize: 10
-                            Layout.fillWidth: true
-                            horizontalAlignment: Text.AlignHCenter
-                            wrapMode: Text.WordWrap
-                            maximumLineCount: 2
-                            elide: Text.ElideRight
-                        }
-                    }
+                    onVolumeRequested: (v) => AudioController.setVolume(modelData.name, v)
+                    onMuteToggled: AudioController.setMute(modelData.name, !modelData.muted)
+                    onDeviceRequested: (d) => AudioController.setChannelDevice(modelData.name, d)
                 }
             }
-
             Item { Layout.fillWidth: true } // push strips to the leading edge
         }
 

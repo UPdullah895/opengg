@@ -87,6 +87,9 @@ QtObject {
         "record": { d: "M 4 12A 8 8 0 0 1 20 12 A 8 8 0 0 1 4 12 Z", sw: 0, filled: true },
         "video": { d: "M 23 7L 16 12L 23 17L 23 7ZM 3 5L 14 5A 2 2 0 0 1 16 7 L 16 17A 2 2 0 0 1 14 19 L 3 19A 2 2 0 0 1 1 17 L 1 7A 2 2 0 0 1 3 5 Z", sw: 2 },
 
+        // ChannelStrip.vue's Aux icon slot (a music note).
+        "music": { d: "M 9 18V 5l 12 -2v 13M 4 18A 3 3 0 0 1 10 18 A 3 3 0 0 1 4 18 ZM 16 16A 3 3 0 0 1 22 16 A 3 3 0 0 1 16 16 Z", sw: 2 },
+
         // ── Brand ──
         // Titlebar.vue's logo. Source is a 512-viewBox path inside
         // matrix(2.778643,0,0,2.778643,-447.380743,-285.942888); that transform is

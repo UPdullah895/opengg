@@ -36,6 +36,10 @@ pub mod qobject {
         // not under `"settings"`, so it's read/written here rather than via
         // SettingsController (same reasoning as ExtensionsController's
         // modules/extensionConsents — see that file's header comment).
+        // Output sinks / input sources for the per-strip device selector that
+        // ChannelStrip.vue renders under each fader.
+        #[qproperty(QString, output_devices_json, cxx_name = "outputDevicesJson")]
+        #[qproperty(QString, input_devices_json, cxx_name = "inputDevicesJson")]
         #[qproperty(QString, ear_blast_json, cxx_name = "earBlastJson")]
         type AudioController = super::AudioControllerRust;
 
@@ -107,6 +111,16 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "setEarBlast"]
         fn set_ear_blast(self: Pin<&mut Self>, key: &QString, value_json: &QString);
+
+        /// Re-enumerate output sinks and input sources for the strip selectors.
+        #[qinvokable]
+        #[cxx_name = "refreshDevices"]
+        fn refresh_devices(self: Pin<&mut Self>);
+
+        /// Bind a channel to a specific output sink / input source.
+        #[qinvokable]
+        #[cxx_name = "setChannelDevice"]
+        fn set_channel_device(self: Pin<&mut Self>, channel: &QString, device: &QString);
     }
 
     impl cxx_qt::Threading for AudioController {}
@@ -130,6 +144,8 @@ pub struct AudioControllerRust {
     vu_running: bool,
     vu_flag: Arc<AtomicBool>,
     vu_gen: Arc<AtomicU64>,
+    output_devices_json: QString,
+    input_devices_json: QString,
     ear_blast_json: QString,
 }
 
@@ -184,6 +200,29 @@ impl qobject::AudioController {
     pub fn set_mute(mut self: Pin<&mut Self>, channel: &QString, muted: bool) {
         let _ = opengg_core::audio::set_mute(channel.to_string(), muted);
         self.as_mut().refresh();
+    }
+
+    pub fn refresh_devices(mut self: Pin<&mut Self>) {
+        let sinks = opengg_core::audio::list_audio_sinks().unwrap_or_default();
+        let sources = opengg_core::audio::list_capture_sources().unwrap_or_default();
+        self.as_mut().set_output_devices_json(QString::from(
+            &serde_json::to_string(&sinks).unwrap_or_else(|_| "[]".into()),
+        ));
+        self.as_mut().set_input_devices_json(QString::from(
+            &serde_json::to_string(&sources).unwrap_or_else(|_| "[]".into()),
+        ));
+    }
+
+    pub fn set_channel_device(self: Pin<&mut Self>, channel: &QString, device: &QString) {
+        let channel = channel.to_string();
+        let device = device.to_string();
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            if let Err(e) = opengg_core::audio::set_channel_device(channel, device) {
+                eprintln!("setChannelDevice: {e}");
+            }
+            let _ = qt_thread.queue(|mut c| c.as_mut().refresh());
+        });
     }
 
     pub fn refresh_virtual_audio_status(mut self: Pin<&mut Self>) {
