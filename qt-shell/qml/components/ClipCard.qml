@@ -297,9 +297,16 @@ Rectangle {
                     height: 17
 
                     Row {
+                        id: metaPills
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 6
+                        // .clip-meta is a flex row in the original, so the pills
+                        // shrink rather than slide under the right-aligned game
+                        // badge. Anchoring alone allowed them to overlap on a
+                        // narrow card.
+                        width: parent.width - (gameBadge.visible ? gameBadge.width + 8 : 0)
+                        clip: true
 
                         Repeater {
                             model: [
@@ -333,6 +340,7 @@ Rectangle {
                     }
 
                     Rectangle {
+                        id: gameBadge
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         visible: card.game.length > 0 && card.game !== "Unknown"
