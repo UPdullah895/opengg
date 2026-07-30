@@ -431,7 +431,7 @@ ColumnLayout {
                 visible: root.deps.some(d => d.feature === "export" && !d.available)
                 Layout.fillWidth: true
                 spacing: 8
-                Text { text: "⚠"; color: "#ef4444"; font.pixelSize: 13 }
+                Icon { name: "alert-triangle"; size: 13; color: "#ef4444"}
                 Text {
                     text: I18n.t("settings.deps.missingFfmpeg")
                     color: Theme.text
@@ -463,10 +463,9 @@ ColumnLayout {
 
                     ColumnLayout {
                         spacing: 0
-                        Text {
-                            text: "▲"
+                        Icon {
+                            name: "chevron-up"; size: 12
                             color: trackRow.index === 0 ? Theme.border : Theme.textDim
-                            font.pixelSize: 9
                             MouseArea {
                                 anchors.fill: parent
                                 anchors.margins: -4
@@ -481,10 +480,9 @@ ColumnLayout {
                                 }
                             }
                         }
-                        Text {
-                            text: "▼"
+                        Icon {
+                            name: "chevron-down"; size: 12
                             color: trackRow.index === (root.s.captureTracks || []).length - 1 ? Theme.border : Theme.textDim
-                            font.pixelSize: 9
                             MouseArea {
                                 anchors.fill: parent
                                 anchors.margins: -4
@@ -542,7 +540,7 @@ ColumnLayout {
                         width: 24; height: 24
                         radius: Theme.radius
                         color: "transparent"
-                        Text { anchors.centerIn: parent; text: "✕"; color: Theme.textDim; font.pixelSize: 12 }
+                        Icon { anchors.centerIn: parent; name: "x"; size: 12; color: Theme.textDim}
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor

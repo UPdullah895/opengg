@@ -217,13 +217,13 @@ ColumnLayout {
                 Rectangle {
                     width: 28; height: 28; radius: Theme.radius
                     color: "transparent"; border.width: 1; border.color: Theme.border
-                    Text { anchors.centerIn: parent; text: "↻"; color: Theme.text; font.pixelSize: 14 }
+                    Icon { anchors.centerIn: parent; name: "refresh-cw"; size: 14; color: Theme.text}
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: ExtensionsController.refresh() }
                 }
                 Rectangle {
                     width: 28; height: 28; radius: Theme.radius
                     color: "transparent"; border.width: 1; border.color: Theme.border
-                    Text { anchors.centerIn: parent; text: "📁"; font.pixelSize: 13 }
+                    Icon { anchors.centerIn: parent; name: "folder"; size: 13}
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: ExtensionsController.openFolder() }
                 }
             }
@@ -391,7 +391,7 @@ ColumnLayout {
 
     RowLayout {
         spacing: 6
-        Text { text: "ℹ️"; font.pixelSize: 11 }
+        Icon { name: "info"; size: 11}
         Text {
             text: (I18n.language, I18n.t("settings.extensions.restartHint"))
             color: Theme.textDim

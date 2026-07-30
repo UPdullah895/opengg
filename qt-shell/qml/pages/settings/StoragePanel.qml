@@ -114,8 +114,8 @@ ColumnLayout {
                             Layout.fillWidth: true
                             elide: Text.ElideMiddle
                         }
-                        Text {
-                            text: "✕"
+                        Icon {
+                            name: "x"; size: 12
                             color: Theme.textDim
                             MouseArea {
                                 anchors.fill: parent
@@ -172,8 +172,8 @@ ColumnLayout {
                             Layout.fillWidth: true
                             elide: Text.ElideMiddle
                         }
-                        Text {
-                            text: "✕"
+                        Icon {
+                            name: "x"; size: 12
                             color: Theme.textDim
                             MouseArea {
                                 anchors.fill: parent

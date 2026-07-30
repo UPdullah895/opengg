@@ -157,10 +157,9 @@ Rectangle {
                 border.width: 1
                 border.color: page.overdriveEnabled ? "#f59e0b" : Theme.border
 
-                Text {
+                Icon {
                     anchors.centerIn: parent
-                    text: "⚡"
-                    font.pixelSize: 14
+                    name: "zap"; size: 13
                 }
                 MouseArea {
                     id: overdriveArea
@@ -304,13 +303,14 @@ Rectangle {
                             Layout.alignment: Qt.AlignHCenter
                             width: 40; height: 30
                             radius: Theme.radius
-                            color: modelData.muted ? Qt.rgba(0.914, 0.271, 0.376, 0.15) : "transparent"
+                            color: modelData.muted ? Theme.accentAlpha(15) : "transparent"
                             border.width: 1
                             border.color: modelData.muted ? Theme.accent : Theme.border
-                            Text {
+                            Icon {
                                 anchors.centerIn: parent
-                                text: modelData.muted ? "🔇" : "🔊"
-                                font.pixelSize: 13
+                                name: modelData.muted ? "volume-x" : "volume-1"
+                                size: 16
+                                color: modelData.muted ? Theme.accent : Theme.textDim
                             }
                             MouseArea {
                                 anchors.fill: parent
@@ -500,7 +500,7 @@ Rectangle {
                     Rectangle {
                         width: 20; height: 20; radius: Theme.radius
                         color: "transparent"
-                        Text { anchors.centerIn: parent; text: "↺"; color: Theme.textDim; font.pixelSize: 13 }
+                        Icon { anchors.centerIn: parent; name: "rotate-ccw"; size: 13; color: Theme.textDim}
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor

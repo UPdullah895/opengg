@@ -198,12 +198,11 @@ Rectangle {
                     elide: Text.ElideRight
                     verticalAlignment: Text.AlignVCenter
                 }
-                indicator: Text {
+                indicator: Icon {
                     x: gameBox.width - width - 8
                     y: (gameBox.height - height) / 2
-                    text: "▾"
+                    name: "chevron-down"; size: 12
                     color: Theme.textDim
-                    font.pixelSize: 11
                 }
                 popup: Popup {
                     y: gameBox.height + 2
@@ -271,12 +270,11 @@ Rectangle {
                     elide: Text.ElideRight
                     verticalAlignment: Text.AlignVCenter
                 }
-                indicator: Text {
+                indicator: Icon {
                     x: sortBox.width - width - 8
                     y: (sortBox.height - height) / 2
-                    text: "▾"
+                    name: "chevron-down"; size: 12
                     color: Theme.textDim
-                    font.pixelSize: 11
                 }
                 popup: Popup {
                     y: sortBox.height + 2
@@ -445,12 +443,11 @@ Rectangle {
                             // Placeholder when no thumbnail; kicks off async
                             // generation once (deduped on the Rust side across
                             // reloads/re-mounts) so the image pops in when ready.
-                            Text {
+                            Icon {
                                 anchors.centerIn: parent
                                 visible: !thumbnail
-                                text: "▶"
+                                name: "film"; size: 34
                                 color: Theme.border
-                                font.pixelSize: 34
 
                                 Component.onCompleted: {
                                     if (!thumbnail && filepath) {
@@ -532,11 +529,14 @@ Rectangle {
                         width: 26; height: 26; radius: 13
                         visible: cardHover.hovered || !!favorite
                         color: favArea.containsMouse ? "#aa000000" : "#66000000"
-                        Text {
+                        // ClipCard.vue uses a heart (filled when favourited),
+                        // not a star.
+                        Icon {
                             anchors.centerIn: parent
-                            text: favorite ? "★" : "☆"
-                            color: favorite ? "#fbbf24" : "#ffffff"
-                            font.pixelSize: 15
+                            name: "heart"
+                            size: 15
+                            filled: !!favorite
+                            color: favorite ? Theme.accent : "#ffffff"
                         }
                         MouseArea {
                             id: favArea
@@ -558,7 +558,7 @@ Rectangle {
                         Rectangle {
                             width: 26; height: 26; radius: 13
                             color: editArea.containsMouse ? Theme.accent : "#66000000"
-                            Text { anchors.centerIn: parent; text: "✂"; color: "#ffffff"; font.pixelSize: 13 }
+                            Icon { anchors.centerIn: parent; name: "scissors"; size: 13; color: "#ffffff"}
                             MouseArea {
                                 id: editArea
                                 anchors.fill: parent
@@ -570,7 +570,7 @@ Rectangle {
                         Rectangle {
                             width: 26; height: 26; radius: 13
                             color: renameArea.containsMouse ? Theme.accent : "#66000000"
-                            Text { anchors.centerIn: parent; text: "✎"; color: "#ffffff"; font.pixelSize: 13 }
+                            Icon { anchors.centerIn: parent; name: "edit"; size: 13; color: "#ffffff"}
                             MouseArea {
                                 id: renameArea
                                 anchors.fill: parent
@@ -582,7 +582,7 @@ Rectangle {
                         Rectangle {
                             width: 26; height: 26; radius: 13
                             color: delArea.containsMouse ? "#dc2626" : "#66000000"
-                            Text { anchors.centerIn: parent; text: "🗑"; color: "#ffffff"; font.pixelSize: 12 }
+                            Icon { anchors.centerIn: parent; name: "trash"; size: 13; color: "#ffffff"}
                             MouseArea {
                                 id: delArea
                                 anchors.fill: parent

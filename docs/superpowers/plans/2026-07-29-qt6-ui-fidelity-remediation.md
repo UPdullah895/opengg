@@ -176,6 +176,42 @@ it needs generalizing.
 **Acceptance:** zero emoji in `qt-shell/qml/` outside the two documented
 exceptions; every icon's stroke path is traceable to a specific Vue `<svg>`.
 
+### Phase 2 outcome (landed)
+
+`Icons.qml` (31 entries) + `components/Icon.qml`, generalising the
+Shape/ShapePath/PathSvg pattern `Sidebar.qml` already proved. 29 emoji sites
+were converted programmatically (marker pass, then a brace-matching retype from
+`Text` to `Icon` that also strips the now-invalid `font.*` properties) so the
+edits stayed uniform rather than 29 hand-edits.
+
+Geometry was extracted mechanically from 193 inline `<svg>`s **plus the 16
+named `ICON_*` constants in `frontend/src/assets/deviceAssets.ts`** — a
+canonically-named set the initial `*.vue`-only glob had missed entirely.
+
+Three traps worth recording, all of which fail *silently*:
+
+- **`PathSvg` cannot parse SVG's compact arc-flag shorthand.** In
+  `a9 9 0 0118 0` the two single-digit flags and the following x run together;
+  PathSvg reads `0118` as one number and drops the remainder of the subpath with
+  no warning. The mute icon's wave arc simply vanished. A normalizer rewrote all
+  31 paths into fully space-separated arc form (flags parsed as single chars,
+  never as numbers).
+- **SVG attribute names contain digits.** The first extractor used
+  `[a-zA-Z-]+` for attribute names, so `x1`/`y1`/`x2`/`y2` never matched and
+  every `<line>` collapsed to `M 0 0 L 0 0`.
+- **Two icons were misidentified by proximity search.** The path grepped as
+  "shield" was actually a duplicate headphones glyph — the Vue UI has no shield
+  anywhere, and its Ear Blast header is a bare `<span>` + InfoIcon. Dropped the
+  entry, removed the invented 🛡️, and added the real `check-square` that
+  `MixerRoutingSettings.vue` uses. Likewise 🎚 for chatmix was invented
+  (`DeviceCard.vue` renders it as plain text) and ★/☆ for favourites was wrong
+  (`ClipCard.vue` uses a heart that fills).
+
+Because geometry loss is invisible, `--page icons` renders a contact sheet of
+every registry entry at 16/24/32px; regenerate it after touching `Icons.qml`.
+Kept as text, matching the Vue original: the `✓` in dep-check rows and `•`
+bullets in About.
+
 ---
 
 ## Phase 3 — Color sweep

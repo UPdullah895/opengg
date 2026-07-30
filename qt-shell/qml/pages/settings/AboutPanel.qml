@@ -103,10 +103,9 @@ ColumnLayout {
                 color: Qt.rgba(0.914, 0.271, 0.376, 0.12)
                 border.width: 2
                 border.color: Theme.accent
-                Text {
+                Icon {
                     anchors.centerIn: parent
-                    text: "🎮"
-                    font.pixelSize: 22
+                    name: "gamepad"; size: 34
                 }
             }
             Text {

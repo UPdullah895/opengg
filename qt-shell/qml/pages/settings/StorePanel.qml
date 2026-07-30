@@ -29,9 +29,8 @@ ColumnLayout {
         Layout.topMargin: 40
         spacing: 10
 
-        Text {
-            text: "📦"
-            font.pixelSize: 32
+        Icon {
+            name: "package"; size: 34
             opacity: 0.5
             Layout.alignment: Qt.AlignHCenter
         }

@@ -44,7 +44,8 @@ ColumnLayout {
     RowLayout {
         visible: !root.isMissing
         spacing: 8
-        Text { text: "✓"; color: "#10b981"; font.pixelSize: 14; font.weight: Font.Bold }
+        // RecorderInstallHelper.vue uses an SVG check here, not a text glyph.
+        Icon { name: "check"; size: 15; color: Theme.success }
         Text {
             text: (I18n.language, I18n.t("settings.recorderInstall.installed"))
             color: "#10b981"
@@ -71,7 +72,7 @@ ColumnLayout {
 
             RowLayout {
                 spacing: 8
-                Text { text: "⚠"; color: "#ef4444"; font.pixelSize: 14 }
+                Icon { name: "alert-triangle"; size: 14; color: "#ef4444"}
                 Text {
                     text: (I18n.language, I18n.t("settings.recorderInstall.notFound"))
                     color: Theme.text

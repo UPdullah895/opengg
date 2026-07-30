@@ -106,17 +106,31 @@ Rectangle {
                                 spacing: 18
                                 visible: modelData.deviceType === "headset"
 
-                                Text {
+                                // Battery: icon + level, mirroring DeviceCard.vue's
+                                // ICON_BATTERY + "<n>%" pairing.
+                                Row {
                                     visible: modelData.batteryLevel !== undefined
-                                    text: "🔋 " + (modelData.batteryLevel >= 0
-                                        ? modelData.batteryLevel + "%"
-                                        : "n/a")
-                                    color: Theme.textDim
-                                    font.pixelSize: 12
+                                    spacing: 5
+                                    Icon {
+                                        name: "battery"
+                                        size: 14
+                                        color: Theme.textDim
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    Text {
+                                        text: modelData.batteryLevel >= 0
+                                              ? modelData.batteryLevel + "%"
+                                              : "n/a"
+                                        color: Theme.textDim
+                                        font.pixelSize: 12
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
                                 }
                                 Text {
+                                    // No icon here: DeviceCard.vue renders chatmix
+                                    // as plain text, so the 🎚 glyph was invented.
                                     visible: modelData.chatmix !== undefined
-                                    text: "🎚 chatmix " + modelData.chatmix
+                                    text: "chatmix " + modelData.chatmix
                                     color: Theme.textDim
                                     font.pixelSize: 12
                                 }

@@ -174,11 +174,10 @@ ColumnLayout {
                         property bool protectedTrack: tRow.modelData.id === "V1" || tRow.modelData.id === "O1"
                         color: "transparent"
                         opacity: protectedTrack ? 0.35 : 1.0
-                        Text {
+                        Icon {
                             anchors.centerIn: parent
-                            text: "✕"
+                            name: "x"; size: 12
                             color: Theme.textDim
-                            font.pixelSize: 13
                         }
                         MouseArea {
                             anchors.fill: parent

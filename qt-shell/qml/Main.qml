@@ -139,5 +139,13 @@ ApplicationWindow {
         }
 
         TourOverlay {}
+
+        // Dev-only icon contact sheet (--page icons). Inside captureRoot so it
+        // is screenshottable; never instantiated in a normal run.
+        Loader {
+            anchors.fill: parent
+            active: ScreenshotController.active && ScreenshotController.page === "icons"
+            sourceComponent: IconGallery {}
+        }
     }
 }

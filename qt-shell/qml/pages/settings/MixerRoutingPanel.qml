@@ -85,7 +85,8 @@ ColumnLayout {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
-                Text { text: "🛡️"; font.pixelSize: 14 }
+                // No icon: MixerRoutingSettings.vue's Ear Blast header is a bare
+                // <span> + InfoIcon, so the 🛡️ glyph here was invented.
                 Text {
                     text: (I18n.language, I18n.t("settings.earBlast.title"))
                     color: Theme.text
@@ -197,7 +198,7 @@ ColumnLayout {
 
             RowLayout {
                 spacing: 8
-                Text { text: "⚠️"; font.pixelSize: 14 }
+                Icon { name: "alert-triangle"; size: 14}
                 Text {
                     text: (I18n.language, I18n.t("settings.dangerZone.title"))
                     color: "#ef4444"
@@ -236,7 +237,7 @@ ColumnLayout {
                     color: "transparent"
                     border.width: 1
                     border.color: Theme.border
-                    Text { anchors.centerIn: parent; text: "↻"; color: Theme.text; font.pixelSize: 15 }
+                    Icon { anchors.centerIn: parent; name: "refresh-cw"; size: 15; color: Theme.text}
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
@@ -293,7 +294,7 @@ ColumnLayout {
                     color: "transparent"
                     border.width: 1
                     border.color: "#ef4444"
-                    Text { anchors.centerIn: parent; text: "🗑"; font.pixelSize: 13 }
+                    Icon { anchors.centerIn: parent; name: "trash"; size: 13}
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor

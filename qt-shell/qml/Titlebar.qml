@@ -77,12 +77,10 @@ Rectangle {
             radius: Theme.radius
             color: "transparent"
 
-            Text {
+            Icon {
                 anchors.centerIn: parent
-                text: "−"
+                name: "minus"; size: 14
                 color: Theme.textDim
-                font.pixelSize: 16
-                font.weight: Font.Bold
             }
 
             MouseArea {
@@ -102,12 +100,10 @@ Rectangle {
             radius: Theme.radius
             color: "transparent"
 
-            Text {
+            Icon {
                 anchors.centerIn: parent
-                text: "✕"
+                name: "x"; size: 14
                 color: Theme.textDim
-                font.pixelSize: 16
-                font.weight: Font.Bold
             }
 
             MouseArea {

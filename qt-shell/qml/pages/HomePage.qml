@@ -204,13 +204,14 @@ Rectangle {
                             Rectangle {
                                 width: 32; height: 28
                                 radius: Theme.radius
-                                color: modelData.muted ? Qt.rgba(0.914, 0.271, 0.376, 0.15) : "transparent"
+                                color: modelData.muted ? Theme.accentAlpha(15) : "transparent"
                                 border.width: 1
                                 border.color: modelData.muted ? Theme.accent : Theme.border
-                                Text {
+                                Icon {
                                     anchors.centerIn: parent
-                                    text: modelData.muted ? "🔇" : "🔊"
-                                    font.pixelSize: 12
+                                    name: modelData.muted ? "volume-x" : "volume-1"
+                                    size: 15
+                                    color: modelData.muted ? Theme.accent : Theme.textDim
                                 }
                                 MouseArea {
                                     anchors.fill: parent

@@ -62,10 +62,9 @@ ColumnLayout {
                         onClicked: ThemeController.save(ThemeController.accent, !ThemeController.darkMode)
                     }
                 }
-                Text {
-                    text: "↻"
+                Icon {
+                    name: "refresh-cw"; size: 14
                     color: Theme.textDim
-                    font.pixelSize: 16
                     MouseArea {
                         anchors.fill: parent
                         anchors.margins: -6

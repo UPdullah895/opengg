@@ -107,11 +107,10 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: 26; height: 26; radius: 13
                     color: closeArea.containsMouse ? Theme.accent : "transparent"
-                    Text {
+                    Icon {
                         anchors.centerIn: parent
-                        text: "✕"
+                        name: "x"; size: 14
                         color: Theme.text
-                        font.pixelSize: 14
                     }
                     MouseArea {
                         id: closeArea
@@ -162,11 +161,11 @@ Rectangle {
                     width: 36; height: 36; radius: 18
                     color: Theme.accent
                     anchors.verticalCenter: parent.verticalCenter
-                    Text {
+                    Icon {
                         anchors.centerIn: parent
-                        text: mp.playbackState === MediaPlayer.PlayingState ? "⏸" : "▶"
+                        name: mp.playbackState === MediaPlayer.PlayingState ? "pause" : "play"
+                        size: 14
                         color: "#ffffff"
-                        font.pixelSize: 14
                     }
                     MouseArea {
                         anchors.fill: parent
