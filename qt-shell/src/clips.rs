@@ -142,6 +142,18 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "startWatcher"]
         fn start_watcher(self: Pin<&mut Self>);
+
+        /// The `limit` most-recently-created clips as a JSON array of
+        /// `{filepath, title, thumbnail, favorite}`, newest first. Reads
+        /// `all_clips` directly rather than the filtered `view` the model
+        /// exposes, so the Dashboard's recent-clips popover always shows the
+        /// true most-recent clips regardless of whatever search/game-filter/
+        /// sort the Clips page currently has active — mirrors HomePage.vue's
+        /// `recentClips`, which reads the raw `replay.clips` store array
+        /// rather than ClipsPage's locally-filtered view.
+        #[qinvokable]
+        #[cxx_name = "recentJson"]
+        fn recent_json(self: &Self, limit: i32) -> QString;
     }
 
     impl cxx_qt::Threading for ClipsController {}
@@ -287,6 +299,27 @@ impl qobject::ClipsController {
             ClipRoles::Height => QVariant::from(&(clip.height as i32)),
             _ => QVariant::default(),
         }
+    }
+
+    pub fn recent_json(&self, limit: i32) -> QString {
+        let mut indices: Vec<usize> = (0..self.all_clips.len()).collect();
+        indices.sort_by_key(|&i| std::cmp::Reverse(self.all_clips[i].created_ts));
+        indices.truncate(limit.max(0) as usize);
+
+        let items: Vec<serde_json::Value> = indices
+            .iter()
+            .map(|&i| {
+                let clip = &self.all_clips[i];
+                serde_json::json!({
+                    "filepath": clip.filepath,
+                    "title": title_for(clip),
+                    "thumbnail": clip.thumbnail,
+                    "favorite": clip.favorite,
+                })
+            })
+            .collect();
+
+        QString::from(&serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string()))
     }
 
     fn role_names(&self) -> QHash_i32_QByteArray {

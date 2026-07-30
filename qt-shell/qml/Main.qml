@@ -133,11 +133,15 @@ ApplicationWindow {
                     Layout.fillHeight: true
                     currentIndex: ["home", "mixer", "clips", "devices", "settings"].indexOf(root.currentPage)
 
-                    HomePage {}
+                    HomePage {
+                        onNavigate: (p) => root.currentPage = p
+                        onNavigateSettings: (section) => settingsPage.active = section
+                        onPreviewClipRequested: (fp, t) => clipsPage.playerClip = { filepath: fp, title: t }
+                    }
                     MixerPage {}
-                    ClipsPage {}
+                    ClipsPage { id: clipsPage }
                     DevicesPage {}
-                    SettingsPage {}
+                    SettingsPage { id: settingsPage }
                 }
             }
         }
