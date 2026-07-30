@@ -4,7 +4,7 @@ import com.opengg.app
 
 Rectangle {
     id: titlebar
-    height: 40
+    height: Theme.titlebarH   // --titlebar-h
     color: Theme.surface
 
     // Bottom border line
@@ -22,12 +22,40 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         spacing: 10
 
+        // Brand mark — Titlebar.vue renders this accent-filled logo left of the
+        // wordmark; the QML port previously showed the text alone.
+        Icon {
+            name: "logo"
+            size: 22
+            color: Theme.accent
+            anchors.verticalCenter: parent.verticalCenter
+        }
+
         Text {
             text: "OpenGG"
             color: Theme.text
             font.pixelSize: 14
             font.weight: Font.DemiBold
             anchors.verticalCenter: parent.verticalCenter
+        }
+
+        // "Beta" pill, also missing from the original port (Titlebar.vue:49).
+        Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: betaLabel.implicitWidth + 12
+            height: 16
+            radius: 8
+            color: Theme.accentAlpha(15)
+            border.width: 1
+            border.color: Theme.accentAlpha(40)
+            Text {
+                id: betaLabel
+                anchors.centerIn: parent
+                text: "Beta"
+                color: Theme.accent
+                font.pixelSize: 9
+                font.weight: Font.Bold
+            }
         }
     }
 

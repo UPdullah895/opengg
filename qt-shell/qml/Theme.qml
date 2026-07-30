@@ -62,6 +62,9 @@ QtObject {
     // rather than using a CSS var; tokenised so this shell has no bare literal.
     readonly property string overdrive: ThemeController.overdrive
 
+    // Trimmed-clip duration badge (ClipCard.vue:135, hardcoded there too).
+    readonly property string trimmed: ThemeController.trimmed
+
     // ── Layout ────────────────────────────────────────────────────────────
     readonly property int radius: ThemeController.radius          // --radius
     readonly property int radiusLg: ThemeController.radiusLg      // --radius-lg

@@ -43,6 +43,7 @@ pub mod qobject {
         #[qproperty(QString, success)]
         #[qproperty(QString, purple)]
         #[qproperty(QString, overdrive)]
+        #[qproperty(QString, trimmed)]
         // ── Layout ──
         #[qproperty(i32, radius)]
         #[qproperty(i32, radius_lg, cxx_name = "radiusLg")]
@@ -81,6 +82,7 @@ pub struct ThemeControllerRust {
     success: QString,
     purple: QString,
     overdrive: QString,
+    trimmed: QString,
     radius: i32,
     radius_lg: i32,
     clips_grid_cols: i32,
@@ -138,6 +140,8 @@ const PURPLE: &str = "#a855f7";
 /// Fader tint past 100%. Hardcoded (not a CSS var) in the Vue UI at
 /// `ChannelStrip.vue:253` — tokenised here so the shell has no bare literal.
 const OVERDRIVE: &str = "#f59e0b";
+/// Trimmed-clip duration badge. Hardcoded at `ClipCard.vue:135`.
+const TRIMMED: &str = "#ffd27a";
 
 const RADIUS: i32 = 6;
 const RADIUS_LG: i32 = 10;
@@ -164,6 +168,7 @@ pub struct Resolved {
     pub success: String,
     pub purple: String,
     pub overdrive: String,
+    pub trimmed: String,
     pub radius: i32,
     pub radius_lg: i32,
     pub clips_grid_cols: i32,
@@ -215,6 +220,7 @@ pub fn resolve(v: &Value) -> Resolved {
         success: color(c, "--success", SUCCESS),
         purple: color(c, "--purple", PURPLE),
         overdrive: color(c, "--overdrive", OVERDRIVE),
+        trimmed: color(c, "--trimmed", TRIMMED),
         radius: parse_len(l["--radius"].as_str(), RADIUS),
         radius_lg: parse_len(l["--radius-lg"].as_str(), RADIUS_LG),
         clips_grid_cols: parse_len(l["--clips-grid-cols"].as_str(), CLIPS_GRID_COLS),
@@ -241,6 +247,7 @@ impl Default for ThemeControllerRust {
             success: QString::default(),
             purple: QString::default(),
             overdrive: QString::default(),
+            trimmed: QString::default(),
             radius: RADIUS,
             radius_lg: RADIUS_LG,
             clips_grid_cols: CLIPS_GRID_COLS,
@@ -269,6 +276,7 @@ impl ThemeControllerRust {
         self.success = QString::from(&r.success);
         self.purple = QString::from(&r.purple);
         self.overdrive = QString::from(&r.overdrive);
+        self.trimmed = QString::from(&r.trimmed);
         self.radius = r.radius;
         self.radius_lg = r.radius_lg;
         self.clips_grid_cols = r.clips_grid_cols;
@@ -298,6 +306,7 @@ impl qobject::ThemeController {
         self.as_mut().set_success(QString::from(&r.success));
         self.as_mut().set_purple(QString::from(&r.purple));
         self.as_mut().set_overdrive(QString::from(&r.overdrive));
+        self.as_mut().set_trimmed(QString::from(&r.trimmed));
         self.as_mut().set_radius(r.radius);
         self.as_mut().set_radius_lg(r.radius_lg);
         self.as_mut().set_clips_grid_cols(r.clips_grid_cols);

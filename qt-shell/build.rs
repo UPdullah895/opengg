@@ -32,6 +32,7 @@ fn main() {
         QmlFile::from("qml/pages/settings/ComingSoonPanel.qml"),
         QmlFile::from("qml/components/VideoPlayer.qml"),
         QmlFile::from("qml/components/TrimEditor.qml"),
+        QmlFile::from("qml/components/ClipCard.qml"),
         QmlFile::from("qml/components/Icon.qml"),
         QmlFile::from("qml/components/IconGallery.qml"),
         QmlFile::from("qml/components/InfoIcon.qml"),

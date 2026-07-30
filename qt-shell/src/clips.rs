@@ -55,6 +55,11 @@ pub mod qobject {
         Game,
         Filesize,
         Favorite,
+        // ClipCard.vue also shows the capture time and a resolution pill; the
+        // data was already on ClipInfo, just never exposed as roles.
+        Created,
+        Width,
+        Height,
     }
 
     unsafe extern "RustQt" {
@@ -277,6 +282,9 @@ impl qobject::ClipsController {
             ClipRoles::Game => QVariant::from(&QString::from(clip.game.as_str())),
             ClipRoles::Filesize => QVariant::from(&clip.filesize),
             ClipRoles::Favorite => QVariant::from(&clip.favorite),
+            ClipRoles::Created => QVariant::from(&QString::from(clip.created.as_str())),
+            ClipRoles::Width => QVariant::from(&(clip.width as i32)),
+            ClipRoles::Height => QVariant::from(&(clip.height as i32)),
             _ => QVariant::default(),
         }
     }
@@ -290,6 +298,9 @@ impl qobject::ClipsController {
         roles.insert(ClipRoles::Game.repr, QByteArray::from("game"));
         roles.insert(ClipRoles::Filesize.repr, QByteArray::from("filesize"));
         roles.insert(ClipRoles::Favorite.repr, QByteArray::from("favorite"));
+        roles.insert(ClipRoles::Created.repr, QByteArray::from("created"));
+        roles.insert(ClipRoles::Width.repr, QByteArray::from("width"));
+        roles.insert(ClipRoles::Height.repr, QByteArray::from("height"));
         roles
     }
 

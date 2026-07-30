@@ -409,189 +409,29 @@ Rectangle {
                 width: grid.cellWidth
                 height: grid.cellHeight
 
-                Rectangle {
-                    id: card
+                // Extracted component — see components/ClipCard.qml. The inline
+                // delegate this replaces had drifted far from ClipCard.vue
+                // (no film placeholder, time badge, heart, kebab or meta pills).
+                ClipCard {
                     anchors.fill: parent
                     anchors.margins: 6
-                    radius: Theme.radius
-                    color: Theme.surface
-                    border.width: 1
-                    border.color: cardArea.containsMouse ? Theme.accent : Theme.border
 
-                    ColumnLayout {
-                        anchors.fill: parent
-                        spacing: 0
+                    filepath: model.filepath
+                    thumbnail: model.thumbnail
+                    duration: model.duration
+                    title: model.title
+                    game: model.game
+                    filesize: model.filesize
+                    favorite: model.favorite
+                    created: model.created
+                    clipWidth: model.width
+                    clipHeight: model.height
 
-                        // Thumbnail (16:9)
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: width * 0.5625
-                            radius: Theme.radius
-                            color: Theme.bgDeep
-                            clip: true
-
-                            // Cached thumbnail if present
-                            Image {
-                                anchors.fill: parent
-                                fillMode: Image.PreserveAspectCrop
-                                asynchronous: true
-                                cache: true
-                                visible: !!thumbnail
-                                source: thumbnail ? "file://" + thumbnail : ""
-                            }
-
-                            // Placeholder when no thumbnail; kicks off async
-                            // generation once (deduped on the Rust side across
-                            // reloads/re-mounts) so the image pops in when ready.
-                            Icon {
-                                anchors.centerIn: parent
-                                visible: !thumbnail
-                                name: "film"; size: 34
-                                color: Theme.border
-
-                                Component.onCompleted: {
-                                    if (!thumbnail && filepath) {
-                                        ClipsController.requestThumbnail(filepath)
-                                    }
-                                }
-                            }
-
-                            // Duration pill
-                            Rectangle {
-                                anchors.right: parent.right
-                                anchors.bottom: parent.bottom
-                                anchors.margins: 6
-                                radius: 3
-                                color: Theme.scrim(80)
-                                implicitWidth: durText.implicitWidth + 10
-                                implicitHeight: 18
-                                Text {
-                                    id: durText
-                                    anchors.centerIn: parent
-                                    text: page.fmtDuration(duration)
-                                    color: "#ffffff"
-                                    font.pixelSize: 11
-                                }
-                            }
-
-                        }
-
-                        // Info strip
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            Layout.margins: 8
-                            spacing: 2
-
-                            Text {
-                                Layout.fillWidth: true
-                                text: title
-                                color: Theme.text
-                                font.pixelSize: 13
-                                font.weight: Font.Medium
-                                elide: Text.ElideRight
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 6
-                                Text {
-                                    text: game || "Unknown"
-                                    color: Theme.textDim
-                                    font.pixelSize: 11
-                                    elide: Text.ElideRight
-                                    Layout.fillWidth: true
-                                }
-                                Text {
-                                    text: page.fmtSize(filesize)
-                                    color: Theme.textDim
-                                    font.pixelSize: 11
-                                }
-                            }
-                        }
-                    }
-
-                    // Opens the player (sits below the action buttons).
-                    MouseArea {
-                        id: cardArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: page.playerClip = { filepath: filepath, title: title }
-                    }
-
-                    // Card-level hover — stays true over the action buttons too.
-                    HoverHandler { id: cardHover }
-
-                    // Favorite toggle (top-left): shown on hover or when favorited.
-                    Rectangle {
-                        anchors.left: parent.left
-                        anchors.top: parent.top
-                        anchors.margins: 6
-                        width: 26; height: 26; radius: 13
-                        visible: cardHover.hovered || !!favorite
-                        color: favArea.containsMouse ? Theme.scrim(67) : Theme.scrim(40)
-                        // ClipCard.vue uses a heart (filled when favourited),
-                        // not a star.
-                        Icon {
-                            anchors.centerIn: parent
-                            name: "heart"
-                            size: 15
-                            filled: !!favorite
-                            color: favorite ? Theme.accent : "#ffffff"
-                        }
-                        MouseArea {
-                            id: favArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: ClipsController.setFavorite(filepath, !favorite)
-                        }
-                    }
-
-                    // Rename + delete (top-right): shown on hover.
-                    Row {
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 6
-                        spacing: 4
-                        visible: cardHover.hovered
-
-                        Rectangle {
-                            width: 26; height: 26; radius: 13
-                            color: editArea.containsMouse ? Theme.accent : Theme.scrim(40)
-                            Icon { anchors.centerIn: parent; name: "scissors"; size: 13; color: "#ffffff"}
-                            MouseArea {
-                                id: editArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: page.editorClip = { filepath: filepath, title: title }
-                            }
-                        }
-                        Rectangle {
-                            width: 26; height: 26; radius: 13
-                            color: renameArea.containsMouse ? Theme.accent : Theme.scrim(40)
-                            Icon { anchors.centerIn: parent; name: "edit"; size: 13; color: "#ffffff"}
-                            MouseArea {
-                                id: renameArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: page.renameTarget = { filepath: filepath, title: title }
-                            }
-                        }
-                        Rectangle {
-                            width: 26; height: 26; radius: 13
-                            color: delArea.containsMouse ? Theme.danger : Theme.scrim(40)
-                            Icon { anchors.centerIn: parent; name: "trash"; size: 13; color: "#ffffff"}
-                            MouseArea {
-                                id: delArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: page.deleteTarget = { filepath: filepath, title: title }
-                            }
-                        }
-                    }
+                    onOpened: page.playerClip = { filepath: model.filepath, title: model.title }
+                    onTrimRequested: page.editorClip = { filepath: model.filepath, title: model.title }
+                    onDeleteRequested: page.deleteTarget = { filepath: model.filepath, title: model.title }
+                    onMenuRequested: page.renameTarget = { filepath: model.filepath, title: model.title }
+                    onFavoriteToggled: ClipsController.setFavorite(model.filepath, !model.favorite)
                 }
             }
         }
