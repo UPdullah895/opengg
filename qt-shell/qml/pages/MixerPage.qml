@@ -98,7 +98,8 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
             Text {
-                text: (I18n.language, I18n.t("nav.mixer"))
+                // MixerPage.vue's heading is "Audio Mixer", not the nav label.
+            text: (I18n.language, I18n.t("dashboard.audioMixer"))
                 color: Theme.text
                 font.pixelSize: 26
                 font.weight: Font.Bold

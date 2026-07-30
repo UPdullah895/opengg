@@ -47,47 +47,52 @@ Rectangle {
     HoverHandler { id: cardHover }
 
     // ── formatting (mirrors ClipCard.vue's fmt* helpers) ──────────────────
+    // ── formatting: ports utils/format.ts verbatim. These had drifted:
+    //   fmtDur added an hours field the original never has
+    //   fmtSize printed "142 MB" where the original gives "142.4 MB"
+    //   fmtDate printed ISO "2026-07-20" instead of "Jul 20, 2026"
+    //   fmtTime printed 24h "09:45" instead of "9:45 AM"
+    function pad2(n) { return (n < 10 ? "0" : "") + n }
+
     function fmtDur(sec) {
-        if (!sec || sec <= 0)
-            return ""
-        var s = Math.round(sec)
-        var h = Math.floor(s / 3600)
-        var m = Math.floor((s % 3600) / 60)
-        var ss = s % 60
-        var mm = (h > 0 && m < 10 ? "0" : "") + m
-        return (h > 0 ? h + ":" : "") + mm + ":" + (ss < 10 ? "0" : "") + ss
+        if (!sec) return "0:00"
+        return Math.floor(sec / 60) + ":" + pad2(Math.floor(sec % 60))
     }
-    function fmtSize(bytes) {
-        if (!bytes || bytes <= 0)
-            return ""
-        var mb = bytes / (1024 * 1024)
-        return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : Math.round(mb) + " MB"
+    function fmtSize(b) {
+        if (!b) return "0 B"
+        var u = ["B", "KB", "MB", "GB"]
+        var i = 0, v = b
+        while (v >= 1024 && i < 3) { v /= 1024; i++ }
+        return (i ? v.toFixed(1) : Math.round(v)) + " " + u[i]
     }
     function fmtRes(w, h) {
-        if (!w || !h)
-            return ""
-        // ClipCard.vue labels the common heights rather than printing WxH.
+        if (!w) return ""
         if (h >= 2160) return "4K"
         if (h >= 1440) return "1440p"
         if (h >= 1080) return "1080p"
         if (h >= 720) return "720p"
-        return w + "x" + h
+        return w + "\u00d7" + h
     }
-    // `created` arrives as a preformatted string from core; take the date and
-    // clock parts out of it rather than reparsing into a Date.
-    function datePart(s) {
-        if (!s) return ""
-        var t = s.indexOf(" ")
-        return t > 0 ? s.substring(0, t) : s
+    readonly property var monthNames: ["Jan","Feb","Mar","Apr","May","Jun",
+                                      "Jul","Aug","Sep","Oct","Nov","Dec"]
+    function parseCreated(created) {
+        if (!created) return null
+        var d = new Date(String(created).replace(" ", "T"))
+        return isNaN(d.getTime()) ? null : d
     }
-    function timePart(s) {
-        if (!s) return ""
-        var t = s.indexOf(" ")
-        if (t < 0) return ""
-        var rest = s.substring(t + 1)
-        // Trim seconds: "14:23:07" -> "14:23"
-        var p = rest.split(":")
-        return p.length >= 2 ? p[0] + ":" + p[1] : rest
+    function fmtDate(created) {
+        var d = parseCreated(created)
+        if (!d) return ""
+        return monthNames[d.getMonth()] + " " + d.getDate() + ", " + d.getFullYear()
+    }
+    function fmtTime(created) {
+        var d = parseCreated(created)
+        if (!d) return ""
+        var h = d.getHours()
+        var ap = h >= 12 ? "PM" : "AM"
+        h = h % 12
+        if (h === 0) h = 12
+        return h + ":" + pad2(d.getMinutes()) + " " + ap
     }
 
     Column {
@@ -151,7 +156,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.bottom: parent.bottom
                 anchors.margins: 6
-                visible: card.timePart(card.created).length > 0
+                visible: card.fmtTime(card.created).length > 0
                 radius: 4
                 color: Theme.scrim(80)
                 implicitWidth: timeLabel.implicitWidth + 14
@@ -159,7 +164,7 @@ Rectangle {
                 Text {
                     id: timeLabel
                     anchors.centerIn: parent
-                    text: card.timePart(card.created)
+                    text: card.fmtTime(card.created)
                     color: "#ffffff"
                     font.pixelSize: 11
                     font.weight: Font.DemiBold
@@ -296,7 +301,7 @@ Rectangle {
                             model: [
                                 card.fmtSize(card.filesize),
                                 card.fmtRes(card.clipWidth, card.clipHeight),
-                                card.datePart(card.created)
+                                card.fmtDate(card.created)
                             ].filter(function (t) { return !!t })
 
                             Rectangle {

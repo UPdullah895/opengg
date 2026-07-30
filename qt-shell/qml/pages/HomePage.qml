@@ -44,7 +44,8 @@ Rectangle {
             Component.onDestruction: TourController.unregisterTarget("home-dashboard")
 
             Text {
-                text: (I18n.language, I18n.t("nav.home"))
+                // HomePage.vue's heading is dashboard.title ("Dashboard"), not the nav label.
+                text: (I18n.language, I18n.t("dashboard.title"))
                 color: Theme.text
                 font.pixelSize: 26
                 font.weight: Font.Bold

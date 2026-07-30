@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import com.opengg.app
 
 Rectangle {
@@ -118,6 +119,31 @@ Rectangle {
                 onEntered: parent.color = Theme.bgHover
                 onExited: parent.color = "transparent"
                 onClicked: root.showMinimized()
+            }
+        }
+
+        // Maximize / restore — present in Titlebar.vue (toggleMaximize) but
+        // missing from the original port, which shipped minimize + close only.
+        Rectangle {
+            width: 36
+            height: 32
+            radius: Theme.radius
+            color: "transparent"
+
+            Icon {
+                anchors.centerIn: parent
+                name: "square"; size: 13
+                color: Theme.textDim
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onEntered: parent.color = Theme.bgHover
+                onExited: parent.color = "transparent"
+                onClicked: root.visibility === Window.Maximized
+                           ? root.showNormal() : root.showMaximized()
             }
         }
 

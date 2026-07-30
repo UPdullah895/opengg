@@ -55,6 +55,7 @@ Rectangle {
         anchors.leftMargin: 8
         width: parent.width - 16
         spacing: 2
+        anchors.bottomMargin: 40
 
         Repeater {
             model: sidebar.navItems
@@ -123,6 +124,48 @@ Rectangle {
         }
 
         Layout.fillHeight: true
+    }
+
+    // Bottom tip strip (Sidebar.vue:34-41) — absent from the original port.
+    Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: 1          // clear the right border line
+        height: 34
+        color: "transparent"
+
+        Rectangle {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: 1
+            color: Theme.border
+        }
+
+        Row {
+            anchors.left: parent.left
+            anchors.leftMargin: 12
+            anchors.right: parent.right
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 7
+
+            Icon {
+                name: "info"
+                size: 13
+                color: Theme.accent
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            Text {
+                width: parent.width - 26
+                text: (I18n.language, I18n.t("sidebar.tip"))
+                color: Theme.textMuted
+                font.pixelSize: 10
+                elide: Text.ElideRight
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
     }
 
     // TODO(i18n): migrate to qsTrId + JsonTranslator per plan §3.1

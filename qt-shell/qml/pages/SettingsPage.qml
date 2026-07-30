@@ -38,7 +38,7 @@ Rectangle {
         {
             labelKey: "extensions",
             items: [
-                { key: "extensions", built: true },
+                { key: "extensions", built: true, badge: "Beta" },
                 { key: "store", built: true },
             ],
         },
@@ -122,12 +122,35 @@ Rectangle {
                                     }
 
                                     Text {
+                                        id: navLabel
                                         anchors.left: parent.left
                                         anchors.leftMargin: 16
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: (I18n.language, I18n.t("settings.sections." + modelData.key))
                                         color: isActive ? Theme.accent : (navArea.containsMouse ? Theme.accent : Theme.textDim)
                                         font.pixelSize: 13
+                                    }
+
+                                    // "Beta" pill, as in SettingsPage.vue's nav.
+                                    Rectangle {
+                                        visible: !!modelData.badge
+                                        anchors.left: navLabel.right
+                                        anchors.leftMargin: 8
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: badgeLabel.implicitWidth + 10
+                                        height: 14
+                                        radius: 7
+                                        color: Theme.accentAlpha(15)
+                                        border.width: 1
+                                        border.color: Theme.accentAlpha(40)
+                                        Text {
+                                            id: badgeLabel
+                                            anchors.centerIn: parent
+                                            text: modelData.badge || ""
+                                            color: Theme.accent
+                                            font.pixelSize: 8
+                                            font.weight: Font.Bold
+                                        }
                                     }
 
                                     MouseArea {

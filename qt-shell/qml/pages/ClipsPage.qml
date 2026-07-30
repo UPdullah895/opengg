@@ -396,7 +396,10 @@ Rectangle {
             readonly property int columns: Math.max(2, Math.min(5,
                 page.settings.clipsPerRow || Theme.clipsGridCols))
             cellWidth: width / columns
-            cellHeight: cellWidth * 0.5625 + 62  // 16:9 thumb + info strip
+            // 16:9 thumb + info strip. The old +62 was ~6px short of the real
+            // info height, so `clip: true` shaved the card's bottom border and
+            // rounded corners off — the "border not fully displayed" defect.
+            cellHeight: cellWidth * 0.5625 + 80
 
             model: ClipsController
 
