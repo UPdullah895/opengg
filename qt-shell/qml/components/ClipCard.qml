@@ -33,7 +33,8 @@ Rectangle {
     signal deleteRequested()
     signal trimRequested()
     signal favoriteToggled()
-    signal menuRequested()
+    /// Emitted with page-space coords for the shared context menu.
+    signal menuRequested(real gx, real gy)
 
     radius: Theme.radiusLg
     color: Theme.surface
@@ -281,7 +282,10 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: card.menuRequested()
+                            onClicked: {
+                                var p = kebabArea.mapToItem(null, 0, kebabArea.height)
+                                card.menuRequested(p.x, p.y)
+                            }
                         }
                     }
                 }
@@ -358,8 +362,16 @@ Rectangle {
     MouseArea {
         id: cardArea
         anchors.fill: parent
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: Qt.PointingHandCursor
-        onClicked: card.opened()
+        onClicked: (m) => {
+            if (m.button === Qt.RightButton) {
+                var p = card.mapToItem(null, m.x, m.y)
+                card.menuRequested(p.x, p.y)
+            } else {
+                card.opened()
+            }
+        }
         z: -1
     }
 }

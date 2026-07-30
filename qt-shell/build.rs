@@ -34,6 +34,7 @@ fn main() {
         QmlFile::from("qml/components/TrimEditor.qml"),
         QmlFile::from("qml/components/ChannelStrip.qml"),
         QmlFile::from("qml/components/ClipCard.qml"),
+        QmlFile::from("qml/components/ClipContextMenu.qml"),
         QmlFile::from("qml/components/Icon.qml"),
         QmlFile::from("qml/components/SettingsHeading.qml"),
         QmlFile::from("qml/components/IconGallery.qml"),

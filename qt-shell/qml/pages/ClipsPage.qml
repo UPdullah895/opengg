@@ -433,11 +433,29 @@ Rectangle {
                     onOpened: page.playerClip = { filepath: model.filepath, title: model.title }
                     onTrimRequested: page.editorClip = { filepath: model.filepath, title: model.title }
                     onDeleteRequested: page.deleteTarget = { filepath: model.filepath, title: model.title }
-                    onMenuRequested: page.renameTarget = { filepath: model.filepath, title: model.title }
+                    onMenuRequested: (gx, gy) => clipMenu.openAt(
+                        { filepath: model.filepath, title: model.title, favorite: model.favorite },
+                        gx, gy)
                     onFavoriteToggled: ClipsController.setFavorite(model.filepath, !model.favorite)
                 }
             }
         }
+    }
+
+    // ── Context menu (one instance for the whole page, as in ClipsPage.vue) ──
+    ClipContextMenu {
+        id: clipMenu
+        z: 50
+        onPreviewRequested: page.playerClip = { filepath: clip.filepath, title: clip.title }
+        onEditRequested: page.editorClip = { filepath: clip.filepath, title: clip.title }
+        onRenameRequested: page.renameTarget = { filepath: clip.filepath, title: clip.title }
+        onDeleteRequested: page.deleteTarget = { filepath: clip.filepath, title: clip.title }
+        onFavoriteRequested: ClipsController.setFavorite(clip.filepath, !clip.favorite)
+        onRevealRequested: SystemController.revealInFolder(clip.filepath)
+        onCopyPathRequested: SystemController.writeClipboard(clip.filepath)
+        // Multi-select is tracked separately (task #32); until it exists this
+        // opens the clip rather than silently doing nothing.
+        onSelectRequested: page.playerClip = { filepath: clip.filepath, title: clip.title }
     }
 
     // ── Player overlay ────────────────────────────────────────────────────

@@ -26,6 +26,16 @@ pub fn open_crash_logs_folder() -> Result<(), String> {
     Ok(())
 }
 
+/// Open the directory containing `path` in the desktop file manager — the
+/// Clips context menu's "Show in folder". Opens the parent, not the file
+/// itself, so it never launches a video player by accident.
+pub fn reveal_in_folder(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    let dir = p.parent().unwrap_or(p);
+    open::that(dir).map_err(|e| format!("{e}"))?;
+    Ok(())
+}
+
 /// Returns true if the XDG autostart entry for OpenGG exists.
 pub fn get_autostart() -> Result<bool, String> {
     let desktop = dirs::home_dir()

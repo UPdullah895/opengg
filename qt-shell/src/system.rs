@@ -42,7 +42,12 @@ pub mod qobject {
         #[qinvokable]
         fn refresh(self: Pin<&mut Self>);
 
-        /// Copy text (an install/fix command) to the system clipboard.
+        /// Open the folder containing `path` in the file manager.
+        #[qinvokable]
+        #[cxx_name = "revealInFolder"]
+        fn reveal_in_folder(self: &Self, path: &QString);
+
+        /// Copy text to the clipboard.
         #[qinvokable]
         #[cxx_name = "writeClipboard"]
         fn write_clipboard(self: &Self, text: QString);
@@ -93,6 +98,12 @@ impl qobject::SystemController {
         self.as_mut().set_deps_json(QString::from(&deps_str));
         self.as_mut().set_distro_json(QString::from(&distro_str));
         self.as_mut().set_access_json(QString::from(&access_str));
+    }
+
+    pub fn reveal_in_folder(&self, path: &QString) {
+        if let Err(e) = opengg_core::system::reveal_in_folder(&path.to_string()) {
+            eprintln!("revealInFolder: {e}");
+        }
     }
 
     pub fn write_clipboard(&self, text: QString) {
