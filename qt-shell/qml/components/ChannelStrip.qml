@@ -36,7 +36,17 @@ Rectangle {
 
     // 0 dB at the top of the meter, -60 at the bottom.
     readonly property real vuFraction: Math.max(0, Math.min(1, (vuDb + 60) / 60))
-    readonly property real fillFraction: Math.max(0, Math.min(1, volume / strip.maxVolume))
+
+    // While dragging, the fill/thumb track the mouse directly rather than
+    // `volume` (which only moves once AudioController.setVolume's D-Bus/
+    // pactl round trip completes and channelsJson refreshes) — otherwise
+    // every pixel of drag waits on that round trip and the fader visibly
+    // lags or stutters behind the cursor.
+    property bool dragging: false
+    property real dragFraction: 0
+    readonly property real fillFraction: strip.dragging
+        ? strip.dragFraction
+        : Math.max(0, Math.min(1, volume / strip.maxVolume))
 
     // ── Accent bar (ChannelStrip.vue's .accent-bar) ──────────────────────
     Rectangle {
@@ -175,10 +185,13 @@ Rectangle {
                         cursorShape: Qt.PointingHandCursor
                         function apply(my) {
                             var f = 1 - Math.max(0, Math.min(1, (my + 8) / faderTrack.height))
+                            strip.dragFraction = f
                             strip.volumeRequested(Math.round(f * strip.maxVolume))
                         }
-                        onPressed: (m) => apply(m.y)
+                        onPressed: (m) => { strip.dragging = true; apply(m.y) }
                         onPositionChanged: (m) => { if (pressed) apply(m.y) }
+                        onReleased: strip.dragging = false
+                        onCanceled: strip.dragging = false
                     }
                 }
             }
@@ -186,10 +199,13 @@ Rectangle {
 
         // ── Volume + dB readout ──────────────────────────────────────────
         Text {
+            readonly property real displayVolume: strip.dragging
+                ? strip.dragFraction * strip.maxVolume
+                : strip.volume
             anchors.horizontalCenter: parent.horizontalCenter
-            text: Math.round(strip.volume) + "%"
+            text: Math.round(displayVolume) + "%"
             color: strip.muted ? Theme.textMuted
-                 : strip.volume > 100 ? Theme.overdrive : strip.channelColor
+                 : displayVolume > 100 ? Theme.overdrive : strip.channelColor
             font.pixelSize: 17
             font.weight: Font.Bold
         }

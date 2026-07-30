@@ -186,20 +186,39 @@ impl qobject::AudioController {
         });
     }
 
-    pub fn set_volume(mut self: Pin<&mut Self>, channel: &QString, volume: i32) {
+    pub fn set_volume(self: Pin<&mut Self>, channel: &QString, volume: i32) {
         // 150 (not 100) so the Mixer page's Overdrive toggle can push faders
         // past unity gain, matching ChannelStrip.vue's `maxVol` (100 normally,
         // 150 with overdrive) — the QML slider's own `to:` already enforces
         // the lower 100 cap when overdrive is off, this just avoids silently
         // clamping the legitimate 100-150 range back down.
         let vol = volume.clamp(0, 150) as u32;
-        let _ = opengg_core::audio::set_volume(channel.to_string(), vol);
-        self.as_mut().refresh();
+        let channel = channel.to_string();
+        // Was a direct synchronous call (pactl subprocess spawn or a D-Bus
+        // round trip, then a second round trip for refresh()) on the Qt/UI
+        // thread. A fader drag calls this on every `onPositionChanged`, so
+        // every pixel of movement blocked the render loop on two blocking
+        // I/O calls — the fader visibly froze/stuttered while dragging.
+        // Backgrounded to match the established route_app/setChannelDevice
+        // pattern.
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            if let Err(e) = opengg_core::audio::set_volume(channel, vol) {
+                eprintln!("setVolume: {e}");
+            }
+            let _ = qt_thread.queue(|mut c| c.as_mut().refresh());
+        });
     }
 
-    pub fn set_mute(mut self: Pin<&mut Self>, channel: &QString, muted: bool) {
-        let _ = opengg_core::audio::set_mute(channel.to_string(), muted);
-        self.as_mut().refresh();
+    pub fn set_mute(self: Pin<&mut Self>, channel: &QString, muted: bool) {
+        let channel = channel.to_string();
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            if let Err(e) = opengg_core::audio::set_mute(channel, muted) {
+                eprintln!("setMute: {e}");
+            }
+            let _ = qt_thread.queue(|mut c| c.as_mut().refresh());
+        });
     }
 
     pub fn refresh_devices(mut self: Pin<&mut Self>) {
