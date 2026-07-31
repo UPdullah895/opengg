@@ -379,10 +379,22 @@ Rectangle {
         }
 
         // ── Clip grid ─────────────────────────────────────────────────────
-        GridView {
-            id: grid
+        // Wrapped in a plain Item so the wheel-accelerator overlay below can
+        // anchor to it: GridView itself is a direct ColumnLayout child, and a
+        // Layout child can't be anchor-targeted by an item outside that
+        // layout ("Cannot anchor to an item that isn't a parent or sibling" —
+        // confirmed live, which is why the grid was still scrolling at the
+        // old default speed despite the overlay existing). This wrapper is
+        // the actual Layout child; grid and the overlay are both its
+        // children and so share a common parent to anchor against.
+        Item {
+            id: gridWrap
             Layout.fillWidth: true
             Layout.fillHeight: true
+
+        GridView {
+            id: grid
+            anchors.fill: parent
             visible: ClipsController.count > 0
             clip: true
             cacheBuffer: 400
@@ -438,6 +450,14 @@ Rectangle {
                         gx, gy)
                     onFavoriteToggled: ClipsController.setFavorite(model.filepath, !model.favorite)
                 }
+            }
+        }
+
+            // Wheel accelerator, sibling of `grid` inside the shared wrapper
+            // — see the comment on `gridWrap` above.
+            Item {
+                anchors.fill: parent
+                WheelScroller { anchors.fill: parent; flick: grid }
             }
         }
     }
@@ -645,12 +665,5 @@ Rectangle {
                 }
             }
         }
-    }
-
-    // Wheel accelerator for the clip grid — must sit above the Flickable,
-    // see WheelScroller.qml.
-    Item {
-        anchors.fill: grid
-        WheelScroller { anchors.fill: parent; flick: grid }
     }
 }

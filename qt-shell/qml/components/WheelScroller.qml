@@ -5,7 +5,11 @@ import QtQuick
 // Qt's stock Flickable wheel step works out to about 72px per notch here
 // (measured), so getting down a long page — Storage, Extensions, the
 // Dashboard changelog — took a dozen-plus notches and felt like the app was
-// resisting. This scales one notch up to roughly what a browser does.
+// resisting. `pixelsPerNotch` below is the ONE place that speed is set for
+// the whole app — every page passes its own `flick` but leaves this at the
+// default, so there's exactly one number to tune, not six. (170 was tried
+// first and judged too fast; 100 is the current value — comfortably quicker
+// than stock without feeling like it's throwing you down the page.)
 //
 // Two constraints shaped the implementation:
 //
@@ -26,7 +30,7 @@ MouseArea {
 
     /// The ScrollView's Flickable — pass `<scrollViewId>.contentItem`.
     property Flickable flick: null
-    property real pixelsPerNotch: 170
+    property real pixelsPerNotch: 100
 
     acceptedButtons: Qt.NoButton
     propagateComposedEvents: true

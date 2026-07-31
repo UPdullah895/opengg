@@ -52,17 +52,23 @@ Rectangle {
     }
 
     property string activeTab: "mixer"
+    readonly property var mixerChannelNames: ["Master", "Game", "Chat", "Media", "Aux", "Mic"]
     // Overdrive — expands fader range from 100% to 150%. Client-side UI
     // state only (matches MixerPage.vue's overdriveEnabled ref: not
-    // persisted). Disabling it clamps any channel currently above 100%
-    // back down, mirroring clampChannelsTo100().
-    property bool overdriveEnabled: false
-    readonly property var mixerChannelNames: ["Master", "Game", "Chat", "Media", "Aux", "Mic"]
-    onOverdriveEnabledChanged: {
-        if (overdriveEnabled) return
-        for (const modelData of page.channels) {
-            if (page.mixerChannelNames.includes(modelData.name) && modelData.volume > 100)
-                AudioController.setVolume(modelData.name, 100)
+    // persisted), but lives on AudioController rather than as a page-local
+    // property: the Home dashboard's Quick Mixer needs the same answer to
+    // "is 150% currently allowed", and previously had no way to know,
+    // letting it push a channel to 150% with Overdrive off. Disabling it
+    // clamps any channel currently above 100% back down, mirroring
+    // clampChannelsTo100().
+    Connections {
+        target: AudioController
+        function onOverdriveEnabledChanged() {
+            if (AudioController.overdriveEnabled) return
+            for (const modelData of page.channels) {
+                if (page.mixerChannelNames.includes(modelData.name) && modelData.volume > 100)
+                    AudioController.setVolume(modelData.name, 100)
+            }
         }
     }
     readonly property var tabs: [
@@ -184,9 +190,9 @@ Rectangle {
                 visible: page.activeTab === "mixer"
                 width: 30; height: 30
                 radius: Theme.radius
-                color: page.overdriveEnabled ? Theme.tint(Theme.overdrive, 15) : "transparent"
+                color: AudioController.overdriveEnabled ? Theme.tint(Theme.overdrive, 15) : "transparent"
                 border.width: 1
-                border.color: page.overdriveEnabled ? Theme.overdrive : Theme.border
+                border.color: AudioController.overdriveEnabled ? Theme.overdrive : Theme.border
 
                 Icon {
                     anchors.centerIn: parent
@@ -197,11 +203,11 @@ Rectangle {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     hoverEnabled: true
-                    onClicked: page.overdriveEnabled = !page.overdriveEnabled
+                    onClicked: AudioController.overdriveEnabled = !AudioController.overdriveEnabled
                 }
                 ToolTip {
                     visible: overdriveArea.containsMouse
-                    text: page.overdriveEnabled
+                    text: AudioController.overdriveEnabled
                         ? "Overdrive ON — faders go to 150%"
                         : "Enable Overdrive (faders up to 150%)"
                     delay: 300
@@ -249,7 +255,7 @@ Rectangle {
                     channelColor: page.channelColors[modelData.name] || Theme.accent
                     iconName: page.channelIcons[modelData.name] || "volume-2"
                     vuDb: page.vuDb(modelData.name)
-                    maxVolume: page.overdriveEnabled ? 150 : 100
+                    maxVolume: AudioController.overdriveEnabled ? 150 : 100
                     devices: modelData.name === "Mic" ? page.inputDevices : page.outputDevices
                     selectedDevice: ""
 
@@ -493,11 +499,20 @@ Rectangle {
         // Per-channel EQ/DSP tab content. Each panel is a static child kept
         // alive for the whole session (not a Loader) so its jalv engine and
         // band/toggle state survive switching tabs — only visibility toggles.
-        ScrollView {
-            id: eqDspScroll
+        //
+        // Wrapped in a plain Item so the wheel-accelerator overlay can anchor
+        // to it: a direct Layout child can't be anchor-targeted by an item
+        // outside that layout ("Cannot anchor to an item that isn't a parent
+        // or sibling" — confirmed live; the same fix as ClipsPage's grid).
+        Item {
+            id: eqDspWrap
             visible: page.activeTab !== "mixer"
             Layout.fillWidth: true
             Layout.fillHeight: true
+
+        ScrollView {
+            id: eqDspScroll
+            anchors.fill: parent
             contentWidth: availableWidth
             // See HomePage.qml's ScrollView for why this is explicit — QQC2's
             // automatic contentHeight inference doesn't reliably track a
@@ -543,12 +558,12 @@ Rectangle {
                 }
             }
         }
-    }
 
-    // Wheel accelerator for the EQ/DSP tab — must sit above the Flickable,
-    // see WheelScroller.qml.
-    Item {
-        anchors.fill: eqDspScroll
-        WheelScroller { anchors.fill: parent; flick: eqDspScroll.contentItem }
+            // Wheel accelerator, sibling of eqDspScroll inside eqDspWrap.
+            Item {
+                anchors.fill: parent
+                WheelScroller { anchors.fill: parent; flick: eqDspScroll.contentItem }
+            }
+        }
     }
 }

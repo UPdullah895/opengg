@@ -172,13 +172,31 @@ Rectangle {
                     }
                 }
             }
+
+            // Wheel accelerator, sibling of navScroll inside the shared
+            // Rectangle — see the comment on settingsWrap below for why a
+            // direct Layout child can't be anchor-targeted from outside it.
+            Item {
+                anchors.fill: parent
+                WheelScroller { anchors.fill: parent; flick: navScroll.contentItem }
+            }
         }
 
         // ── Content ──
-        ScrollView {
-            id: settingsScroll
+        //
+        // Wrapped in a plain Item so the wheel-accelerator overlay can anchor
+        // to it: ScrollView is a direct RowLayout child, and a Layout child
+        // can't be anchor-targeted by an item outside that layout ("Cannot
+        // anchor to an item that isn't a parent or sibling" — confirmed live,
+        // same fix as ClipsPage's grid / MixerPage's EQ tab).
+        Item {
+            id: settingsWrap
             Layout.fillWidth: true
             Layout.fillHeight: true
+
+        ScrollView {
+            id: settingsScroll
+            anchors.fill: parent
             contentWidth: availableWidth
             // See HomePage.qml's ScrollView for why this is explicit — QQC2's
             // automatic contentHeight inference doesn't reliably track a
@@ -215,6 +233,13 @@ Rectangle {
                 }
             }
         }
+
+            // Wheel accelerator, sibling of settingsScroll inside settingsWrap.
+            Item {
+                anchors.fill: parent
+                WheelScroller { anchors.fill: parent; flick: settingsScroll.contentItem }
+            }
+        }
     }
 
     Component { id: generalPanel; GeneralPanel {} }
@@ -231,19 +256,5 @@ Rectangle {
     Component {
         id: comingSoonPanel
         ComingSoonPanel { sectionTitle: I18n.t("settings.sections." + page.active) }
-    }
-
-    // Wheel accelerator for the settings panel — must sit above the Flickable,
-    // see WheelScroller.qml.
-    Item {
-        anchors.fill: settingsScroll
-        WheelScroller { anchors.fill: parent; flick: settingsScroll.contentItem }
-    }
-
-    // Wheel accelerator for the section list — must sit above the Flickable,
-    // see WheelScroller.qml.
-    Item {
-        anchors.fill: navScroll
-        WheelScroller { anchors.fill: parent; flick: navScroll.contentItem }
     }
 }
