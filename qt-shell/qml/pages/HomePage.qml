@@ -189,6 +189,7 @@ Rectangle {
     }
 
     ScrollView {
+        id: homeScroll
         anchors.fill: parent
         contentWidth: availableWidth
         // QQC2 ScrollView's automatic contentHeight inference doesn't pick
@@ -431,6 +432,15 @@ Rectangle {
     // ── Popover overlay ──────────────────────────────────────────────────
     // Page-level overlay positioned at the active card's geometry, mirroring
     // ClipContextMenu.qml's pattern (a plain positioned Item rather than a
+    // Wheel accelerator. Has to sit *above* the ScrollView rather than
+    // inside it: Flickable filters wheel events away from its own children
+    // before they can reach a handler down there. This Item accepts no mouse
+    // buttons, so clicks still fall through to the content underneath.
+    Item {
+        anchors.fill: homeScroll
+        WheelScroller { anchors.fill: parent; flick: homeScroll.contentItem }
+    }
+
     // QQC2 Popup, with its own click-away MouseArea and a click-absorbing
     // MouseArea on the panel itself).
     Item {

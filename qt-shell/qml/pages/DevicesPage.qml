@@ -26,6 +26,7 @@ Rectangle {
     }
 
     ScrollView {
+        id: devicesScroll
         anchors.fill: parent
         contentWidth: availableWidth
         // See HomePage.qml's ScrollView for why this is explicit: QQC2's
@@ -167,4 +168,10 @@ Rectangle {
             }
         }
     }
+    // Above the ScrollView, not inside it — see WheelScroller.qml.
+    Item {
+        anchors.fill: devicesScroll
+        WheelScroller { anchors.fill: parent; flick: devicesScroll.contentItem }
+    }
+
 }

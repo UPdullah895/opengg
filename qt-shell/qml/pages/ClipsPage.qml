@@ -646,4 +646,11 @@ Rectangle {
             }
         }
     }
+
+    // Wheel accelerator for the clip grid — must sit above the Flickable,
+    // see WheelScroller.qml.
+    Item {
+        anchors.fill: grid
+        WheelScroller { anchors.fill: parent; flick: grid }
+    }
 }

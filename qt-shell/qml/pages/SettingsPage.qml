@@ -78,6 +78,7 @@ Rectangle {
             }
 
             ScrollView {
+                id: navScroll
                 anchors.fill: parent
                 contentWidth: availableWidth
                 // See HomePage.qml's ScrollView for why this is explicit —
@@ -175,6 +176,7 @@ Rectangle {
 
         // ── Content ──
         ScrollView {
+            id: settingsScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
             contentWidth: availableWidth
@@ -229,5 +231,19 @@ Rectangle {
     Component {
         id: comingSoonPanel
         ComingSoonPanel { sectionTitle: I18n.t("settings.sections." + page.active) }
+    }
+
+    // Wheel accelerator for the settings panel — must sit above the Flickable,
+    // see WheelScroller.qml.
+    Item {
+        anchors.fill: settingsScroll
+        WheelScroller { anchors.fill: parent; flick: settingsScroll.contentItem }
+    }
+
+    // Wheel accelerator for the section list — must sit above the Flickable,
+    // see WheelScroller.qml.
+    Item {
+        anchors.fill: navScroll
+        WheelScroller { anchors.fill: parent; flick: navScroll.contentItem }
     }
 }
