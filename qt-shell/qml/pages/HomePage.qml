@@ -531,7 +531,12 @@ Rectangle {
                     }
                     HSlider {
                         Layout.fillWidth: true
-                        from: 0; to: 150
+                        from: 0
+                        // Was a hardcoded 150 regardless of Mixer's Overdrive
+                        // toggle, so Home could push a channel to 150% even
+                        // with Overdrive off — the two pages now read the
+                        // same AudioController.overdriveEnabled.
+                        to: AudioController.overdriveEnabled ? 150 : 100
                         value: page.volumeFor(modelData)
                         sliderColor: page.channelColors[modelData]
                         onMoved: (v) => AudioController.setVolume(modelData, Math.round(v))

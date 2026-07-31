@@ -41,6 +41,15 @@ pub mod qobject {
         #[qproperty(QString, output_devices_json, cxx_name = "outputDevicesJson")]
         #[qproperty(QString, input_devices_json, cxx_name = "inputDevicesJson")]
         #[qproperty(QString, ear_blast_json, cxx_name = "earBlastJson")]
+        // Overdrive — lets faders exceed 100% (up to 150%). Client-side UI
+        // state only, in-memory, not persisted (matches MixerPage.vue's
+        // `overdriveEnabled` ref). Lives here rather than as a page-local
+        // property so the Home dashboard's Quick Mixer and the Mixer page's
+        // ChannelStrips share one answer to "is 150% currently allowed" —
+        // previously Home's slider had its own hardcoded 150 cap with no way
+        // to know whether Mixer's toggle was on, so it could push a channel
+        // to 150% even with Overdrive off.
+        #[qproperty(bool, overdrive_enabled, cxx_name = "overdriveEnabled")]
         type AudioController = super::AudioControllerRust;
 
         /// Fetch the current channel list from the daemon.
@@ -147,6 +156,7 @@ pub struct AudioControllerRust {
     output_devices_json: QString,
     input_devices_json: QString,
     ear_blast_json: QString,
+    overdrive_enabled: bool,
 }
 
 impl qobject::AudioController {
