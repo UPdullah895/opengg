@@ -325,7 +325,8 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                     }
                     Text {
-                        width: devBox.width - 34
+                        id: devText
+                        width: Math.max(20, devBox.width - 34)
                         text: devBox.displayText
                         color: Theme.textDim
                         font.pixelSize: 9
@@ -333,6 +334,29 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         anchors.verticalCenter: parent.verticalCenter
                     }
+                }
+
+                // Full device name on hover. `acceptedButtons: Qt.NoButton`
+                // is the same trick WheelScroller.qml uses to sit above
+                // something clickable without swallowing its clicks — this
+                // MouseArea only ever sees hover, so devBox's own press
+                // handling (opening the popup) still gets every click.
+                // (A HoverHandler was tried first and reverted: it produced
+                // an "Unable to assign [undefined] to bool" QML warning in
+                // the headless capture path, most likely racing devBox's own
+                // startup before its hover state settles. This MouseArea
+                // mirrors the Overdrive button's tooltip above, which has
+                // never shown that warning.)
+                MouseArea {
+                    id: devHoverArea
+                    anchors.fill: parent
+                    acceptedButtons: Qt.NoButton
+                    hoverEnabled: true
+                }
+                ToolTip {
+                    visible: devHoverArea.containsMouse
+                    text: devBox.displayText
+                    delay: 400
                 }
                 background: Rectangle {
                     radius: Theme.radius

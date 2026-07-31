@@ -51,6 +51,14 @@ Rectangle {
     }
 
     property string activeTab: "mixer"
+    // Below this, six full-label tabs plus the Overdrive/gear buttons don't
+    // reliably fit `page.width` (page.width is the content area alone —
+    // Theme.sidebarW is already subtracted by the StackLayout it lives in).
+    // Past that point tabs collapse to icon-only rather than letting the
+    // RowLayout's plain `width:` bindings overflow the window with no
+    // elision, which is how "Mixer" was rendering as "Mixe…" with no
+    // ellipsis at narrow widths — the label Text had no `elide` at all.
+    readonly property bool compactTabs: page.width < 620
     readonly property var mixerChannelNames: ["Master", "Game", "Chat", "Media", "Aux", "Mic"]
     // Overdrive — expands fader range from 100% to 150%. Client-side UI
     // state only (matches MixerPage.vue's overdriveEnabled ref: not
@@ -71,12 +79,12 @@ Rectangle {
         }
     }
     readonly property var tabs: [
-        { id: "mixer", label: "Mixer" },
-        { id: "game", label: "Game" },
-        { id: "chat", label: "Chat" },
-        { id: "media", label: "Media" },
-        { id: "aux", label: "Aux" },
-        { id: "mic", label: "Mic" },
+        { id: "mixer", label: "Mixer", icon: "sliders" },
+        { id: "game", label: "Game", icon: "gamepad" },
+        { id: "chat", label: "Chat", icon: "headphones" },
+        { id: "media", label: "Media", icon: "play" },
+        { id: "aux", label: "Aux", icon: "music" },
+        { id: "mic", label: "Mic", icon: "mic" },
     ]
     // MixerPage.vue renders SIX strips: Master + the five daemon channels.
     // Master is not returned by the daemon — audio.ts synthesizes it (volume
@@ -134,6 +142,12 @@ Rectangle {
     Component.onCompleted: {
         AudioController.refresh()
         AudioController.refreshDevices()
+        // Gates chatMixBar's visibility below — MixerPage.vue's onMounted
+        // called this too. Without it virtualAudioReady stays at its
+        // default false (nothing else on this page sets it), so the
+        // ChatMix panel silently never appears no matter how ready the
+        // real audio engine is.
+        AudioController.refreshVirtualAudioStatus()
     }
     Timer { interval: 2000; running: true; repeat: true; onTriggered: AudioController.refresh() }
 
@@ -184,23 +198,68 @@ Rectangle {
                     id: tabBtn
                     required property var modelData
                     property bool isActive: page.activeTab === modelData.id
-                    width: tabLabel.implicitWidth + 24
+                    // Capped rather than plain implicitWidth+24 for the same
+                    // reason the label itself gets `elide` below: an
+                    // uncapped width just moves the overflow problem from
+                    // "text cut off mid-word" to "buttons run off the edge
+                    // of the window" — neither is what a narrow window
+                    // should do, so this is the ceiling a real translation
+                    // (some are longer than English) can't exceed either.
+                    readonly property int maxLabelWidth: 70
+                    width: page.compactTabs
+                        ? 30
+                        : tabIcon.width + 6 + Math.min(tabLabel.implicitWidth, maxLabelWidth) + 24
                     height: 30
                     radius: Theme.radius
                     color: isActive ? Theme.surface : "transparent"
 
-                    Text {
-                        id: tabLabel
+                    Row {
                         anchors.centerIn: parent
-                        text: tabBtn.modelData.label
-                        color: tabBtn.isActive ? Theme.text : Theme.textDim
-                        font.pixelSize: 12
-                        font.weight: tabBtn.isActive ? Font.DemiBold : Font.Normal
+                        spacing: page.compactTabs ? 0 : 6
+
+                        Icon {
+                            id: tabIcon
+                            name: tabBtn.modelData.icon
+                            size: 14
+                            color: tabBtn.isActive ? Theme.text : Theme.textDim
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            id: tabLabel
+                            // Deliberately never toggles `visible` — Qt Quick
+                            // skips layout polish on invisible items, and an
+                            // item that starts invisible (compactTabs is true
+                            // at page.width==0, before the first real layout
+                            // pass) can end up with its implicitWidth stuck
+                            // unrefreshed once it turns visible again. This
+                            // showed up as headless ui-shots captures staying
+                            // icon-only forever despite compactTabs correctly
+                            // reading false by then. Collapsing via `width`
+                            // instead keeps the Text always live.
+                            clip: true
+                            width: page.compactTabs ? 0 : Math.min(implicitWidth, tabBtn.maxLabelWidth)
+                            text: tabBtn.modelData.label
+                            color: tabBtn.isActive ? Theme.text : Theme.textDim
+                            font.pixelSize: 12
+                            font.weight: tabBtn.isActive ? Font.DemiBold : Font.Normal
+                            elide: Text.ElideRight
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
                     }
                     MouseArea {
+                        id: tabArea
                         anchors.fill: parent
+                        hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: page.activeTab = tabBtn.modelData.id
+                    }
+                    // Icon-only mode drops the visible label entirely, so
+                    // hovering is the only way left to confirm which tab
+                    // this is before clicking it.
+                    ToolTip {
+                        visible: page.compactTabs && tabArea.containsMouse
+                        text: tabBtn.modelData.label
+                        delay: 400
                     }
                 }
             }
@@ -263,8 +322,18 @@ Rectangle {
             id: stripsRow
             visible: page.activeTab === "mixer"
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.maximumHeight: 420
+            // NOT Layout.fillHeight — a fillHeight item whose actual size is
+            // then capped by Layout.maximumHeight still gets handed a CELL
+            // sized to "whatever's left" in the ColumnLayout (all the way up
+            // to the window bottom), and with no Layout.alignment set,
+            // QtQuick.Layouts centers the capped content inside that oversized
+            // cell. That's what was pushing this row ~200px down from the tab
+            // bar and, in turn, pushing ChatMix below the visible column —
+            // not a `spacing` value anywhere close to that. A fixed
+            // preferredHeight makes this row exactly as tall as it needs to
+            // be and nothing more, so it sits directly under the tab bar and
+            // ChatMix follows immediately after it.
+            Layout.preferredHeight: 420
             spacing: 16
 
             Component.onCompleted: TourController.registerTarget("mixer-channels", stripsRow)
@@ -294,6 +363,15 @@ Rectangle {
                     required property int index
                     readonly property var modelData: page.stripChannels[index]
                     Layout.preferredWidth: 132
+                    // Without a floor, 6 strips squeezed into a window too
+                    // narrow to fit all of them at 132px each get compressed
+                    // by the layout solver down toward single digits — at
+                    // which point the device-name Text (itself sized off
+                    // strip.width) has no room left to show anything but an
+                    // ellipsis. This keeps enough width for a few readable
+                    // characters before the ToolTip becomes the only way to
+                    // read the rest. (Full narrow-window reflow is #41.)
+                    Layout.minimumWidth: 110
                     Layout.fillHeight: true
                     spacing: 6
 
