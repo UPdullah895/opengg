@@ -31,7 +31,13 @@ Rectangle {
     radius: Theme.radiusLg
     color: Theme.surface
     border.width: 1
-    border.color: Theme.border
+    // Theme.border (#2a2d3a on the dark palette) sits close enough to
+    // Theme.surface (#171923) in luminance that on this specific card —
+    // surrounded by other dark chrome, not a lighter page background like
+    // HomePage's cards — the strip's outline read as almost invisible. A
+    // light, low-alpha tint gives it a clearly readable edge without
+    // introducing a new bare-hex token.
+    border.color: Theme.tint(Theme.text, 12)
     clip: true
 
     // 0 dB at the top of the meter, -60 at the bottom.
@@ -56,11 +62,22 @@ Rectangle {
     function settle() { settleTimer.restart() }
 
     // ── Accent bar (ChannelStrip.vue's .accent-bar) ──────────────────────
+    // `clip: true` on `strip` only clips children to its rectangular
+    // bounding box, not to its rounded outline — a plain flat-cornered bar
+    // here has square corners that poke past the card's curve, which is
+    // what made the accent read as a separate strip floating above the
+    // card rather than its top edge. Matching the corner radius (and being
+    // tall enough for that radius to fully render, hence height ==
+    // strip.radius rather than a thin 3px sliver) makes the two curves
+    // coincide exactly, with the bar's straight sides flush against the
+    // card's sides below the curve.
     Rectangle {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 3
+        height: strip.radius
+        topLeftRadius: strip.radius
+        topRightRadius: strip.radius
         color: strip.channelColor
     }
 
@@ -309,11 +326,39 @@ Rectangle {
                 // PipeWire routing never moves).
                 onActivated: (index) => strip.deviceRequested(strip.devices[index].value)
 
-                // The default popup sizes itself to the ComboBox's own
-                // width, which is only ~80px on a 132px-wide strip — far too
-                // narrow for "Arctis Nova 7 Analog Stereo". Widened
-                // independently of the trigger.
-                popup.width: Math.max(220, devBox.width)
+                // Custom popup rather than the default QQC2 Basic-style one:
+                // that default renders a plain, un-themed frame (it doesn't
+                // pick up Theme.* at all) and opens downward, which on a
+                // channel strip near the bottom of the window pushes the
+                // list past the app's own edge. This one matches the app's
+                // dark chrome, always opens upward above the trigger, and is
+                // sized/aligned to the whole strip's width rather than just
+                // devBox's own (narrower, mute-button-adjacent) width — so a
+                // narrow strip still gets a comfortably wide, edge-aligned
+                // list instead of one cramped to the trigger's own size.
+                popup: Popup {
+                    id: devPopup
+                    y: -height - 4
+                    x: strip.mapToItem(devBox, 0, 0).x
+                    width: Math.max(220, strip.width)
+                    topPadding: 4
+                    bottomPadding: 4
+                    leftPadding: 0
+                    rightPadding: 0
+                    background: Rectangle {
+                        radius: Theme.radiusLg
+                        color: Theme.surface
+                        border.width: 1
+                        border.color: Theme.tint(Theme.text, 12)
+                    }
+                    contentItem: ListView {
+                        implicitHeight: contentHeight
+                        model: devBox.delegateModel
+                        currentIndex: devBox.highlightedIndex
+                        clip: true
+                        ScrollIndicator.vertical: ScrollIndicator {}
+                    }
+                }
 
                 contentItem: Row {
                     leftPadding: 6

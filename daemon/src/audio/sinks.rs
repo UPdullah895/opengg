@@ -253,6 +253,15 @@ impl SinkManager {
         let _ = subprocess::command("pactl")
             .args(["set-sink-mute", &sink_name, val])
             .output();
+        // Muting the Mic channel's virtual sink only silences consumers reading
+        // from OpenGG_Mic.monitor. GSR and other capture tools still subscribe
+        // directly to the hardware capture source, so the actual mic input must
+        // also be muted at the source for the mute to have any real effect.
+        if channel == "Mic" {
+            let _ = subprocess::command("pactl")
+                .args(["set-source-mute", "@DEFAULT_SOURCE@", val])
+                .output();
+        }
         Ok(())
     }
 

@@ -723,7 +723,40 @@ pub fn get_channel_devices_json() -> String {
     serde_json::to_string(&map).unwrap_or_else(|_| "{}".into())
 }
 
+/// Every capture-capable node: real mic inputs, OpenGG virtual-channel
+/// monitors, and hardware output monitors (e.g. "Headphones (Monitor)" for
+/// system-audio capture). Used by the Capture Sound settings panel and GSR's
+/// recording-source picker, where all three categories are valid choices.
 pub fn list_capture_sources() -> Result<Vec<CaptureSource>, String> {
+    let (og, inputs, monitors) = list_sources_categorized()?;
+    // Order: OpenGG channels, then hardware inputs, then hardware output monitors.
+    let mut out = og;
+    out.extend(inputs);
+    out.extend(monitors);
+    if out.is_empty() {
+        Err("No audio sources found via pactl".into())
+    } else {
+        Ok(out)
+    }
+}
+
+/// Real hardware/software microphone inputs only — excludes OpenGG's own
+/// virtual-channel monitors (Game/Chat/Media/Aux) and hardware output
+/// monitors (e.g. "Headphones (Monitor)"). Used for the Mixer's Mic-channel
+/// device picker, where those other entries are meaningless (or actively
+/// confusing — they aren't microphones).
+pub fn list_mic_input_sources() -> Result<Vec<CaptureSource>, String> {
+    let (_, inputs, _) = list_sources_categorized()?;
+    if inputs.is_empty() {
+        Err("No microphone input sources found via pactl".into())
+    } else {
+        Ok(inputs)
+    }
+}
+
+type CategorizedSources = (Vec<CaptureSource>, Vec<CaptureSource>, Vec<CaptureSource>);
+
+fn list_sources_categorized() -> Result<CategorizedSources, String> {
     let output = std::process::Command::new("pactl")
         .args(["list", "sources"])
         .output()
@@ -768,15 +801,7 @@ pub fn list_capture_sources() -> Result<Vec<CaptureSource>, String> {
         }
     }
 
-    // Order: OpenGG channels, then hardware inputs, then hardware output monitors.
-    let mut out = og;
-    out.extend(inputs);
-    out.extend(monitors);
-    if out.is_empty() {
-        Err("No audio sources found via pactl".into())
-    } else {
-        Ok(out)
-    }
+    Ok((og, inputs, monitors))
 }
 
 pub fn get_session_type() -> String {

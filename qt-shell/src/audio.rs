@@ -270,7 +270,7 @@ impl qobject::AudioController {
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
             let sinks = opengg_core::audio::list_audio_sinks_friendly().unwrap_or_default();
-            let sources = opengg_core::audio::list_capture_sources().unwrap_or_default();
+            let sources = opengg_core::audio::list_mic_input_sources().unwrap_or_default();
             let channel_devices = opengg_core::audio::get_channel_devices_json();
             let _ = qt_thread.queue(move |mut c| {
                 c.as_mut().set_output_devices_json(QString::from(

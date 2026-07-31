@@ -148,6 +148,7 @@ Rectangle {
         // ChatMix panel silently never appears no matter how ready the
         // real audio engine is.
         AudioController.refreshVirtualAudioStatus()
+        AudioController.refreshEarBlast()
     }
     Timer { interval: 2000; running: true; repeat: true; onTriggered: AudioController.refresh() }
 
@@ -175,21 +176,12 @@ Rectangle {
                 font.weight: Font.Bold
                 Layout.fillWidth: true
             }
-            Rectangle {
-                width: 8; height: 8; radius: 4
-                color: AudioController.connected ? Theme.success : Theme.danger
-                Layout.alignment: Qt.AlignVCenter
-            }
-            Text {
-                text: AudioController.connected ? "daemon connected" : "daemon offline"
-                color: Theme.textDim
-                font.pixelSize: 12
-            }
         }
 
-        // Tab bar — Mixer (fader strips) + one tab per EQ/DSP channel.
+        // Tab bar — Mixer (fader strips) + one tab per EQ/DSP channel, then a
+        // spacer pushing Overdrive/Ear-Blast/gear to the row's far right edge.
         RowLayout {
-            Layout.fillWidth: false
+            Layout.fillWidth: true
             spacing: 4
 
             Repeater {
@@ -206,9 +198,50 @@ Rectangle {
                     // should do, so this is the ceiling a real translation
                     // (some are longer than English) can't exceed either.
                     readonly property int maxLabelWidth: 70
-                    width: page.compactTabs
+                    // Measures the label's natural width independently of
+                    // tabLabel's own rendered `width`/`elide` state. Both
+                    // tabBtn.width and tabLabel.width used to read
+                    // tabLabel.implicitWidth directly — self-referencing
+                    // implicitWidth from within a Text item's own `width`
+                    // binding while `elide` is active is a known QML trap:
+                    // eliding recomputation can re-emit implicitWidthChanged,
+                    // which re-triggers tabBtn.width, which reflows the Row,
+                    // which perturbs tabLabel's layout again — Qt's own
+                    // binding-loop detector caught exactly this cycle live
+                    // ("Binding loop detected for property 'width'"), and
+                    // once tripped it stops re-evaluating the binding, which
+                    // is what left every tab stuck showing icon-only even
+                    // after compactTabs correctly settled to false. A
+                    // TextMetrics has no `width`/`elide` of its own, so its
+                    // `width` is a pure function of font+text — no cycle.
+                    TextMetrics {
+                        id: labelMetrics
+                        font.pixelSize: 12
+                        font.weight: tabBtn.isActive ? Font.DemiBold : Font.Normal
+                        text: tabBtn.modelData.label
+                    }
+                    // Layout.preferredWidth, not a plain `width:` binding:
+                    // this Rectangle is a Repeater delegate living directly
+                    // inside a RowLayout that's now Layout.fillWidth: true
+                    // (needed to push Overdrive/Ear-Blast/gear to the row's
+                    // far edge). A plain `width:` is only an initial size
+                    // hint to a Layout container — once the row itself
+                    // started stretching, RowLayout's own arrange pass kept
+                    // overwriting that width back down after every
+                    // recompute (visible live as the correct 78/78/71/78/67/63
+                    // px values immediately reverting to 30, the compact
+                    // fallback, even with compactTabs already settled false).
+                    // Layout.preferredWidth is the attached property Layout
+                    // containers are actually built to keep re-reading.
+                    // +4px over the raw TextMetrics reading: TextMetrics and
+                    // Text compute layout via separate code paths and don't
+                    // always agree to the sub-pixel, so sizing the label to
+                    // the exact metrics width left `elide` firing on labels
+                    // that visibly fit ("Mixer" clipped to "Mix…" at 78px).
+                    readonly property int labelW: Math.min(labelMetrics.width + 4, maxLabelWidth)
+                    Layout.preferredWidth: page.compactTabs
                         ? 30
-                        : tabIcon.width + 6 + Math.min(tabLabel.implicitWidth, maxLabelWidth) + 24
+                        : tabIcon.width + 6 + tabBtn.labelW + 24
                     height: 30
                     radius: Theme.radius
                     color: isActive ? Theme.surface : "transparent"
@@ -237,7 +270,7 @@ Rectangle {
                             // reading false by then. Collapsing via `width`
                             // instead keeps the Text always live.
                             clip: true
-                            width: page.compactTabs ? 0 : Math.min(implicitWidth, tabBtn.maxLabelWidth)
+                            width: page.compactTabs ? 0 : tabBtn.labelW
                             text: tabBtn.modelData.label
                             color: tabBtn.isActive ? Theme.text : Theme.textDim
                             font.pixelSize: 12
@@ -264,6 +297,10 @@ Rectangle {
                 }
             }
 
+            // Pushes Overdrive/Ear-Blast/gear to the row's far right edge
+            // instead of them trailing immediately after the last tab.
+            Item { Layout.fillWidth: true }
+
             // Overdrive — unlocks faders beyond 100% (up to 150%).
             Rectangle {
                 visible: page.activeTab === "mixer"
@@ -289,6 +326,42 @@ Rectangle {
                     text: AudioController.overdriveEnabled
                         ? "Overdrive ON — faders go to 150%"
                         : "Enable Overdrive (faders up to 150%)"
+                    delay: 300
+                }
+            }
+
+            // Ear Blast Protection — quick toggle mirroring MixerPage.vue's
+            // header button. Full channel/threshold/target config still lives
+            // in Settings → Mixer Routing; this is just the on/off switch.
+            Rectangle {
+                id: earBlastBtn
+                readonly property var eb: AudioController.earBlastJson
+                    ? JSON.parse(AudioController.earBlastJson)
+                    : { enabled: false }
+                visible: page.activeTab === "mixer"
+                width: 30; height: 30
+                radius: Theme.radius
+                color: earBlastBtn.eb.enabled ? Theme.tint(Theme.accent, 15) : "transparent"
+                border.width: 1
+                border.color: earBlastBtn.eb.enabled ? Theme.accent : Theme.border
+
+                Icon {
+                    anchors.centerIn: parent
+                    name: "ear"; size: 13
+                    color: earBlastBtn.eb.enabled ? Theme.accent : Theme.text
+                }
+                MouseArea {
+                    id: earBlastArea
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    hoverEnabled: true
+                    onClicked: AudioController.setEarBlast("enabled", JSON.stringify(!earBlastBtn.eb.enabled))
+                }
+                ToolTip {
+                    visible: earBlastArea.containsMouse
+                    text: earBlastBtn.eb.enabled
+                        ? (I18n.language, I18n.t("dashboard.earBlastOn"))
+                        : (I18n.language, I18n.t("dashboard.earBlastOff"))
                     delay: 300
                 }
             }
@@ -334,7 +407,7 @@ Rectangle {
             // be and nothing more, so it sits directly under the tab bar and
             // ChatMix follows immediately after it.
             Layout.preferredHeight: 420
-            spacing: 16
+            spacing: 10
 
             Component.onCompleted: TourController.registerTarget("mixer-channels", stripsRow)
             Component.onDestruction: TourController.unregisterTarget("mixer-channels")
@@ -362,18 +435,18 @@ Rectangle {
                     id: stripCol
                     required property int index
                     readonly property var modelData: page.stripChannels[index]
-                    Layout.preferredWidth: 132
+                    Layout.preferredWidth: 108
                     // Without a floor, 6 strips squeezed into a window too
-                    // narrow to fit all of them at 132px each get compressed
+                    // narrow to fit all of them at 108px each get compressed
                     // by the layout solver down toward single digits — at
                     // which point the device-name Text (itself sized off
                     // strip.width) has no room left to show anything but an
                     // ellipsis. This keeps enough width for a few readable
                     // characters before the ToolTip becomes the only way to
                     // read the rest. (Full narrow-window reflow is #41.)
-                    Layout.minimumWidth: 110
+                    Layout.minimumWidth: 96
                     Layout.fillHeight: true
-                    spacing: 6
+                    spacing: 10
 
                     ChannelStrip {
                         Layout.fillWidth: true
@@ -464,6 +537,7 @@ Rectangle {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
+                                chatMixSlider.dragging = false
                                 AudioController.setVolume("Game", 100)
                                 AudioController.setVolume("Chat", 100)
                             }
@@ -482,38 +556,78 @@ Rectangle {
                         font.weight: Font.DemiBold
                     }
 
-                    Slider {
+                    // Custom-drawn slider rather than QQC2's Slider: Slider's
+                    // built-in drag handling writes to its own `value`
+                    // property directly, which silently severs a QML binding
+                    // like `value: chatMixBar.balance` on the very first
+                    // press — after that, `value` never tracks
+                    // chatMixBar.balance again (no live re-sync, no visible
+                    // motion beyond wherever the pointer last was), which is
+                    // what made the slider feel unmovable/dead. ChannelStrip's
+                    // vertical fader hit the identical problem and solved it
+                    // with a local `dragging`/dragFraction` + settle() Timer;
+                    // this is that same pattern, adapted to a horizontal
+                    // -100..100 balance value instead of a 0..1 fraction.
+                    Item {
                         id: chatMixSlider
                         Layout.fillWidth: true
-                        from: -100; to: 100
-                        value: chatMixBar.balance
-                        onMoved: {
-                            const g = Math.round(Math.max(0, 100 - Math.max(0, value)))
-                            const c = Math.round(Math.max(0, 100 - Math.max(0, -value)))
+                        height: 18
+
+                        property bool dragging: false
+                        property real dragBalance: 0
+                        readonly property real displayBalance: chatMixSlider.dragging
+                            ? chatMixSlider.dragBalance
+                            : chatMixBar.balance
+                        readonly property real fraction: (chatMixSlider.displayBalance + 100) / 200
+
+                        Timer { id: chatMixSettle; interval: 600; onTriggered: chatMixSlider.dragging = false }
+
+                        function apply(balance) {
+                            const g = Math.round(Math.max(0, 100 - Math.max(0, balance)))
+                            const c = Math.round(Math.max(0, 100 - Math.max(0, -balance)))
                             AudioController.setVolume("Game", g)
                             AudioController.setVolume("Chat", c)
                         }
 
-                        background: Rectangle {
-                            x: chatMixSlider.leftPadding
-                            y: chatMixSlider.topPadding + chatMixSlider.availableHeight / 2 - height / 2
-                            width: chatMixSlider.availableWidth
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width
                             height: 6
                             radius: 3
                             gradient: Gradient {
                                 orientation: Gradient.Horizontal
                                 GradientStop { position: 0.0; color: page.channelColors.Game }
-                                GradientStop { position: 0.5; color: Theme.border }
+                                GradientStop { position: 0.5; color: Theme.purple }
                                 GradientStop { position: 1.0; color: page.channelColors.Chat }
                             }
                         }
-                        handle: Rectangle {
-                            x: chatMixSlider.leftPadding + chatMixSlider.visualPosition * (chatMixSlider.availableWidth - width)
-                            y: chatMixSlider.topPadding + chatMixSlider.availableHeight / 2 - height / 2
+                        Rectangle {
+                            id: chatMixHandle
                             width: 18; height: 18; radius: 9
+                            anchors.verticalCenter: parent.verticalCenter
+                            x: chatMixSlider.fraction * (chatMixSlider.width - width)
                             color: Theme.text
                             border.width: 2
                             border.color: Theme.accent
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+
+                            function moveTo(mx) {
+                                const frac = Math.max(0, Math.min(1, mx / chatMixSlider.width))
+                                chatMixSlider.dragBalance = frac * 200 - 100
+                                chatMixSlider.apply(chatMixSlider.dragBalance)
+                            }
+                            onPressed: (m) => {
+                                chatMixSlider.dragging = true
+                                moveTo(m.x)
+                            }
+                            onPositionChanged: (m) => {
+                                if (pressed) moveTo(m.x)
+                            }
+                            onReleased: chatMixSettle.restart()
+                            onCanceled: chatMixSettle.restart()
                         }
                     }
 
@@ -619,6 +733,29 @@ Rectangle {
         visible: page.appSettingsOpen
         z: 1001
 
+        // Positions appSettingsPanel under appGearBtn every time the
+        // overlay opens. Two other approaches were tried and both failed:
+        // (1) a `readonly property point: appGearBtn.mapToItem(page, ...)`
+        // binding evaluated exactly once, at construction (page.width==0,
+        // nothing laid out yet), and then never again — confirmed live via
+        // debug prints frozen at that first snapshot even after explicitly
+        // reading page.width/height/appGearBtn.x/y/page.appSettingsOpen as
+        // forced dependencies from inside the binding. (2) plain
+        // `anchors.top/right: appGearBtn.bottom/right` — Qt Quick anchors
+        // only work between a parent and its own children or siblings;
+        // appSettingsPanel and appGearBtn are cousins (different branches
+        // under `page`), and Qt logs exactly that at runtime: "Cannot
+        // anchor to an item that isn't a parent or sibling." Recomputing
+        // imperatively in onVisibleChanged sidesteps both: it runs once,
+        // on-demand, well after everything is laid out, using mapToItem's
+        // one-off snapshot at exactly the moment it's actually needed.
+        onVisibleChanged: {
+            if (!visible) return
+            const p = appGearBtn.mapToItem(appSettingsOverlay, appGearBtn.width, appGearBtn.height + 6)
+            appSettingsPanel.x = Math.max(6, p.x - appSettingsPanel.width)
+            appSettingsPanel.y = p.y
+        }
+
         MouseArea {
             anchors.fill: parent
             onClicked: page.appSettingsOpen = false
@@ -626,9 +763,6 @@ Rectangle {
 
         Rectangle {
             id: appSettingsPanel
-            readonly property point anchorPos: appGearBtn.mapToItem(appSettingsOverlay, 0, appGearBtn.height + 6)
-            x: Math.max(6, Math.min(appSettingsPanel.anchorPos.x, appSettingsOverlay.width - width - 6))
-            y: appSettingsPanel.anchorPos.y
             width: 200
             implicitHeight: appSettingsCol.implicitHeight + 20
             radius: Theme.radiusLg

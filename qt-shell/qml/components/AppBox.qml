@@ -35,7 +35,10 @@ Rectangle {
     radius: Theme.radius
     color: Theme.bg
     border.width: 1
-    border.color: dropArea.containsDrag ? box.channelColor : Theme.border
+    // See ChannelStrip.qml's identical note: Theme.border reads as almost
+    // invisible against this dark chrome, so use the same light tint for a
+    // clearly readable card edge (still only when not actively drag-hovered).
+    border.color: dropArea.containsDrag ? box.channelColor : Theme.tint(Theme.text, 12)
 
     DropArea {
         id: dropArea
