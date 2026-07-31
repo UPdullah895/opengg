@@ -279,10 +279,41 @@ Rectangle {
                 visible: strip.devices.length > 0
                 width: strip.width - 52
                 height: 26
+                // `strip.devices` is now a list of {value, label} objects —
+                // value is the real pactl node.name (what setChannelDevice
+                // needs), label is the friendly description (what the user
+                // should read). textRole/valueRole make displayText,
+                // indexOfValue() and currentValue all resolve through
+                // `label`/`value` automatically instead of stringifying the
+                // whole object.
+                textRole: "label"
+                valueRole: "value"
                 model: strip.devices
                 font.pixelSize: 9
-                currentIndex: Math.max(0, strip.devices.indexOf(strip.selectedDevice))
-                onActivated: strip.deviceRequested(String(strip.devices[currentIndex]))
+                // Previously `strip.selectedDevice` was always "" (MixerPage
+                // never passed the channel's actual current device), so this
+                // fell through to index 0 no matter what was really
+                // selected — the dropdown could show one device while a
+                // different one was actually in use, and there was no way to
+                // tell from the UI. MixerPage now supplies the real value
+                // via AudioController.channelDevicesJson.
+                currentIndex: strip.selectedDevice ? devBox.indexOfValue(strip.selectedDevice) : -1
+                // Reads the model directly by the index the signal hands us,
+                // rather than `devBox.currentValue` — confirmed live that
+                // `currentValue` can still read the pre-click value at the
+                // moment `activated` fires, silently sending the OLD device
+                // back to setChannelDevice (which then no-ops, since
+                // core::set_channel_device treats "already linked to this
+                // device" as nothing to do — so nothing even errors, the
+                // dropdown just visually shows the new pick while the real
+                // PipeWire routing never moves).
+                onActivated: (index) => strip.deviceRequested(strip.devices[index].value)
+
+                // The default popup sizes itself to the ComboBox's own
+                // width, which is only ~80px on a 132px-wide strip — far too
+                // narrow for "Arctis Nova 7 Analog Stereo". Widened
+                // independently of the trigger.
+                popup.width: Math.max(220, devBox.width)
 
                 contentItem: Row {
                     leftPadding: 6
@@ -310,12 +341,13 @@ Rectangle {
                     border.color: Theme.border
                 }
                 delegate: ItemDelegate {
-                    width: devBox.width
+                    width: devBox.popup.width
+                    height: 32
                     highlighted: devBox.highlightedIndex === index
                     contentItem: Text {
-                        text: modelData
+                        text: modelData.label
                         color: highlighted ? Theme.accent : Theme.text
-                        font.pixelSize: 10
+                        font.pixelSize: 11
                         elide: Text.ElideRight
                         verticalAlignment: Text.AlignVCenter
                     }

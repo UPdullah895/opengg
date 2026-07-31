@@ -102,9 +102,14 @@ Rectangle {
         Media: "play", Aux: "music", Mic: "mic"
     })
 
+    // Both lists are {value, label} objects — value is the real pactl
+    // node.name ChannelStrip's ComboBox needs to send back via
+    // setChannelDevice, label is what's shown. inputDevices used to collapse
+    // this down to just the label string, which meant Mic's selector could
+    // only ever send back display text instead of a real device name.
     property var outputDevices: JSON.parse(AudioController.outputDevicesJson || "[]")
-    property var inputDevices: (JSON.parse(AudioController.inputDevicesJson || "[]"))
-        .map(function (d) { return d.label || d.value || d })
+    property var inputDevices: JSON.parse(AudioController.inputDevicesJson || "[]")
+    property var channelDevices: JSON.parse(AudioController.channelDevicesJson || "{}")
 
     readonly property var channelColors: ({
         Master: "#94A3B8", Game: "#E94560", Chat: "#3B82F6",
@@ -257,7 +262,7 @@ Rectangle {
                     vuDb: page.vuDb(modelData.name)
                     maxVolume: AudioController.overdriveEnabled ? 150 : 100
                     devices: modelData.name === "Mic" ? page.inputDevices : page.outputDevices
-                    selectedDevice: ""
+                    selectedDevice: page.channelDevices[modelData.name] || ""
 
                     onVolumeRequested: (v) => AudioController.setVolume(modelData.name, v)
                     onMuteToggled: AudioController.setMute(modelData.name, !modelData.muted)

@@ -40,6 +40,12 @@ pub mod qobject {
         // ChannelStrip.vue renders under each fader.
         #[qproperty(QString, output_devices_json, cxx_name = "outputDevicesJson")]
         #[qproperty(QString, input_devices_json, cxx_name = "inputDevicesJson")]
+        // The device each channel is actually using right now, as a
+        // `{"Master": "<node.name>", "Game": "...", ...}` object keyed by
+        // channel name — lets each ChannelStrip's device ComboBox highlight
+        // the real current selection instead of always defaulting to
+        // whatever happens to be first in outputDevicesJson.
+        #[qproperty(QString, channel_devices_json, cxx_name = "channelDevicesJson")]
         #[qproperty(QString, ear_blast_json, cxx_name = "earBlastJson")]
         // Overdrive — lets faders exceed 100% (up to 150%). Client-side UI
         // state only, in-memory, not persisted (matches MixerPage.vue's
@@ -155,6 +161,7 @@ pub struct AudioControllerRust {
     vu_gen: Arc<AtomicU64>,
     output_devices_json: QString,
     input_devices_json: QString,
+    channel_devices_json: QString,
     ear_blast_json: QString,
     overdrive_enabled: bool,
 }
@@ -251,15 +258,31 @@ impl qobject::AudioController {
         });
     }
 
-    pub fn refresh_devices(mut self: Pin<&mut Self>) {
-        let sinks = opengg_core::audio::list_audio_sinks().unwrap_or_default();
-        let sources = opengg_core::audio::list_capture_sources().unwrap_or_default();
-        self.as_mut().set_output_devices_json(QString::from(
-            &serde_json::to_string(&sinks).unwrap_or_else(|_| "[]".into()),
-        ));
-        self.as_mut().set_input_devices_json(QString::from(
-            &serde_json::to_string(&sources).unwrap_or_else(|_| "[]".into()),
-        ));
+    /// Reload the output/input device lists plus which device each channel
+    /// is currently using.
+    ///
+    /// `current_channel_device` alone runs `pw-link -l` up to twice per
+    /// channel (5 channels), on top of two `pactl list` calls for the
+    /// device lists — enough blocking subprocess work that, like every
+    /// other refresh in this file, it has to run off the Qt thread rather
+    /// than stall the render loop.
+    pub fn refresh_devices(self: Pin<&mut Self>) {
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let sinks = opengg_core::audio::list_audio_sinks_friendly().unwrap_or_default();
+            let sources = opengg_core::audio::list_capture_sources().unwrap_or_default();
+            let channel_devices = opengg_core::audio::get_channel_devices_json();
+            let _ = qt_thread.queue(move |mut c| {
+                c.as_mut().set_output_devices_json(QString::from(
+                    &serde_json::to_string(&sinks).unwrap_or_else(|_| "[]".into()),
+                ));
+                c.as_mut().set_input_devices_json(QString::from(
+                    &serde_json::to_string(&sources).unwrap_or_else(|_| "[]".into()),
+                ));
+                c.as_mut()
+                    .set_channel_devices_json(QString::from(&channel_devices));
+            });
+        });
     }
 
     pub fn set_channel_device(self: Pin<&mut Self>, channel: &QString, device: &QString) {
@@ -270,7 +293,10 @@ impl qobject::AudioController {
             if let Err(e) = opengg_core::audio::set_channel_device(channel, device) {
                 eprintln!("setChannelDevice: {e}");
             }
-            let _ = qt_thread.queue(|mut c| c.as_mut().refresh());
+            let _ = qt_thread.queue(|mut c| {
+                c.as_mut().refresh();
+                c.as_mut().refresh_devices();
+            });
         });
     }
 

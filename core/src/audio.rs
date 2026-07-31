@@ -632,6 +632,97 @@ pub fn list_audio_sinks() -> Result<Vec<String>, String> {
     }
 }
 
+/// Real playback devices for a channel's output-device selector, as
+/// {value: node.name, label: friendly description} pairs — the qt-shell
+/// counterpart of `list_capture_sources` for sinks rather than sources.
+///
+/// `list_audio_sinks()` above returns raw pactl node names with no
+/// filtering, which is exactly what it needs to be for its one existing
+/// caller (GSR's audio-source picker, which legitimately wants to offer a
+/// virtual channel's own sink as a capture target). Reusing it for a
+/// channel's OUTPUT device selector produced two real bugs: the dropdown
+/// showed technical names like "alsa_output.usb-..." instead of "Arctis
+/// Nova 7 Analog Stereo", and it listed OpenGG's own virtual sinks
+/// (OpenGG_Game/Chat/Media/Aux) as selectable playback devices — routing a
+/// channel's output to another channel's virtual sink is nonsensical and
+/// was never a real target. This is a new function rather than a change to
+/// `list_audio_sinks` so GSR's existing behavior is untouched.
+pub fn list_audio_sinks_friendly() -> Result<Vec<CaptureSource>, String> {
+    let output = std::process::Command::new("pactl")
+        .args(["list", "sinks"])
+        .output()
+        .map_err(|e| format!("pactl not found: {e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut cur_name: Option<String> = None;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("Name: ") {
+            cur_name = Some(rest.trim().to_string());
+        } else if let Some(rest) = t.strip_prefix("Description: ") {
+            if let Some(n) = cur_name.take() {
+                pairs.push((n, rest.trim().to_string()));
+            }
+        }
+    }
+
+    let out: Vec<CaptureSource> = pairs
+        .into_iter()
+        .filter(|(name, _)| !name.starts_with("OpenGG_"))
+        .map(|(value, label)| CaptureSource { value, label })
+        .collect();
+    if out.is_empty() {
+        Err("No audio sinks found via pactl".into())
+    } else {
+        Ok(out)
+    }
+}
+
+/// The device currently in use for a channel, as a raw pactl node.name
+/// matching a `value` field from `list_audio_sinks_friendly`/
+/// `list_capture_sources` — so a ComboBox can find and highlight the real
+/// current selection instead of always defaulting to index 0.
+///
+/// Master/Mic route through the system default sink/source, not a virtual
+/// OpenGG sink, so those read `pactl get-default-{sink,source}` directly.
+/// The other four channels are queried the same way `set_channel_device`
+/// verifies its own writes: via `pw-link -l`, since pactl has no "what is
+/// this virtual sink's monitor linked to" query of its own.
+pub fn current_channel_device(channel: &str) -> String {
+    match channel {
+        "Master" => run_cmd_sync("pactl", &["get-default-sink"])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default(),
+        "Mic" => run_cmd_sync("pactl", &["get-default-source"])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default(),
+        _ => {
+            let sink = format!("OpenGG_{channel}");
+            let fl = get_linked_device_for_monitor(&sink, "FL");
+            if !fl.is_empty() {
+                fl
+            } else {
+                get_linked_device_for_monitor(&sink, "FR")
+            }
+        }
+    }
+}
+
+/// `current_channel_device` for every channel strip the Mixer page renders,
+/// as a single JSON object (`{"Master": "...", "Game": "...", ...}`) — one
+/// bundle rather than six separate qinvokable round trips from QML.
+pub fn get_channel_devices_json() -> String {
+    let mut map = serde_json::Map::new();
+    for ch in ["Master", "Game", "Chat", "Media", "Aux", "Mic"] {
+        map.insert(
+            ch.to_string(),
+            serde_json::Value::String(current_channel_device(ch)),
+        );
+    }
+    serde_json::to_string(&map).unwrap_or_else(|_| "{}".into())
+}
+
 pub fn list_capture_sources() -> Result<Vec<CaptureSource>, String> {
     let output = std::process::Command::new("pactl")
         .args(["list", "sources"])
