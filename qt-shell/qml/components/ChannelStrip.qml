@@ -48,6 +48,13 @@ Rectangle {
         ? strip.dragFraction
         : Math.max(0, Math.min(1, volume / strip.maxVolume))
 
+    // Anti-snap: keep showing the dragged value for a moment after release so
+    // a refresh that was already in flight when the drag ended can't yank the
+    // fader back to a pre-drag value. MixerPage.vue's store does the same with
+    // its 3s "ignore polling after user interaction" window.
+    Timer { id: settleTimer; interval: 600; onTriggered: strip.dragging = false }
+    function settle() { settleTimer.restart() }
+
     // ── Accent bar (ChannelStrip.vue's .accent-bar) ──────────────────────
     Rectangle {
         anchors.top: parent.top
@@ -179,19 +186,46 @@ Rectangle {
                     }
 
                     MouseArea {
+                        id: faderArea
                         anchors.fill: parent
                         // Widen the hit area either side of the 6px track.
                         anchors.margins: -8
                         cursorShape: Qt.PointingHandCursor
-                        function apply(my) {
-                            var f = 1 - Math.max(0, Math.min(1, (my + 8) / faderTrack.height))
+
+                        // Where the grab started, so the drag is *relative*.
+                        // Previously a press jumped the value to the pressed
+                        // position, so grabbing the thumb anywhere but its
+                        // exact centre made the fader visibly jump before it
+                        // started following the mouse. Now pressing parks the
+                        // value where it already is and only movement changes
+                        // it — you grab the fader and carry it, wherever on
+                        // the track you happened to take hold of it.
+                        property real grabY: 0
+                        property real grabFraction: 0
+
+                        onPressed: (m) => {
+                            // Read fillFraction BEFORE setting `dragging` —
+                            // that flag is what makes fillFraction switch from
+                            // the volume-derived value to dragFraction, so
+                            // flipping it first made this capture the stale
+                            // dragFraction (0 on a fresh strip) and slam the
+                            // fader to silence the instant you touched it.
+                            faderArea.grabY = m.y
+                            faderArea.grabFraction = strip.fillFraction
+                            strip.dragFraction = faderArea.grabFraction
+                            strip.dragging = true
+                        }
+                        onPositionChanged: (m) => {
+                            if (!faderArea.pressed || faderTrack.height <= 0)
+                                return
+                            var f = faderArea.grabFraction
+                                  - (m.y - faderArea.grabY) / faderTrack.height
+                            f = Math.max(0, Math.min(1, f))
                             strip.dragFraction = f
                             strip.volumeRequested(Math.round(f * strip.maxVolume))
                         }
-                        onPressed: (m) => { strip.dragging = true; apply(m.y) }
-                        onPositionChanged: (m) => { if (pressed) apply(m.y) }
-                        onReleased: strip.dragging = false
-                        onCanceled: strip.dragging = false
+                        onReleased: strip.settle()
+                        onCanceled: strip.settle()
                     }
                 }
             }

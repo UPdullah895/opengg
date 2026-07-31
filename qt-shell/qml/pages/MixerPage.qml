@@ -222,10 +222,24 @@ Rectangle {
             Component.onDestruction: TourController.unregisterTarget("mixer-channels")
 
             Repeater {
-                model: page.stripChannels
+                // Deliberately the *count*, not the array. `stripChannels` is
+                // rebuilt from scratch every time channelsJson changes, so a
+                // `model: page.stripChannels` binding handed the Repeater a
+                // brand-new array identity on every volume change and it tore
+                // down and recreated all six delegates each time (measured:
+                // three volume changes → 18 delegate constructions). That
+                // destroyed the fader's MouseArea mid-drag, taking the mouse
+                // grab with it — which is why every channel except Master
+                // dropped the drag the instant it moved. Master survived only
+                // because its value is synthesized client-side and so never
+                // altered the JSON. The count only changes when a channel
+                // appears or disappears, so the delegates now persist and each
+                // one reads its own row.
+                model: page.stripChannels.length
 
                 ChannelStrip {
-                    required property var modelData
+                    required property int index
+                    readonly property var modelData: page.stripChannels[index]
                     Layout.preferredWidth: 132
                     Layout.fillHeight: true
 
@@ -480,6 +494,7 @@ Rectangle {
         // alive for the whole session (not a Loader) so its jalv engine and
         // band/toggle state survive switching tabs — only visibility toggles.
         ScrollView {
+            id: eqDspScroll
             visible: page.activeTab !== "mixer"
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -528,5 +543,12 @@ Rectangle {
                 }
             }
         }
+    }
+
+    // Wheel accelerator for the EQ/DSP tab — must sit above the Flickable,
+    // see WheelScroller.qml.
+    Item {
+        anchors.fill: eqDspScroll
+        WheelScroller { anchors.fill: parent; flick: eqDspScroll.contentItem }
     }
 }

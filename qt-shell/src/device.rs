@@ -24,9 +24,12 @@ pub mod qobject {
         #[qinvokable]
         fn refresh(self: Pin<&mut Self>);
     }
+
+    impl cxx_qt::Threading for DeviceController {}
 }
 
 use core::pin::Pin;
+use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 
 #[derive(Default)]
@@ -36,13 +39,23 @@ pub struct DeviceControllerRust {
 }
 
 impl qobject::DeviceController {
-    pub fn refresh(mut self: Pin<&mut Self>) {
-        match opengg_core::device::get_devices() {
-            Ok(j) => {
-                self.as_mut().set_devices_json(QString::from(&j));
-                self.as_mut().set_connected(true);
-            }
-            Err(_) => self.as_mut().set_connected(false),
-        }
+    /// Reload the device list.
+    ///
+    /// DevicesPage polls this on a 3s repeating Timer, and `get_devices` is a
+    /// blocking D-Bus round trip, so running it on the Qt thread stalled the
+    /// render loop every 3 seconds for as long as the daemon took to answer.
+    /// The I/O runs on a worker; only the result comes back to the Qt thread.
+    pub fn refresh(self: Pin<&mut Self>) {
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let devices = opengg_core::device::get_devices();
+            let _ = qt_thread.queue(move |mut controller| match devices {
+                Ok(j) => {
+                    controller.as_mut().set_devices_json(QString::from(&j));
+                    controller.as_mut().set_connected(true);
+                }
+                Err(_) => controller.as_mut().set_connected(false),
+            });
+        });
     }
 }

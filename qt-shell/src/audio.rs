@@ -150,17 +150,33 @@ pub struct AudioControllerRust {
 }
 
 impl qobject::AudioController {
-    pub fn refresh(mut self: Pin<&mut Self>) {
-        match opengg_core::audio::get_channels() {
-            Ok(j) => {
-                self.as_mut().set_channels_json(QString::from(&j));
-                self.as_mut().set_connected(true);
-            }
-            Err(_) => self.as_mut().set_connected(false),
-        }
-        if let Ok(j) = opengg_core::audio::get_apps() {
-            self.as_mut().set_apps_json(QString::from(&j));
-        }
+    /// Reload channels + apps.
+    ///
+    /// Both of these are blocking IPC (a D-Bus round trip, or a `pactl`
+    /// subprocess on the fallback path), and this used to run them straight
+    /// on the Qt thread — where a 2s repeating Timer calls it forever, and
+    /// where every queued volume/mute change called it again. Each call
+    /// therefore stalled the render loop, which is what made scrolling and
+    /// dragging feel like they were catching on something. The I/O now runs
+    /// on a worker and only the finished strings are marshalled back.
+    pub fn refresh(self: Pin<&mut Self>) {
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let channels = opengg_core::audio::get_channels();
+            let apps = opengg_core::audio::get_apps();
+            let _ = qt_thread.queue(move |mut controller| {
+                match channels {
+                    Ok(j) => {
+                        controller.as_mut().set_channels_json(QString::from(&j));
+                        controller.as_mut().set_connected(true);
+                    }
+                    Err(_) => controller.as_mut().set_connected(false),
+                }
+                if let Ok(j) = apps {
+                    controller.as_mut().set_apps_json(QString::from(&j));
+                }
+            });
+        });
     }
 
     pub fn route_app(self: Pin<&mut Self>, app_id: i32, channel: &QString, binary: &QString) {
@@ -201,12 +217,16 @@ impl qobject::AudioController {
         // I/O calls — the fader visibly froze/stuttered while dragging.
         // Backgrounded to match the established route_app/setChannelDevice
         // pattern.
-        let qt_thread = self.qt_thread();
+        //
+        // Deliberately does *not* refresh afterwards: a drag fires this
+        // continuously, and every refresh rewrites channelsJson and so
+        // re-runs every binding downstream of it. ChannelStrip already shows
+        // the dragged value optimistically, and MixerPage's 2s poll
+        // reconciles with the daemon shortly after.
         std::thread::spawn(move || {
             if let Err(e) = opengg_core::audio::set_volume(channel, vol) {
                 eprintln!("setVolume: {e}");
             }
-            let _ = qt_thread.queue(|mut c| c.as_mut().refresh());
         });
     }
 

@@ -25,10 +25,31 @@ Item {
         anchors.right: valueText.left
         anchors.rightMargin: 10
         anchors.verticalCenter: parent.verticalCenter
+        // A Control sizes itself from its background/handle *implicit* size,
+        // and the custom delegates below only set `height` — so this Slider
+        // computed implicitHeight 0 and, with no top/bottom anchor, ended up
+        // 0px tall. It still painted (children aren't clipped) but was
+        // invisible to hit-testing, so every HSlider in the app — the Home
+        // popover's Quick Mixer, GraphicEQ's bands, DspControls — silently
+        // ignored every click and drag. Give it a real height.
+        height: 22
         from: root.from
         to: root.to
-        value: root.value
         onMoved: root.moved(value)
+
+        // Follow `root.value` only while the user isn't holding the handle,
+        // and for a moment after they let go. A plain `value: root.value`
+        // binding is severed the first time the Slider writes to value, so
+        // the handle and the numeric readout drifted apart permanently once
+        // you had dragged; re-binding on release keeps them together, and
+        // the settle window stops a poll that was already in flight from
+        // snapping the handle back to a pre-drag value.
+        Binding on value {
+            value: root.value
+            when: !sl.pressed && !settleTimer.running
+            restoreMode: Binding.RestoreNone
+        }
+        onPressedChanged: if (!pressed) settleTimer.restart()
 
         background: Rectangle {
             x: sl.leftPadding
@@ -54,13 +75,17 @@ Item {
         }
     }
 
+    Timer { id: settleTimer; interval: 600 }
+
     Text {
         id: valueText
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         width: 46
         horizontalAlignment: Text.AlignRight
-        text: Math.round(root.value) + root.suffix
+        // The slider's own value, not root.value — so the number always
+        // agrees with where the handle actually is, including mid-drag.
+        text: Math.round(sl.value) + root.suffix
         color: Theme.textDim
         font.pixelSize: 11
     }
