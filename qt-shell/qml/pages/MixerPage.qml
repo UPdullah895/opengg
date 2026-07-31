@@ -21,12 +21,11 @@ Rectangle {
     property var apps: AudioController.appsJson
         ? JSON.parse(AudioController.appsJson)
         : []
-    readonly property var routeTargets: ["Master", "Game", "Chat", "Media", "Aux"]
 
     function appsForChannel(name) {
         if (name === "Master")
             return page.apps.filter(a => !a.locked && (!a.channel || a.channel === "" || a.channel === "Master"))
-        return page.apps.filter(a => a.channel === name)
+        return page.apps.filter(a => !a.locked && a.channel === name)
     }
 
     // Current volume (0..150) for a named channel, or 100 if not found yet
@@ -115,6 +114,22 @@ Rectangle {
         Master: "#94A3B8", Game: "#E94560", Chat: "#3B82F6",
         Media: "#10B981", Aux: "#A855F7", Mic: "#F59E0B",
     })
+
+    // ── App-box layout: one global gear (below) controls every channel's
+    // app box the same way, mirroring DropZone.vue's shared
+    // appBoxCount/appBoxPerRow settings so the row-count/column-count math
+    // stays a single formula instead of six independent ones.
+    property bool appSettingsOpen: false
+    property var uiSettings: JSON.parse(SettingsController.settingsJson || "{}")
+    readonly property int appBoxCount: Math.max(1, Math.min(12, page.uiSettings.appBoxCount ?? 3))
+    readonly property int appBoxPerRow: page.uiSettings.appBoxPerRow === 2 ? 2 : 1
+    readonly property int appBoxRowH: 22
+    readonly property int appBoxRowGap: 2
+    readonly property int appBoxPad: 6
+    readonly property int appBoxHeight: {
+        const rows = Math.ceil(page.appBoxCount / page.appBoxPerRow)
+        return rows * page.appBoxRowH + Math.max(0, rows - 1) * page.appBoxRowGap + page.appBoxPad * 2
+    }
 
     Component.onCompleted: {
         AudioController.refresh()
@@ -218,6 +233,29 @@ Rectangle {
                     delay: 300
                 }
             }
+
+            // APP LIST SETTINGS — one gear controlling every channel's app
+            // box the same way (rows shown before scrolling, 1 or 2 columns).
+            Rectangle {
+                id: appGearBtn
+                visible: page.activeTab === "mixer"
+                width: 30; height: 30
+                radius: Theme.radius
+                color: page.appSettingsOpen ? Theme.tint(Theme.accent, 15) : "transparent"
+                border.width: 1
+                border.color: page.appSettingsOpen ? Theme.accent : Theme.border
+
+                Icon {
+                    anchors.centerIn: parent
+                    name: "gear"; size: 13
+                    color: page.appSettingsOpen ? Theme.accent : Theme.text
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: page.appSettingsOpen = !page.appSettingsOpen
+                }
+            }
         }
 
         // Row of channel strips
@@ -245,152 +283,62 @@ Rectangle {
                 // because its value is synthesized client-side and so never
                 // altered the JSON. The count only changes when a channel
                 // appears or disappears, so the delegates now persist and each
-                // one reads its own row.
+                // one reads its own row. Wrapping ChannelStrip in a ColumnLayout
+                // here (to stack the per-channel app box beneath it) doesn't
+                // reintroduce that bug — the Repeater still only ever recreates
+                // this wrapper, not the strip inside it, when the count changes.
                 model: page.stripChannels.length
 
-                ChannelStrip {
+                ColumnLayout {
+                    id: stripCol
                     required property int index
                     readonly property var modelData: page.stripChannels[index]
                     Layout.preferredWidth: 132
                     Layout.fillHeight: true
+                    spacing: 6
 
-                    name: modelData.name
-                    volume: modelData.volume
-                    muted: !!modelData.muted
-                    channelColor: page.channelColors[modelData.name] || Theme.accent
-                    iconName: page.channelIcons[modelData.name] || "volume-2"
-                    vuDb: page.vuDb(modelData.name)
-                    maxVolume: AudioController.overdriveEnabled ? 150 : 100
-                    devices: modelData.name === "Mic" ? page.inputDevices : page.outputDevices
-                    selectedDevice: page.channelDevices[modelData.name] || ""
+                    ChannelStrip {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
 
-                    onVolumeRequested: (v) => AudioController.setVolume(modelData.name, v)
-                    onMuteToggled: AudioController.setMute(modelData.name, !modelData.muted)
-                    onDeviceRequested: (d) => AudioController.setChannelDevice(modelData.name, d)
-                }
-            }
-            Item { Layout.fillWidth: true } // push strips to the leading edge
-        }
+                        name: stripCol.modelData.name
+                        volume: stripCol.modelData.volume
+                        muted: !!stripCol.modelData.muted
+                        channelColor: page.channelColors[stripCol.modelData.name] || Theme.accent
+                        iconName: page.channelIcons[stripCol.modelData.name] || "volume-2"
+                        vuDb: page.vuDb(stripCol.modelData.name)
+                        maxVolume: AudioController.overdriveEnabled ? 150 : 100
+                        devices: stripCol.modelData.name === "Mic" ? page.inputDevices : page.outputDevices
+                        selectedDevice: page.channelDevices[stripCol.modelData.name] || ""
 
-        // App routing — click an app pill to expand an inline channel
-        // picker. Deliberately NOT a port of DropZone.vue's custom
-        // pointer-drag-with-ghost-element system (a from-scratch, high-risk
-        // rebuild for comparatively little functional gain over click-to-
-        // route); this reuses only proven primitives (Rectangle/MouseArea/
-        // Flow), consistent with this migration's "boring primitive over
-        // fragile fidelity" pattern elsewhere (GraphicEQ's discrete sliders
-        // instead of an SVG bezier curve, the card-scoped confirm overlay
-        // instead of a QQC2 Popup).
-        Rectangle {
-            id: routingCard
-            visible: page.activeTab === "mixer" && page.apps.length > 0
-            Layout.fillWidth: true
-            radius: Theme.radius
-            color: Theme.surface
-            border.width: 1
-            border.color: Theme.border
-            implicitHeight: routingCol.implicitHeight + 24
+                        onVolumeRequested: (v) => AudioController.setVolume(stripCol.modelData.name, v)
+                        onMuteToggled: AudioController.setMute(stripCol.modelData.name, !stripCol.modelData.muted)
+                        onDeviceRequested: (d) => AudioController.setChannelDevice(stripCol.modelData.name, d)
+                    }
 
-            // Id of the app pill whose channel picker is currently open, or
-            // -1 if none. Only one open at a time.
-            property int expandedAppId: -1
+                    AppBox {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: page.appBoxHeight
 
-            ColumnLayout {
-                id: routingCol
-                anchors.fill: parent
-                anchors.margins: 12
-                spacing: 10
+                        channelName: stripCol.modelData.name
+                        channelColor: page.channelColors[stripCol.modelData.name] || Theme.accent
+                        apps: page.appsForChannel(stripCol.modelData.name)
+                        perRow: page.appBoxPerRow
+                        rowH: page.appBoxRowH
+                        rowGap: page.appBoxRowGap
+                        boxPad: page.appBoxPad
+                        dragOverlay: dragLayer
 
-                Text {
-                    text: "APP ROUTING"
-                    color: Theme.textDim
-                    font.pixelSize: 11
-                    font.weight: Font.Bold
-                }
-
-                Flow {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Repeater {
-                        model: page.apps.filter(a => !a.locked)
-
-                        ColumnLayout {
-                            id: appDelegate
-                            required property var modelData
-                            spacing: 4
-
-                            Rectangle {
-                                id: pill
-                                readonly property bool expanded: routingCard.expandedAppId === appDelegate.modelData.id
-                                implicitWidth: pillRow.implicitWidth + 16
-                                implicitHeight: 26
-                                radius: 13
-                                color: pill.expanded ? Theme.accent : Theme.bg
-                                border.width: 1
-                                border.color: Theme.border
-
-                                RowLayout {
-                                    id: pillRow
-                                    anchors.centerIn: parent
-                                    spacing: 6
-                                    Rectangle {
-                                        width: 6; height: 6; radius: 3
-                                        color: page.channelColors[appDelegate.modelData.channel || "Master"] || Theme.textDim
-                                    }
-                                    Text {
-                                        text: appDelegate.modelData.name + " · " + (appDelegate.modelData.channel || "Master")
-                                        color: pill.expanded ? "#fff" : Theme.text
-                                        font.pixelSize: 11
-                                    }
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: routingCard.expandedAppId = pill.expanded ? -1 : appDelegate.modelData.id
-                                }
-                            }
-
-                            RowLayout {
-                                visible: pill.expanded
-                                spacing: 4
-                                Repeater {
-                                    model: page.routeTargets
-                                    Rectangle {
-                                        id: targetBtn
-                                        required property string modelData
-                                        readonly property bool isCurrent: (appDelegate.modelData.channel || "Master") === modelData
-                                        implicitWidth: targetText.implicitWidth + 14
-                                        implicitHeight: 22
-                                        radius: Theme.radius
-                                        color: targetBtn.isCurrent ? Theme.accent : "transparent"
-                                        border.width: 1
-                                        border.color: Theme.border
-                                        Text {
-                                            id: targetText
-                                            anchors.centerIn: parent
-                                            text: targetBtn.modelData
-                                            color: targetBtn.isCurrent ? "#fff" : Theme.textDim
-                                            font.pixelSize: 10
-                                        }
-                                        MouseArea {
-                                            anchors.fill: parent
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                if (targetBtn.modelData === "Master")
-                                                    AudioController.unrouteApp(appDelegate.modelData.id, appDelegate.modelData.binary)
-                                                else
-                                                    AudioController.routeApp(appDelegate.modelData.id, targetBtn.modelData, appDelegate.modelData.binary)
-                                                routingCard.expandedAppId = -1
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                        onAppDropped: (appId, binary) => {
+                            if (stripCol.modelData.name === "Master")
+                                AudioController.unrouteApp(appId, binary)
+                            else
+                                AudioController.routeApp(appId, stripCol.modelData.name, binary)
                         }
                     }
                 }
             }
+            Item { Layout.fillWidth: true } // push strips to the leading edge
         }
 
         // ChatMix — Game/Chat balance slider. Balance is derived from the
@@ -568,6 +516,148 @@ Rectangle {
             Item {
                 anchors.fill: parent
                 WheelScroller { anchors.fill: parent; flick: eqDspScroll.contentItem }
+            }
+        }
+    }
+
+    // Drag overlay for the per-channel app boxes — a chip being dragged is
+    // reparented here (see AppBox.qml) so it isn't clipped by the box's own
+    // scrollable Flickable while travelling across neighbouring boxes. Plain
+    // child of `page` rather than of the ColumnLayout above: it must cover
+    // the same screen area without being sized/positioned by that layout.
+    Item {
+        id: dragLayer
+        anchors.fill: parent
+        z: 1000
+    }
+
+    // APP LIST SETTINGS popover — same page-level-overlay-plus-click-away
+    // pattern as HomePage.qml's card popovers (a plain positioned Item
+    // rather than a QQC2 Popup, consistent with this migration's other
+    // free-floating panels).
+    Item {
+        id: appSettingsOverlay
+        anchors.fill: parent
+        visible: page.appSettingsOpen
+        z: 1001
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: page.appSettingsOpen = false
+        }
+
+        Rectangle {
+            id: appSettingsPanel
+            readonly property point anchorPos: appGearBtn.mapToItem(appSettingsOverlay, 0, appGearBtn.height + 6)
+            x: Math.max(6, Math.min(appSettingsPanel.anchorPos.x, appSettingsOverlay.width - width - 6))
+            y: appSettingsPanel.anchorPos.y
+            width: 200
+            implicitHeight: appSettingsCol.implicitHeight + 20
+            radius: Theme.radiusLg
+            color: Theme.surface
+            border.width: 1
+            border.color: Theme.border
+
+            MouseArea { anchors.fill: parent } // absorb clicks so they don't close the popover
+
+            ColumnLayout {
+                id: appSettingsCol
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 10
+
+                Text {
+                    text: ((I18n.language, I18n.t("devices.appBoxSettings"))).toUpperCase()
+                    color: Theme.textDim
+                    font.pixelSize: 10
+                    font.weight: Font.Bold
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text {
+                        text: (I18n.language, I18n.t("devices.appsShown"))
+                        color: Theme.text
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
+                    }
+                    RowLayout {
+                        spacing: 4
+                        Rectangle {
+                            width: 22; height: 22
+                            radius: Theme.radius
+                            color: Theme.bgDeep
+                            border.width: 1; border.color: Theme.border
+                            opacity: page.appBoxCount > 1 ? 1 : 0.4
+                            Text { anchors.centerIn: parent; text: "−"; color: Theme.text; font.pixelSize: 13 }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: page.appBoxCount > 1
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: SettingsController.setValue("appBoxCount", JSON.stringify(page.appBoxCount - 1))
+                            }
+                        }
+                        Text {
+                            text: page.appBoxCount
+                            color: Theme.text
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                            horizontalAlignment: Text.AlignHCenter
+                            Layout.preferredWidth: 16
+                        }
+                        Rectangle {
+                            width: 22; height: 22
+                            radius: Theme.radius
+                            color: Theme.bgDeep
+                            border.width: 1; border.color: Theme.border
+                            opacity: page.appBoxCount < 12 ? 1 : 0.4
+                            Text { anchors.centerIn: parent; text: "+"; color: Theme.text; font.pixelSize: 13 }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: page.appBoxCount < 12
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: SettingsController.setValue("appBoxCount", JSON.stringify(page.appBoxCount + 1))
+                            }
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text {
+                        text: (I18n.language, I18n.t("devices.appsPerRow"))
+                        color: Theme.text
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
+                    }
+                    Row {
+                        spacing: 2
+                        Repeater {
+                            model: [1, 2]
+                            Rectangle {
+                                id: perRowBtn
+                                required property int modelData
+                                width: 26; height: 22
+                                radius: Theme.radius
+                                color: page.appBoxPerRow === perRowBtn.modelData ? Theme.accent : Theme.bgDeep
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: perRowBtn.modelData
+                                    color: page.appBoxPerRow === perRowBtn.modelData ? "#fff" : Theme.textDim
+                                    font.pixelSize: 11
+                                    font.weight: Font.Bold
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: SettingsController.setValue("appBoxPerRow", JSON.stringify(perRowBtn.modelData))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
