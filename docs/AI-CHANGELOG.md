@@ -6,6 +6,44 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-01] Claude (main session, Sonnet 5 → Opus 5 → Fable 5) — qt6-migration
+
+**What Changed:**
+- `fee433c`: Mixer round 2 — toolbar/borders/ChatMix/Ear-Blast + two real backend bugs
+  (stale deployed daemon binary; Mic mute now also mutes @DEFAULT_SOURCE@; Mic
+  device list split from the capture-source list)
+- `060c54b` / `05cd520` / `99ebf66`: Clips rebuild — multi-select, list/date views,
+  stats bar, toolbar, full player transport, dedicated editor page
+- `ee94d40` + `3ff1ccd`: GStreamer multi-track audio mixer (all tracks at once,
+  per-track gain) + the ownership/sync/trim/z-order regression fixes
+- `cfb0368`: Export settings dialog (target size, codec, two-pass encode in core)
+- `39ad78e` / `af67442` / `01bb419`: editor design-gap analysis + plan of record —
+  **decision: a single GStreamer pipeline (qml6glsink) will replace Qt Multimedia
+  for clip playback entirely**; icons fix = Shape.CurveRenderer
+- `89c6c71`: review fixes for the switchover-agent's work (fabricated commit
+  hashes in this file's first entry, misleading Layout rules in AGENTS.md,
+  make install ETXTBSY)
+
+**Why:**
+User feedback rounds on the Mixer and Clips pages, then the switchover decision:
+qt-shell becomes the launched UI and GStreamer the committed playback direction.
+
+**Landmines & Discoveries:**
+- Everything durable was folded into AGENTS.md; the deep narrative lives in the
+  session memory and the plan/gap docs under docs/.
+- Subagent lesson: an agent that ingests very large files can stall the stream
+  watchdog (two 600s stalls); inline the needed facts into the prompt instead.
+  And verify agent-written logs against `git log` — the first draft of this
+  file's older entry cited four commits that did not exist.
+
+**Verification:**
+- Full suite per slice: cargo clippy + test (core/daemon/qt-shell),
+  check-colors.sh, ui-shots.sh (zero QML warnings), screenshot review,
+  live relaunches; mixer pipeline verified against a real 3-track capture;
+  export path verified by a real 1s stream-copy test.
+
+---
+
 ### [2026-08-01] Claude Fable 5 — qt6-migration
 
 **What Changed:**
