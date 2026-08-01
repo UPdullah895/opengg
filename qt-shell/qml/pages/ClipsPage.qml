@@ -16,8 +16,9 @@ Rectangle {
     // is a small {filepath, title} object built from the delegate's role
     // context properties at the point of interaction.
     property var playerClip: null
-    // Clip currently open in the trim editor overlay (null = closed).
-    property var editorClip: null
+    /// Raised when a clip should open in the dedicated editor page. Main.qml
+    /// owns the navigation; the editor is a page now, not an overlay here.
+    signal editClipRequested(var clip)
     // Clips targeted by the rename / delete dialogs (null = dialog closed).
     property var renameTarget: null
     property var deleteTarget: null
@@ -784,7 +785,7 @@ Rectangle {
                     onOpened: page.activate(model.filepath, model.title)
                     onSelectToggled: page.toggleSelect(model.filepath)
                     onRenamed: (newName) => ClipsController.setCustomName(model.filepath, newName)
-                    onTrimRequested: page.editorClip = { filepath: model.filepath, title: model.title }
+                    onTrimRequested: page.editClipRequested({ filepath: model.filepath, title: model.title })
                     onDeleteRequested: page.deleteTarget = { filepath: model.filepath, title: model.title }
                     onMenuRequested: (gx, gy) => clipMenu.openAt(
                         { filepath: model.filepath, title: model.title, favorite: model.favorite },
@@ -917,7 +918,7 @@ Rectangle {
                                 onOpened: page.activate(modelData.filepath, modelData.title)
                                 onSelectToggled: page.toggleSelect(modelData.filepath)
                                 onRenamed: (newName) => ClipsController.setCustomName(modelData.filepath, newName)
-                                onTrimRequested: page.editorClip = { filepath: modelData.filepath, title: modelData.title }
+                                onTrimRequested: page.editClipRequested({ filepath: modelData.filepath, title: modelData.title })
                                 onDeleteRequested: page.deleteTarget = { filepath: modelData.filepath, title: modelData.title }
                                 onFavoriteToggled: ClipsController.setFavorite(modelData.filepath, !modelData.favorite)
                                 onMenuRequested: (gx, gy) => clipMenu.openAt(
@@ -984,7 +985,7 @@ Rectangle {
         id: clipMenu
         z: 50
         onPreviewRequested: page.playerClip = { filepath: clip.filepath, title: clip.title }
-        onEditRequested: page.editorClip = { filepath: clip.filepath, title: clip.title }
+        onEditRequested: page.editClipRequested({ filepath: clip.filepath, title: clip.title })
         onRenameRequested: page.renameTarget = { filepath: clip.filepath, title: clip.title }
         onDeleteRequested: page.deleteTarget = { filepath: clip.filepath, title: clip.title }
         onFavoriteRequested: ClipsController.setFavorite(clip.filepath, !clip.favorite)
@@ -1002,15 +1003,6 @@ Rectangle {
         onClosed: page.playerClip = null
     }
 
-    // ── Trim editor overlay ───────────────────────────────────────────────
-    TrimEditor {
-        anchors.fill: parent
-        visible: page.editorClip !== null
-        source: page.editorClip ? "file://" + page.editorClip.filepath : ""
-        filepath: page.editorClip ? page.editorClip.filepath : ""
-        title: page.editorClip ? page.editorClip.title : ""
-        onClosed: page.editorClip = null
-    }
 
     // ── Rename dialog ─────────────────────────────────────────────────────
     Rectangle {

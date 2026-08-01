@@ -30,6 +30,12 @@ pub mod qobject {
         #[qproperty(QString, export_stage, cxx_name = "exportStage")]
         #[qproperty(QString, export_error, cxx_name = "exportError")]
         #[qproperty(QString, export_result, cxx_name = "exportResult")]
+        /// Full ffprobe analysis of the loaded clip as JSON (duration, width,
+        /// height, fps, video_codec, streams[], video_streams, audio_streams).
+        /// Backs the editor's INFO panel and its per-audio-track timeline
+        /// lanes; empty until the background probe started by `loadClip`
+        /// finishes.
+        #[qproperty(QString, media_info_json, cxx_name = "mediaInfoJson")]
         type EditorController = super::EditorControllerRust;
 
         /// Probe the clip's duration and load its saved trim window (if any,
@@ -66,6 +72,7 @@ pub struct EditorControllerRust {
     export_stage: QString,
     export_error: QString,
     export_result: QString,
+    media_info_json: QString,
 }
 
 impl qobject::EditorController {
@@ -89,6 +96,21 @@ impl qobject::EditorController {
                 self.as_mut().set_trim_end(dur);
             }
         }
+
+        // Full analysis (codec/fps/streams) is a second ffprobe, so it runs off
+        // the Qt thread — `duration` above already came from the cheap probe,
+        // letting the timeline lay out before this lands.
+        self.as_mut().set_media_info_json(QString::default());
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let json = opengg_core::media::analyze_media_sync(&fp)
+                .ok()
+                .and_then(|info| serde_json::to_string(&info).ok())
+                .unwrap_or_default();
+            let _ = qt_thread.queue(move |mut c| {
+                c.as_mut().set_media_info_json(QString::from(&json));
+            });
+        });
     }
 
     pub fn save_trim(self: Pin<&mut Self>, filepath: QString, start: f64, end: f64) {

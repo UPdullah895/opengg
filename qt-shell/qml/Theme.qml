@@ -96,4 +96,19 @@ QtObject {
     function scrim(pct) {
         return Qt.rgba(0, 0, 0, pct / 100)
     }
+
+    // Per-channel identity colours, hardcoded in MixerPage.vue:62-63 too (they
+    // are not theme tokens — Game is always red, Chat always blue, regardless
+    // of the user's accent). Lives here so anything keyed by channel name —
+    // the mixer strips, the editor's audio-track lanes — agrees on them.
+    readonly property var channelColors: ({
+        Master: "#94A3B8", Game: "#E94560", Chat: "#3B82F6",
+        Media: "#10B981", Aux: "#A855F7", Mic: "#F59E0B",
+    })
+
+    /// Colour for a channel name, falling back to the accent for anything
+    /// unrecognised (a clip's audio track can carry any label).
+    function channelColor(name) {
+        return Theme.channelColors[name] || Theme.accent
+    }
 }

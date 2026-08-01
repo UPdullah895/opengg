@@ -124,14 +124,18 @@ ApplicationWindow {
 
                 Sidebar {
                     Layout.fillHeight: true
-                    currentPage: root.currentPage
+                    // The editor is reached from Clips and has no nav entry of
+                    // its own, so keep Clips lit while it's open rather than
+                    // leaving nothing selected.
+                    currentPage: root.currentPage === "editor" ? "clips" : root.currentPage
                     onNavigate: (p) => root.currentPage = p
                 }
 
                 StackLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    currentIndex: ["home", "mixer", "clips", "devices", "settings"].indexOf(root.currentPage)
+                    currentIndex: ["home", "mixer", "clips", "devices", "settings", "editor"]
+                                  .indexOf(root.currentPage)
 
                     HomePage {
                         onNavigate: (p) => root.currentPage = p
@@ -139,9 +143,22 @@ ApplicationWindow {
                         onPreviewClipRequested: (fp, t) => clipsPage.playerClip = { filepath: fp, title: t }
                     }
                     MixerPage {}
-                    ClipsPage { id: clipsPage }
+                    ClipsPage {
+                        id: clipsPage
+                        onEditClipRequested: (c) => {
+                            editorPage.clip = c
+                            root.currentPage = "editor"
+                        }
+                    }
                     DevicesPage {}
                     SettingsPage { id: settingsPage }
+                    ClipEditorPage {
+                        id: editorPage
+                        onClosed: {
+                            root.currentPage = "clips"
+                            editorPage.clip = null
+                        }
+                    }
                 }
             }
         }
