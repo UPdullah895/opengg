@@ -34,8 +34,12 @@ Rectangle {
         } else {
             mp.stop()
             // Release the audio device — a live pipeline left running would
-            // keep playing over the rest of the app.
-            ClipAudioMixer.unload()
+            // keep playing over the rest of the app. Token-scoped, so hiding
+            // this player during navigation can't silence the editor.
+            if (root.mixerToken !== null) {
+                ClipAudioMixer.release(root.mixerToken)
+                root.mixerToken = null
+            }
             root.expanded = false
             speedMenu.open = false
             trackMenu.open = false
@@ -58,6 +62,10 @@ Rectangle {
     // (all tracks mixed, independent gains) and Qt Multimedia is muted down to
     // just the picture. Single-track clips keep Qt's own audio path.
     readonly property bool mixed: ClipAudioMixer.active
+    /// Ownership token from the last ClipAudioMixer.load — see the note there.
+    /// Releasing without it let this player tear down audio the editor page
+    /// had just started, which is how the editor ended up silent.
+    property var mixerToken: null
     /// Per-track mute flags while `mixed`. Reassigned wholesale, never mutated
     /// in place, so the bindings in the track menu actually re-evaluate.
     property var trackMuted: ({})
@@ -72,16 +80,10 @@ Rectangle {
     }
 
     function togglePlay() {
-        if (mp.playbackState === MediaPlayer.PlayingState) {
-            mp.pause()
-            if (root.mixed) ClipAudioMixer.pause()
-        } else {
-            mp.play()
-            if (root.mixed) {
-                ClipAudioMixer.seek(mp.position)
-                ClipAudioMixer.play()
-            }
-        }
+        // Only the video is driven here; onPlaybackStateChanged mirrors the
+        // resulting state onto the mixer.
+        if (mp.playbackState === MediaPlayer.PlayingState) mp.pause()
+        else mp.play()
         root.poke()
     }
     function seekTo(ms) {
@@ -104,13 +106,13 @@ Rectangle {
     // The two clocks run independently, so nudge the audio back whenever it
     // drifts more than a frame or two from the video.
     Timer {
-        interval: 1000
+        interval: 400
         running: root.visible && root.mixed
                  && mp.playbackState === MediaPlayer.PlayingState
         repeat: true
         onTriggered: {
             const apos = ClipAudioMixer.positionMs()
-            if (apos >= 0 && Math.abs(apos - mp.position) > 180)
+            if (apos >= 0 && Math.abs(apos - mp.position) > 120)
                 ClipAudioMixer.seek(mp.position)
         }
     }
@@ -180,7 +182,19 @@ Rectangle {
                 root.poke()
             }
         }
-        onPlaybackStateChanged: root.poke()
+        // The mix follows the video's ACTUAL state rather than being started
+        // alongside mp.play(), which returns long before the first frame.
+        onPlaybackStateChanged: {
+            if (root.mixed) {
+                if (mp.playbackState === MediaPlayer.PlayingState) {
+                    ClipAudioMixer.seek(mp.position)
+                    ClipAudioMixer.play()
+                } else {
+                    ClipAudioMixer.pause()
+                }
+            }
+            root.poke()
+        }
     }
     Component.onDestruction: mp.stop()
 
@@ -194,10 +208,12 @@ Rectangle {
             // deciding after playback starts would leak a burst of Qt's
             // single-track sound.
             root.trackMuted = ({})
-            ClipAudioMixer.load(path)
+            root.mixerToken = ClipAudioMixer.load(path)
             ClipAudioMixer.setMasterVolume(audioOut.muted ? 0 : audioOut.volume)
+            // Deliberately NOT starting the mix here: the pipeline would begin
+            // instantly while Qt is still opening the file, so the audio ran
+            // ahead of the picture. It follows mp's real playback state below.
             mp.play()
-            if (root.mixed) ClipAudioMixer.play()
             root.poke()
         }
     }

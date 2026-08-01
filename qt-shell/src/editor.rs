@@ -36,6 +36,8 @@ pub mod qobject {
         /// lanes; empty until the background probe started by `loadClip`
         /// finishes.
         #[qproperty(QString, media_info_json, cxx_name = "mediaInfoJson")]
+        /// Path of the most recent `grabFrame` result (empty until one lands).
+        #[qproperty(QString, screenshot_path, cxx_name = "screenshotPath")]
         type EditorController = super::EditorControllerRust;
 
         /// Probe the clip's duration and load its saved trim window (if any,
@@ -53,6 +55,17 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "exportTrim"]
         fn export_trim(self: Pin<&mut Self>, filepath: QString, start: f64, end: f64);
+
+        /// Grab the frame at `time_sec` to the screenshot directory. Threaded
+        /// (ffmpeg subprocess); the resulting path lands in `screenshotPath`.
+        #[qinvokable]
+        #[cxx_name = "grabFrame"]
+        fn grab_frame(self: Pin<&mut Self>, filepath: QString, time_sec: f64);
+
+        /// Set the clip's game tag, preserving its other metadata.
+        #[qinvokable]
+        #[cxx_name = "setGameTag"]
+        fn set_game_tag(self: Pin<&mut Self>, filepath: QString, game: QString);
     }
 
     impl cxx_qt::Threading for EditorController {}
@@ -73,6 +86,7 @@ pub struct EditorControllerRust {
     export_error: QString,
     export_result: QString,
     media_info_json: QString,
+    screenshot_path: QString,
 }
 
 impl qobject::EditorController {
@@ -116,6 +130,63 @@ impl qobject::EditorController {
     pub fn save_trim(self: Pin<&mut Self>, filepath: QString, start: f64, end: f64) {
         if let Err(e) = opengg_core::clips::save_trim_state(&filepath.to_string(), start, end) {
             eprintln!("EditorController::save_trim: {e}");
+        }
+    }
+
+    pub fn grab_frame(mut self: Pin<&mut Self>, filepath: QString, time_sec: f64) {
+        self.as_mut().set_screenshot_path(QString::default());
+        let fp = filepath.to_string();
+        // Honour the configured screenshot directory, same as the recorder's
+        // own hotkey grab; falls back to XDG Pictures inside core.
+        let dir = opengg_core::settings::load_ui_settings()
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| {
+                v.get("settings")?
+                    .get("screenshotDirs")?
+                    .get(0)?
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = opengg_core::media::take_screenshot_sync(
+                &fp,
+                time_sec,
+                if dir.is_empty() { None } else { Some(dir.as_str()) },
+            );
+            let path = match result {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("EditorController::grab_frame: {e}");
+                    String::new()
+                }
+            };
+            let _ = qt_thread.queue(move |mut c| {
+                c.as_mut().set_screenshot_path(QString::from(&path));
+            });
+        });
+    }
+
+    pub fn set_game_tag(self: Pin<&mut Self>, filepath: QString, game: QString) {
+        let fp = filepath.to_string();
+        // set_clip_meta writes `favorite` unconditionally, so it has to be
+        // re-sent or tagging a clip would silently un-favourite it — the same
+        // trap ClipsController::set_custom_name documents.
+        let favorite = opengg_core::clips::get_clip_meta(&fp)
+            .ok()
+            .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+            .and_then(|v| v.get("favorite").and_then(|f| f.as_bool()));
+        let update = opengg_core::clips::ClipMetaUpdate {
+            filepath: fp,
+            custom_name: None,
+            favorite,
+            game_tag: Some(game.to_string()),
+            notes: None,
+        };
+        if let Err(e) = opengg_core::clips::set_clip_meta(update) {
+            eprintln!("EditorController::set_game_tag: {e}");
         }
     }
 

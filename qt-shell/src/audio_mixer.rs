@@ -32,11 +32,23 @@ pub mod qobject {
         type ClipAudioMixer = super::ClipAudioMixerRust;
 
         /// Tear down any existing pipeline and build one for `source`
-        /// (accepts a plain path or a file:// URL). Sets `trackCount`.
+        /// (accepts a plain path or a file:// URL). Sets `trackCount` and
+        /// returns an ownership token for `release`.
+        ///
+        /// This is a singleton with two callers (the clip player and the
+        /// editor page), and navigating between them hides one while showing
+        /// the other. An unconditional `unload` from the one being hidden
+        /// would kill the audio the other just started — which is exactly how
+        /// the editor ended up silent. Callers keep their token and release
+        /// with it; a stale release is ignored.
         #[qinvokable]
-        fn load(self: Pin<&mut Self>, source: &QString);
+        fn load(self: Pin<&mut Self>, source: &QString) -> i64;
 
-        /// Drop the pipeline and release the audio device.
+        /// Drop the pipeline IF `token` still owns it, else do nothing.
+        #[qinvokable]
+        fn release(self: Pin<&mut Self>, token: i64);
+
+        /// Unconditional teardown — app shutdown only.
         #[qinvokable]
         fn unload(self: Pin<&mut Self>);
 
@@ -84,6 +96,8 @@ pub struct ClipAudioMixerRust {
     active: bool,
     master_volume: f64,
     pipeline: Option<MixerPipeline>,
+    /// Monotonic ownership token; see `load`.
+    token: i64,
 }
 
 impl Default for ClipAudioMixerRust {
@@ -93,15 +107,19 @@ impl Default for ClipAudioMixerRust {
             active: false,
             master_volume: 1.0,
             pipeline: None,
+            token: 0,
         }
     }
 }
 
 impl qobject::ClipAudioMixer {
-    pub fn load(mut self: Pin<&mut Self>, source: &QString) {
+    pub fn load(mut self: Pin<&mut Self>, source: &QString) -> i64 {
         // Tear the old pipeline down completely first — leaving a stale one
         // holding the audio device was a real bug in the PoC.
         self.as_mut().unload();
+
+        let token = self.token.wrapping_add(1);
+        self.as_mut().rust_mut().token = token;
 
         let source = source.to_string();
         let path = source
@@ -109,7 +127,7 @@ impl qobject::ClipAudioMixer {
             .unwrap_or(&source)
             .to_string();
         if path.is_empty() {
-            return;
+            return token;
         }
 
         let pipeline = match build_mixer_pipeline(&path) {
@@ -117,7 +135,7 @@ impl qobject::ClipAudioMixer {
             Err(e) => {
                 eprintln!("clip audio mixer: pipeline build failed for {path}: {e}");
                 self.as_mut().set_track_count(0);
-                return;
+                return token;
             }
         };
         pipeline.set_master_volume(self.master_volume);
@@ -140,6 +158,14 @@ impl qobject::ClipAudioMixer {
                 self.as_mut().set_active(true);
             }
         }
+        token
+    }
+
+    pub fn release(mut self: Pin<&mut Self>, token: i64) {
+        if token != self.token {
+            return; // superseded by another owner — not ours to tear down
+        }
+        self.as_mut().unload();
     }
 
     pub fn unload(mut self: Pin<&mut Self>) {

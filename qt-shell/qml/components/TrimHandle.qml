@@ -1,15 +1,21 @@
 import QtQuick
 import com.opengg.app
 
-// Draggable trim boundary on the clip editor's timeline. Reports deltas rather
-// than absolute positions so the page can clamp each handle against the other.
+// Draggable trim boundary on the clip editor's timeline.
+//
+// Reports an ABSOLUTE x in the parent's coordinate space, not a delta: the
+// handle is repositioned by the value it reports, so the MouseArea slides out
+// from under the cursor between events. A delta measured against a fixed
+// press-point therefore compounded and the handle barely tracked the mouse.
 Item {
     id: handle
 
-    /// Emitted with the horizontal movement since the last emit, in pixels.
-    signal dragged(real dx)
+    /// New position, in the parent overlay's coordinates.
+    signal movedTo(real x)
 
-    width: 12
+    property bool dragging: false
+
+    width: 14
 
     Rectangle {
         anchors.horizontalCenter: parent.horizontalCenter
@@ -22,21 +28,28 @@ Item {
     Rectangle {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
-        width: 12
-        height: 16
+        width: 14
+        height: 18
         radius: 3
-        color: Theme.accent
+        color: handle.dragging || grip.containsMouse
+               ? Theme.tint(Theme.text, 90) : Theme.accent
     }
 
     MouseArea {
+        id: grip
         anchors.fill: parent
-        anchors.margins: -4      // enlarge the hit target past the visual grip
+        anchors.margins: -6      // enlarge the hit target past the visual grip
+        hoverEnabled: true
         cursorShape: Qt.SizeHorCursor
-        property real lastX: 0
-        onPressed: (m) => handle.lastX = m.x
+        preventStealing: true    // the timeline's seek handler must not grab it
+
+        onPressed: handle.dragging = true
+        onReleased: handle.dragging = false
+        onCanceled: handle.dragging = false
         onPositionChanged: (m) => {
-            if (!pressed) return
-            handle.dragged(m.x - handle.lastX)
+            if (!grip.pressed)
+                return
+            handle.movedTo(grip.mapToItem(handle.parent, m.x, m.y).x)
         }
     }
 }

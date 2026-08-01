@@ -350,7 +350,43 @@ pub async fn take_screenshot(
     time_sec: f64,
     output_dir: Option<String>,
 ) -> Result<String, String> {
-    let pics_dir = match output_dir.as_deref().filter(|s| !s.is_empty()) {
+    let out = screenshot_output_path(output_dir.as_deref());
+
+    let r = run_command_output_async("ffmpeg", &screenshot_args(&filepath, time_sec, &out)
+        .iter().map(String::as_str).collect::<Vec<_>>()).await?;
+
+    if r.status.success() && Path::new(&out).exists() {
+        Ok(out)
+    } else {
+        Err(format!(
+            "Screenshot failed: {}",
+            String::from_utf8_lossy(&r.stderr)
+        ))
+    }
+}
+
+/// Blocking twin of [`take_screenshot`], for callers already on a worker
+/// thread (qt-shell's editor runs it off the Qt thread, no tokio runtime).
+pub fn take_screenshot_sync(
+    filepath: &str,
+    time_sec: f64,
+    output_dir: Option<&str>,
+) -> Result<String, String> {
+    let out = screenshot_output_path(output_dir);
+    let args = screenshot_args(filepath, time_sec, &out);
+    crate::subprocess::run_cmd_sync(
+        "ffmpeg",
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    if Path::new(&out).exists() {
+        Ok(out)
+    } else {
+        Err("Screenshot failed: ffmpeg produced no output".into())
+    }
+}
+
+fn screenshot_output_path(output_dir: Option<&str>) -> String {
+    let pics_dir = match output_dir.filter(|s| !s.is_empty()) {
         Some(d) => PathBuf::from(shexp(d)),
         None => dirs::picture_dir()
             .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures")),
@@ -360,24 +396,25 @@ pub async fn take_screenshot(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let out = pics_dir.join(format!("opengg_screenshot_{ts}.png"));
+    pics_dir
+        .join(format!("opengg_screenshot_{ts}.png"))
+        .to_string_lossy()
+        .to_string()
+}
 
-    let r = run_command_output_async("ffmpeg", &[
-        "-ss", &format!("{time_sec:.3}"),
-        "-i", &filepath,
-        "-vframes", "1",
-        "-q:v", "2",
-        "-y", &out.to_string_lossy(),
-    ]).await?;
-
-    if r.status.success() && out.exists() {
-        Ok(out.to_string_lossy().to_string())
-    } else {
-        Err(format!(
-            "Screenshot failed: {}",
-            String::from_utf8_lossy(&r.stderr)
-        ))
-    }
+fn screenshot_args(filepath: &str, time_sec: f64, out: &str) -> Vec<String> {
+    vec![
+        "-ss".into(),
+        format!("{time_sec:.3}"),
+        "-i".into(),
+        filepath.into(),
+        "-vframes".into(),
+        "1".into(),
+        "-q:v".into(),
+        "2".into(),
+        "-y".into(),
+        out.into(),
+    ]
 }
 
 /// Parallel ffprobe of multiple files with concurrency limit (max 4).

@@ -271,12 +271,16 @@ Rectangle {
             Layout.fillWidth: true
             visible: ClipsController.totalCount > 0
             spacing: 10
+            // The recorder menu drops out of this row into the grid's area.
+            // z on the button itself only orders it WITHIN this row — the grid
+            // is a later sibling of the row in the ColumnLayout, so the row is
+            // what has to be lifted for the menu to be visible at all.
+            z: 60
 
             // Recorder status + start/save/stop (ClipsToolbar.vue's #recording
             // slot). The Home page's recording card drives the same controller.
             RecordingControl {
                 Layout.alignment: Qt.AlignVCenter
-                z: 60
             }
 
             // Search
@@ -486,9 +490,20 @@ Rectangle {
                     Layout.alignment: Qt.AlignVCenter
                     from: 2; to: 5; stepSize: 1
                     snapMode: Slider.SnapAlways
-                    value: page.clipsPerRow
+                    // NOT `value: page.clipsPerRow` — QQC2 writes `value`
+                    // directly while dragging, which severs any binding on it
+                    // and leaves the handle stuck. Seed it once and re-sync
+                    // only when the setting changes from elsewhere.
+                    Component.onCompleted: value = page.clipsPerRow
                     onMoved: SettingsController.setValue("clipsPerRow",
-                                                         JSON.stringify(Math.round(value)))
+                                                         JSON.stringify(Math.round(sizeSlider.value)))
+                    Connections {
+                        target: page
+                        function onClipsPerRowChanged() {
+                            if (!sizeSlider.pressed)
+                                sizeSlider.value = page.clipsPerRow
+                        }
+                    }
 
                     background: Rectangle {
                         x: sizeSlider.leftPadding
@@ -785,11 +800,11 @@ Rectangle {
                     onOpened: page.activate(model.filepath, model.title)
                     onSelectToggled: page.toggleSelect(model.filepath)
                     onRenamed: (newName) => ClipsController.setCustomName(model.filepath, newName)
-                    onTrimRequested: page.editClipRequested({ filepath: model.filepath, title: model.title })
+                    onTrimRequested: page.editClipRequested({ filepath: model.filepath, title: model.title, game: model.game })
                     onDeleteRequested: page.deleteTarget = { filepath: model.filepath, title: model.title }
                     onMenuRequested: (gx, gy) => clipMenu.openAt(
-                        { filepath: model.filepath, title: model.title, favorite: model.favorite },
-                        gx, gy)
+                        { filepath: model.filepath, title: model.title,
+                          favorite: model.favorite, game: model.game }, gx, gy)
                     onFavoriteToggled: ClipsController.setFavorite(model.filepath, !model.favorite)
                 }
             }
@@ -827,8 +842,8 @@ Rectangle {
                     onSelectToggled: page.toggleSelect(model.filepath)
                     onFavoriteToggled: ClipsController.setFavorite(model.filepath, !model.favorite)
                     onMenuRequested: (gx, gy) => clipMenu.openAt(
-                        { filepath: model.filepath, title: model.title, favorite: model.favorite },
-                        gx, gy)
+                        { filepath: model.filepath, title: model.title,
+                          favorite: model.favorite, game: model.game }, gx, gy)
                 }
             }
 
@@ -918,12 +933,12 @@ Rectangle {
                                 onOpened: page.activate(modelData.filepath, modelData.title)
                                 onSelectToggled: page.toggleSelect(modelData.filepath)
                                 onRenamed: (newName) => ClipsController.setCustomName(modelData.filepath, newName)
-                                onTrimRequested: page.editClipRequested({ filepath: modelData.filepath, title: modelData.title })
+                                onTrimRequested: page.editClipRequested({ filepath: modelData.filepath, title: modelData.title, game: modelData.game })
                                 onDeleteRequested: page.deleteTarget = { filepath: modelData.filepath, title: modelData.title }
                                 onFavoriteToggled: ClipsController.setFavorite(modelData.filepath, !modelData.favorite)
                                 onMenuRequested: (gx, gy) => clipMenu.openAt(
                                     { filepath: modelData.filepath, title: modelData.title,
-                                      favorite: modelData.favorite }, gx, gy)
+                                      favorite: modelData.favorite, game: modelData.game }, gx, gy)
                             }
                         }
                     }
@@ -959,7 +974,7 @@ Rectangle {
                                 onFavoriteToggled: ClipsController.setFavorite(modelData.filepath, !modelData.favorite)
                                 onMenuRequested: (gx, gy) => clipMenu.openAt(
                                     { filepath: modelData.filepath, title: modelData.title,
-                                      favorite: modelData.favorite }, gx, gy)
+                                      favorite: modelData.favorite, game: modelData.game }, gx, gy)
                             }
                         }
                     }
@@ -985,7 +1000,7 @@ Rectangle {
         id: clipMenu
         z: 50
         onPreviewRequested: page.playerClip = { filepath: clip.filepath, title: clip.title }
-        onEditRequested: page.editClipRequested({ filepath: clip.filepath, title: clip.title })
+        onEditRequested: page.editClipRequested({ filepath: clip.filepath, title: clip.title, game: clip.game })
         onRenameRequested: page.renameTarget = { filepath: clip.filepath, title: clip.title }
         onDeleteRequested: page.deleteTarget = { filepath: clip.filepath, title: clip.title }
         onFavoriteRequested: ClipsController.setFavorite(clip.filepath, !clip.favorite)

@@ -40,10 +40,27 @@ Rectangle {
     // gain, which is the whole point of a multi-track editor; Qt Multimedia is
     // muted down to the picture. Single-track clips fall back to Qt's audio.
     readonly property bool mixed: ClipAudioMixer.active
+    /// Ownership token from ClipAudioMixer.load — see the note there.
+    property var mixerToken: null
     /// Per-track mute flags. Reassigned wholesale so bindings re-evaluate.
     property var trackMuted: ({})
     /// Master mute. Applies to the mix when mixed, to Qt's output otherwise.
     property bool masterMuted: false
+    /// Output level, owned by the page rather than read back off audioOut:
+    /// while mixed, Qt's output is muted by design and its `volume` says
+    /// nothing about what you can actually hear.
+    property real masterVolume: 1.0
+
+    function applyVolume() {
+        if (page.mixed)
+            ClipAudioMixer.setMasterVolume(page.masterMuted ? 0 : page.masterVolume)
+        else
+            audioOut.volume = page.masterVolume
+    }
+    /// Hides the info panel and timeline so the picture fills the page.
+    property bool theaterMode: false
+    /// Current game tag, seeded from the clip row and edited in the top bar.
+    property string gameTag: ""
 
     function toggleTrack(index) {
         if (!page.mixed)
@@ -65,11 +82,13 @@ Rectangle {
         EditorController.loadClip(page.clip.filepath)
         page.trimStart = EditorController.trimStart
         page.trimEnd = EditorController.trimEnd
+        page.gameTag = page.clip.game || ""
         page.trackMuted = ({})
-        ClipAudioMixer.load(page.clip.filepath)
-        ClipAudioMixer.setMasterVolume(audioOut.muted ? 0 : audioOut.volume)
+        page.mixerToken = ClipAudioMixer.load(page.clip.filepath)
+        page.applyVolume()
+        // The mix is started by onPlaybackStateChanged, not here — starting it
+        // alongside mp.play() ran the audio ahead of the first frame.
         mp.play()
-        if (page.mixed) ClipAudioMixer.play()
     }
 
     onVisibleChanged: {
@@ -78,20 +97,24 @@ Rectangle {
         } else {
             mp.stop()
             // Release the audio device; a live pipeline would keep playing
-            // over the rest of the app after navigating away.
-            ClipAudioMixer.unload()
+            // over the rest of the app after navigating away. Token-scoped so
+            // it can't tear down a mix another view already owns.
+            if (page.mixerToken !== null) {
+                ClipAudioMixer.release(page.mixerToken)
+                page.mixerToken = null
+            }
         }
     }
 
     // Independent clocks drift; nudge the audio back to the video periodically.
     Timer {
-        interval: 1000
+        interval: 400
         running: page.visible && page.mixed
                  && mp.playbackState === MediaPlayer.PlayingState
         repeat: true
         onTriggered: {
             const apos = ClipAudioMixer.positionMs()
-            if (apos >= 0 && Math.abs(apos - mp.position) > 180)
+            if (apos >= 0 && Math.abs(apos - mp.position) > 120)
                 ClipAudioMixer.seek(mp.position)
         }
     }
@@ -105,16 +128,10 @@ Rectangle {
     }
 
     function togglePlay() {
-        if (mp.playbackState === MediaPlayer.PlayingState) {
-            mp.pause()
-            if (page.mixed) ClipAudioMixer.pause()
-        } else {
-            mp.play()
-            if (page.mixed) {
-                ClipAudioMixer.seek(mp.position)
-                ClipAudioMixer.play()
-            }
-        }
+        // Only the video is driven here; onPlaybackStateChanged mirrors the
+        // resulting state onto the mixer.
+        if (mp.playbackState === MediaPlayer.PlayingState) mp.pause()
+        else mp.play()
     }
     function seekTo(ms) {
         mp.position = Math.max(0, Math.min(mp.duration, ms))
@@ -146,13 +163,28 @@ Rectangle {
             id: audioOut
             // Silence Qt's single-track decode while the mixer owns the sound,
             // or track 1 would be heard twice.
-            muted: page.mixed
+            // Muted whenever the mixer owns the sound (its track 1 would
+            // otherwise double up), and whenever the user mutes the output.
+            muted: page.mixed || page.masterMuted
+            volume: page.masterVolume
+        }
+        onPlaybackRateChanged: if (page.mixed) ClipAudioMixer.setRate(mp.playbackRate)
+        // The mix follows the video's ACTUAL state; mp.play() returns long
+        // before the first frame is on screen.
+        onPlaybackStateChanged: {
+            if (!page.mixed)
+                return
+            if (mp.playbackState === MediaPlayer.PlayingState) {
+                ClipAudioMixer.seek(mp.position)
+                ClipAudioMixer.play()
+            } else {
+                ClipAudioMixer.pause()
+            }
         }
         onMediaStatusChanged: {
             if (mediaStatus === MediaPlayer.EndOfMedia) {
                 mp.pause()
                 page.seekTo(Math.round(page.trimStart * 1000))
-                if (page.mixed) ClipAudioMixer.pause()
             }
         }
         // Playback is clamped to the trim window so the handles preview what
@@ -209,13 +241,32 @@ Rectangle {
                     }
                 }
 
-                Text {
+                // Name and game are editable here, as in the old editor's
+                // header — the Clips grid's inline rename only covers the name.
+                EditorField {
+                    id: nameField
+                    Layout.preferredWidth: 220
+                    placeholder: "Clip name"
                     text: page.clip ? page.clip.title : ""
-                    color: Theme.text
-                    font.pixelSize: 15
-                    font.weight: Font.DemiBold
-                    elide: Text.ElideRight
-                    Layout.maximumWidth: 320
+                    onCommitted: (v) => {
+                        if (v.length > 0 && page.clip) {
+                            ClipsController.setCustomName(page.clip.filepath, v)
+                            page.clip = { filepath: page.clip.filepath, title: v }
+                        }
+                    }
+                }
+                EditorField {
+                    id: gameField
+                    Layout.preferredWidth: 170
+                    placeholder: "Game…"
+                    text: page.gameTag
+                    onCommitted: (v) => {
+                        if (page.clip) {
+                            EditorController.setGameTag(page.clip.filepath, v)
+                            page.gameTag = v
+                            ClipsController.refresh()
+                        }
+                    }
                 }
 
                 Item { Layout.fillWidth: true }
@@ -337,7 +388,8 @@ Rectangle {
 
             // Info sidebar
             Rectangle {
-                Layout.preferredWidth: 232
+                visible: !page.theaterMode
+                Layout.preferredWidth: page.theaterMode ? 0 : 232
                 Layout.fillHeight: true
                 color: Theme.surface
 
@@ -482,7 +534,7 @@ Rectangle {
                     onTriggered: {
                         page.masterMuted = !page.masterMuted
                         if (page.mixed)
-                            ClipAudioMixer.setMasterVolume(page.masterMuted ? 0 : audioOut.volume)
+                            page.applyVolume()
                         else
                             audioOut.muted = page.masterMuted
                     }
@@ -492,11 +544,13 @@ Rectangle {
                     Layout.preferredWidth: 84
                     Layout.alignment: Qt.AlignVCenter
                     from: 0; to: 1
-                    value: audioOut.muted ? 0 : audioOut.volume
+                    // Seeded once, then owned locally — a binding here would be
+                    // severed by QQC2's own writes on the first drag anyway.
+                    Component.onCompleted: value = page.masterVolume
                     onMoved: {
-                        audioOut.volume = vol.value
-                        if (vol.value > 0) audioOut.muted = false
-                        if (page.mixed) ClipAudioMixer.setMasterVolume(vol.value)
+                        page.masterVolume = vol.value
+                        if (vol.value > 0) page.masterMuted = false
+                        page.applyVolume()
                     }
                     background: Rectangle {
                         x: vol.leftPadding
@@ -523,6 +577,19 @@ Rectangle {
                 }
 
                 EditorButton {
+                    icon: "camera"
+                    tooltip: "Save this frame as an image"
+                    onTriggered: {
+                        if (page.clip)
+                            EditorController.grabFrame(page.clip.filepath, mp.position / 1000)
+                    }
+                }
+                EditorButton {
+                    icon: page.theaterMode ? "minimize" : "maximize"
+                    tooltip: page.theaterMode ? "Exit full view" : "Full view"
+                    onTriggered: page.theaterMode = !page.theaterMode
+                }
+                EditorButton {
                     icon: "rotate-ccw"
                     tooltip: "Reset trim"
                     onTriggered: page.resetTrim()
@@ -533,8 +600,10 @@ Rectangle {
         // ── Timeline ──────────────────────────────────────────────────────
         Rectangle {
             id: timelinePane
+            visible: !page.theaterMode
             Layout.fillWidth: true
-            Layout.preferredHeight: Math.min(196, 34 + lanes.implicitHeight + 16)
+            Layout.preferredHeight: page.theaterMode
+                                    ? 0 : Math.min(196, 34 + lanes.implicitHeight + 16)
             color: Theme.bgDeep
 
             Rectangle { width: parent.width; height: 1; color: Theme.border }
@@ -636,17 +705,17 @@ Rectangle {
                 TrimHandle {
                     x: timelinePane.timeToX(page.trimStart) - width / 2
                     height: parent.height
-                    onDragged: (dx) => {
-                        const t = timelinePane.xToTime(timelinePane.timeToX(page.trimStart) + dx)
-                        page.trimStart = Math.min(t, page.trimEnd - 0.1)
+                    onMovedTo: (px) => {
+                        page.trimStart = Math.min(timelinePane.xToTime(px),
+                                                  page.trimEnd - 0.1)
                     }
                 }
                 TrimHandle {
                     x: timelinePane.timeToX(page.trimEnd) - width / 2
                     height: parent.height
-                    onDragged: (dx) => {
-                        const t = timelinePane.xToTime(timelinePane.timeToX(page.trimEnd) + dx)
-                        page.trimEnd = Math.max(t, page.trimStart + 0.1)
+                    onMovedTo: (px) => {
+                        page.trimEnd = Math.max(timelinePane.xToTime(px),
+                                                page.trimStart + 0.1)
                     }
                 }
             }

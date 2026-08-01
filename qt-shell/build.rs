@@ -43,6 +43,7 @@ fn main() {
         QmlFile::from("qml/components/RecordingControl.qml"),
         QmlFile::from("qml/components/EditorTrackLane.qml"),
         QmlFile::from("qml/components/EditorButton.qml"),
+        QmlFile::from("qml/components/EditorField.qml"),
         QmlFile::from("qml/components/TrimHandle.qml"),
         QmlFile::from("qml/components/Icon.qml"),
         QmlFile::from("qml/components/SettingsHeading.qml"),
