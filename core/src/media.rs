@@ -490,6 +490,149 @@ pub fn calc_export_settings(
     .to_string())
 }
 
+/// Video encoder for an export, chosen in the editor's Advanced Settings.
+/// `Copy` is the lossless stream copy — no re-encode, and the only option
+/// that preserves every audio track as-is.
+pub fn video_encoder_for(codec: &str) -> &'static str {
+    match codec {
+        "h265" | "libx265" => "libx265",
+        "vp9" | "libvpx-vp9" => "libvpx-vp9",
+        "av1" | "libsvtav1" => "libsvtav1",
+        "copy" => "copy",
+        _ => "libx264",
+    }
+}
+
+/// Trim + re-encode to hit `target_mb`, via a two-pass encode. `target_mb`
+/// of 0 (or a `copy` codec) falls through to the lossless [`trim_clip`].
+///
+/// `on_progress(percent, stage)` mirrors `trim_clip`'s callback. ffmpeg gives
+/// no usable completion estimate for a two-pass run, so progress is pulsed by
+/// the caller's own timer rather than parsed — the same approach the Tauri
+/// host takes, and the reason the stages ("pass1"/"pass2") are reported.
+pub fn export_clip_sized<F: Fn(f64, &str)>(
+    input_path: &str,
+    start_sec: f64,
+    end_sec: f64,
+    target_mb: f64,
+    output_path: &str,
+    codec: &str,
+    on_progress: F,
+) -> Result<String, String> {
+    let dur = end_sec - start_sec;
+    if dur <= 0.0 {
+        return Err("Invalid trim range".into());
+    }
+
+    let video_codec = video_encoder_for(codec);
+    if target_mb <= 0.0 && video_codec == "copy" {
+        return trim_clip(input_path, start_sec, end_sec, output_path, on_progress);
+    }
+
+    let suffix = if target_mb > 0.0 {
+        format!("_{}mb", target_mb as u32)
+    } else {
+        "_export".to_string()
+    };
+    let mut out = if output_path.is_empty() {
+        auto_name(input_path, &suffix)
+    } else {
+        output_path.to_string()
+    };
+    if out == input_path {
+        out = auto_name(input_path, &suffix);
+    }
+
+    // No size target, just a codec change: one CRF pass, no bitrate math.
+    if target_mb <= 0.0 {
+        on_progress(0.0, "encoding");
+        let status = Command::new("ffmpeg")
+            .args([
+                "-y", "-i", input_path,
+                "-ss", &format!("{start_sec:.3}"),
+                "-to", &format!("{end_sec:.3}"),
+                "-c:v", video_codec,
+                "-pix_fmt", "yuv420p",
+                "-crf", "20",
+                "-preset", "fast",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                &out,
+            ])
+            .status()
+            .map_err(|e| format!("ffmpeg: {e}"))?;
+        return if status.success() {
+            on_progress(100.0, "done");
+            Ok(out)
+        } else {
+            Err("FFmpeg encoding failed".into())
+        };
+    }
+
+    let audio_kbps: f64 = 128.0;
+    let total_kbps = target_mb * 8192.0 / dur;
+    let video_kbps = (total_kbps - audio_kbps).max(100.0);
+    let vbr = format!("{}k", video_kbps as u32);
+
+    // Two-pass writes ffmpeg2pass-0.log into the CWD, so run both passes from
+    // the output's own directory and clean up after — otherwise concurrent or
+    // repeated exports collide on that file.
+    let workdir = Path::new(&out)
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    on_progress(0.0, "pass1");
+    let pass1 = Command::new("ffmpeg")
+        .current_dir(&workdir)
+        .args([
+            "-y", "-i", input_path,
+            "-ss", &format!("{start_sec:.3}"),
+            "-to", &format!("{end_sec:.3}"),
+            "-c:v", video_codec,
+            "-pix_fmt", "yuv420p",
+            "-b:v", &vbr,
+            "-preset", "fast",
+            "-pass", "1",
+            "-an",
+            "-f", "null", "/dev/null",
+        ])
+        .status()
+        .map_err(|e| format!("ffmpeg pass 1: {e}"))?;
+    if !pass1.success() {
+        return Err("FFmpeg analysis pass failed".into());
+    }
+
+    on_progress(50.0, "pass2");
+    let pass2 = Command::new("ffmpeg")
+        .current_dir(&workdir)
+        .args([
+            "-y", "-i", input_path,
+            "-ss", &format!("{start_sec:.3}"),
+            "-to", &format!("{end_sec:.3}"),
+            "-c:v", video_codec,
+            "-pix_fmt", "yuv420p",
+            "-b:v", &vbr,
+            "-preset", "fast",
+            "-pass", "2",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            &out,
+        ])
+        .status()
+        .map_err(|e| format!("ffmpeg pass 2: {e}"))?;
+
+    let _ = std::fs::remove_file(workdir.join("ffmpeg2pass-0.log"));
+    let _ = std::fs::remove_file(workdir.join("ffmpeg2pass-0.log.mbtree"));
+
+    if pass2.success() {
+        on_progress(100.0, "done");
+        Ok(out)
+    } else {
+        Err("FFmpeg encoding failed".into())
+    }
+}
+
 // ═══ Helpers (public for use by commands.rs and listers) ═══
 
 /// Count actual audio streams in a file via ffprobe
@@ -882,4 +1025,47 @@ pub async fn run_command_output_async(
     })
     .await
     .map_err(|e| format!("spawn_blocking join: {e}"))?
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    /// Exercises the real ffmpeg path end-to-end on a 1s stream copy, so a
+    /// broken argument list can't ship looking fine in the UI. Skipped when no
+    /// clip is available.
+    #[test]
+    fn stream_copy_export_produces_a_file() {
+        let Some(src) = first_clip() else {
+            eprintln!("skipping: no clip available");
+            return;
+        };
+        let out = std::env::temp_dir().join("opengg_export_test.mp4");
+        let _ = std::fs::remove_file(&out);
+
+        let res = export_clip_sized(
+            &src,
+            0.0,
+            1.0,
+            0.0,
+            &out.to_string_lossy(),
+            "copy",
+            |_, _| {},
+        );
+        let path = res.expect("export should succeed");
+        let size = std::fs::metadata(&path).expect("output must exist").len();
+        let _ = std::fs::remove_file(&path);
+        assert!(size > 0, "exported file is empty");
+    }
+
+    fn first_clip() -> Option<String> {
+        let home = std::env::var_os("HOME")?;
+        let dir = std::path::PathBuf::from(home).join("Videos/OpenGG");
+        std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "mp4"))
+            .map(|p| p.to_string_lossy().to_string())
+    }
 }

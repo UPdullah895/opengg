@@ -61,6 +61,8 @@ Rectangle {
     property bool theaterMode: false
     /// Current game tag, seeded from the clip row and edited in the top bar.
     property string gameTag: ""
+    /// Export settings dialog open?
+    property bool exportOpen: false
 
     function toggleTrack(index) {
         if (!page.mixed)
@@ -314,34 +316,12 @@ Rectangle {
                         anchors.fill: parent
                         enabled: !EditorController.exportRunning && page.trimEnd > page.trimStart
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            EditorController.saveTrim(page.filepath, page.trimStart, page.trimEnd)
-                            EditorController.exportTrim(page.filepath, page.trimStart, page.trimEnd)
-                        }
+                        // Opens the settings dialog rather than exporting on the
+                        // spot — filename, directory, size and codec all belong
+                        // to the user, not to a default.
+                        onClicked: page.exportOpen = true
                     }
                 }
-            }
-        }
-
-        // ── Export result / error banner ──────────────────────────────────
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: visible ? 32 : 0
-            visible: EditorController.exportError.length > 0
-                     || EditorController.exportResult.length > 0
-            color: EditorController.exportError.length > 0
-                   ? Theme.tint(Theme.danger, 12) : Theme.accentAlpha(12)
-            Text {
-                anchors.left: parent.left
-                anchors.leftMargin: 14
-                anchors.verticalCenter: parent.verticalCenter
-                text: EditorController.exportError.length > 0
-                      ? "Export failed: " + EditorController.exportError
-                      : "Exported to " + EditorController.exportResult
-                color: EditorController.exportError.length > 0 ? Theme.danger : Theme.text
-                font.pixelSize: 12
-                elide: Text.ElideMiddle
-                width: parent.width - 28
             }
         }
 
@@ -718,6 +698,49 @@ Rectangle {
                                                 page.trimStart + 0.1)
                     }
                 }
+            }
+        }
+    }
+
+    // ── Export settings dialog ────────────────────────────────────────────
+    ExportDialog {
+        clip: page.exportOpen ? page.clip : null
+        trimStart: page.trimStart
+        trimEnd: page.trimEnd
+        z: 100
+        onClosed: page.exportOpen = false
+    }
+
+    // A finished frame grab is worth confirming — it lands in a directory the
+    // user may not have open.
+    Rectangle {
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 90
+        z: 90
+        visible: EditorController.screenshotPath.length > 0 && shotToast.running
+        radius: Theme.radius
+        color: Theme.surface
+        border.width: 1
+        border.color: Theme.accent
+        implicitWidth: shotText.implicitWidth + 28
+        implicitHeight: 34
+        Text {
+            id: shotText
+            anchors.centerIn: parent
+            text: "Frame saved"
+            color: Theme.text
+            font.pixelSize: 12
+        }
+        Timer {
+            id: shotToast
+            interval: 2600
+        }
+        Connections {
+            target: EditorController
+            function onScreenshotPathChanged() {
+                if (EditorController.screenshotPath.length > 0)
+                    shotToast.restart()
             }
         }
     }

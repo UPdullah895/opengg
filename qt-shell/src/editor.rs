@@ -66,6 +66,38 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "setGameTag"]
         fn set_game_tag(self: Pin<&mut Self>, filepath: QString, game: QString);
+
+        /// Full export with the editor dialog's options. `target_mb` of 0 means
+        /// "original size"; `codec` is one of h264/h265/vp9/av1/copy. A 0 target
+        /// with `copy` is the lossless stream-copy path (every audio track
+        /// preserved); anything else re-encodes.
+        #[qinvokable]
+        #[cxx_name = "exportClip"]
+        fn export_clip(
+            self: Pin<&mut Self>,
+            filepath: QString,
+            start: f64,
+            end: f64,
+            target_mb: f64,
+            output_path: QString,
+            codec: QString,
+        );
+
+        /// Default export directory (the first configured clip directory).
+        #[qinvokable]
+        #[cxx_name = "defaultExportDir"]
+        fn default_export_dir(self: &Self) -> QString;
+
+        /// Human-readable summary of what the chosen options will produce —
+        /// backs the dialog's grey preview line.
+        #[qinvokable]
+        #[cxx_name = "exportSummary"]
+        fn export_summary(
+            self: &Self,
+            duration: f64,
+            target_mb: f64,
+            codec: QString,
+        ) -> QString;
     }
 
     impl cxx_qt::Threading for EditorController {}
@@ -188,6 +220,108 @@ impl qobject::EditorController {
         if let Err(e) = opengg_core::clips::set_clip_meta(update) {
             eprintln!("EditorController::set_game_tag: {e}");
         }
+    }
+
+    pub fn default_export_dir(&self) -> QString {
+        let dir = opengg_core::settings::load_ui_settings()
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| {
+                v.get("settings")?
+                    .get("clip_directories")?
+                    .get(0)?
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| {
+                opengg_core::paths::default_clips_dir()
+                    .to_string_lossy()
+                    .to_string()
+            });
+        // Settings store this with a leading ~; the dialog concatenates it
+        // straight into an ffmpeg output path, which does no shell expansion.
+        QString::from(&opengg_core::paths::shexp(&dir))
+    }
+
+    pub fn export_summary(&self, duration: f64, target_mb: f64, codec: QString) -> QString {
+        let codec = codec.to_string();
+        let enc = opengg_core::media::video_encoder_for(&codec);
+        let res = serde_json::from_str::<serde_json::Value>(&self.media_info_json.to_string())
+            .ok()
+            .and_then(|v| {
+                let w = v.get("width")?.as_u64()?;
+                let h = v.get("height")?.as_u64()?;
+                Some(format!("{w}x{h}"))
+            })
+            .unwrap_or_else(|| "—".into());
+
+        let label = match enc {
+            "libx265" => "H.265",
+            "libvpx-vp9" => "VP9",
+            "libsvtav1" => "AV1",
+            "copy" => "H.264",
+            _ => "H.264",
+        };
+
+        let text = if target_mb <= 0.0 && enc == "copy" {
+            format!("Stream copy • {label} • {res}")
+        } else if target_mb <= 0.0 {
+            format!("Re-encode CRF 20 • {label} • {res}")
+        } else if duration > 0.0 {
+            let total_kbps = target_mb * 8192.0 / duration;
+            let video_kbps = (total_kbps - 128.0).max(100.0) as u32;
+            format!("2-pass • {label} • {res} • {video_kbps} kbps video + 128 kbps audio")
+        } else {
+            format!("2-pass • {label} • {res}")
+        };
+        QString::from(&text)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn export_clip(
+        mut self: Pin<&mut Self>,
+        filepath: QString,
+        start: f64,
+        end: f64,
+        target_mb: f64,
+        output_path: QString,
+        codec: QString,
+    ) {
+        self.as_mut().set_export_running(true);
+        self.as_mut().set_export_progress(0.0);
+        self.as_mut().set_export_stage(QString::from("starting"));
+        self.as_mut().set_export_error(QString::default());
+        self.as_mut().set_export_result(QString::default());
+
+        let fp = filepath.to_string();
+        let out = output_path.to_string();
+        let codec = codec.to_string();
+        let qt_thread = self.qt_thread();
+        let progress_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = opengg_core::media::export_clip_sized(
+                &fp,
+                start,
+                end,
+                target_mb,
+                &out,
+                &codec,
+                move |pct, stage| {
+                    let stage = stage.to_string();
+                    let _ = progress_thread.queue(move |mut c| {
+                        c.as_mut().set_export_progress(pct);
+                        c.as_mut().set_export_stage(QString::from(&stage));
+                    });
+                },
+            );
+            let _ = qt_thread.queue(move |mut c| {
+                c.as_mut().set_export_running(false);
+                match result {
+                    Ok(o) => c.as_mut().set_export_result(QString::from(&o)),
+                    Err(e) => c.as_mut().set_export_error(QString::from(&e)),
+                }
+            });
+        });
     }
 
     pub fn export_trim(mut self: Pin<&mut Self>, filepath: QString, start: f64, end: f64) {
