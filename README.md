@@ -82,7 +82,7 @@ cd opengg
 |---------|--------------|
 | `./dev.sh` | Full stack — daemon + Qt6 frontend |
 | `./dev.sh daemon` | Daemon only |
-| `./dev.sh ui` | Qt6/QML frontend only (hot-reload with debug builds) |
+| `./dev.sh ui` | Qt6/QML frontend only (debug build + run) |
 | `./dev.sh ui-legacy` | Tauri/Vue frontend only (archived, for reference) |
 | `./dev.sh build` | Release build (daemon + Qt6 frontend) |
 | `./dev.sh setup` | First-time: udev rules, groups, D-Bus policy, data dirs |

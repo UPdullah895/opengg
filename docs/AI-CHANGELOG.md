@@ -9,19 +9,19 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 ### [2026-08-01] Claude Fable 5 — qt6-migration
 
 **What Changed:**
-- `2c5f8ac`: Archive the Tauri UI in place; qt-shell becomes the default build/dev flows
+- `a47b6e3`: Archive the Tauri UI in place; qt-shell becomes the default build/dev flows
   - Updated Makefile lint recipe to run clippy on qt-shell + check-colors.sh
   - Fixed dev.sh run_frontend build guard (replaced `& wait $!` pattern with proper `if ! cargo build`)
   - Added ui-legacy flow documentation to dev.sh help text
-- `a7e4c1f`: Point the launcher at the Qt shell binary
+- `1f38bb7`: Point the launcher at the Qt shell binary
   - Reordered opengg-launch.sh candidate search: qt-shell/target/release/opengg-qt first
   - Reverted packaging/*.desktop StartupWMClass changes (were incorrect; left unchanged)
-- `f3b2d8c`: README: reflect the Qt6/QML architecture and switchover
+- `1825dbe`: README: reflect the Qt6/QML architecture and switchover
   - Rewrote architecture section: Qt6/QML + cxx-qt, shared opengg-core, daemon, legacy UI archived
   - Updated Requirements: Qt 6, GStreamer + gst-plugin-qml6, removed Tauri/Node from mandatory build tools
   - Reflected all verified build/run commands from fixed Makefile and dev.sh
   - Kept AUR install, data locations, and troubleshooting sections (still accurate)
-- `9c3f7e2`: Add AI contributor guide and session changelog convention
+- `b31af5f`: Add AI contributor guide and session changelog convention
   - Created AGENTS.md: mandatory read for AI agents working on this codebase
     - Architecture boundaries: crate separation, IPC flow, access control
     - Mandatory verification: clippy/test/lint/ui-shots protocol before commits

@@ -82,8 +82,8 @@ setup:
 # ── Install ──────────────────────────────────────────────────────
 install: build install-service
 	@mkdir -p $(HOME)/.local/bin
-	cp $(DAEMON)/target/release/openggd $(HOME)/.local/bin/
-	cp $(QT_SHELL)/target/release/opengg-qt $(HOME)/.local/bin/opengg
+	install -m 755 $(DAEMON)/target/release/openggd $(HOME)/.local/bin/openggd
+	install -m 755 $(QT_SHELL)/target/release/opengg-qt $(HOME)/.local/bin/opengg
 	@echo "✓ Installed openggd to ~/.local/bin/"
 	@echo "✓ Installed opengg-qt as ~/.local/bin/opengg"
 

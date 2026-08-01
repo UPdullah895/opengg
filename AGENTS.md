@@ -85,7 +85,7 @@ This guards against:
 ```bash
 qt-shell/tools/ui-shots.sh
 # Renders every page to PNG under QT_QPA_PLATFORM=offscreen
-# Output: qt-shell/shots/
+# Output: qt-shell/target/ui-shots/
 # Must complete with NO QML warnings in stderr
 ```
 
@@ -94,7 +94,7 @@ qt-shell/tools/ui-shots.sh
 ```bash
 QT_FORCE_STDERR_LOGGING=1 qt-shell/tools/ui-shots.sh 2>&1 | tee /tmp/qml-build.log
 grep -i "warning\|error" /tmp/qml-build.log
-# If found, the build is blockers
+# Any hit is a blocker
 ```
 
 Then **actually look at the generated PNG screenshots** — never sign off UI work based on a clean log alone. Verify:
@@ -176,21 +176,31 @@ Without the explicit `import com.opengg.app`, QML imports from sibling files fai
 
 ### 4. Layout Container Width/Height Rules
 
-Inside a `Row`, `Column`, or `GridLayout`, use `Layout.preferredWidth` / `Layout.preferredHeight`, not bare `width` / `height`:
+Two distinct traps, both hit for real in this codebase:
+
+**Inside a `RowLayout` / `ColumnLayout` / `GridLayout`** (Qt Quick Layouts),
+a bare `width:` / `height:` on a child is silently overwritten by the
+layout's arrange pass — use the `Layout.preferredWidth` /
+`Layout.preferredHeight` attached properties instead:
 
 ```qml
-// ✗ WRONG — layout engine silently ignores bare width
-Row {
-    Slider { width: 200 }  // overwritten by layout's arrange pass
+// ✗ WRONG — arrange pass overwrites this back to a stale value
+RowLayout {
+    Rectangle { width: 200 }
 }
 
 // ✓ CORRECT
-Row {
-    Slider { Layout.preferredWidth: 200 }
+RowLayout {
+    Rectangle { Layout.preferredWidth: 200 }
 }
 ```
 
-**Why**: Layout containers override the `width`/`height` properties during arrangement. Bare assignments are silently overwritten.
+**Inside a plain `Row` / `Column`** (positioners, NOT layouts), the
+`Layout.*` attached properties do NOTHING — and a QQC2 control (e.g.
+`Slider`) given a bare `width:` there can contribute ZERO width, making it
+vanish entirely (this is how the clips-per-row slider disappeared). If a
+QQC2 control needs explicit sizing in a row, use a `RowLayout` with
+`Layout.preferredWidth`, not a `Row`.
 
 ### 5. QQC2 Control Value Bindings Are One-Time
 
