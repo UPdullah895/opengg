@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import com.opengg.app
 
 // ClipCard — one clip tile in the Clips grid. Extracted from an inline
@@ -27,19 +28,49 @@ Rectangle {
     property int clipHeight: 0
 
     property bool hovered: cardHover.hovered
+    /// True when this clip is part of the page's multi-select set.
+    property bool selected: false
+    /// True while ANY clip is selected — the checkbox then stays visible on
+    /// every card, not just the hovered one, so the set is readable at a glance.
+    property bool selectionMode: false
 
     signal opened()
     signal editRequested()
     signal deleteRequested()
     signal trimRequested()
     signal favoriteToggled()
+    signal selectToggled()
+    signal renamed(string newName)
     /// Emitted with page-space coords for the shared context menu.
     signal menuRequested(real gx, real gy)
 
+    /// True while the title is swapped for its inline edit field.
+    property bool editingName: false
+
+    function beginRename() {
+        nameEdit.text = card.title
+        card.editingName = true
+        nameEdit.forceActiveFocus()
+        nameEdit.selectAll()
+    }
+
+    function commitRename() {
+        // Guard against re-entry: committing drops focus, which fires
+        // onActiveFocusChanged, which would call straight back into here.
+        if (!card.editingName)
+            return
+        card.editingName = false
+        const v = nameEdit.text.trim()
+        if (v.length > 0 && v !== card.title)
+            card.renamed(v)
+    }
+
     radius: Theme.radiusLg
     color: Theme.surface
-    border.width: 1
-    border.color: hovered ? Theme.accent : Theme.border
+    // Border lives in `frame` below, painted OVER the content. Drawn here it
+    // sat under the thumbnail (which fills the card's full width), so the
+    // hover/selected accent ring was invisible along the card's top edge.
+    border.width: 0
     clip: true
 
     // ClipCard.vue lifts the card 2px on hover.
@@ -197,39 +228,34 @@ Rectangle {
                 }
             }
 
-            // Trim + delete (top-left cluster, hover-only). ClipCard.vue routes
-            // these through its kebab context menu; a QML port of that popup is
-            // tracked separately, so they stay as direct hover actions here.
-            Row {
+            // Selection checkbox (top-left). Trim and delete used to live here
+            // as direct hover buttons; they're now reachable only from the
+            // right-click menu, leaving the card's two hover affordances as
+            // "select" (left) and "favourite" (right).
+            Rectangle {
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.margins: 6
-                spacing: 4
-                visible: card.hovered
-
-                Rectangle {
-                    width: 26; height: 26; radius: 13
-                    color: trimArea.containsMouse ? Theme.accent : Theme.scrim(50)
-                    Icon { anchors.centerIn: parent; name: "scissors"; size: 13; color: "#ffffff" }
-                    MouseArea {
-                        id: trimArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: card.trimRequested()
-                    }
+                width: 22; height: 22
+                radius: 4
+                visible: card.hovered || card.selected || card.selectionMode
+                color: card.selected ? Theme.accent
+                     : selArea.containsMouse ? Theme.scrim(80) : Theme.scrim(50)
+                border.width: 1
+                border.color: card.selected ? Theme.accent : Theme.tint(Theme.text, 40)
+                Icon {
+                    anchors.centerIn: parent
+                    visible: card.selected
+                    name: "check"
+                    size: 13
+                    color: "#ffffff"
                 }
-                Rectangle {
-                    width: 26; height: 26; radius: 13
-                    color: delArea.containsMouse ? Theme.danger : Theme.scrim(50)
-                    Icon { anchors.centerIn: parent; name: "trash"; size: 13; color: "#ffffff" }
-                    MouseArea {
-                        id: delArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: card.deleteRequested()
-                    }
+                MouseArea {
+                    id: selArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: card.selectToggled()
                 }
             }
         }
@@ -254,15 +280,66 @@ Rectangle {
                     width: parent.width
                     height: 18
 
-                    Text {
+                    // Click the name to rename in place (ClipCard.vue does the
+                    // same). The full rename dialog still exists on the
+                    // right-click menu for keyboard-driven use.
+                    Item {
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
                         width: parent.width - 26
-                        text: card.title
-                        color: Theme.text
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
-                        elide: Text.ElideRight
+                        height: 20
+
+                        Text {
+                            id: nameText
+                            anchors.fill: parent
+                            visible: !card.editingName
+                            verticalAlignment: Text.AlignVCenter
+                            text: card.title
+                            color: nameArea.containsMouse ? Theme.accent : Theme.text
+                            font.pixelSize: 13
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
+
+                        MouseArea {
+                            id: nameArea
+                            anchors.fill: parent
+                            visible: !card.editingName
+                            hoverEnabled: true
+                            cursorShape: Qt.IBeamCursor
+                            onClicked: card.beginRename()
+                        }
+
+                        Rectangle {
+                            anchors.fill: parent
+                            visible: card.editingName
+                            radius: 4
+                            color: Theme.bgDeep
+                            border.width: 1
+                            border.color: Theme.accent
+
+                            TextField {
+                                id: nameEdit
+                                anchors.fill: parent
+                                leftPadding: 6
+                                rightPadding: 6
+                                verticalAlignment: TextInput.AlignVCenter
+                                color: Theme.text
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                background: Item {}
+                                selectByMouse: true
+                                onAccepted: card.commitRename()
+                                // Clicking anywhere else (including another
+                                // card) drops focus — treat that as a commit,
+                                // matching the Vue input's @blur handler.
+                                onActiveFocusChanged: {
+                                    if (!activeFocus && card.editingName)
+                                        card.commitRename()
+                                }
+                                Keys.onEscapePressed: card.editingName = false
+                            }
+                        }
                     }
 
                     Rectangle {
@@ -364,6 +441,22 @@ Rectangle {
                 }
             }
         }
+    }
+
+    // Border ring, painted on top of the thumbnail. See the `border.width: 0`
+    // note on the root — the thumbnail spans the card's full width, so a
+    // border drawn by the root Rectangle is covered along the top edge and the
+    // selected/hover accent never reads as a complete ring.
+    Rectangle {
+        id: frame
+        anchors.fill: parent
+        z: 5
+        radius: card.radius
+        color: "transparent"
+        border.width: card.selected ? 2 : 1
+        border.color: card.selected ? Theme.accent
+                    : card.hovered ? Theme.accent
+                    : Theme.tint(Theme.text, 12)
     }
 
     // Opens the player. Sits below the action buttons so they win the click.

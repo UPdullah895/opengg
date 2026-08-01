@@ -87,6 +87,10 @@ QtObject {
 
         // ── Dashboard card badges (HomePage.vue:230/268/319/392) ──
         "sliders": { d: "M 4 21L 4 14M 4 10L 4 3M 12 21L 12 12M 12 8L 12 3M 20 21L 20 16M 20 12L 20 3", sw: 2 },
+        "grid": { d: "M 3 3L 10 3L 10 10L 3 10 ZM 14 3L 21 3L 21 10L 14 10 ZM 3 14L 10 14L 10 21L 3 21 ZM 14 14L 21 14L 21 21L 14 21 Z", sw: 2 },
+        "list": { d: "M 3 6L 21 6M 3 12L 21 12M 3 18L 21 18", sw: 2 },
+        "calendar": { d: "M 5 4L 19 4A 2 2 0 0 1 21 6 L 21 20A 2 2 0 0 1 19 22 L 5 22A 2 2 0 0 1 3 20 L 3 6A 2 2 0 0 1 5 4 ZM 16 2L 16 6M 8 2L 8 6M 3 10L 21 10", sw: 2 },
+        "bar-chart": { d: "M 18 20L 18 10M 12 20L 12 4M 6 20L 6 14", sw: 2 },
         "record": { d: "M 4 12A 8 8 0 0 1 20 12 A 8 8 0 0 1 4 12 Z", sw: 0, filled: true },
         "video": { d: "M 23 7L 16 12L 23 17L 23 7ZM 3 5L 14 5A 2 2 0 0 1 16 7 L 16 17A 2 2 0 0 1 14 19 L 3 19A 2 2 0 0 1 1 17 L 1 7A 2 2 0 0 1 3 5 Z", sw: 2 },
 

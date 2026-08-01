@@ -21,6 +21,118 @@ Rectangle {
     // Clips targeted by the rename / delete dialogs (null = dialog closed).
     property var renameTarget: null
     property var deleteTarget: null
+    /// Set to a filepath list to confirm a bulk delete (null = dialog closed).
+    property var bulkDeleteTarget: null
+
+    // ── Multi-select ──────────────────────────────────────────────────────
+    // A plain JS object used as a set (filepath -> true). QML can't observe
+    // in-place mutation of an object property, so every mutator REPLACES the
+    // whole object — the same "reassign, never mutate" rule audio.ts documents
+    // for Vue's reactivity.
+    property var selected: ({})
+    readonly property int selectedCount: Object.keys(page.selected).length
+
+    function isSelected(fp) { return page.selected[fp] === true }
+
+    function toggleSelect(fp) {
+        var next = {}
+        for (var k in page.selected) next[k] = true
+        if (next[fp]) delete next[fp]
+        else next[fp] = true
+        page.selected = next
+    }
+
+    function clearSelection() { page.selected = ({}) }
+
+    function selectAllVisible() {
+        var next = {}
+        var paths = ClipsController.visibleFilepaths()
+        for (var i = 0; i < paths.length; i++) next[paths[i]] = true
+        page.selected = next
+    }
+
+    function selectedList() { return Object.keys(page.selected) }
+
+    /// A plain click on a clip. While a selection is active it extends the
+    /// selection instead of opening the player — otherwise building a batch
+    /// would mean hitting the small checkbox on every single card.
+    function activate(fp, clipTitle) {
+        if (page.selectedCount > 0)
+            page.toggleSelect(fp)
+        else
+            page.playerClip = { filepath: fp, title: clipTitle }
+    }
+
+    // ── Date grouping ─────────────────────────────────────────────────────
+    property var dateGroups: []
+
+    function groupLabel(dateKey) {
+        if (dateKey === "Unknown")
+            return "Unknown date"
+        const d = new Date(dateKey)
+        if (isNaN(d.getTime()))
+            return dateKey
+        d.setHours(0, 0, 0, 0)
+        const today = new Date(); today.setHours(0, 0, 0, 0)
+        const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1)
+        if (d.getTime() === today.getTime()) return "Today"
+        if (d.getTime() === yesterday.getTime()) return "Yesterday"
+        // Bare Qt.locale() is the SYSTEM locale, which on an Arabic-locale
+        // desktop rendered these headers in Arabic while the rest of the UI
+        // stayed English. Follow the app's own language instead — the Vue
+        // original hardcodes 'en-US' here for the same reason.
+        return d.toLocaleDateString(Qt.locale(I18n.language === "ar" ? "ar" : "en_US"),
+                                    "dddd, MMMM d, yyyy")
+    }
+
+    function rebuildGroups() {
+        if (!page.dateGrouped) {
+            page.dateGroups = []
+            return
+        }
+        const rows = JSON.parse(ClipsController.visibleJson() || "[]")
+        var buckets = {}
+        var order = []
+        for (var i = 0; i < rows.length; i++) {
+            const key = rows[i].created ? String(rows[i].created).split(" ")[0] : "Unknown"
+            if (!buckets[key]) { buckets[key] = []; order.push(key) }
+            buckets[key].push(rows[i])
+        }
+        var out = []
+        for (var j = 0; j < order.length; j++)
+            out.push({ date: order[j], label: page.groupLabel(order[j]), clips: buckets[order[j]] })
+        page.dateGroups = out
+    }
+
+    onDateGroupedChanged: page.rebuildGroups()
+    Connections {
+        target: ClipsController
+        // `revision` is bumped on every view recompute, including ones that
+        // leave count/stats identical (a favourite toggle, a rename).
+        function onRevisionChanged() { page.rebuildGroups() }
+    }
+
+    /// True when every selected clip is already favourited — the bulk button
+    /// then un-favourites instead, matching the single-clip heart's behaviour.
+    readonly property bool allSelectedFavorited: {
+        const paths = page.selectedList()
+        if (paths.length === 0) return false
+        const favs = ClipsController.favoritePaths()
+        for (var i = 0; i < paths.length; i++)
+            if (favs.indexOf(paths[i]) < 0) return false
+        return true
+    }
+
+    // ── View state ────────────────────────────────────────────────────────
+    /// "grid" | "list"
+    property string viewMode: "grid"
+    property bool dateGrouped: false
+    property bool showStats: true
+    property bool favoritesOnly: false
+
+    readonly property int clipsPerRow: Math.max(2, Math.min(5,
+        page.settings.clipsPerRow || Theme.clipsGridCols))
+    readonly property var stats: JSON.parse(ClipsController.statsJson || "{}")
 
     // Live ui-settings.json `settings` object (drives the grid column count).
     // `settingsJson` is ALREADY that inner object — settings.rs's refresh()
@@ -65,6 +177,27 @@ Rectangle {
         if (mb >= 1024)
             return (mb / 1024).toFixed(1) + " GB"
         return Math.round(mb) + " MB"
+    }
+
+    // Stats-bar formatters — ported from ClipsStatsBar.vue's fmtStat* so the
+    // strip reads identically ("50m 58s", "10.7 GB") in both shells.
+    function fmtStatDuration(s) {
+        s = s || 0
+        var m = Math.floor(s / 60)
+        var h = Math.floor(m / 60)
+        if (h > 0)
+            return h + "h " + (m % 60) + "m"
+        return m + "m " + Math.floor(s % 60) + "s"
+    }
+    function fmtStatSize(bytes) {
+        bytes = bytes || 0
+        var gb = bytes / (1024 * 1024 * 1024)
+        if (gb >= 1)
+            return gb.toFixed(1) + " GB"
+        var mb = bytes / (1024 * 1024)
+        if (mb >= 1)
+            return mb.toFixed(0) + " MB"
+        return bytes + " B"
     }
 
     ColumnLayout {
@@ -163,8 +296,6 @@ Rectangle {
                     onTextChanged: ClipsController.setSearchText(text)
                 }
             }
-
-            Item { Layout.fillWidth: true }
 
             // Game filter
             ComboBox {
@@ -308,6 +439,206 @@ Rectangle {
                     }
                 }
             }
+
+            // Favourites-only filter, badged with the library's favourite count.
+            IconToggle {
+                icon: "heart"
+                label: String(ClipsController.favCount)
+                active: page.favoritesOnly
+                tooltip: "Show favorites only"
+                onTriggered: {
+                    page.favoritesOnly = !page.favoritesOnly
+                    ClipsController.setFavoritesOnly(page.favoritesOnly)
+                }
+            }
+
+            // Everything past here is right-aligned view control, matching
+            // ClipsToolbar.vue's ctrl-left / ctrl-right split.
+            Item { Layout.fillWidth: true }
+
+            // Clips-per-row (2–5), persisted to ui-settings.json's
+            // `clipsPerRow` — the same key ClipsPage.vue's size slider writes,
+            // so both shells agree on grid density.
+            // RowLayout, not Row: a plain Row sizes itself from its children's
+            // `width`, and a QQC2 Slider given a bare `width` inside one ends
+            // up contributing zero — the same "use the Layout attached
+            // properties, not width/height" rule the Mixer tab bar needed.
+            RowLayout {
+                spacing: 6
+                Layout.alignment: Qt.AlignVCenter
+                visible: page.viewMode === "grid"
+
+                Icon {
+                    Layout.alignment: Qt.AlignVCenter
+                    name: "grid"; size: 13; color: Theme.textDim
+                }
+                Slider {
+                    id: sizeSlider
+                    Layout.preferredWidth: 90
+                    Layout.alignment: Qt.AlignVCenter
+                    from: 2; to: 5; stepSize: 1
+                    snapMode: Slider.SnapAlways
+                    value: page.clipsPerRow
+                    onMoved: SettingsController.setValue("clipsPerRow",
+                                                         JSON.stringify(Math.round(value)))
+
+                    background: Rectangle {
+                        x: sizeSlider.leftPadding
+                        y: sizeSlider.topPadding + sizeSlider.availableHeight / 2 - height / 2
+                        width: sizeSlider.availableWidth
+                        height: 4
+                        radius: 2
+                        color: Theme.border
+                        Rectangle {
+                            width: sizeSlider.visualPosition * parent.width
+                            height: parent.height
+                            radius: 2
+                            color: Theme.accent
+                        }
+                    }
+                    handle: Rectangle {
+                        x: sizeSlider.leftPadding
+                           + sizeSlider.visualPosition * (sizeSlider.availableWidth - width)
+                        y: sizeSlider.topPadding + sizeSlider.availableHeight / 2 - height / 2
+                        width: 14; height: 14; radius: 7
+                        color: Theme.text
+                        border.width: 2
+                        border.color: Theme.accent
+                    }
+                }
+            }
+
+            IconToggle {
+                icon: "bar-chart"
+                active: page.showStats
+                tooltip: "Toggle clip details"
+                onTriggered: page.showStats = !page.showStats
+            }
+            IconToggle {
+                icon: "calendar"
+                active: page.dateGrouped
+                tooltip: "Group by date"
+                onTriggered: page.dateGrouped = !page.dateGrouped
+            }
+            IconToggle {
+                icon: "grid"
+                active: page.viewMode === "grid"
+                tooltip: "Grid view"
+                onTriggered: page.viewMode = "grid"
+            }
+            IconToggle {
+                icon: "list"
+                active: page.viewMode === "list"
+                tooltip: "List view"
+                onTriggered: page.viewMode = "list"
+            }
+        }
+
+        // ── Stats bar (port of ClipsStatsBar.vue) ─────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            visible: page.showStats && ClipsController.count > 0
+            implicitHeight: 36
+            radius: Theme.radius
+            color: Theme.surface
+            border.width: 1
+            border.color: Theme.border
+
+            Row {
+                anchors.left: parent.left
+                anchors.leftMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 14
+
+                Repeater {
+                    model: [
+                        { v: String(page.stats.count || 0),                  l: "clips" },
+                        { v: page.fmtStatDuration(page.stats.totalDuration), l: "total duration" },
+                        { v: page.fmtStatSize(page.stats.totalSize),         l: "total size" },
+                        { v: page.fmtStatDuration(page.stats.avgDuration),   l: "avg duration" }
+                    ]
+
+                    Row {
+                        required property var modelData
+                        required property int index
+                        spacing: 14
+
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: index > 0
+                            width: visible ? 1 : 0
+                            height: 12
+                            color: Theme.border
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.v
+                            color: Theme.text
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.l
+                            color: Theme.textMuted
+                            font.pixelSize: 12
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Selection action bar ──────────────────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            visible: page.selectedCount > 0
+            implicitHeight: 44
+            radius: Theme.radius
+            color: Theme.accentAlpha(10)
+            border.width: 1
+            border.color: Theme.accentAlpha(35)
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 10
+                spacing: 10
+
+                Text {
+                    text: page.selectedCount + (page.selectedCount === 1 ? " clip selected" : " clips selected")
+                    color: Theme.text
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                }
+
+                Item { Layout.fillWidth: true }
+
+                ClipsBarButton {
+                    label: "Select all"
+                    icon: "check-square"
+                    onTriggered: page.selectAllVisible()
+                }
+                ClipsBarButton {
+                    label: page.allSelectedFavorited ? "Unfavorite" : "Favorite"
+                    icon: "heart"
+                    onTriggered: {
+                        ClipsController.setFavorites(page.selectedList(),
+                                                     !page.allSelectedFavorited)
+                        page.clearSelection()
+                    }
+                }
+                ClipsBarButton {
+                    label: "Delete"
+                    icon: "trash"
+                    danger: true
+                    onTriggered: page.bulkDeleteTarget = page.selectedList()
+                }
+                ClipsBarButton {
+                    label: "Clear"
+                    icon: "x"
+                    onTriggered: page.clearSelection()
+                }
+            }
         }
 
         // ── Error banner ──────────────────────────────────────────────────
@@ -395,7 +726,7 @@ Rectangle {
         GridView {
             id: grid
             anchors.fill: parent
-            visible: ClipsController.count > 0
+            visible: ClipsController.count > 0 && page.viewMode === "grid" && !page.dateGrouped
             clip: true
             cacheBuffer: 400
 
@@ -405,9 +736,7 @@ Rectangle {
             // theme.json's `--clips-grid-cols` is vestigial in the Vue UI too
             // (defined in :root, read by nothing), so it is deliberately not
             // wired up here; Theme.clipsGridCols only supplies the fallback.
-            readonly property int columns: Math.max(2, Math.min(5,
-                page.settings.clipsPerRow || Theme.clipsGridCols))
-            cellWidth: width / columns
+            cellWidth: width / page.clipsPerRow
             // 16:9 thumb + info strip. The old +62 was ~6px short of the real
             // info height, so `clip: true` shaved the card's bottom border and
             // rounded corners off — the "border not fully displayed" defect.
@@ -442,7 +771,12 @@ Rectangle {
                     clipWidth: model.width
                     clipHeight: model.height
 
-                    onOpened: page.playerClip = { filepath: model.filepath, title: model.title }
+                    selected: page.isSelected(model.filepath)
+                    selectionMode: page.selectedCount > 0
+
+                    onOpened: page.activate(model.filepath, model.title)
+                    onSelectToggled: page.toggleSelect(model.filepath)
+                    onRenamed: (newName) => ClipsController.setCustomName(model.filepath, newName)
                     onTrimRequested: page.editorClip = { filepath: model.filepath, title: model.title }
                     onDeleteRequested: page.deleteTarget = { filepath: model.filepath, title: model.title }
                     onMenuRequested: (gx, gy) => clipMenu.openAt(
@@ -453,11 +787,187 @@ Rectangle {
             }
         }
 
-            // Wheel accelerator, sibling of `grid` inside the shared wrapper
+            // ── List view ─────────────────────────────────────────────────
+            ListView {
+                id: listView
+                anchors.fill: parent
+                visible: ClipsController.count > 0 && page.viewMode === "list" && !page.dateGrouped
+                clip: true
+                cacheBuffer: 400
+                spacing: 6
+                model: ClipsController
+
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                delegate: ClipListRow {
+                    width: listView.width
+                    filepath: model.filepath
+                    thumbnail: model.thumbnail
+                    duration: model.duration
+                    title: model.title
+                    game: model.game
+                    filesize: model.filesize
+                    favorite: model.favorite
+                    created: model.created
+                    clipWidth: model.width
+                    clipHeight: model.height
+
+                    selected: page.isSelected(model.filepath)
+                    selectionMode: page.selectedCount > 0
+
+                    onOpened: page.activate(model.filepath, model.title)
+                    onSelectToggled: page.toggleSelect(model.filepath)
+                    onFavoriteToggled: ClipsController.setFavorite(model.filepath, !model.favorite)
+                    onMenuRequested: (gx, gy) => clipMenu.openAt(
+                        { filepath: model.filepath, title: model.title, favorite: model.favorite },
+                        gx, gy)
+                }
+            }
+
+            // ── Date-grouped view ─────────────────────────────────────────
+            // Feeds off `page.dateGroups` (a JS snapshot from visibleJson())
+            // rather than the model, because a QAbstractListModel can't express
+            // section headers to QML and GridView has no section support at all.
+            ListView {
+                id: groupedView
+                anchors.fill: parent
+                visible: ClipsController.count > 0 && page.dateGrouped
+                clip: true
+                cacheBuffer: 600
+                spacing: 18
+                model: page.dateGroups
+
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                delegate: Column {
+                    required property var modelData
+                    width: groupedView.width
+                    spacing: 8
+
+                    Row {
+                        spacing: 8
+                        Text {
+                            text: modelData.label
+                            color: Theme.text
+                            font.pixelSize: 14
+                            font.weight: Font.Bold
+                        }
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            radius: 9
+                            color: Theme.surface
+                            border.width: 1
+                            border.color: Theme.border
+                            implicitWidth: groupCount.implicitWidth + 16
+                            implicitHeight: 18
+                            Text {
+                                id: groupCount
+                                anchors.centerIn: parent
+                                text: String(modelData.clips.length)
+                                color: Theme.textDim
+                                font.pixelSize: 11
+                            }
+                        }
+                    }
+
+                    // Grid and list bodies are both instantiated and gated by
+                    // `visible` rather than swapped through a Loader: a Loader's
+                    // component would have to reach the delegate's `modelData`
+                    // by unqualified lookup across a Repeater boundary, which
+                    // this toolchain resolves to blank silently (see the
+                    // ShortcutsPanel landmine in the migration notes).
+                    Grid {
+                        width: parent.width
+                        visible: page.viewMode === "grid"
+                        columns: page.clipsPerRow
+                        spacing: 12
+
+                        Repeater {
+                            model: parent.visible ? modelData.clips : []
+
+                            ClipCard {
+                                required property var modelData
+                                readonly property real cellW:
+                                    (groupedView.width - (page.clipsPerRow - 1) * 12)
+                                    / page.clipsPerRow
+                                width: cellW
+                                height: cellW * 0.5625 + 80
+
+                                filepath: modelData.filepath
+                                thumbnail: modelData.thumbnail
+                                duration: modelData.duration
+                                title: modelData.title
+                                game: modelData.game
+                                filesize: modelData.filesize
+                                favorite: modelData.favorite
+                                created: modelData.created
+                                clipWidth: modelData.width
+                                clipHeight: modelData.height
+
+                                selected: page.isSelected(modelData.filepath)
+                                selectionMode: page.selectedCount > 0
+
+                                onOpened: page.activate(modelData.filepath, modelData.title)
+                                onSelectToggled: page.toggleSelect(modelData.filepath)
+                                onRenamed: (newName) => ClipsController.setCustomName(modelData.filepath, newName)
+                                onTrimRequested: page.editorClip = { filepath: modelData.filepath, title: modelData.title }
+                                onDeleteRequested: page.deleteTarget = { filepath: modelData.filepath, title: modelData.title }
+                                onFavoriteToggled: ClipsController.setFavorite(modelData.filepath, !modelData.favorite)
+                                onMenuRequested: (gx, gy) => clipMenu.openAt(
+                                    { filepath: modelData.filepath, title: modelData.title,
+                                      favorite: modelData.favorite }, gx, gy)
+                            }
+                        }
+                    }
+
+                    Column {
+                        width: parent.width
+                        visible: page.viewMode === "list"
+                        spacing: 6
+
+                        Repeater {
+                            model: parent.visible ? modelData.clips : []
+
+                            ClipListRow {
+                                required property var modelData
+                                width: groupedView.width
+
+                                filepath: modelData.filepath
+                                thumbnail: modelData.thumbnail
+                                duration: modelData.duration
+                                title: modelData.title
+                                game: modelData.game
+                                filesize: modelData.filesize
+                                favorite: modelData.favorite
+                                created: modelData.created
+                                clipWidth: modelData.width
+                                clipHeight: modelData.height
+
+                                selected: page.isSelected(modelData.filepath)
+                                selectionMode: page.selectedCount > 0
+
+                                onOpened: page.activate(modelData.filepath, modelData.title)
+                                onSelectToggled: page.toggleSelect(modelData.filepath)
+                                onFavoriteToggled: ClipsController.setFavorite(modelData.filepath, !modelData.favorite)
+                                onMenuRequested: (gx, gy) => clipMenu.openAt(
+                                    { filepath: modelData.filepath, title: modelData.title,
+                                      favorite: modelData.favorite }, gx, gy)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Wheel accelerator, sibling of the views inside the shared wrapper
             // — see the comment on `gridWrap` above.
             Item {
                 anchors.fill: parent
-                WheelScroller { anchors.fill: parent; flick: grid }
+                WheelScroller {
+                    anchors.fill: parent
+                    flick: page.dateGrouped ? groupedView
+                         : page.viewMode === "list" ? listView
+                         : grid
+                }
             }
         }
     }
@@ -473,9 +983,7 @@ Rectangle {
         onFavoriteRequested: ClipsController.setFavorite(clip.filepath, !clip.favorite)
         onRevealRequested: SystemController.revealInFolder(clip.filepath)
         onCopyPathRequested: SystemController.writeClipboard(clip.filepath)
-        // Multi-select is tracked separately (task #32); until it exists this
-        // opens the clip rather than silently doing nothing.
-        onSelectRequested: page.playerClip = { filepath: clip.filepath, title: clip.title }
+        onSelectRequested: page.toggleSelect(clip.filepath)
     }
 
     // ── Player overlay ────────────────────────────────────────────────────
@@ -587,6 +1095,82 @@ Rectangle {
                     nameField.text = page.renameTarget.title
                     nameField.forceActiveFocus()
                     nameField.selectAll()
+                }
+            }
+        }
+    }
+
+    // ── Bulk delete confirmation ──────────────────────────────────────────
+    Rectangle {
+        anchors.fill: parent
+        color: Theme.scrim(80)
+        visible: page.bulkDeleteTarget !== null
+        MouseArea { anchors.fill: parent; onClicked: page.bulkDeleteTarget = null }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: 400
+            implicitHeight: bcol.implicitHeight + 32
+            radius: Theme.radius
+            color: Theme.surface
+            border.width: 1
+            border.color: Theme.border
+            MouseArea { anchors.fill: parent }
+
+            Column {
+                id: bcol
+                anchors.fill: parent
+                anchors.margins: 16
+                spacing: 12
+
+                Text {
+                    text: page.bulkDeleteTarget
+                          ? "Delete " + page.bulkDeleteTarget.length + " clips?"
+                          : ""
+                    color: Theme.text
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    width: parent.width
+                    text: "This permanently deletes every selected clip from disk."
+                    color: Theme.textDim
+                    font.pixelSize: 13
+                    wrapMode: Text.WordWrap
+                }
+
+                Row {
+                    anchors.right: parent.right
+                    spacing: 8
+                    Rectangle {
+                        width: 84; height: 32; radius: Theme.radius
+                        color: cancelB.containsMouse ? Theme.border : "transparent"
+                        border.width: 1
+                        border.color: Theme.border
+                        Text { anchors.centerIn: parent; text: "Cancel"; color: Theme.text; font.pixelSize: 13 }
+                        MouseArea {
+                            id: cancelB
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: page.bulkDeleteTarget = null
+                        }
+                    }
+                    Rectangle {
+                        width: 84; height: 32; radius: Theme.radius
+                        color: Theme.danger
+                        Text { anchors.centerIn: parent; text: "Delete"; color: "#ffffff"; font.pixelSize: 13 }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (page.bulkDeleteTarget)
+                                    ClipsController.deleteClips(page.bulkDeleteTarget)
+                                page.bulkDeleteTarget = null
+                                page.clearSelection()
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -72,6 +72,19 @@ pub mod qobject {
         #[qproperty(i32, count)]
         #[qproperty(i32, total_count, cxx_name = "totalCount")]
         #[qproperty(QStringList, game_list, cxx_name = "gameList")]
+        /// Number of favourited clips in the whole library — drives the
+        /// toolbar's favourites-filter button badge.
+        #[qproperty(i32, fav_count, cxx_name = "favCount")]
+        /// Aggregates over the CURRENTLY VISIBLE (filtered) rows, as JSON:
+        /// `{count, totalDuration, totalSize, avgDuration}`. Backs the stats
+        /// bar, which reports what you're looking at rather than the library.
+        #[qproperty(QString, stats_json, cxx_name = "statsJson")]
+        /// Bumped on every recompute of the view. The date-grouped view builds
+        /// its own JS snapshot via `visibleJson()` and needs a reliable "the
+        /// rows changed" signal to rebuild from; `count`/`statsJson` both miss
+        /// changes that leave their values identical (toggling a favourite,
+        /// renaming a clip), so this is an unconditional generation counter.
+        #[qproperty(i32, revision)]
         type ClipsController = super::ClipsControllerRust;
 
         #[cxx_override]
@@ -135,6 +148,42 @@ pub mod qobject {
         #[cxx_name = "setSortMode"]
         fn set_sort_mode(self: Pin<&mut Self>, mode: &QString);
 
+        /// Restrict the view to favourited clips only.
+        #[qinvokable]
+        #[cxx_name = "setFavoritesOnly"]
+        fn set_favorites_only(self: Pin<&mut Self>, only: bool);
+
+        /// Filepaths of every currently-visible row, in view order — backs
+        /// "select all" without QML having to walk the model by role.
+        #[qinvokable]
+        #[cxx_name = "visibleFilepaths"]
+        fn visible_filepaths(self: &Self) -> QStringList;
+
+        /// Every currently-visible row as a JSON array, in view order. The
+        /// date-grouped view needs to partition the rows by capture date and
+        /// render its own headers, which a QAbstractListModel can't express —
+        /// QML has no way to walk a model by role. Only that view calls this.
+        #[qinvokable]
+        #[cxx_name = "visibleJson"]
+        fn visible_json(self: &Self) -> QString;
+
+        /// Filepaths of every favourited clip in the library. Lets QML decide
+        /// whether a bulk favourite action should set or clear the flag.
+        #[qinvokable]
+        #[cxx_name = "favoritePaths"]
+        fn favorite_paths(self: &Self) -> QStringList;
+
+        /// Bulk favourite/unfavourite. One reload at the end instead of the
+        /// N reloads a QML-side loop over `setFavorite` would cause.
+        #[qinvokable]
+        #[cxx_name = "setFavorites"]
+        fn set_favorites(self: Pin<&mut Self>, filepaths: &QStringList, favorite: bool);
+
+        /// Bulk delete, same single-reload rationale as `setFavorites`.
+        #[qinvokable]
+        #[cxx_name = "deleteClips"]
+        fn delete_clips(self: Pin<&mut Self>, filepaths: &QStringList);
+
         /// Start the background clip-directory filesystem watcher (idempotent
         /// — safe to call more than once, only the first call spawns it).
         /// Auto-refreshes the gallery when a clip file is added or removed on
@@ -176,10 +225,14 @@ pub struct ClipsControllerRust {
     search_text: String,
     game_filter: String,
     sort_mode: String,
+    favorites_only: bool,
     loading: bool,
     error: QString,
     count: i32,
     total_count: i32,
+    fav_count: i32,
+    stats_json: QString,
+    revision: i32,
     game_list: QStringList,
     /// Filepaths currently queued/generating on the thumbnail worker thread.
     thumbs_in_flight: HashSet<String>,
@@ -225,12 +278,21 @@ fn title_for(clip: &ClipInfo) -> String {
 
 /// Compute the filtered+sorted row order (indices into `clips`). Ported
 /// directly from the old QML `filteredClips` computed property.
-fn compute_view(clips: &[ClipInfo], search: &str, game_filter: &str, sort_mode: &str) -> Vec<usize> {
+fn compute_view(
+    clips: &[ClipInfo],
+    search: &str,
+    game_filter: &str,
+    sort_mode: &str,
+    favorites_only: bool,
+) -> Vec<usize> {
     let search = search.to_lowercase();
     let mut indices: Vec<usize> = clips
         .iter()
         .enumerate()
         .filter(|(_, c)| {
+            if favorites_only && !c.favorite {
+                return false;
+            }
             if !game_filter.is_empty() {
                 let g = if c.game.is_empty() { "Unknown" } else { c.game.as_str() };
                 if g != game_filter {
@@ -375,14 +437,37 @@ impl qobject::ClipsController {
     /// Recompute `view` from the current search/game/sort state and reset
     /// the model. Called after every reload() and every filter-state change.
     fn apply_filter(mut self: Pin<&mut Self>) {
-        let indices = compute_view(&self.all_clips, &self.search_text, &self.game_filter, &self.sort_mode);
+        let indices = compute_view(
+            &self.all_clips,
+            &self.search_text,
+            &self.game_filter,
+            &self.sort_mode,
+            self.favorites_only,
+        );
         let total = self.all_clips.len() as i32;
+        let favs = self.all_clips.iter().filter(|c| c.favorite).count() as i32;
+
+        // Stats describe the visible rows, so they have to be summed from the
+        // freshly-computed indices rather than from `all_clips`.
+        let count = indices.len();
+        let total_duration: f64 = indices.iter().map(|&i| self.all_clips[i].duration).sum();
+        let total_size: u64 = indices.iter().map(|&i| self.all_clips[i].filesize).sum();
+        let stats = serde_json::json!({
+            "count": count,
+            "totalDuration": total_duration,
+            "totalSize": total_size,
+            "avgDuration": if count > 0 { total_duration / count as f64 } else { 0.0 },
+        });
+
         self.as_mut().begin_reset_model();
         self.as_mut().rust_mut().view = indices;
         self.as_mut().end_reset_model();
-        let count = self.view.len() as i32;
-        self.as_mut().set_count(count);
+        self.as_mut().set_count(count as i32);
         self.as_mut().set_total_count(total);
+        self.as_mut().set_fav_count(favs);
+        self.as_mut().set_stats_json(QString::from(&stats.to_string()));
+        let next = self.revision.wrapping_add(1);
+        self.as_mut().set_revision(next);
     }
 
     pub fn refresh(self: Pin<&mut Self>) {
@@ -402,6 +487,71 @@ impl qobject::ClipsController {
     pub fn set_sort_mode(mut self: Pin<&mut Self>, mode: &QString) {
         self.as_mut().rust_mut().sort_mode = mode.to_string();
         self.apply_filter();
+    }
+
+    pub fn set_favorites_only(mut self: Pin<&mut Self>, only: bool) {
+        self.as_mut().rust_mut().favorites_only = only;
+        self.apply_filter();
+    }
+
+    pub fn visible_filepaths(&self) -> QStringList {
+        self.view
+            .iter()
+            .map(|&i| QString::from(self.all_clips[i].filepath.as_str()))
+            .collect()
+    }
+
+    pub fn visible_json(&self) -> QString {
+        let rows: Vec<serde_json::Value> = self
+            .view
+            .iter()
+            .map(|&i| {
+                let c = &self.all_clips[i];
+                serde_json::json!({
+                    "filepath": c.filepath,
+                    "thumbnail": c.thumbnail,
+                    "duration": c.duration,
+                    "title": title_for(c),
+                    "game": c.game,
+                    "filesize": c.filesize,
+                    "favorite": c.favorite,
+                    "created": c.created,
+                    "width": c.width,
+                    "height": c.height,
+                })
+            })
+            .collect();
+        QString::from(&serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into()))
+    }
+
+    pub fn favorite_paths(&self) -> QStringList {
+        self.all_clips
+            .iter()
+            .filter(|c| c.favorite)
+            .map(|c| QString::from(c.filepath.as_str()))
+            .collect()
+    }
+
+    pub fn set_favorites(mut self: Pin<&mut Self>, filepaths: &QStringList, favorite: bool) {
+        for fp in filepaths.iter() {
+            let update = ClipMetaUpdate {
+                favorite: Some(favorite),
+                ..Self::meta_update(fp.to_string())
+            };
+            if let Err(e) = opengg_core::clips::set_clip_meta(update) {
+                eprintln!("set_favorites: {e}");
+            }
+        }
+        self.as_mut().reload();
+    }
+
+    pub fn delete_clips(mut self: Pin<&mut Self>, filepaths: &QStringList) {
+        for fp in filepaths.iter() {
+            if let Err(e) = opengg_core::clips::delete_clip(&fp.to_string()) {
+                eprintln!("delete_clips: {e}");
+            }
+        }
+        self.as_mut().reload();
     }
 
     fn meta_update(filepath: String) -> ClipMetaUpdate {

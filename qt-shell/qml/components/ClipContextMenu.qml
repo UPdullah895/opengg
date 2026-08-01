@@ -29,10 +29,15 @@ Item {
     signal copyPathRequested()
     signal deleteRequested()
 
+    /// `x`/`y` are SCENE coordinates (callers use mapToItem(null, …)). This
+    /// menu fills the Clips page, which is itself inset by the sidebar and
+    /// titlebar, so scene coords land the panel down-right of the cursor by
+    /// exactly that inset unless they're converted into local space first.
     function openAt(clipObj, x, y) {
         menu.clip = clipObj
-        menu.menuX = x
-        menu.menuY = y
+        const p = menu.mapFromItem(null, x, y)
+        menu.menuX = p.x
+        menu.menuY = p.y
     }
     function close() { menu.clip = null }
 
