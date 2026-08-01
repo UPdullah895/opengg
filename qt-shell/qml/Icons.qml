@@ -88,6 +88,10 @@ QtObject {
         // ── Dashboard card badges (HomePage.vue:230/268/319/392) ──
         "sliders": { d: "M 4 21L 4 14M 4 10L 4 3M 12 21L 12 12M 12 8L 12 3M 20 21L 20 16M 20 12L 20 3", sw: 2 },
         "grid": { d: "M 3 3L 10 3L 10 10L 3 10 ZM 14 3L 21 3L 21 10L 14 10 ZM 3 14L 10 14L 10 21L 3 21 ZM 14 14L 21 14L 21 21L 14 21 Z", sw: 2 },
+        "rewind": { d: "M 11 19L 2 12L 11 5 ZM 22 19L 13 12L 22 5 Z", sw: 0, filled: true },
+        "fast-forward": { d: "M 13 19L 22 12L 13 5 ZM 2 19L 11 12L 2 5 Z", sw: 0, filled: true },
+        "maximize": { d: "M 8 3H 5a 2 2 0 0 0 -2 2 v 3M 21 8V 5a 2 2 0 0 0 -2 -2 h -3M 3 16v 3a 2 2 0 0 0 2 2 h 3M 16 21h 3a 2 2 0 0 0 2 -2 v -3", sw: 2 },
+        "minimize": { d: "M 8 3v 3a 2 2 0 0 1 -2 2 H 3M 21 8h -3a 2 2 0 0 1 -2 -2 V 3M 3 16h 3a 2 2 0 0 1 2 2 v 3M 16 21v -3a 2 2 0 0 1 2 -2 h 3", sw: 2 },
         "list": { d: "M 3 6L 21 6M 3 12L 21 12M 3 18L 21 18", sw: 2 },
         "calendar": { d: "M 5 4L 19 4A 2 2 0 0 1 21 6 L 21 20A 2 2 0 0 1 19 22 L 5 22A 2 2 0 0 1 3 20 L 3 6A 2 2 0 0 1 5 4 ZM 16 2L 16 6M 8 2L 8 6M 3 10L 21 10", sw: 2 },
         "bar-chart": { d: "M 18 20L 18 10M 12 20L 12 4M 6 20L 6 14", sw: 2 },

@@ -35,15 +35,18 @@ pub struct MediaInfo {
     pub audio_streams: u32,
 }
 
+const FFPROBE_ARGS: &[&str] = &[
+    "-v", "quiet",
+    "-print_format", "json",
+    "-show_format",
+    "-show_streams",
+];
+
 /// Analyze a media file via ffprobe — returns resolution, duration, frame rate, codec, and stream list.
 pub async fn analyze_media(filepath: String) -> Result<MediaInfo, String> {
-    let output = run_command_output_async("ffprobe", &[
-        "-v", "quiet",
-        "-print_format", "json",
-        "-show_format",
-        "-show_streams",
-        &filepath,
-    ]).await?;
+    let mut args = FFPROBE_ARGS.to_vec();
+    args.push(&filepath);
+    let output = run_command_output_async("ffprobe", &args).await?;
 
     if !output.status.success() {
         return Err(format!(
@@ -52,8 +55,22 @@ pub async fn analyze_media(filepath: String) -> Result<MediaInfo, String> {
         ));
     }
 
+    parse_media_info(&output.stdout)
+}
+
+/// Blocking twin of [`analyze_media`], for callers already on a worker thread
+/// (qt-shell runs it off the Qt thread rather than inside a tokio runtime).
+/// Shares the same parser, so the two can't drift.
+pub fn analyze_media_sync(filepath: &str) -> Result<MediaInfo, String> {
+    let mut args = FFPROBE_ARGS.to_vec();
+    args.push(filepath);
+    let out = crate::subprocess::run_cmd_sync("ffprobe", &args)?;
+    parse_media_info(out.as_bytes())
+}
+
+fn parse_media_info(stdout: &[u8]) -> Result<MediaInfo, String> {
     let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("parse: {e}"))?;
+        serde_json::from_slice(stdout).map_err(|e| format!("parse: {e}"))?;
 
     let fmt = &json["format"];
     let duration: f64 = fmt["duration"]
@@ -111,11 +128,22 @@ pub async fn analyze_media(filepath: String) -> Result<MediaInfo, String> {
                     audio_count += 1;
                     let ch = s["channels"].as_u64().unwrap_or(2) as u32;
                     let sr = s["sample_rate"].as_str().unwrap_or("48000").to_string();
-                    let track_title = if title.is_empty() {
-                        format!("Audio {audio_count}")
-                    } else {
-                        title
-                    };
+                    // gpu-screen-recorder labels its per-channel tracks with
+                    // the mp4 `name` tag ("Game", "Chat", "Mic"), not `title`
+                    // — reading only `title` threw those names away and left
+                    // every OpenGG capture showing "Audio 1/2/3" in the player's
+                    // track picker and the editor's timeline.
+                    let track_title = [
+                        title.as_str(),
+                        tags["name"].as_str().unwrap_or(""),
+                        tags["handler_name"].as_str().unwrap_or(""),
+                    ]
+                    .into_iter()
+                    .map(str::trim)
+                    // "SoundHandler" is ffmpeg's generic default, not a name.
+                    .find(|t| !t.is_empty() && *t != "SoundHandler")
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("Audio {audio_count}"));
                     streams.push(MediaStream {
                         index: idx,
                         codec_type,

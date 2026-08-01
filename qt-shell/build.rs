@@ -39,6 +39,8 @@ fn main() {
         QmlFile::from("qml/components/ClipsBarButton.qml"),
         QmlFile::from("qml/components/ClipListRow.qml"),
         QmlFile::from("qml/components/IconToggle.qml"),
+        QmlFile::from("qml/components/PlayerButton.qml"),
+        QmlFile::from("qml/components/RecordingControl.qml"),
         QmlFile::from("qml/components/Icon.qml"),
         QmlFile::from("qml/components/SettingsHeading.qml"),
         QmlFile::from("qml/components/IconGallery.qml"),

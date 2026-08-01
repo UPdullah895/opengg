@@ -85,6 +85,9 @@ pub mod qobject {
         /// changes that leave their values identical (toggling a favourite,
         /// renaming a clip), so this is an unconditional generation counter.
         #[qproperty(i32, revision)]
+        /// Audio-track display names for the clip most recently passed to
+        /// `requestAudioTracks`, in stream order.
+        #[qproperty(QStringList, audio_track_names, cxx_name = "audioTrackNames")]
         type ClipsController = super::ClipsControllerRust;
 
         #[cxx_override]
@@ -158,6 +161,16 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "visibleFilepaths"]
         fn visible_filepaths(self: &Self) -> QStringList;
+
+        /// Kick off an ffprobe of `filepath` and publish its audio-track names
+        /// to `audioTrackNames`. Qt Multimedia reports how MANY audio tracks a
+        /// clip has but exposes no usable name for GSR's (the labels live in
+        /// the mp4 `name` tag, which Qt doesn't surface as metadata), so the
+        /// player's track picker would otherwise read "Track 1/2/3" instead of
+        /// "Game"/"Chat"/"Mic". Threaded, because ffprobe is a subprocess.
+        #[qinvokable]
+        #[cxx_name = "requestAudioTracks"]
+        fn request_audio_tracks(self: Pin<&mut Self>, filepath: &QString);
 
         /// Every currently-visible row as a JSON array, in view order. The
         /// date-grouped view needs to partition the rows by capture date and
@@ -233,6 +246,7 @@ pub struct ClipsControllerRust {
     fav_count: i32,
     stats_json: QString,
     revision: i32,
+    audio_track_names: QStringList,
     game_list: QStringList,
     /// Filepaths currently queued/generating on the thumbnail worker thread.
     thumbs_in_flight: HashSet<String>,
@@ -499,6 +513,33 @@ impl qobject::ClipsController {
             .iter()
             .map(|&i| QString::from(self.all_clips[i].filepath.as_str()))
             .collect()
+    }
+
+    pub fn request_audio_tracks(mut self: Pin<&mut Self>, filepath: &QString) {
+        // Clear immediately so the picker never shows the previous clip's
+        // track names while this probe is still running.
+        self.as_mut().set_audio_track_names(QStringList::default());
+        let fp = filepath.to_string();
+        if fp.is_empty() {
+            return;
+        }
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let names: Vec<String> = opengg_core::media::analyze_media_sync(&fp)
+                .ok()
+                .map(|info| {
+                    info.streams
+                        .iter()
+                        .filter(|s| s.codec_type == "audio")
+                        .map(|s| s.title.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let _ = qt_thread.queue(move |mut controller| {
+                let list: QStringList = names.iter().map(|n| QString::from(n.as_str())).collect();
+                controller.as_mut().set_audio_track_names(list);
+            });
+        });
     }
 
     pub fn visible_json(&self) -> QString {

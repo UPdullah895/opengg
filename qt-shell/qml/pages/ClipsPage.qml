@@ -271,10 +271,17 @@ Rectangle {
             visible: ClipsController.totalCount > 0
             spacing: 10
 
+            // Recorder status + start/save/stop (ClipsToolbar.vue's #recording
+            // slot). The Home page's recording card drives the same controller.
+            RecordingControl {
+                Layout.alignment: Qt.AlignVCenter
+                z: 60
+            }
+
             // Search
             Rectangle {
                 Layout.fillWidth: true
-                Layout.maximumWidth: 360
+                Layout.maximumWidth: 300
                 implicitHeight: 32
                 radius: Theme.radius
                 color: Theme.surface
