@@ -45,9 +45,16 @@ click the video without it playing" — both fall out of specific defects:
   (~100–200 ms) is a *constant* offset between "position reported" and
   "sound heard" that no amount of position-matching removes.
 
-### Phase A — make the dual-clock design correct (est. 1 session)
+> **DECISION (2026-08-01, user):** the Qt Multimedia player may be replaced
+> outright — GStreamer owning both picture and sound is the committed
+> long-run direction, not a contingency. Phase B below is therefore the
+> **main track**; Phase A is retained only as the fallback if the Phase B
+> spike fails. Sequencing table at the bottom updated to match.
 
-Do these in order; each is independently verifiable.
+### Phase A — make the dual-clock design correct (FALLBACK ONLY)
+
+Execute only if the Phase B spike fails. Do these in order; each is
+independently verifiable.
 
 1. **Instrumentation first.** Temporary on-screen readout (the established
    text-binding debug technique) showing both clock positions, drift, and
@@ -85,24 +92,49 @@ pause-resume; standard suite (clippy, tests, ui-shots) stays green; live
 relaunch for the user's own ears — audio quality is ultimately not
 screenshot-verifiable.
 
-### Phase B — single clock, single pipeline (contingency / end-state)
+### Phase B — one pipeline owns picture AND sound (MAIN TRACK)
 
-The categorical fix is **one pipeline owning both picture and sound** — then
-there is no sync code to get wrong. `gst-plugin-qml6` (the `qml6glsink`
-element + `GstGLVideoItem` QML type) is packaged on this distro
-(`extra/gst-plugin-qml6 1.28.5`) but not installed.
+The categorical fix: extend the existing `mixer_pipeline` so decodebin's
+video pad feeds a Qt-integrated video sink instead of a fakesink — one
+pipeline, one clock, **zero sync code to get wrong**. Every defect in the
+root-cause list (D1–D6) ceases to exist rather than being compensated.
 
-- **Timeboxed spike:** install the package; route decodebin's video pad →
-  `glupload → qml6glsink` instead of the current fakesink; place a
-  `GstGLVideoItem` in QML. The risk concentrates in one spot: handing the
-  QQuickItem pointer to the sink's `widget` property from Rust across the
-  cxx-qt boundary.
-- **Decision gate:** only proceed past the spike if Phase A still shows
-  user-perceivable desync. Otherwise record the spike results in the
-  migration memory and stop — Phase A's skew-based slaving is how plenty of
-  shipping players work.
-- **Packaging note:** adds a runtime dependency on a system GStreamer
-  package — consistent with the §5.1/§5.3 never-vendor policy.
+**Prerequisite (user action):** `gst-plugin-qml6` is packaged
+(`extra/gst-plugin-qml6 1.28.5`) but not installed:
+
+    sudo pacman -S gst-plugin-qml6
+
+**Step B1 — timeboxed spike (half a session).** Minimal proof: video pad →
+`glupload → glcolorconvert → qml6glsink`, a `GstGLVideoItem` in QML
+(`import org.freedesktop.gstreamer.Qt6GLVideoItem`), video visible inside
+the app. The risk concentrates in exactly one spot: handing the QQuickItem
+pointer to the sink's `widget` property from Rust across the cxx-qt
+boundary. Second risk to check in the same spike: whether `qml6glsink`
+renders under `QT_QPA_PLATFORM=offscreen`, because the ui-shots
+verification harness depends on it — if not, captures of the player/editor
+need a documented gate, not silent breakage.
+
+**Step B2 — `ClipPlayer` controller.** Promote `ClipAudioMixer` into a
+full player: position/duration (polled from the pipeline), playing state,
+rate, ACCURATE seeks, per-track and master gain, EndOfMedia→paused-reset.
+One QML-facing surface replaces `MediaPlayer + VideoOutput +
+ClipAudioMixer` in both views.
+
+**Step B3 — migrate both views.** `VideoPlayer.qml` (Preview) and
+`ClipEditorPage.qml` (Edit) swap onto `ClipPlayer`; delete every line of
+ownership-token, drift-timer, and mute-arbitration code — that entire
+class of bug goes away. Parity checklist to verify per view: play/pause,
+click-to-toggle, scrub bar tracking + hover preview, ±5s skip, volume +
+mute, playback rate, track mute toggles, keyboard map, EndOfMedia replay,
+expanded/theater modes, trim-window clamping (editor), offscreen capture.
+Clips with zero audio tracks and broken files fall back gracefully (poster
+frame + error text; Qt Multimedia can remain compiled-in as a fallback
+until parity is confirmed, then the `Multimedia` qt_module dependency is
+dropped).
+
+**Packaging note:** adds a runtime dependency on a system GStreamer
+package — consistent with the §5.1/§5.3 never-vendor policy. AUR/Flatpak
+manifests gain `gst-plugin-qml6`.
 
 ---
 
@@ -177,11 +209,11 @@ weight:
 | Order | Slice | Why first |
 |---|---|---|
 | 1 | 2a icons (CurveRenderer + audit) | Cheapest change, app-wide visible lift |
-| 2 | Phase A audio | Correctness before features; fixes both reported symptoms |
+| 2 | Phase B spike → B2/B3 unified player | Committed direction; erases the whole desync bug class |
 | 3 | 2b.1 waveforms + 2b.2 split trim | Carry most of the perceived design gap |
 | 4 | 2b.3–2b.7 | Editor manipulability + naming |
 | 5 | 2b.8–2b.10 | Layout flexibility + hand-off |
-| — | Phase B spike | Only if Phase A verification still shows desync |
+| — | Phase A | Only if the Phase B spike fails |
 
 Every slice ends with: offscreen screenshot or instrumented run as proof,
 the standard suite (clippy / tests / check-colors / ui-shots), a commit,
