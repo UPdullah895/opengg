@@ -14,6 +14,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DAEMON_DIR="$ROOT_DIR/daemon"
 FRONTEND_DIR="$ROOT_DIR/frontend"
+QT_SHELL_DIR="$ROOT_DIR/qt-shell"
 
 # ── Colors ───────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -159,8 +160,27 @@ run_daemon() {
     logs "Daemon running (PID ${PIDS[-1]})"
 }
 
-# ── Run Frontend ─────────────────────────────────────────────────
+# ── Run Frontend (Qt6/QML) ──────────────────────────────────────
 run_frontend() {
+    log "Building Qt6/QML frontend..."
+    cd "$QT_SHELL_DIR"
+
+    # Build in debug mode (faster compilation)
+    if ! cargo build 2>&1 | sed -u "s/^/$(echo -e "${DEV_PREFIX} [qt-shell] ")/"; then
+        loge "Qt6 frontend build failed"
+        return 1
+    fi
+    logs "Qt6 frontend built"
+
+    log "Starting Qt6/QML frontend..."
+    QT_FORCE_STDERR_LOGGING=1 "$QT_SHELL_DIR/target/debug/opengg-qt" 2>&1 | \
+        sed -u "s/^/$(echo -e "[qt-shell] ")/" &
+    PIDS+=($!)
+    logs "Qt6 frontend running (PID ${PIDS[-1]})"
+}
+
+# ── Run Frontend Legacy (Tauri/Vue) ───────────────────────────────
+run_frontend_legacy() {
     cd "$FRONTEND_DIR"
 
     # Ensure node_modules exists
@@ -178,7 +198,7 @@ run_frontend() {
         sleep 2
     fi
 
-    log "Starting Tauri dev server..."
+    log "Starting Tauri dev server (legacy)..."
     # Use npx to ensure local binaries are found
     npx tauri dev 2>&1 | sed -u "s/^/$(echo -e "${TAURI_PREFIX} ")/" &
     PIDS+=($!)
@@ -229,6 +249,11 @@ case "${1:-all}" in
         log "Press ${BOLD}Ctrl+C${RESET} to stop"
         wait
         ;;
+    ui-legacy|frontend-legacy)
+        run_frontend_legacy
+        log "Press ${BOLD}Ctrl+C${RESET} to stop"
+        wait
+        ;;
     build|release)
         do_build
         ;;
@@ -241,8 +266,8 @@ case "${1:-all}" in
         echo ""
         log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         log " ${BOLD}Both services running${RESET}"
-        log " Daemon: ${DIM}http://localhost:9473 (D-Bus)${RESET}"
-        log " Tauri:  ${DIM}http://localhost:1420 (Vite)${RESET}"
+        log " Daemon: ${DIM}D-Bus session bus${RESET}"
+        log " Qt6:    ${DIM}Qt6/QML frontend (native)${RESET}"
         log " Press ${BOLD}Ctrl+C${RESET} to stop everything"
         log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
@@ -254,11 +279,12 @@ case "${1:-all}" in
         echo "Usage: ./dev.sh [command]"
         echo ""
         echo "Commands:"
-        echo "  (none)    Run daemon + frontend (full stack)"
-        echo "  daemon    Run daemon only"
-        echo "  ui        Run frontend only"
-        echo "  build     Build everything for release"
-        echo "  setup     First-time setup"
+        echo "  (none)          Run daemon + frontend (full stack)"
+        echo "  daemon          Run daemon only"
+        echo "  ui              Run Qt6/QML frontend only"
+        echo "  ui-legacy       Run Tauri/Vue frontend only (archived, for reference)"
+        echo "  build           Build everything for release"
+        echo "  setup           First-time setup"
         echo ""
         ;;
 esac

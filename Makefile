@@ -14,23 +14,25 @@ SHELL := /bin/bash
 ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
 FRONTEND := $(ROOT)/frontend
+QT_SHELL := $(ROOT)/qt-shell
 
-.PHONY: dev daemon ui build setup clean install install-service install-desktop lint check help new-extension validate-extension ui-shots lint-qml
+.PHONY: dev daemon ui ui-legacy build setup clean install install-service install-desktop lint check help new-extension validate-extension ui-shots lint-qml
 
 # ── Default ──────────────────────────────────────────────────────
 help:
 	@echo ""
 	@echo "  OpenGG Development Commands"
 	@echo "  ─────────────────────────────"
-	@echo "  make dev       Full-stack dev (daemon + frontend)"
+	@echo "  make dev       Full-stack dev (daemon + Qt6 frontend)"
 	@echo "  make daemon    Build & run daemon (debug)"
-	@echo "  make ui        Run Tauri frontend dev server"
-	@echo "  make build     Release build"
+	@echo "  make ui        Build & run Qt6/QML frontend"
+	@echo "  make ui-legacy Build & run Tauri/Vue frontend (archived)"
+	@echo "  make build     Release build (daemon + Qt6 frontend)"
 	@echo "  make setup     Install all dependencies"
 	@echo "  make clean     Remove build artifacts"
 	@echo "  make install   Install daemon to ~/.local/bin"
 	@echo "  make check     Type-check everything"
-	@echo "  make lint      Clippy + vue-tsc"
+	@echo "  make lint      Clippy + check-colors.sh"
 	@echo "  make new-extension NAME=<id>          Scaffold a new extension"
 	@echo "  make validate-extension DIR=<path>   Validate extension manifest & files"
 	@echo ""
@@ -53,12 +55,15 @@ daemon-release:
 ui:
 	@chmod +x dev.sh && ./dev.sh ui
 
+ui-legacy:
+	@chmod +x dev.sh && ./dev.sh ui-legacy
+
 ui-deps:
 	cd $(FRONTEND) && npm install
 
 # ── Release build ────────────────────────────────────────────────
 build: daemon-release
-	cd $(FRONTEND) && npm install && npx tauri build
+	cd $(QT_SHELL) && cargo build --release
 
 # ── Scaffold a new extension ─────────────────────────────────────
 new-extension:
@@ -75,10 +80,12 @@ setup:
 	@chmod +x dev.sh && ./dev.sh setup
 
 # ── Install ──────────────────────────────────────────────────────
-install: daemon-release install-service
+install: build install-service
 	@mkdir -p $(HOME)/.local/bin
 	cp $(DAEMON)/target/release/openggd $(HOME)/.local/bin/
+	cp $(QT_SHELL)/target/release/opengg-qt $(HOME)/.local/bin/opengg
 	@echo "✓ Installed openggd to ~/.local/bin/"
+	@echo "✓ Installed opengg-qt as ~/.local/bin/opengg"
 
 # ── systemd user service ─────────────────────────────────────────
 # Install + enable the per-user daemon so the virtual audio engine auto-starts at
@@ -108,6 +115,7 @@ check:
 
 lint:
 	cd $(DAEMON) && cargo clippy -- -W clippy::all
+	cd $(QT_SHELL) && cargo clippy -- -W clippy::all
 	cd $(FRONTEND) && npx vue-tsc --noEmit
 	$(MAKE) lint-qml
 
