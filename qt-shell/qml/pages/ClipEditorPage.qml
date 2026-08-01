@@ -10,11 +10,12 @@ import com.opengg.app
 // (video + one lane per audio track) with draggable trim handles underneath.
 //
 // AUDIO LANES: the lanes are labelled with the clip's real track names, which
-// only exist in the mp4 `name` tag (see core::media's parser). Qt Multimedia
-// decodes one audio stream at a time, so the lane's speaker button selects
-// which track the PREVIEW plays rather than mixing — a true mixdown needs a
-// hand-built GStreamer pipeline. Export is a lossless stream copy and keeps
-// every track regardless of what the preview is monitoring.
+// only exist in the mp4 `name` tag (see core::media's parser). Every track
+// plays SIMULTANEOUSLY through ClipAudioMixer's GStreamer pipeline, so each
+// lane's speaker button mutes that one track in the live mix. Qt Multimedia
+// only ever supplies the picture here — it can decode one audio stream at a
+// time and cannot mix. Export is a lossless stream copy and keeps every track
+// regardless of what is muted for monitoring.
 Rectangle {
     id: page
     color: Theme.bg
@@ -34,6 +35,26 @@ Rectangle {
 
     focus: visible
 
+    // ── Audio ownership ───────────────────────────────────────────────────
+    // ClipAudioMixer plays every audio track simultaneously with independent
+    // gain, which is the whole point of a multi-track editor; Qt Multimedia is
+    // muted down to the picture. Single-track clips fall back to Qt's audio.
+    readonly property bool mixed: ClipAudioMixer.active
+    /// Per-track mute flags. Reassigned wholesale so bindings re-evaluate.
+    property var trackMuted: ({})
+    /// Master mute. Applies to the mix when mixed, to Qt's output otherwise.
+    property bool masterMuted: false
+
+    function toggleTrack(index) {
+        if (!page.mixed)
+            return
+        var next = {}
+        for (var k in page.trackMuted) next[k] = page.trackMuted[k]
+        next[index] = !next[index]
+        page.trackMuted = next
+        ClipAudioMixer.setTrackVolume(index, next[index] ? 0.0 : 1.0)
+    }
+
     onClipChanged: {
         if (!page.clip)
             return
@@ -44,12 +65,35 @@ Rectangle {
         EditorController.loadClip(page.clip.filepath)
         page.trimStart = EditorController.trimStart
         page.trimEnd = EditorController.trimEnd
+        page.trackMuted = ({})
+        ClipAudioMixer.load(page.clip.filepath)
+        ClipAudioMixer.setMasterVolume(audioOut.muted ? 0 : audioOut.volume)
         mp.play()
+        if (page.mixed) ClipAudioMixer.play()
     }
 
     onVisibleChanged: {
-        if (visible) page.forceActiveFocus()
-        else mp.stop()
+        if (visible) {
+            page.forceActiveFocus()
+        } else {
+            mp.stop()
+            // Release the audio device; a live pipeline would keep playing
+            // over the rest of the app after navigating away.
+            ClipAudioMixer.unload()
+        }
+    }
+
+    // Independent clocks drift; nudge the audio back to the video periodically.
+    Timer {
+        interval: 1000
+        running: page.visible && page.mixed
+                 && mp.playbackState === MediaPlayer.PlayingState
+        repeat: true
+        onTriggered: {
+            const apos = ClipAudioMixer.positionMs()
+            if (apos >= 0 && Math.abs(apos - mp.position) > 180)
+                ClipAudioMixer.seek(mp.position)
+        }
     }
 
     function fmt(sec) {
@@ -61,11 +105,23 @@ Rectangle {
     }
 
     function togglePlay() {
-        if (mp.playbackState === MediaPlayer.PlayingState) mp.pause()
-        else mp.play()
+        if (mp.playbackState === MediaPlayer.PlayingState) {
+            mp.pause()
+            if (page.mixed) ClipAudioMixer.pause()
+        } else {
+            mp.play()
+            if (page.mixed) {
+                ClipAudioMixer.seek(mp.position)
+                ClipAudioMixer.play()
+            }
+        }
+    }
+    function seekTo(ms) {
+        mp.position = Math.max(0, Math.min(mp.duration, ms))
+        if (page.mixed) ClipAudioMixer.seek(mp.position)
     }
     function skip(ms) {
-        mp.position = Math.max(0, Math.min(mp.duration, mp.position + ms))
+        page.seekTo(mp.position + ms)
     }
     function resetTrim() {
         page.trimStart = 0
@@ -86,18 +142,24 @@ Rectangle {
         id: mp
         source: page.filepath ? "file://" + page.filepath : ""
         videoOutput: videoOut
-        audioOutput: AudioOutput { id: audioOut }
+        audioOutput: AudioOutput {
+            id: audioOut
+            // Silence Qt's single-track decode while the mixer owns the sound,
+            // or track 1 would be heard twice.
+            muted: page.mixed
+        }
         onMediaStatusChanged: {
             if (mediaStatus === MediaPlayer.EndOfMedia) {
                 mp.pause()
-                mp.position = Math.round(page.trimStart * 1000)
+                page.seekTo(Math.round(page.trimStart * 1000))
+                if (page.mixed) ClipAudioMixer.pause()
             }
         }
         // Playback is clamped to the trim window so the handles preview what
         // the export will actually produce.
         onPositionChanged: {
             if (page.trimEnd > 0 && mp.position > page.trimEnd * 1000 + 50)
-                mp.position = Math.round(page.trimStart * 1000)
+                page.seekTo(Math.round(page.trimStart * 1000))
         }
     }
 
@@ -415,9 +477,15 @@ Rectangle {
                 Item { Layout.fillWidth: true }
 
                 EditorButton {
-                    icon: audioOut.muted ? "volume-x" : "volume-2"
-                    tooltip: audioOut.muted ? "Unmute" : "Mute"
-                    onTriggered: audioOut.muted = !audioOut.muted
+                    icon: masterMuted ? "volume-x" : "volume-2"
+                    tooltip: masterMuted ? "Unmute" : "Mute"
+                    onTriggered: {
+                        page.masterMuted = !page.masterMuted
+                        if (page.mixed)
+                            ClipAudioMixer.setMasterVolume(page.masterMuted ? 0 : audioOut.volume)
+                        else
+                            audioOut.muted = page.masterMuted
+                    }
                 }
                 Slider {
                     id: vol
@@ -428,6 +496,7 @@ Rectangle {
                     onMoved: {
                         audioOut.volume = vol.value
                         if (vol.value > 0) audioOut.muted = false
+                        if (page.mixed) ClipAudioMixer.setMasterVolume(vol.value)
                     }
                     background: Rectangle {
                         x: vol.leftPadding
@@ -517,9 +586,11 @@ Rectangle {
                         label: modelData.title || ("Audio " + (index + 1))
                         accent: Theme.channelColor(modelData.title)
                         icon: "music"
-                        monitorable: true
-                        monitoring: mp.activeAudioTrack === index
-                        onMonitorToggled: mp.activeAudioTrack = index
+                        // Every track plays at once; this mutes one of them
+                        // rather than switching which single track is audible.
+                        monitorable: page.mixed
+                        monitoring: page.trackMuted[index] !== true
+                        onMonitorToggled: page.toggleTrack(index)
                     }
                 }
             }
@@ -551,7 +622,7 @@ Rectangle {
                 // Seek by clicking anywhere on the timeline.
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: (m) => mp.position = Math.round(timelinePane.xToTime(m.x) * 1000)
+                    onClicked: (m) => page.seekTo(Math.round(timelinePane.xToTime(m.x) * 1000))
                 }
 
                 // Playhead

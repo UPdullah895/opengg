@@ -62,6 +62,7 @@ fn main() {
         .files([
             "src/i18n.rs",
             "src/audio.rs",
+            "src/audio_mixer.rs",
             "src/device.rs",
             "src/clips.rs",
             "src/editor.rs",

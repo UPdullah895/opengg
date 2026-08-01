@@ -1,4 +1,6 @@
 mod audio;
+mod audio_mixer;
+mod mixer_pipeline;
 mod clips;
 mod device;
 mod editor;

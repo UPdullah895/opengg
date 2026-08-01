@@ -19,6 +19,11 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # (plan §2.2/§2.3). All daemon/pactl/SQLite access goes through opengg_core;
 # qt-shell no longer depends on zbus directly.
 opengg-core = { path = "../core" }
+# Multi-track clip audio. Qt Multimedia decodes exactly one audio stream at a
+# time, so playing a capture's Game+Chat+Mic tracks together needs a real
+# mixing pipeline (decodebin -> per-track volume -> audiomixer). Ported from
+# the video PoC, which validated this design.
+gstreamer = "0.25.3"
 
 [build-dependencies]
 cxx-qt-build = "0.9"

@@ -33,6 +33,9 @@ Rectangle {
             root.forceActiveFocus()
         } else {
             mp.stop()
+            // Release the audio device — a live pipeline left running would
+            // keep playing over the rest of the app.
+            ClipAudioMixer.unload()
             root.expanded = false
             speedMenu.open = false
             trackMenu.open = false
@@ -50,19 +53,66 @@ Rectangle {
         return (h > 0 ? h + ":" : "") + mm + ":" + (s < 10 ? "0" : "") + s
     }
 
-    function togglePlay() {
-        if (mp.playbackState === MediaPlayer.PlayingState) mp.pause()
-        else mp.play()
+    // ── Audio ownership ───────────────────────────────────────────────────
+    // When the clip has several audio tracks, ClipAudioMixer takes the sound
+    // (all tracks mixed, independent gains) and Qt Multimedia is muted down to
+    // just the picture. Single-track clips keep Qt's own audio path.
+    readonly property bool mixed: ClipAudioMixer.active
+    /// Per-track mute flags while `mixed`. Reassigned wholesale, never mutated
+    /// in place, so the bindings in the track menu actually re-evaluate.
+    property var trackMuted: ({})
+
+    function toggleTrack(index) {
+        var next = {}
+        for (var k in root.trackMuted) next[k] = root.trackMuted[k]
+        next[index] = !next[index]
+        root.trackMuted = next
+        ClipAudioMixer.setTrackVolume(index, next[index] ? 0.0 : 1.0)
         root.poke()
     }
+
+    function togglePlay() {
+        if (mp.playbackState === MediaPlayer.PlayingState) {
+            mp.pause()
+            if (root.mixed) ClipAudioMixer.pause()
+        } else {
+            mp.play()
+            if (root.mixed) {
+                ClipAudioMixer.seek(mp.position)
+                ClipAudioMixer.play()
+            }
+        }
+        root.poke()
+    }
+    function seekTo(ms) {
+        mp.position = Math.max(0, Math.min(mp.duration, ms))
+        if (root.mixed) ClipAudioMixer.seek(mp.position)
+    }
     function skip(ms) {
-        mp.position = Math.max(0, Math.min(mp.duration, mp.position + ms))
+        root.seekTo(mp.position + ms)
         root.poke()
     }
     function setVolume(v) {
         audioOut.volume = Math.max(0, Math.min(1, v))
         if (audioOut.volume > 0) audioOut.muted = false
+        // While mixed, the slider is the mix's master gain — Qt's own output
+        // is silent and its volume would control nothing audible.
+        if (root.mixed) ClipAudioMixer.setMasterVolume(audioOut.muted ? 0 : audioOut.volume)
         root.poke()
+    }
+
+    // The two clocks run independently, so nudge the audio back whenever it
+    // drifts more than a frame or two from the video.
+    Timer {
+        interval: 1000
+        running: root.visible && root.mixed
+                 && mp.playbackState === MediaPlayer.PlayingState
+        repeat: true
+        onTriggered: {
+            const apos = ClipAudioMixer.positionMs()
+            if (apos >= 0 && Math.abs(apos - mp.position) > 180)
+                ClipAudioMixer.seek(mp.position)
+        }
     }
 
     // ── Auto-hiding chrome ────────────────────────────────────────────────
@@ -110,13 +160,23 @@ Rectangle {
         id: mp
         source: root.source
         videoOutput: videoOut
-        audioOutput: AudioOutput { id: audioOut }
+        audioOutput: AudioOutput {
+            id: audioOut
+            // Silence Qt's single-track decode when the mixer owns the sound,
+            // otherwise track 1 would play twice — once here, once in the mix.
+            muted: root.mixed
+        }
+        onPlaybackRateChanged: if (root.mixed) ClipAudioMixer.setRate(mp.playbackRate)
         onMediaStatusChanged: {
             // PoC gap #6: Qt Multimedia leaves the pipeline at EndOfMedia; reset
             // to a paused first frame so the clip can be replayed.
             if (mediaStatus === MediaPlayer.EndOfMedia) {
                 mp.pause()
                 mp.position = 0
+                if (root.mixed) {
+                    ClipAudioMixer.pause()
+                    ClipAudioMixer.seek(0)
+                }
                 root.poke()
             }
         }
@@ -128,9 +188,17 @@ Rectangle {
     // audio-track names (see the note on requestAudioTracks in clips.rs).
     onSourceChanged: {
         if (root.source.length > 0) {
+            const path = root.source.replace(/^file:\/\//, "")
+            ClipsController.requestAudioTracks(path)
+            // Build the mix first: `active` decides who owns the audio, and
+            // deciding after playback starts would leak a burst of Qt's
+            // single-track sound.
+            root.trackMuted = ({})
+            ClipAudioMixer.load(path)
+            ClipAudioMixer.setMasterVolume(audioOut.muted ? 0 : audioOut.volume)
             mp.play()
+            if (root.mixed) ClipAudioMixer.play()
             root.poke()
-            ClipsController.requestAudioTracks(root.source.replace(/^file:\/\//, ""))
         }
     }
 
@@ -284,7 +352,7 @@ Rectangle {
                     // so hold the drag value locally and only follow the player
                     // while not pressed — same pattern as the mixer faders.
                     value: seek.pressed ? seek.value : mp.position
-                    onMoved: mp.position = Math.round(seek.value)
+                    onMoved: root.seekTo(Math.round(seek.value))
                     onPressedChanged: root.poke()
 
                     background: Rectangle {
@@ -433,12 +501,12 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 4
 
-                    // Audio-track picker — only meaningful on multi-track clips.
+                    // Per-track mixer — only meaningful on multi-track clips.
                     PlayerButton {
                         id: trackBtn
                         icon: "music"
-                        tooltip: "Audio track"
-                        visible: mp.audioTracks.length > 1
+                        tooltip: "Audio tracks"
+                        visible: root.mixed && ClipAudioMixer.trackCount > 1
                         active: trackMenu.open
                         onTriggered: {
                             trackMenu.open = !trackMenu.open
@@ -553,21 +621,33 @@ Rectangle {
                 anchors.centerIn: parent
                 width: parent.width - 8
 
+                // Every track is audible at once; these toggle each one's gain
+                // rather than choosing between them.
                 Repeater {
-                    model: mp.audioTracks.length
+                    model: ClipAudioMixer.trackCount
 
                     Rectangle {
                         required property int index
+                        readonly property bool muted: root.trackMuted[index] === true
                         width: trackCol.width
                         height: 26
                         radius: 4
                         color: trackArea.containsMouse ? Theme.accentAlpha(22) : "transparent"
 
-                        Text {
+                        Icon {
+                            id: trackIcon
                             anchors.left: parent.left
-                            anchors.leftMargin: 10
+                            anchors.leftMargin: 8
                             anchors.verticalCenter: parent.verticalCenter
-                            width: parent.width - 30
+                            name: muted ? "volume-x" : "volume-2"
+                            size: 13
+                            color: muted ? Theme.textMuted : Theme.accent
+                        }
+                        Text {
+                            anchors.left: trackIcon.right
+                            anchors.leftMargin: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 40
                             // Real names ("Game"/"Chat"/"Mic") come from the
                             // ffprobe side-channel; Qt's own metadata has none
                             // for GSR captures, hence the positional fallback.
@@ -577,27 +657,16 @@ Rectangle {
                                     return names[index]
                                 return "Track " + (index + 1)
                             }
-                            color: mp.activeAudioTrack === index ? Theme.accent : "#ffffff"
+                            color: muted ? Theme.textMuted : "#ffffff"
                             font.pixelSize: 12
                             elide: Text.ElideRight
-                        }
-                        Icon {
-                            anchors.right: parent.right
-                            anchors.rightMargin: 8
-                            anchors.verticalCenter: parent.verticalCenter
-                            visible: mp.activeAudioTrack === index
-                            name: "check"; size: 12; color: Theme.accent
                         }
                         MouseArea {
                             id: trackArea
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                mp.activeAudioTrack = index
-                                trackMenu.open = false
-                                root.poke()
-                            }
+                            onClicked: root.toggleTrack(index)
                         }
                     }
                 }
