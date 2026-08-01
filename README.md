@@ -109,21 +109,20 @@ opengg/
 │       ├── config/         # TOML config (~/.config/opengg/)
 │       └── ipc/            # D-Bus interface definitions
 ├── qt-shell/               # Qt6/QML native UI (cxx-qt)
-│   ├── src/
-│   │   ├── main.rs         # App setup, D-Bus, shortcuts
-│   │   └── commands.rs     # QML invokable functions
+│   ├── src/                # cxx-qt controllers (audio.rs, clips.rs,
+│   │   │                   #   editor.rs, recording.rs, mixer_pipeline.rs, …)
+│   │   └── main.rs         # App setup + module registration
 │   ├── qml/
-│   │   ├── App.qml         # Root: pages, theme, navigation
-│   │   ├── pages/          # MixerPage, ClipsPage, SettingsPage, etc.
-│   │   ├── components/     # Reusable QML elements
-│   │   └── Theme.qml       # Design tokens
-│   └── build.rs            # QML resource registration
+│   │   ├── Main.qml        # Root: pages, navigation
+│   │   ├── Theme.qml       # Design tokens (mirrors theme.json)
+│   │   ├── Icons.qml       # SVG icon path registry
+│   │   ├── pages/          # MixerPage, ClipsPage, ClipEditorPage, …
+│   │   └── components/     # Reusable QML elements
+│   ├── tools/              # check-colors.sh, ui-shots.sh (CI guards)
+│   └── build.rs            # QML file + controller registration
 ├── core/                   # Shared opengg-core crate
-│   └── src/
-│       ├── lib.rs          # Public API
-│       ├── audio/          # Routing, mixing logic
-│       ├── replay/         # Clip metadata, FFmpeg integration
-│       └── device/         # Device abstraction
+│   └── src/                # audio.rs, clips/, media.rs, settings/,
+│                           #   gsr.rs, daemon.rs, device.rs, vu.rs, …
 ├── frontend/               # ARCHIVED: Tauri + Vue UI
 │   ├── ARCHIVED.md         # Archive notes
 │   ├── src/
