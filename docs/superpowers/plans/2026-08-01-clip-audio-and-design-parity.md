@@ -142,6 +142,11 @@ manifests gain `gst-plugin-qml6`.
 
 ### 2a. Icon quality (est. ½ session, app-wide payoff)
 
+> **OWNED BY THE USER (2026-08-01) — do not implement.** The user is doing
+> the icon work themselves. The diagnosis below stands and is theirs to use;
+> another contributor picking up this plan should start at 2b instead.
+> Broader interface polish before 0.2.0 is also being handled separately.
+
 The icons are geometrically faithful (mechanically extracted from the Vue
 SVGs) but **render badly**, and rendering is what the eye judges:
 
