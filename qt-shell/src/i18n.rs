@@ -161,7 +161,7 @@ impl qobject::I18n {
             let en = codes.remove(pos);
             codes.insert(0, en);
         }
-        codes.iter().map(|c| QString::from(c)).collect()
+        codes.iter().map(QString::from).collect()
     }
 }
 

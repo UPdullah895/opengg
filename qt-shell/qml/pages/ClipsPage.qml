@@ -545,18 +545,17 @@ Rectangle {
             }
             // A fused pair rather than two separate buttons, so the pair
             // reads as one view-mode control (per design reference).
-            Row {
-                spacing: 0
+            SegmentedToggle {
                 IconToggle {
+                    flat: true
                     icon: "grid"
-                    segment: "left"
                     active: page.viewMode === "grid"
                     tooltip: "Grid view"
                     onTriggered: page.viewMode = "grid"
                 }
                 IconToggle {
+                    flat: true
                     icon: "list"
-                    segment: "right"
                     active: page.viewMode === "list"
                     tooltip: "List view"
                     onTriggered: page.viewMode = "list"

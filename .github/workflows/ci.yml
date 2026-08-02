@@ -29,47 +29,72 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
-  rust-tauri:
-    name: Rust Tauri Backend
+  # The Qt6/QML shell — the UI OpenGG actually ships. The old Tauri + Vue
+  # frontend/ is ARCHIVED (see frontend/ARCHIVED.md) and deliberately has no
+  # jobs here: gating merges on dead code buys nothing, and its stale tests
+  # were the only red checks on the board.
+  #
+  # Runs in the Arch container rather than on ubuntu-latest because the QML
+  # uses Qt 6.7+ APIs (per-corner radii such as topLeftRadius); Ubuntu's Qt
+  # is older and would fail at runtime with QML warnings rather than at
+  # compile time.
+  qt-shell:
+    name: Qt6/QML Shell
     runs-on: ubuntu-latest
+    container: archlinux:latest
+    timeout-minutes: 45
     defaults:
       run:
-        working-directory: ./frontend/src-tauri
+        working-directory: ./qt-shell
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        working-directory: .
+        run: |
+          pacman -Syu --noconfirm \
+            base-devel curl pkgconf cmake ninja clang \
+            qt6-base qt6-declarative qt6-multimedia qt6-shadertools \
+            gstreamer gst-plugins-base gst-plugins-base-libs \
+            gst-plugins-good gst-plugins-bad gst-plugin-qml6 \
+            ttf-dejavu
+
+      - name: Install Rust via rustup
+        working-directory: .
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --component clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "./frontend/src-tauri"
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - name: Check
-        run: cargo check
+          workspaces: "./qt-shell"
+
+      # Cheap and dependency-free, so it runs before the expensive build.
+      - name: Theme/icon lint (no bare hex, no emoji icons)
+        run: ./tools/check-colors.sh
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
       - name: Test
         run: cargo test
-      - name: Clippy
-        run: cargo clippy -- -D warnings
 
-  frontend:
-    name: Frontend (Vue + TS)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Debug, not release: ui-shots.sh runs target/debug/opengg-qt and errors
+      # out if it is missing. Clippy does not emit binaries, so this is the
+      # step that actually produces one.
+      - name: Build
+        run: cargo build
+
+      # The repo's mandatory UI gate: renders every page offscreen and fails
+      # on any QML warning. Catches the class of bug a compile cannot —
+      # broken bindings, missing properties, layout errors.
+      - name: Offscreen UI capture (must emit zero QML warnings)
+        run: ./tools/ui-shots.sh
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: ./frontend/package-lock.json
-      - name: Install dependencies
-        run: npm ci
-      - name: Type check
-        run: npx vue-tsc --noEmit
-      - name: Test
-        run: npm run test
-      - name: Check locales
-        run: npm run check:locales
+          name: ui-shots
+          path: qt-shell/target/ui-shots
+          if-no-files-found: warn

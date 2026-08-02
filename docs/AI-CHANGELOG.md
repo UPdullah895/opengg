@@ -6,6 +6,55 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-03] Claude Opus 5 — qt6-gstreamer-player-b3
+
+**What Changed:**
+- `21f721e`: `drop_video_pad`'s fakesink now sets `sync=true`; `ChannelStrip`
+  clamps its fader height and gains a `compact` mode; `Main.qml` gains minimum
+  window dimensions.
+- CI now builds and tests the Qt shell (clippy `-D warnings`, `cargo test`,
+  `check-colors.sh`, `ui-shots.sh` with screenshot artifacts) in an Arch
+  container. The archived Tauri/Vue jobs — the only red checks on the board —
+  are removed from `ci.yml` and `security.yml`.
+- `SegmentedToggle.qml` replaces the per-corner-radius approach used for the
+  Clips grid/list pill.
+
+**Why:**
+Two user-reported bugs (playback racing to the end of a clip after a skip;
+UI elements overlapping in a quarter-screen window), plus the discovery that
+CI gated exclusively on archived code and never built the shipping UI.
+
+**Landmines & Discoveries:**
+- **GstBin folds POSITION queries by taking the MAXIMUM across sinks.** A
+  `fakesink` defaults to `sync=false` and so consumes decoded video as fast as
+  the file reads; that runaway pad, not the audio, then becomes the pipeline's
+  reported position. Measured: 5117ms of media per 400ms of wall time, versus
+  398-401ms with `sync=true`. Any discard sink in a pipeline whose position is
+  ever queried MUST set `sync=true`.
+- **A negative height in a QML `Column` does not clamp — it stacks subsequent
+  children BACKWARDS.** `ChannelStrip` sized its fader as `strip.height - 168`,
+  which inverted below 168px and drew the channel name on top of the volume
+  readout. Always `Math.max(0, ...)` a computed height.
+- `minimumWidth`/`minimumHeight` on a Window are only hints; tiling
+  compositors (Hyprland, sway) size from their own layout and ignore them, so
+  components must degrade on their own regardless.
+- **Per-corner radii (`topLeftRadius` and friends) require Qt 6.7**, newer than
+  Debian stable's Qt, which the distro matrix builds against. A clipping
+  rounded parent gets the same result portably.
+- The bug was found by measuring, not reading: an earlier plausible-sounding
+  theory (that `videoActive` was false, leaving the drift timer running) was
+  disproved by checking that `no-more-pads` fires after all pads are added.
+
+**Verification:**
+- Regression test `playback_advances_at_wallclock_speed_before_and_after_a_seek`
+  asserts ~1x advance; confirmed it FAILS (21516ms) with the fix reverted.
+- `cargo test` 16 passed; `cargo clippy --all-targets -- -D warnings` clean
+- `./tools/check-colors.sh` clean; `./tools/ui-shots.sh` zero QML warnings
+- Before/after offscreen captures of the mixer at 928x492 (the reported
+  quarter-screen size) confirm the overlap is gone
+
+---
+
 ### [2026-08-02] Claude Sonnet 5 — qt6-gstreamer-player-b3
 
 **What Changed:**

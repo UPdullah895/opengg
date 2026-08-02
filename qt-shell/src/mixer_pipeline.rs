@@ -28,7 +28,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-/// Qt facts cxx-qt cannot express — see `src/cpp/video_bridge.cpp`.
+// Qt facts cxx-qt cannot express — see `src/cpp/video_bridge.cpp`.
+// (A `///` doc comment on an extern block is not rendered by rustdoc and
+// warns, so this is a plain comment.)
 extern "C" {
     fn opengg_has_gl_window_system() -> bool;
     fn opengg_find_video_item(object_name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
@@ -57,9 +59,9 @@ fn attach_video_item(sink: &gst::Element) -> bool {
         return false;
     }
     unsafe {
-        let mut value = glib::Value::from_type(glib::Type::POINTER);
+        let value = glib::Value::from_type(glib::Type::POINTER);
         glib::gobject_ffi::g_value_set_pointer(
-            value.as_ptr() as *mut glib::gobject_ffi::GValue,
+            value.as_ptr(),
             item,
         );
         sink.set_property_from_value("widget", &value);
@@ -366,6 +368,7 @@ impl MixerPipeline {
 
     /// First ERROR on the bus within `timeout`, if any. Used by the tests to
     /// assert the graph actually runs rather than just builds.
+    #[cfg(test)]
     pub fn pop_error(&self, timeout: Duration) -> Option<String> {
         let bus = self.pipeline.bus()?;
         let msg = bus.timed_pop_filtered(
@@ -382,6 +385,7 @@ impl MixerPipeline {
     }
 
     /// How many per-track volume elements were built. Test/diagnostic hook.
+    #[cfg(test)]
     pub fn track_count(&self) -> usize {
         self.tracks.lock().unwrap().elements.len()
     }
