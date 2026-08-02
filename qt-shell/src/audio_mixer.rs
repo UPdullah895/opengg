@@ -23,12 +23,21 @@ pub mod qobject {
         #[qobject]
         #[qml_element]
         #[qml_singleton]
+        /// Whether this process can render GL video at all. QML reads it to
+        /// decide between the video surface and a poster frame, without having
+        /// to load a clip first.
+        #[qproperty(bool, gl_available, cxx_name = "glAvailable")]
         /// Number of audio tracks being mixed; 0 when the clip has none (or
         /// the pipeline failed, in which case QML falls back to Qt's own
         /// single-track audio). -1 while discovery is still running.
         #[qproperty(i32, track_count, cxx_name = "trackCount")]
         /// True once a pipeline is live and owns this clip's audio.
         #[qproperty(bool, active)]
+        /// True when this pipeline is also rendering the picture into the QML
+        /// video surface. False on a clip with no video, and always false
+        /// without a GL window system (the offscreen screenshot harness) —
+        /// QML shows a poster frame in that case.
+        #[qproperty(bool, video_active, cxx_name = "videoActive")]
         type ClipAudioMixer = super::ClipAudioMixerRust;
 
         /// Tear down any existing pipeline and build one for `source`
@@ -94,6 +103,8 @@ use std::time::Duration;
 pub struct ClipAudioMixerRust {
     track_count: i32,
     active: bool,
+    video_active: bool,
+    gl_available: bool,
     master_volume: f64,
     pipeline: Option<MixerPipeline>,
     /// Monotonic ownership token; see `load`.
@@ -105,6 +116,8 @@ impl Default for ClipAudioMixerRust {
         Self {
             track_count: 0,
             active: false,
+            video_active: false,
+            gl_available: crate::mixer_pipeline::gl_video_available(),
             master_volume: 1.0,
             pipeline: None,
             token: 0,
@@ -130,7 +143,11 @@ impl qobject::ClipAudioMixer {
             return token;
         }
 
-        let pipeline = match build_mixer_pipeline(&path) {
+        // Only build a GL video branch when this process can actually render
+        // one — offscreen it would fail the whole pipeline, taking the audio
+        // down with it (see the B1 spike findings).
+        let want_video = crate::mixer_pipeline::gl_video_available();
+        let pipeline = match build_mixer_pipeline(&path, want_video) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("clip audio mixer: pipeline build failed for {path}: {e}");
@@ -153,9 +170,11 @@ impl qobject::ClipAudioMixer {
                 self.as_mut().set_active(false);
             }
             Some(count) => {
+                let has_video = pipeline.has_video();
                 self.as_mut().rust_mut().pipeline = Some(pipeline);
                 self.as_mut().set_track_count(count);
                 self.as_mut().set_active(true);
+                self.as_mut().set_video_active(has_video);
             }
         }
         token
@@ -173,6 +192,7 @@ impl qobject::ClipAudioMixer {
             old.shutdown();
         }
         self.as_mut().set_active(false);
+        self.as_mut().set_video_active(false);
         self.as_mut().set_track_count(0);
     }
 

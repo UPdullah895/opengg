@@ -22,6 +22,8 @@ Rectangle {
     color: Theme.scrim(92)
     property string source: ""
     property string title: ""
+    /// Cached thumbnail, shown until the pipeline renders its first frame.
+    property string posterSource: ""
     signal closed()
 
     /// Expanded = video fills the whole overlay instead of a centred panel.
@@ -241,9 +243,19 @@ Rectangle {
         Behavior on width  { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
         Behavior on height { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
 
+        // Migration state: both video paths exist. ClipAudioMixer's GStreamer
+        // pipeline renders here when it can; Qt Multimedia's VideoOutput is
+        // the fallback until B3 removes it entirely.
+        ClipVideoSurface {
+            id: gstSurface
+            anchors.fill: parent
+            posterSource: root.posterSource
+        }
+
         VideoOutput {
             id: videoOut
             anchors.fill: parent
+            visible: !ClipAudioMixer.videoActive
         }
 
         // Click the video to toggle playback; movement wakes the chrome.

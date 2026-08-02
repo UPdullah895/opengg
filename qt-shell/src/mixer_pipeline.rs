@@ -17,9 +17,50 @@
 //! its fixed 3-track array to any track count.
 
 use gstreamer as gst;
+use gstreamer::glib;
 use gstreamer::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
+
+/// Qt facts cxx-qt cannot express — see `src/cpp/video_bridge.cpp`.
+extern "C" {
+    fn opengg_has_gl_window_system() -> bool;
+    fn opengg_find_video_item(object_name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+}
+
+/// objectName the QML video surface must carry for the sink to find it.
+pub const VIDEO_ITEM_OBJECT_NAME: &str = "clipVideoItem";
+
+/// Whether this process can render GL video at all. False under
+/// `QT_QPA_PLATFORM=offscreen`, where qml6glsink fails the whole pipeline
+/// with "Could not initialize window system" — the screenshot harness runs
+/// there, so the caller falls back to a poster frame instead.
+pub fn gl_video_available() -> bool {
+    unsafe { opengg_has_gl_window_system() }
+}
+
+/// Point a qml6glsink at the QML video surface.
+///
+/// The sink's `widget` property is a bare G_TYPE_POINTER, so this sets it
+/// through glib directly rather than dragging GStreamer headers into the C++
+/// shim — the shim only locates the QQuickItem and hands back its address.
+fn attach_video_item(sink: &gst::Element) -> bool {
+    let name = std::ffi::CString::new(VIDEO_ITEM_OBJECT_NAME).expect("static name");
+    let item = unsafe { opengg_find_video_item(name.as_ptr()) };
+    if item.is_null() {
+        return false;
+    }
+    unsafe {
+        let mut value = glib::Value::from_type(glib::Type::POINTER);
+        glib::gobject_ffi::g_value_set_pointer(
+            value.as_ptr() as *mut glib::gobject_ffi::GValue,
+            item,
+        );
+        sink.set_property_from_value("widget", &value);
+    }
+    true
+}
 
 #[derive(Default)]
 struct TrackState {
@@ -48,9 +89,52 @@ pub struct MixerPipeline {
     master_volume: gst::Element,
     tracks: Arc<Mutex<TrackState>>,
     discovery: Arc<(Mutex<Option<i32>>, Condvar)>,
+    /// Set once a GL video branch is actually linked. Written from
+    /// decodebin's pad-added callback, read by QML through the controller.
+    video_linked: Arc<AtomicBool>,
 }
 
-pub fn build_mixer_pipeline(path: &str) -> Result<MixerPipeline, gst::glib::BoolError> {
+/// Sink a video pad we are not rendering. A video pad MUST be linked or the
+/// pipeline errors out "not-linked", so unwanted frames go to a fakesink
+/// rather than being left dangling.
+fn drop_video_pad(pipeline: &gst::Pipeline, pad: &gst::Pad) {
+    let Ok(fakesink) = gst::ElementFactory::make("fakesink").build() else {
+        return;
+    };
+    if pipeline.add(&fakesink).is_ok() {
+        let _ = fakesink.sync_state_with_parent();
+        if let Some(sinkpad) = fakesink.static_pad("sink") {
+            let _ = pad.link(&sinkpad);
+        }
+    }
+}
+
+/// Build the GL video chain and add it to the pipeline while it is still at
+/// NULL, returning its entry element.
+///
+/// Built UP FRONT rather than inside decodebin's pad-added callback, which is
+/// the mistake that cost a debugging round: adding it dynamically to an
+/// already-PAUSED pipeline forces `sync_state_with_parent`, and qml6glsink
+/// cannot change state until the Qt scene graph has given it a GL context —
+/// so it failed with "Failed to sync state with parent". At NULL the whole
+/// pipeline transitions together and the sink gets its context in step.
+fn build_video_chain(pipeline: &gst::Pipeline) -> Result<gst::Element, gst::glib::BoolError> {
+    let upload = gst::ElementFactory::make("glupload").build()?;
+    let convert = gst::ElementFactory::make("glcolorconvert").build()?;
+    let sink = gst::ElementFactory::make("qml6glsink").build()?;
+    // The sink reads its widget when it starts; a null widget fails the
+    // state change, so this has to happen before the pipeline moves.
+    if !attach_video_item(&sink) {
+        return Err(gst::glib::bool_error!("no QML video surface in the scene"));
+    }
+    pipeline.add_many([&upload, &convert, &sink])?;
+    gst::Element::link_many([&upload, &convert, &sink])?;
+    Ok(upload)
+}
+
+/// `want_video` renders the picture into the QML surface named
+/// [`VIDEO_ITEM_OBJECT_NAME`]; false discards it (audio-only, or offscreen).
+pub fn build_mixer_pipeline(path: &str, want_video: bool) -> Result<MixerPipeline, gst::glib::BoolError> {
     // Idempotent; safe to call on every clip load.
     gst::init().map_err(|e| gst::glib::bool_error!("gstreamer init failed: {e}"))?;
 
@@ -81,9 +165,26 @@ pub fn build_mixer_pipeline(path: &str) -> Result<MixerPipeline, gst::glib::Bool
     let discovery: Arc<(Mutex<Option<i32>>, Condvar)> =
         Arc::new((Mutex::new(None), Condvar::new()));
 
+    let video_linked = Arc::new(AtomicBool::new(false));
+
+    // Built while the pipeline is still at NULL — see build_video_chain.
+    let video_chain = if want_video {
+        match build_video_chain(&pipeline) {
+            Ok(upload) => Some(upload),
+            Err(e) => {
+                eprintln!("mixer: no GL video branch ({e}) — audio only");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let pipeline_weak = pipeline.downgrade();
     let mixer_weak = mixer.downgrade();
     let tracks_cb = Arc::clone(&tracks);
+    let video_linked_cb = Arc::clone(&video_linked);
+    let video_chain_cb = video_chain.clone();
     decodebin.connect_pad_added(move |_, pad| {
         let (Some(pipeline), Some(mixer)) = (pipeline_weak.upgrade(), mixer_weak.upgrade()) else {
             return;
@@ -93,16 +194,18 @@ pub fn build_mixer_pipeline(path: &str) -> Result<MixerPipeline, gst::glib::Bool
             .and_then(|c| c.structure(0).map(|s| s.name().starts_with("audio/")))
             .unwrap_or(false);
         if !is_audio {
-            // Video pads still have to go somewhere or the pipeline errors out
-            // with "not-linked" — the picture comes from Qt, not from here.
-            let Ok(fakesink) = gst::ElementFactory::make("fakesink").build() else {
-                return;
-            };
-            if pipeline.add(&fakesink).is_ok() {
-                let _ = fakesink.sync_state_with_parent();
-                if let Some(sinkpad) = fakesink.static_pad("sink") {
-                    let _ = pad.link(&sinkpad);
-                }
+            // Link to the pre-built GL chain if we have one and it is still
+            // free; otherwise discard the frames.
+            let linked = video_chain_cb.as_ref().is_some_and(|upload| {
+                upload
+                    .static_pad("sink")
+                    .filter(|sinkpad| !sinkpad.is_linked())
+                    .is_some_and(|sinkpad| pad.link(&sinkpad).is_ok())
+            });
+            if linked {
+                video_linked_cb.store(true, Ordering::Relaxed);
+            } else {
+                drop_video_pad(&pipeline, pad);
             }
             return;
         }
@@ -164,6 +267,7 @@ pub fn build_mixer_pipeline(path: &str) -> Result<MixerPipeline, gst::glib::Bool
         master_volume,
         tracks,
         discovery,
+        video_linked,
     })
 }
 
@@ -257,6 +361,12 @@ impl MixerPipeline {
         Some(format!("{msg:?}"))
     }
 
+    /// Whether the picture is being rendered into the QML surface. False for
+    /// audio-only clips, and whenever the GL branch could not be built.
+    pub fn has_video(&self) -> bool {
+        self.video_linked.load(Ordering::Relaxed)
+    }
+
     /// How many per-track volume elements were built. Test/diagnostic hook.
     pub fn track_count(&self) -> usize {
         self.tracks.lock().unwrap().elements.len()
@@ -282,7 +392,7 @@ mod tests {
             eprintln!("skipping: no multi-track clip available");
             return;
         };
-        let p = build_mixer_pipeline(&clip).expect("pipeline build");
+        let p = build_mixer_pipeline(&clip, false).expect("pipeline build");
         p.set_master_volume(0.0); // keep the test run silent
         p.start_discovery();
         let count = p.wait_for_discovery(Duration::from_secs(10));
@@ -301,7 +411,7 @@ mod tests {
             eprintln!("skipping: no multi-track clip available");
             return;
         };
-        let p = build_mixer_pipeline(&clip).expect("pipeline build");
+        let p = build_mixer_pipeline(&clip, false).expect("pipeline build");
         p.set_master_volume(0.0); // silent test run
         p.start_discovery();
         let discovered = p.wait_for_discovery(Duration::from_secs(10)).unwrap_or(0);

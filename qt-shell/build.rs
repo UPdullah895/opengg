@@ -32,6 +32,7 @@ fn main() {
         QmlFile::from("qml/pages/settings/StorePanel.qml"),
         QmlFile::from("qml/pages/settings/ComingSoonPanel.qml"),
         QmlFile::from("qml/components/VideoPlayer.qml"),
+        QmlFile::from("qml/components/ClipVideoSurface.qml"),
         QmlFile::from("qml/components/ChannelStrip.qml"),
         QmlFile::from("qml/components/AppBox.qml"),
         QmlFile::from("qml/components/ClipCard.qml"),
@@ -79,8 +80,13 @@ fn main() {
             "src/system.rs",
             "src/theme.rs",
         ])
+        // Hand-written C++ for the three Qt facts the GStreamer player needs
+        // that cxx-qt cannot express — see src/cpp/video_bridge.cpp.
+        .cpp_file("src/cpp/video_bridge.cpp")
         // Qt Multimedia (MediaPlayer/VideoOutput) for the clip player — the
         // GStreamer backend is the PoC-validated Wayland-native path (plan §7).
         .qt_module("Multimedia")
+        // QQuickWindow/QQuickItem for video_bridge.cpp.
+        .qt_module("Quick")
         .build();
 }

@@ -57,11 +57,11 @@ Rectangle {
     /// A plain click on a clip. While a selection is active it extends the
     /// selection instead of opening the player — otherwise building a batch
     /// would mean hitting the small checkbox on every single card.
-    function activate(fp, clipTitle) {
+    function activate(fp, clipTitle, thumb) {
         if (page.selectedCount > 0)
             page.toggleSelect(fp)
         else
-            page.playerClip = { filepath: fp, title: clipTitle }
+            page.playerClip = { filepath: fp, title: clipTitle, thumbnail: thumb }
     }
 
     // ── Date grouping ─────────────────────────────────────────────────────
@@ -797,7 +797,7 @@ Rectangle {
                     selected: page.isSelected(model.filepath)
                     selectionMode: page.selectedCount > 0
 
-                    onOpened: page.activate(model.filepath, model.title)
+                    onOpened: page.activate(model.filepath, model.title, model.thumbnail)
                     onSelectToggled: page.toggleSelect(model.filepath)
                     onRenamed: (newName) => ClipsController.setCustomName(model.filepath, newName)
                     onTrimRequested: page.editClipRequested({ filepath: model.filepath, title: model.title, game: model.game })
@@ -838,7 +838,7 @@ Rectangle {
                     selected: page.isSelected(model.filepath)
                     selectionMode: page.selectedCount > 0
 
-                    onOpened: page.activate(model.filepath, model.title)
+                    onOpened: page.activate(model.filepath, model.title, model.thumbnail)
                     onSelectToggled: page.toggleSelect(model.filepath)
                     onFavoriteToggled: ClipsController.setFavorite(model.filepath, !model.favorite)
                     onMenuRequested: (gx, gy) => clipMenu.openAt(
@@ -930,7 +930,7 @@ Rectangle {
                                 selected: page.isSelected(modelData.filepath)
                                 selectionMode: page.selectedCount > 0
 
-                                onOpened: page.activate(modelData.filepath, modelData.title)
+                                onOpened: page.activate(modelData.filepath, modelData.title, modelData.thumbnail)
                                 onSelectToggled: page.toggleSelect(modelData.filepath)
                                 onRenamed: (newName) => ClipsController.setCustomName(modelData.filepath, newName)
                                 onTrimRequested: page.editClipRequested({ filepath: modelData.filepath, title: modelData.title, game: modelData.game })
@@ -969,7 +969,7 @@ Rectangle {
                                 selected: page.isSelected(modelData.filepath)
                                 selectionMode: page.selectedCount > 0
 
-                                onOpened: page.activate(modelData.filepath, modelData.title)
+                                onOpened: page.activate(modelData.filepath, modelData.title, modelData.thumbnail)
                                 onSelectToggled: page.toggleSelect(modelData.filepath)
                                 onFavoriteToggled: ClipsController.setFavorite(modelData.filepath, !modelData.favorite)
                                 onMenuRequested: (gx, gy) => clipMenu.openAt(
@@ -1015,6 +1015,7 @@ Rectangle {
         visible: page.playerClip !== null
         source: page.playerClip ? "file://" + page.playerClip.filepath : ""
         title: page.playerClip ? page.playerClip.title : ""
+        posterSource: page.playerClip ? (page.playerClip.thumbnail || "") : ""
         onClosed: page.playerClip = null
     }
 
