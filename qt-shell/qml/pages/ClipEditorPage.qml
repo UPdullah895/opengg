@@ -86,7 +86,9 @@ Rectangle {
         page.trimEnd = EditorController.trimEnd
         page.gameTag = page.clip.game || ""
         page.trackMuted = ({})
-        page.mixerToken = ClipAudioMixer.load(page.clip.filepath)
+        // false: the editor has no ClipVideoSurface yet (its picture still
+        // comes from Qt Multimedia below) — see load()'s doc comment.
+        page.mixerToken = ClipAudioMixer.load(page.clip.filepath, false)
         page.applyVolume()
         // The mix is started by onPlaybackStateChanged, not here — starting it
         // alongside mp.play() ran the audio ahead of the first frame.

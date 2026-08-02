@@ -10,8 +10,13 @@
 //!   filesrc -> decodebin =*=> queue -> audioconvert -> audioresample -> volume -> audiomixer -> volume -> autoaudiosink
 //! ```
 //!
-//! Video pads are sunk to a fakesink: the picture still comes from Qt
-//! Multimedia's `VideoOutput`, this pipeline only ever owns the sound.
+//! When the caller has a GL video surface to render into (see `load()` in
+//! `audio_mixer.rs`), video pads are also linked into a `glupload ->
+//! glcolorconvert -> qml6glsink` branch built up front (see
+//! `build_video_chain`) so this pipeline owns the picture too. Callers
+//! without one — the editor, until it grows a `ClipVideoSurface` — pass
+//! `want_video: false` and video pads are sunk to a fakesink instead; the
+//! picture then still comes from Qt Multimedia's `VideoOutput`.
 //!
 //! Ported from the qt6 video PoC (`src/mixer_pipeline.rs`), generalised from
 //! its fixed 3-track array to any track count.

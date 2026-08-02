@@ -34,7 +34,7 @@ Rectangle {
     signal renamed(string newName)
     signal menuRequested(real gx, real gy)
 
-    height: 64
+    height: 96
     radius: Theme.radius
     color: row.selected ? Theme.accentAlpha(10)
          : row.hovered ? Theme.bgHover
@@ -122,10 +122,13 @@ Rectangle {
             }
         }
 
-        // Thumbnail
+        // Thumbnail — sized to make list mode a genuinely bigger preview than
+        // the grid card gets, since a row has the full page width to spend on
+        // one thumbnail instead of splitting it across several columns.
         Rectangle {
+            id: thumb
             anchors.verticalCenter: parent.verticalCenter
-            width: 78; height: 44
+            width: 140; height: 79
             radius: 4
             color: Theme.bgDeep
             clip: true
@@ -172,7 +175,7 @@ Rectangle {
         // Title + meta
         Column {
             anchors.verticalCenter: parent.verticalCenter
-            width: parent.width - 78 - 20 - 12 * 3
+            width: parent.width - thumb.width - 20 - 12 * 3
                    - (gameBadge.visible ? gameBadge.width + 12 : 0)
                    - favBtn.width - kebab.width - 24
             spacing: 4

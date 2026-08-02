@@ -107,9 +107,15 @@ Rectangle {
 
     // The two clocks run independently, so nudge the audio back whenever it
     // drifts more than a frame or two from the video.
+    //
+    // NOT while ClipAudioMixer.videoActive: once the mixer's own GStreamer
+    // pipeline renders the picture, it and the audio share one clock and
+    // can't drift — the periodic FLUSHING|KEY_UNIT seek this fires was
+    // hitting the now-visible video branch too, which is what made playback
+    // visibly repeat a few frames and jump, especially right after a skip.
     Timer {
         interval: 400
-        running: root.visible && root.mixed
+        running: root.visible && root.mixed && !ClipAudioMixer.videoActive
                  && mp.playbackState === MediaPlayer.PlayingState
         repeat: true
         onTriggered: {
@@ -210,7 +216,9 @@ Rectangle {
             // deciding after playback starts would leak a burst of Qt's
             // single-track sound.
             root.trackMuted = ({})
-            root.mixerToken = ClipAudioMixer.load(path)
+            // true: this view has a ClipVideoSurface (objectName
+            // "clipVideoItem") for the pipeline's video branch to attach to.
+            root.mixerToken = ClipAudioMixer.load(path, true)
             ClipAudioMixer.setMasterVolume(audioOut.muted ? 0 : audioOut.volume)
             // Deliberately NOT starting the mix here: the pipeline would begin
             // instantly while Qt is still opening the file, so the audio ran
@@ -489,8 +497,23 @@ Rectangle {
                             width: 70
                             visible: volHover.hovered
                             from: 0; to: 1
-                            value: audioOut.muted ? 0 : audioOut.volume
+                            // NOT `value: audioOut.volume` — QQC2 writes
+                            // `value` directly on the first interactive drag,
+                            // which severs a binding on it and leaves the
+                            // handle stuck from then on. Seed it once and
+                            // re-sync only when the volume changes elsewhere
+                            // (mute toggle, keyboard Up/Down).
+                            Component.onCompleted: value = audioOut.muted ? 0 : audioOut.volume
                             onMoved: root.setVolume(vol.value)
+                            Connections {
+                                target: audioOut
+                                function onVolumeChanged() {
+                                    if (!vol.pressed) vol.value = audioOut.muted ? 0 : audioOut.volume
+                                }
+                                function onMutedChanged() {
+                                    if (!vol.pressed) vol.value = audioOut.muted ? 0 : audioOut.volume
+                                }
+                            }
 
                             background: Rectangle {
                                 x: vol.leftPadding

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import com.opengg.app
 
 // Compact recorder status + controls for the Clips toolbar — port of
@@ -16,6 +17,33 @@ Item {
 
     implicitWidth: pill.width
     implicitHeight: 32
+
+    // ── Quick-settings state, same shape as the Home dashboard's recorder
+    // popover (HomePage.qml's recorderPopoverComp) — duplicated locally
+    // rather than shared, matching this shell's existing per-page pattern for
+    // small option lists (see ChannelStrip.qml's device selector).
+    property var settingsObj: JSON.parse(SettingsController.settingsJson || "{}")
+    Connections {
+        target: SettingsController
+        function onSettingsJsonChanged() { rec.settingsObj = JSON.parse(SettingsController.settingsJson || "{}") }
+    }
+    function setSetting(key, value) {
+        SettingsController.setValue(key, JSON.stringify(value))
+        if (rec.settingsObj.gsrEnabled) RecordingController.restart()
+    }
+    readonly property var gsrQualityOptions: [
+        { value: "cbr", label: "Constant bitrate" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High" },
+        { value: "very_high", label: "Very high" },
+        { value: "ultra", label: "Ultra" }
+    ]
+    readonly property var gsrFpsOptions: [30, 60, 120].map(v => ({ value: v, label: v + " FPS" }))
+    readonly property var gsrReplayOptions: [15, 30, 60, 90, 120].map(v => ({ value: v, label: v + "s" }))
+    readonly property var gsrTargetOptions: [
+        { value: "screen", label: "Primary Monitor" },
+        { value: "focused", label: "Fullscreen Application" }
+    ]
 
     Component.onCompleted: RecordingController.refresh()
 
@@ -91,25 +119,24 @@ Item {
         id: menu
         visible: rec.menuOpen
         y: pill.height + 4
-        width: 188
-        height: menuCol.implicitHeight + 10
+        width: 260
+        height: menuCol.implicitHeight + 20
         z: 60
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
         border.color: Theme.border
 
-        Column {
+        ColumnLayout {
             id: menuCol
-            anchors.centerIn: parent
-            width: parent.width - 8
-            spacing: 0
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 10
+            spacing: 8
 
             Text {
-                width: parent.width
-                leftPadding: 8
-                topPadding: 4
-                bottomPadding: 4
+                Layout.fillWidth: true
                 visible: RecordingController.error.length > 0
                 text: RecordingController.error
                 color: Theme.danger
@@ -117,74 +144,124 @@ Item {
                 wrapMode: Text.WordWrap
             }
 
-            Text {
-                width: parent.width
-                leftPadding: 8
-                topPadding: 2
-                bottomPadding: 6
-                text: RecordingController.statusText
-                color: Theme.textMuted
-                font.pixelSize: 11
-                elide: Text.ElideRight
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Rectangle {
+                    Layout.alignment: Qt.AlignVCenter
+                    width: 7; height: 7; radius: 3.5
+                    color: RecordingController.running ? Theme.danger : Theme.textMuted
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: RecordingController.statusText
+                    color: Theme.textDim
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideRight
+                }
             }
 
-            Rectangle { width: parent.width; height: 1; color: Theme.border }
-
-            Repeater {
-                model: [
-                    { key: "start", icon: "record", label: "Start replay buffer",
-                      show: !RecordingController.running },
-                    { key: "save",  icon: "video",  label: "Save clip",
-                      show: RecordingController.running },
-                    { key: "stop",  icon: "square", label: "Stop",
-                      show: RecordingController.running, danger: true }
-                ]
+            // Start/Stop + Save Clip, side by side (Save Clip only usable
+            // once the buffer is actually running).
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
 
                 Rectangle {
-                    required property var modelData
-                    width: menuCol.width
-                    height: modelData.show ? 30 : 0
-                    visible: modelData.show
-                    radius: 4
-                    color: itemArea.containsMouse
-                           ? (modelData.danger ? Theme.tint(Theme.danger, 12) : Theme.accentAlpha(12))
-                           : "transparent"
-
-                    Row {
-                        anchors.left: parent.left
-                        anchors.leftMargin: 8
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 8
-
-                        Icon {
-                            anchors.verticalCenter: parent.verticalCenter
-                            name: modelData.icon
-                            size: 13
-                            color: modelData.danger ? Theme.danger
-                                 : itemArea.containsMouse ? Theme.accent : Theme.textDim
-                        }
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: modelData.label
-                            color: modelData.danger ? Theme.danger : Theme.text
-                            font.pixelSize: 12
-                        }
+                    Layout.fillWidth: true
+                    implicitHeight: 30
+                    radius: Theme.radius
+                    color: startArea.containsMouse ? Theme.bgHover : Theme.bgInput
+                    border.width: 1
+                    border.color: RecordingController.running ? Theme.danger : Theme.border
+                    Text {
+                        anchors.centerIn: parent
+                        text: RecordingController.running ? "Stop" : "Start Replay Buffer"
+                        color: RecordingController.running ? Theme.danger : Theme.text
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
                     }
-
                     MouseArea {
-                        id: itemArea
+                        id: startArea
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            switch (modelData.key) {
-                            case "start": RecordingController.start(); break
-                            case "save":  RecordingController.save(); break
-                            case "stop":  RecordingController.stop(); break
-                            }
-                            rec.menuOpen = false
-                        }
+                        onClicked: RecordingController.running ? RecordingController.stop() : RecordingController.start()
                     }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: 30
+                    radius: Theme.radius
+                    opacity: RecordingController.running ? 1 : 0.5
+                    color: saveArea.containsMouse && RecordingController.running
+                           ? Theme.tint(Theme.danger, 15) : "transparent"
+                    border.width: 1
+                    border.color: Theme.danger
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Save Clip"
+                        color: Theme.danger
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                    }
+                    MouseArea {
+                        id: saveArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: RecordingController.running
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: { RecordingController.save(); rec.menuOpen = false }
+                    }
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
+
+            Text {
+                text: "QUICK SETTINGS"
+                color: Theme.textMuted
+                font.pixelSize: 10
+                font.weight: Font.Bold
+                font.letterSpacing: 0.6
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: 8
+                rowSpacing: 7
+
+                Text { text: "Quality"; color: Theme.textDim; font.pixelSize: 12 }
+                SelectField {
+                    Layout.fillWidth: true
+                    options: rec.gsrQualityOptions
+                    value: rec.settingsObj.gsrQuality
+                    onPicked: (v) => rec.setSetting("gsrQuality", v)
+                }
+                Text { text: "FPS"; color: Theme.textDim; font.pixelSize: 12 }
+                SelectField {
+                    Layout.fillWidth: true
+                    options: rec.gsrFpsOptions
+                    value: rec.settingsObj.gsrFps
+                    onPicked: (v) => rec.setSetting("gsrFps", v)
+                }
+                Text { text: "Buffer"; color: Theme.textDim; font.pixelSize: 12 }
+                SelectField {
+                    Layout.fillWidth: true
+                    options: rec.gsrReplayOptions
+                    value: rec.settingsObj.gsrReplaySecs
+                    onPicked: (v) => rec.setSetting("gsrReplaySecs", v)
+                }
+                Text { text: "Target"; color: Theme.textDim; font.pixelSize: 12 }
+                SelectField {
+                    Layout.fillWidth: true
+                    options: rec.gsrTargetOptions
+                    value: rec.settingsObj.gsrMonitorTarget
+                    onPicked: (v) => rec.setSetting("gsrMonitorTarget", v)
                 }
             }
         }

@@ -44,6 +44,12 @@ pub mod qobject {
         /// (accepts a plain path or a file:// URL). Sets `trackCount` and
         /// returns an ownership token for `release`.
         ///
+        /// `want_video` must be true only from a caller with a
+        /// `ClipVideoSurface` (objectName "clipVideoItem") in its scene to
+        /// attach the sink to — a video branch with nowhere to render stalls
+        /// pipeline state changes and takes the audio down with it. Pass
+        /// false from views that only need sound.
+        ///
         /// This is a singleton with two callers (the clip player and the
         /// editor page), and navigating between them hides one while showing
         /// the other. An unconditional `unload` from the one being hidden
@@ -51,7 +57,7 @@ pub mod qobject {
         /// the editor ended up silent. Callers keep their token and release
         /// with it; a stale release is ignored.
         #[qinvokable]
-        fn load(self: Pin<&mut Self>, source: &QString) -> i64;
+        fn load(self: Pin<&mut Self>, source: &QString, want_video: bool) -> i64;
 
         /// Drop the pipeline IF `token` still owns it, else do nothing.
         #[qinvokable]
@@ -126,7 +132,7 @@ impl Default for ClipAudioMixerRust {
 }
 
 impl qobject::ClipAudioMixer {
-    pub fn load(mut self: Pin<&mut Self>, source: &QString) -> i64 {
+    pub fn load(mut self: Pin<&mut Self>, source: &QString, want_video: bool) -> i64 {
         // Tear the old pipeline down completely first — leaving a stale one
         // holding the audio device was a real bug in the PoC.
         self.as_mut().unload();
@@ -143,10 +149,12 @@ impl qobject::ClipAudioMixer {
             return token;
         }
 
-        // Only build a GL video branch when this process can actually render
-        // one — offscreen it would fail the whole pipeline, taking the audio
-        // down with it (see the B1 spike findings).
-        let want_video = crate::mixer_pipeline::gl_video_available();
+        // Only build a GL video branch when the caller has somewhere to put
+        // it AND this process can actually render one — offscreen, or with
+        // no ClipVideoSurface in the caller's scene, the sink would stall
+        // waiting for a widget it never gets, taking the audio down with it
+        // (see the B1 spike findings and the load() doc comment).
+        let want_video = want_video && crate::mixer_pipeline::gl_video_available();
         let pipeline = match build_mixer_pipeline(&path, want_video) {
             Ok(p) => p,
             Err(e) => {
