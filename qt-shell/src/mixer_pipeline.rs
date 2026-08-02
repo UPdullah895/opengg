@@ -103,7 +103,16 @@ pub struct MixerPipeline {
 /// pipeline errors out "not-linked", so unwanted frames go to a fakesink
 /// rather than being left dangling.
 fn drop_video_pad(pipeline: &gst::Pipeline, pad: &gst::Pad) {
-    let Ok(fakesink) = gst::ElementFactory::make("fakesink").build() else {
+    // sync=true is NOT cosmetic. A default fakesink (sync=false) swallows
+    // decoded video as fast as the file can be read, and GstBin folds POSITION
+    // queries by taking the MAXIMUM across sinks — so the discarded video pad,
+    // racing seconds ahead of the audio, becomes the pipeline's reported
+    // position. Everything downstream of position_ms() then believes playback
+    // has run away.
+    let Ok(fakesink) = gst::ElementFactory::make("fakesink")
+        .property("sync", true)
+        .build()
+    else {
         return;
     };
     if pipeline.add(&fakesink).is_ok() {
@@ -433,6 +442,58 @@ mod tests {
         let err = p.pop_error(Duration::from_secs(3));
         p.shutdown();
         assert!(err.is_none(), "pipeline errored while playing: {err:?}");
+    }
+
+    /// Playback must advance at roughly wall-clock speed, and keep doing so
+    /// after a seek.
+    ///
+    /// Regression test for a real bug: the fakesink that swallows the video
+    /// pad when `want_video` is false defaulted to `sync=false`, so it
+    /// consumed decoded video as fast as the file could be read. GstBin folds
+    /// POSITION queries by taking the MAXIMUM across sinks, so that runaway
+    /// pad — not the audio — became the pipeline's reported position, racing
+    /// ~13x ahead. The editor's drift-correction timer then saw multi-second
+    /// "drift" and issued a FLUSHING seek every 400ms, which is what made
+    /// playback appear to stutter through frames until the clip ended.
+    #[test]
+    fn playback_advances_at_wallclock_speed_before_and_after_a_seek() {
+        let Some(clip) = find_multitrack_clip() else {
+            eprintln!("skipping: no multi-track clip available");
+            return;
+        };
+        let p = build_mixer_pipeline(&clip, false).expect("pipeline build");
+        p.set_master_volume(0.0); // silent test run
+        p.start_discovery();
+        p.wait_for_discovery(Duration::from_secs(10));
+        p.play();
+        // Let the sink preroll and settle before sampling.
+        std::thread::sleep(Duration::from_millis(700));
+
+        // Generous bounds: the bug raced ~13x, so anything near 1x is a pass
+        // even on a loaded machine.
+        let elapsed = 1600i64;
+        let advance = |p: &MixerPipeline| -> i64 {
+            let start = p.position_ms();
+            std::thread::sleep(Duration::from_millis(elapsed as u64));
+            p.position_ms() - start
+        };
+
+        let baseline = advance(&p);
+        assert!(
+            (600..=2600).contains(&baseline),
+            "playback should advance about {elapsed}ms of media per {elapsed}ms of \
+             wall time, advanced {baseline}ms — the pipeline is not honouring the clock"
+        );
+
+        let target = p.position_ms() + 4000;
+        p.seek(target);
+        std::thread::sleep(Duration::from_millis(400));
+        let after_seek = advance(&p);
+        p.shutdown();
+        assert!(
+            (600..=2600).contains(&after_seek),
+            "playback should still advance at ~1x after a seek, advanced {after_seek}ms"
+        );
     }
 
     fn find_multitrack_clip() -> Option<String> {

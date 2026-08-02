@@ -81,6 +81,18 @@ Rectangle {
         color: strip.channelColor
     }
 
+    // ── Short-window adaptation ──────────────────────────────────────────
+    // Below this height there is not enough room for the badge, the name, a
+    // usable fader, both readouts AND the controls. Rather than let them
+    // collide, the strip drops its least load-bearing chrome (the icon badge
+    // and the dB readout) and gives the space to the fader. A Column skips
+    // `visible: false` children entirely, so hiding them genuinely frees the
+    // space rather than leaving a hole.
+    readonly property bool compact: strip.height < 250
+    /// Chrome stacked above and below the fader, which the fader must not eat
+    /// into. Two values because `compact` removes ~58px of it.
+    readonly property int faderReserve: strip.compact ? 110 : 168
+
     Column {
         anchors.fill: parent
         anchors.topMargin: 16
@@ -90,6 +102,7 @@ Rectangle {
         // ── Header: tinted icon badge + name ─────────────────────────────
         Rectangle {
             anchors.horizontalCenter: parent.horizontalCenter
+            visible: !strip.compact
             width: 30; height: 30
             radius: Theme.radius
             // .icon-box uses `color + '18'` — ~9% alpha.
@@ -115,7 +128,11 @@ Rectangle {
         Item {
             id: faderRow
             width: parent.width
-            height: strip.height - 168
+            // Math.max is load-bearing: a negative height here does not merely
+            // shrink the fader, it makes the enclosing Column stack every
+            // following item BACKWARDS, which is what put the channel name on
+            // top of the volume readout in a quarter-screen window.
+            height: Math.max(0, strip.height - strip.faderReserve)
 
             Row {
                 anchors.centerIn: parent
@@ -262,6 +279,7 @@ Rectangle {
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
+            visible: !strip.compact
             text: strip.vuDb <= -60 ? "— dB" : strip.vuDb.toFixed(1) + " dB"
             color: Theme.textMuted
             font.pixelSize: 9

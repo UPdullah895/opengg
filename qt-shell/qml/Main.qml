@@ -7,6 +7,12 @@ ApplicationWindow {
     id: root
     width: 1280
     height: 800
+    // A floor for floating windows. Note this is only a HINT: tiling
+    // compositors (Hyprland, sway) size windows from their own layout and
+    // will happily go below it, so components must still degrade on their
+    // own rather than relying on this — see ChannelStrip's `compact`.
+    minimumWidth: 880
+    minimumHeight: 520
     visible: true
     title: "OpenGG"
     color: Theme.bg
