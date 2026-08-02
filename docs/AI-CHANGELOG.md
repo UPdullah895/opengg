@@ -6,6 +6,44 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-01] Claude Opus 5 — qt6-migration (Phase B1 spike)
+
+**What Changed:**
+- `efe32de`: marked plan slice 2a (icons) as user-owned so contributors start at 2b
+- `914861c`: `qt-shell/spikes/qml6glsink/` — standalone C++ harness proving the
+  unified GStreamer player, plus the plan's B1 section rewritten with findings
+
+**Why:**
+Phase B (one GStreamer pipeline owning both picture and sound) is the committed
+direction for clip playback. Its two risks had to be settled before building
+anything: the QQuickItem-pointer handoff, and whether it survives the offscreen
+screenshot harness.
+
+**Landmines & Discoveries:**
+- The QML type is **`GstGLQt6VideoItem`**, not `GstGLVideoItem` — the latter is
+  the Qt5 name that essentially every online example still uses. Wrong name
+  fails with `"GstGLVideoItem is not a type"`; note it says *is not a type*,
+  not *module is not installed*, which is the tell that the module resolved.
+- The type registers from inside `gst_element_register_qml6glsink`, not from a
+  qmldir (Arch ships only `libgstqml6.so`), so the GStreamer plugin must be
+  loaded before the QML engine resolves the import.
+- `QQuickWindow::setGraphicsApi(OpenGL)` must precede any window, and the
+  pipeline must reach PLAYING only after `sceneGraphInitialized` — otherwise
+  `GST_STATE_CHANGE_FAILURE` (0) instead of `ASYNC` (2).
+- **`qml6glsink` cannot run under `QT_QPA_PLATFORM=offscreen`** ("Could not
+  initialize window system"). It is the window system, not the GL driver, so
+  software GL does not rescue it. The real player must degrade to a poster
+  frame without GL, or `ui-shots.sh` breaks on the player and editor pages.
+- The debugging itself hit this repo's own documented landmine: without
+  `QT_FORCE_STDERR_LOGGING=1` the QML error printed *nothing at all*.
+
+**Verification:**
+- Spike run against a real 3-track capture on Wayland: `ASYNC` state change,
+  `GST_PAD_LINK_OK`, and a screenshot showing actual decoded video frames.
+- Same binary under `offscreen`: reproducible bus error, captured verbatim.
+
+---
+
 ### [2026-08-01] Claude (main session, Sonnet 5 → Opus 5 → Fable 5) — qt6-migration
 
 **What Changed:**

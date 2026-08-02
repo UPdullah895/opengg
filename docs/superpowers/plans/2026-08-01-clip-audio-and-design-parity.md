@@ -104,15 +104,44 @@ root-cause list (D1–D6) ceases to exist rather than being compensated.
 
     sudo pacman -S gst-plugin-qml6
 
-**Step B1 — timeboxed spike (half a session).** Minimal proof: video pad →
-`glupload → glcolorconvert → qml6glsink`, a `GstGLVideoItem` in QML
-(`import org.freedesktop.gstreamer.Qt6GLVideoItem`), video visible inside
-the app. The risk concentrates in exactly one spot: handing the QQuickItem
-pointer to the sink's `widget` property from Rust across the cxx-qt
-boundary. Second risk to check in the same spike: whether `qml6glsink`
-renders under `QT_QPA_PLATFORM=offscreen`, because the ui-shots
-verification harness depends on it — if not, captures of the player/editor
-need a documented gate, not silent breakage.
+**Step B1 — spike: DONE 2026-08-01. VERDICT: GO.** Proven with a standalone
+C++ harness (`scratchpad/qml6-spike/`) against a real 3-track capture:
+video decodes into a QML scene through
+`filesrc → decodebin → glupload → glcolorconvert → qml6glsink`, with the
+sink's `widget` set to a QML video item. Four findings, all load-bearing:
+
+1. **The QML type is `GstGLQt6VideoItem`, NOT `GstGLVideoItem`.** The
+   module is `org.freedesktop.gstreamer.Qt6GLVideoItem`, but the type
+   inside it is `GstGLQt6VideoItem`; `GstGLVideoItem` is the *Qt5* name
+   that every example online still uses. Symptom of getting it wrong is
+   the misleading `"GstGLVideoItem is not a type"` — note that Qt says
+   *"is not a type"*, not *"module is not installed"*, which is the tell
+   that the module resolved and only the name is wrong.
+2. **The type is registered by the GStreamer plugin, not by a qmldir.**
+   Arch ships only `/usr/lib/gstreamer-1.0/libgstqml6.so` — no QML module
+   directory. `qmlRegisterType` runs inside
+   `gst_element_register_qml6glsink`, so the plugin must be loaded
+   (`gst_plugin_load_by_name("qml6")` or any `qml6glsink` element
+   creation) **before** the QML engine resolves the import.
+3. **`QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL)` must be
+   called before any window exists**, and the pipeline must not go to
+   PLAYING until the scene graph is initialised. Starting it in `main()`
+   returns `GST_STATE_CHANGE_FAILURE` (0) because the sink cannot acquire
+   a GL context yet; deferring to `QQuickWindow::sceneGraphInitialized`
+   yields `ASYNC` (2) and `GST_PAD_LINK_OK`.
+4. **`QT_QPA_PLATFORM=offscreen` CANNOT render it** — confirmed
+   `SPIKE-BUS-ERROR: Could not initialize window system`. This is the
+   ui-shots risk landing: it is the *window system*, not the GL driver,
+   so a software-GL override will not rescue it.
+
+**Consequence of (4) — mandatory design constraint for B2/B3:** the player
+must degrade deliberately when no GL window system is available. Detect it
+(the sink's state change failing, or `QT_QPA_PLATFORM=offscreen`) and fall
+back to the existing fakesink video branch plus a poster frame from the
+clip's cached thumbnail. That keeps `ui-shots.sh` green and keeps every
+control, timeline and dialog verifiable in CI; only the moving picture is
+absent there, and it is verified in a real session instead. Silently
+shipping a harness that errors on two pages is not acceptable.
 
 **Step B2 — `ClipPlayer` controller.** Promote `ClipAudioMixer` into a
 full player: position/duration (polled from the pipeline), playing state,
