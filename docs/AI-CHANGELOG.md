@@ -6,6 +6,47 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-02] Claude Sonnet 5 — qt6-gstreamer-player-b3
+
+**What Changed:**
+- `728694a`: `ClipAudioMixer.load()` gained a `want_video` param — the editor
+  was requesting a GL video branch it had no `ClipVideoSurface` for, stalling
+  the pipeline; `VideoPlayer.qml`'s drift-correction timer now skips while
+  `videoActive` is true, since the recurring seek was hitting the now-visible
+  GStreamer video branch and made playback visibly repeat/jump after a skip;
+  the preview volume slider's `value:` binding (severed by the first drag,
+  same landmine as the clips-per-row slider) is fixed the same way; list-view
+  thumbnails grew 78×44 → 140×79; `IconToggle` gained a `segment` prop so the
+  grid/list toggle renders as one fused pill; `RecordingControl`'s dropdown
+  now matches the Home dashboard's richer recorder panel (status line,
+  Start/Save buttons, Quality/FPS/Buffer/Target grid).
+
+**Why:**
+User-reported regressions from B2 (editor audio glitches, video stutter on
+seek) plus a batch of Clips-page design-parity feedback, all live-tested
+against a reference screenshot of the intended look.
+
+**Landmines & Discoveries:**
+- `ClipAudioMixer.load()`'s `want_video` decision cannot be made from
+  `gl_video_available()` alone — it has to be per-caller. A video branch with
+  no `ClipVideoSurface` to attach to leaves `qml6glsink` with no widget,
+  which stalls pipeline state changes and can take the *audio* down with it
+  even though the caller only wanted sound.
+- The dual-clock drift-correction timer (`ClipAudioMixer.seek()` every 400ms
+  on >120ms drift) was written when the mixer only ever owned audio. Once B2
+  made it also own the picture, the same timer was periodically re-seeking
+  the now-visible video — this is the concrete, user-visible instance of the
+  "entire class of bug" B3 is meant to delete outright.
+
+**Verification:**
+- `cargo build`, `cargo test` (15 passed)
+- `./tools/check-colors.sh` clean
+- `./tools/ui-shots.sh` — all pages, zero QML warnings
+- Manual offscreen screenshots of Clips grid/list/recording-menu states,
+  compared directly against the user's reference screenshots
+
+---
+
 ### [2026-08-01] Claude Opus 5 — qt6-migration (Phase B1 spike)
 
 **What Changed:**
