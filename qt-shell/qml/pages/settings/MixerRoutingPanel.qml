@@ -6,6 +6,7 @@ import com.opengg.app
 // Settings → Audio Engine (Mixer Routing). QML port of MixerRoutingSettings.vue.
 ColumnLayout {
     id: root
+    width: parent.width
     spacing: 20
 
     property bool confirmOpen: false
@@ -64,7 +65,6 @@ ColumnLayout {
     Rectangle {
         id: ebCard
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -180,7 +180,6 @@ ColumnLayout {
     Rectangle {
         id: dzCard
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1

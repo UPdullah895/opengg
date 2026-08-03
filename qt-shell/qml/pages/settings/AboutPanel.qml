@@ -7,6 +7,7 @@ import com.opengg.app
 // connect links, dependency probe, device-access probe, credits.
 ColumnLayout {
     id: root
+    width: parent.width
     spacing: 20
 
     property var deps: JSON.parse(SystemController.depsJson || "[]")
@@ -76,7 +77,6 @@ ColumnLayout {
     // ── Hero card ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -138,27 +138,13 @@ ColumnLayout {
     }
 
     // ── Goals card ──
-    Rectangle {
-        Layout.fillWidth: true
-        Layout.preferredWidth: 680
-        radius: Theme.radius
-        color: Theme.surface
-        border.width: 1
-        border.color: Theme.border
-        implicitHeight: goalsCol.implicitHeight + 40
+    SettingsCard {
+        title: (I18n.language, I18n.t("settings.about.goals"))
 
         ColumnLayout {
-            id: goalsCol
-            anchors.fill: parent
-            anchors.margins: 20
+            Layout.fillWidth: true
             spacing: 8
 
-            Text {
-                text: (I18n.language, I18n.t("settings.about.goals"))
-                color: Theme.text
-                font.pixelSize: 14
-                font.weight: Font.Bold
-            }
             Repeater {
                 model: [
                     I18n.t("settings.about.goal1"),
@@ -184,28 +170,10 @@ ColumnLayout {
     }
 
     // ── Connect card ──
-    Rectangle {
-        Layout.fillWidth: true
-        Layout.preferredWidth: 680
-        radius: Theme.radius
-        color: Theme.surface
-        border.width: 1
-        border.color: Theme.border
-        implicitHeight: connectCol.implicitHeight + 40
+    SettingsCard {
+        title: (I18n.language, I18n.t("settings.about.connect"))
 
-        ColumnLayout {
-            id: connectCol
-            anchors.fill: parent
-            anchors.margins: 20
-            spacing: 8
-
-            Text {
-                text: (I18n.language, I18n.t("settings.about.connect"))
-                color: Theme.text
-                font.pixelSize: 14
-                font.weight: Font.Bold
-            }
-            RowLayout {
+        RowLayout {
                 spacing: 10
                 Rectangle {
                     width: 90; height: 30
@@ -247,13 +215,11 @@ ColumnLayout {
                     }
                 }
             }
-        }
     }
 
     // ── System Dependencies card ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -288,6 +254,8 @@ ColumnLayout {
                     }
                 }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Text {
                 visible: root.deps.length === 0
@@ -401,7 +369,6 @@ ColumnLayout {
     // ── Device Access card ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -436,6 +403,8 @@ ColumnLayout {
                     }
                 }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             ColumnLayout {
                 visible: root.missingAccessItems().length === 0
@@ -547,7 +516,6 @@ ColumnLayout {
 
     Text {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         text: (I18n.language, I18n.t("settings.about.credits"))
         color: Theme.textDim
         font.pixelSize: 11

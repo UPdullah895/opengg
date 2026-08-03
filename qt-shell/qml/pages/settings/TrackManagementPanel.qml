@@ -8,6 +8,7 @@ import com.opengg.app
 // TimelineTrackRow.qml, which is Phase 5/editor scope and doesn't exist yet.
 ColumnLayout {
     id: root
+    width: parent.width
     spacing: 20
 
     property var s: JSON.parse(SettingsController.settingsJson || "{}")
@@ -55,7 +56,6 @@ ColumnLayout {
 
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -78,6 +78,8 @@ ColumnLayout {
                 }
                 InfoIcon { tooltipText: I18n.t("settings.timelineTracks.trackListHint") }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Repeater {
                 model: root.trackDefs

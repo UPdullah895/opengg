@@ -11,6 +11,7 @@ import com.opengg.app
 // complexity for a settings-page reorder control.
 ColumnLayout {
     id: root
+    width: parent.width
     spacing: 20
 
     property var s: JSON.parse(SettingsController.settingsJson || "{}")
@@ -89,7 +90,6 @@ ColumnLayout {
     // ── GSR settings card ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -129,6 +129,8 @@ ColumnLayout {
                     font.pixelSize: 10
                 }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             ColumnLayout {
                 visible: !!root.s.gsrEnabled
@@ -429,7 +431,6 @@ ColumnLayout {
     // ── Capture devices card ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -466,6 +467,8 @@ ColumnLayout {
                 }
                 InfoIcon { tooltipText: I18n.t("settings.captureSound.captureHint") }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Repeater {
                 model: root.s.captureTracks || []

@@ -14,13 +14,13 @@ import com.opengg.app
 // Extensions panel has).
 ColumnLayout {
     id: root
+    width: parent.width
     spacing: 20
 
     SettingsHeading { titleText: (I18n.language, I18n.t("settings.store.title")) }
 
     ColumnLayout {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         Layout.topMargin: 40
         spacing: 10
 

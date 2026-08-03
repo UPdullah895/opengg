@@ -213,7 +213,22 @@ Rectangle {
                 y: 24
 
                 Loader {
-                    Layout.preferredWidth: 680
+                    id: settingsPanelLoader
+                    Layout.fillWidth: true
+                    Layout.rightMargin: 28
+                    // Loader has no resize-item-to-loader mode — it sizes
+                    // ITSELF around the loaded item, not the other way
+                    // around. So without each panel's root explicitly
+                    // binding `width: parent.width` (parent being this
+                    // Loader, since that's where Loader.item is actually
+                    // parented), every panel's Layout.fillWidth children
+                    // filled nothing wider than their own implicit content
+                    // width — this Loader (previously pinned to a literal
+                    // 680) was the real source of every settings card's
+                    // width cap, not anything in the panels themselves.
+                    // Same convention `settingsContentCol` above already
+                    // uses for the same reason (it isn't a Layout child of
+                    // anything either).
                     sourceComponent: {
                         switch (page.active) {
                         case "general": return generalPanel

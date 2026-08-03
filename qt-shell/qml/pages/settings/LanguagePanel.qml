@@ -6,33 +6,15 @@ import com.opengg.app
 // Settings → Language. Extracted from the original inline SettingsPage.qml
 // card, now that SettingsPage hosts a nav + multiple panels.
 ColumnLayout {
+    width: parent.width
     spacing: 20
 
     SettingsHeading { titleText: (I18n.language, I18n.t("settings.sections.language")) }
 
-    Rectangle {
-        Layout.fillWidth: true
-        Layout.preferredWidth: 640
-        radius: Theme.radius
-        color: Theme.surface
-        border.width: 1
-        border.color: Theme.border
-        implicitHeight: langCol.implicitHeight + 40
+    SettingsCard {
+        title: (I18n.language, I18n.t("settings.language.title"))
 
-        ColumnLayout {
-            id: langCol
-            anchors.fill: parent
-            anchors.margins: 20
-            spacing: 14
-
-            Text {
-                text: (I18n.language, I18n.t("settings.language.title"))
-                color: Theme.text
-                font.pixelSize: 18
-                font.weight: Font.DemiBold
-            }
-
-            RowLayout {
+        RowLayout {
                 Layout.fillWidth: true
                 spacing: 16
 
@@ -111,6 +93,5 @@ ColumnLayout {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
             }
-        }
     }
 }

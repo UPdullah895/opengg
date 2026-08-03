@@ -6,6 +6,7 @@ import com.opengg.app
 // Settings → Notifications. QML port of NotificationsSettings.vue.
 ColumnLayout {
     id: root
+    width: parent.width
     spacing: 20
 
     property var s: JSON.parse(SettingsController.settingsJson || "{}")
@@ -40,7 +41,6 @@ ColumnLayout {
     // ── Style card ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -63,6 +63,8 @@ ColumnLayout {
                 }
                 InfoIcon { tooltipText: I18n.t("settings.notificationsPage.description") }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Flow {
                 Layout.fillWidth: true
@@ -103,7 +105,6 @@ ColumnLayout {
     Rectangle {
         visible: root.style !== "disabled"
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1

@@ -57,9 +57,18 @@ Rectangle {
     /// A plain click on a clip. While a selection is active it extends the
     /// selection instead of opening the player — otherwise building a batch
     /// would mean hitting the small checkbox on every single card.
-    function activate(fp, clipTitle, thumb) {
-        if (page.selectedCount > 0)
+    ///
+    /// `game` is optional (older call sites only had filepath/title/thumb) —
+    /// it is only needed to route "editor" the same way editClipRequested's
+    /// other call sites do, so a missing value just means an empty game tag
+    /// rather than a broken click.
+    function activate(fp, clipTitle, thumb, game) {
+        if (page.selectedCount > 0) {
             page.toggleSelect(fp)
+            return
+        }
+        if (page.settings.defaultClickAction === "editor")
+            page.editClipRequested({ filepath: fp, title: clipTitle, game: game || "" })
         else
             page.playerClip = { filepath: fp, title: clipTitle, thumbnail: thumb }
     }
@@ -145,6 +154,7 @@ Rectangle {
         target: SettingsController
         function onSettingsJsonChanged() {
             page.settings = JSON.parse(SettingsController.settingsJson || "{}")
+            ClipsController.setDateFormat(page.settings.dateFormat || "YMD")
         }
     }
 
@@ -157,6 +167,7 @@ Rectangle {
     Component.onCompleted: {
         ClipsController.refresh()
         ClipsController.startWatcher()
+        ClipsController.setDateFormat(page.settings.dateFormat || "YMD")
     }
 
     // ── formatting helpers ────────────────────────────────────────────────
@@ -803,7 +814,7 @@ Rectangle {
                     selected: page.isSelected(model.filepath)
                     selectionMode: page.selectedCount > 0
 
-                    onOpened: page.activate(model.filepath, model.title, model.thumbnail)
+                    onOpened: page.activate(model.filepath, model.title, model.thumbnail, model.game)
                     onSelectToggled: page.toggleSelect(model.filepath)
                     onRenamed: (newName) => ClipsController.setCustomName(model.filepath, newName)
                     onTrimRequested: page.editClipRequested({ filepath: model.filepath, title: model.title, game: model.game })
@@ -844,7 +855,7 @@ Rectangle {
                     selected: page.isSelected(model.filepath)
                     selectionMode: page.selectedCount > 0
 
-                    onOpened: page.activate(model.filepath, model.title, model.thumbnail)
+                    onOpened: page.activate(model.filepath, model.title, model.thumbnail, model.game)
                     onSelectToggled: page.toggleSelect(model.filepath)
                     onFavoriteToggled: ClipsController.setFavorite(model.filepath, !model.favorite)
                     onMenuRequested: (gx, gy) => clipMenu.openAt(
@@ -936,7 +947,7 @@ Rectangle {
                                 selected: page.isSelected(modelData.filepath)
                                 selectionMode: page.selectedCount > 0
 
-                                onOpened: page.activate(modelData.filepath, modelData.title, modelData.thumbnail)
+                                onOpened: page.activate(modelData.filepath, modelData.title, modelData.thumbnail, modelData.game)
                                 onSelectToggled: page.toggleSelect(modelData.filepath)
                                 onRenamed: (newName) => ClipsController.setCustomName(modelData.filepath, newName)
                                 onTrimRequested: page.editClipRequested({ filepath: modelData.filepath, title: modelData.title, game: modelData.game })
@@ -975,7 +986,7 @@ Rectangle {
                                 selected: page.isSelected(modelData.filepath)
                                 selectionMode: page.selectedCount > 0
 
-                                onOpened: page.activate(modelData.filepath, modelData.title, modelData.thumbnail)
+                                onOpened: page.activate(modelData.filepath, modelData.title, modelData.thumbnail, modelData.game)
                                 onSelectToggled: page.toggleSelect(modelData.filepath)
                                 onFavoriteToggled: ClipsController.setFavorite(modelData.filepath, !modelData.favorite)
                                 onMenuRequested: (gx, gy) => clipMenu.openAt(

@@ -21,6 +21,7 @@ import com.opengg.app
 //     embedded in the Capture & Sound panel.
 ColumnLayout {
     id: root
+    width: parent.width
     spacing: 20
 
     property var extList: JSON.parse(ExtensionsController.extensionsJson || "[]")
@@ -85,7 +86,6 @@ ColumnLayout {
     // ── Core Modules card ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -108,6 +108,8 @@ ColumnLayout {
                 }
                 InfoIcon { tooltipText: I18n.t("settings.extensions.hint") }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Repeater {
                 model: [
@@ -138,7 +140,6 @@ ColumnLayout {
     // ── GPU Screen Recorder card ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -173,6 +174,9 @@ ColumnLayout {
                     onToggled: root.toggleGsr()
                 }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
+
             Text {
                 text: !!root.s.gsrEnabled ? "Replay buffer enabled — configure it in Capture & Sound." : "Disabled — enable to configure quality, FPS, and audio sources in Capture & Sound."
                 color: Theme.textDim
@@ -187,7 +191,6 @@ ColumnLayout {
     Rectangle {
         id: extListCard
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -222,6 +225,8 @@ ColumnLayout {
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: ExtensionsController.openFolder() }
                 }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Text {
                 visible: root.extList.length === 0

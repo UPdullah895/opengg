@@ -11,6 +11,7 @@ import com.opengg.app
 // than blocking the UI thread on a network call.
 ColumnLayout {
     id: root
+    width: parent.width
     spacing: 20
 
     property var s: JSON.parse(SettingsController.settingsJson || "{}")
@@ -64,7 +65,6 @@ ColumnLayout {
     // ── Directories card ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -87,6 +87,8 @@ ColumnLayout {
                 }
                 InfoIcon { tooltipText: I18n.t("settings.storage.mediaDirsHint") }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             ColumnLayout {
                 spacing: 8
@@ -207,7 +209,6 @@ ColumnLayout {
     // ── Disk usage card ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -248,6 +249,8 @@ ColumnLayout {
                     }
                 }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Text {
                 visible: StorageController.loading

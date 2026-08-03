@@ -156,6 +156,15 @@ pub mod qobject {
         #[cxx_name = "setFavoritesOnly"]
         fn set_favorites_only(self: Pin<&mut Self>, only: bool);
 
+        /// How to read a date typed into the search box: "YMD" for
+        /// YYYY/MM/DD (the default) or "YDM" for YYYY/DD/MM. Settings →
+        /// General's "Search Date Format" control — mirrored here from
+        /// SettingsController rather than read directly because this is a
+        /// hot filter path and settingsJson is a full-envelope reparse.
+        #[qinvokable]
+        #[cxx_name = "setDateFormat"]
+        fn set_date_format(self: Pin<&mut Self>, format: &QString);
+
         /// Filepaths of every currently-visible row, in view order — backs
         /// "select all" without QML having to walk the model by role.
         #[qinvokable]
@@ -239,6 +248,8 @@ pub struct ClipsControllerRust {
     game_filter: String,
     sort_mode: String,
     favorites_only: bool,
+    /// "" and "YMD" both mean YYYY/MM/DD — see set_date_format.
+    date_format: String,
     loading: bool,
     error: QString,
     count: i32,
@@ -290,6 +301,40 @@ fn title_for(clip: &ClipInfo) -> String {
     }
 }
 
+/// Parses a `YYYY-MM-DD ...` prefix (the shape `ClipInfo::created` is stored
+/// in) into (year, month, day). Returns None on anything else rather than
+/// guessing — a clip with an unparseable timestamp should just never match a
+/// date search, not match every search by accident.
+fn created_ymd(created: &str) -> Option<(i32, u32, u32)> {
+    let date_part = created.split(|c| c == ' ' || c == 'T').next()?;
+    let mut parts = date_part.split('-');
+    let y = parts.next()?.parse().ok()?;
+    let m = parts.next()?.parse().ok()?;
+    let d = parts.next()?.parse().ok()?;
+    Some((y, m, d))
+}
+
+/// Parses the search box's text as a date according to Settings → General's
+/// "Search Date Format" ("YMD" = YYYY/MM/DD, "YDM" = YYYY/DD/MM; anything
+/// else falls back to YMD, matching the QML default). Accepts `/` or `-` as
+/// the separator. Returns None for anything that isn't a full y/m/d triple —
+/// a plain text search like "boss fight" must fall through to the substring
+/// match below, not be silently swallowed here.
+fn try_parse_search_date(search: &str, date_format: &str) -> Option<(i32, u32, u32)> {
+    let parts: Vec<&str> = search.split(|c| c == '/' || c == '-').collect();
+    if parts.len() != 3 || !parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    let a: i32 = parts[0].parse().ok()?;
+    let b: u32 = parts[1].parse().ok()?;
+    let c: u32 = parts[2].parse().ok()?;
+    let (y, m, d) = if date_format == "YDM" { (a, c, b) } else { (a, b, c) };
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    Some((y, m, d))
+}
+
 /// Compute the filtered+sorted row order (indices into `clips`). Ported
 /// directly from the old QML `filteredClips` computed property.
 fn compute_view(
@@ -298,7 +343,9 @@ fn compute_view(
     game_filter: &str,
     sort_mode: &str,
     favorites_only: bool,
+    date_format: &str,
 ) -> Vec<usize> {
+    let search_date = try_parse_search_date(search.trim(), date_format);
     let search = search.to_lowercase();
     let mut indices: Vec<usize> = clips
         .iter()
@@ -312,6 +359,9 @@ fn compute_view(
                 if g != game_filter {
                     return false;
                 }
+            }
+            if let Some(target) = search_date {
+                return created_ymd(&c.created) == Some(target);
             }
             if !search.is_empty() {
                 let title = title_for(c).to_lowercase();
@@ -457,6 +507,7 @@ impl qobject::ClipsController {
             &self.game_filter,
             &self.sort_mode,
             self.favorites_only,
+            &self.date_format,
         );
         let total = self.all_clips.len() as i32;
         let favs = self.all_clips.iter().filter(|c| c.favorite).count() as i32;
@@ -505,6 +556,11 @@ impl qobject::ClipsController {
 
     pub fn set_favorites_only(mut self: Pin<&mut Self>, only: bool) {
         self.as_mut().rust_mut().favorites_only = only;
+        self.apply_filter();
+    }
+
+    pub fn set_date_format(mut self: Pin<&mut Self>, format: &QString) {
+        self.as_mut().rust_mut().date_format = format.to_string();
         self.apply_filter();
     }
 
@@ -668,5 +724,68 @@ impl qobject::ClipsController {
                 });
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod date_search_tests {
+    use super::*;
+
+    #[test]
+    fn ymd_is_the_default_and_explicit_format() {
+        assert_eq!(try_parse_search_date("2026/07/20", "YMD"), Some((2026, 7, 20)));
+        assert_eq!(try_parse_search_date("2026/07/20", ""), Some((2026, 7, 20)));
+        assert_eq!(try_parse_search_date("2026-07-20", "YMD"), Some((2026, 7, 20)));
+    }
+
+    #[test]
+    fn ydm_swaps_day_and_month() {
+        assert_eq!(try_parse_search_date("2026/20/07", "YDM"), Some((2026, 7, 20)));
+    }
+
+    #[test]
+    fn plain_text_and_partial_dates_are_not_dates() {
+        assert_eq!(try_parse_search_date("boss fight", "YMD"), None);
+        assert_eq!(try_parse_search_date("2026/07", "YMD"), None);
+        assert_eq!(try_parse_search_date("valorant", "YMD"), None);
+        // Out-of-range month/day: 13 can't be a month under either format, so
+        // this must fail rather than silently picking the other reading.
+        assert_eq!(try_parse_search_date("2026/13/40", "YMD"), None);
+    }
+
+    #[test]
+    fn created_ymd_parses_the_stored_timestamp_shape() {
+        assert_eq!(created_ymd("2026-07-20 09:45:00"), Some((2026, 7, 20)));
+        assert_eq!(created_ymd("2026-07-20T09:45:00"), Some((2026, 7, 20)));
+        assert_eq!(created_ymd("garbage"), None);
+    }
+
+    fn clip_with_created(created: &str) -> ClipInfo {
+        ClipInfo {
+            id: String::new(),
+            filename: String::new(),
+            filepath: String::new(),
+            filesize: 0,
+            created: created.to_string(),
+            created_ts: 0,
+            duration: 0.0,
+            width: 0,
+            height: 0,
+            game: String::new(),
+            custom_name: String::new(),
+            favorite: false,
+            thumbnail: String::new(),
+            probing: false,
+        }
+    }
+
+    #[test]
+    fn a_date_search_matches_by_calendar_day_not_substring() {
+        let clips = vec![
+            clip_with_created("2026-07-20 09:45:00"),
+            clip_with_created("2026-07-21 09:45:00"),
+        ];
+        let view = compute_view(&clips, "2026/07/20", "", "newest", false, "YMD");
+        assert_eq!(view, vec![0]);
     }
 }

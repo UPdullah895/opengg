@@ -6,6 +6,7 @@ import com.opengg.app
 // Settings → Shortcuts. QML port of ShortcutsSettings.vue.
 ColumnLayout {
     id: root
+    width: parent.width
     spacing: 20
     focus: recordingKey !== ""
 
@@ -69,7 +70,6 @@ ColumnLayout {
 
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredWidth: 680
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -114,6 +114,8 @@ ColumnLayout {
                     }
                 }
             }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Repeater {
                 model: root.actions

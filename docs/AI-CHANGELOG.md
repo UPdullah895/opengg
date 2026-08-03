@@ -6,6 +6,51 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-04] Claude Opus 5 — qt6-gstreamer-player-b3
+
+**What Changed:**
+- Settings → General: added a native `ColorDialog` color picker (click the
+  accent swatch) instead of hex-only entry; dark/light-mode and reload icons
+  are now button-shaped (background + border) instead of bare floating icons;
+  Clip Preferences' segmented pills became two labeled `SelectField` dropdowns
+  (`defaultClickAction`, `dateFormat`) — both were previously write-only
+  settings, now wired to actually change clip-card click behavior and enable
+  date-based clip search; Diagnostics' "Open Crash Logs Folder" is now an
+  outlined button matching the reference design.
+- New `SettingsCard.qml` component: title + divider + body, used to give
+  every settings-panel card section a consistent underlined title. Migrated
+  simple single-title cards across all 11 panels to it, and manually inserted
+  the same divider into cards with bespoke header rows (a toggle, a link, a
+  reset button) that don't fit the plain-title shape.
+- Root-caused and fixed the real settings-card width cap: `SettingsPage.qml`'s
+  `Loader` was pinned to `Layout.preferredWidth: 680`; also removed 21
+  additional `Layout.preferredWidth: 680/640` caps scattered across individual
+  card `Rectangle`s in 10 panel files. Cards now span the available width at
+  any window size.
+- Reverted a leftover debug-only window-size hook in `Main.qml`.
+
+**Why:**
+User feedback on four points: no color picker, non-functional-looking
+dark/light toggle buttons, a non-functional Clip Preferences section that
+also needed a redesign, and inconsistent/non-underlined section titles across
+every settings panel except Ear Blast Protection.
+
+**Landmines & Discoveries:**
+- **`Loader` has no `resizeMode` property.** It sizes itself around its
+  loaded item, not the other way around — there is no "stretch the loaded
+  item to the Loader's width" mode. Assigning a `resizeMode` (a hallucinated
+  API) is a hard QML load failure that takes down the whole app; the fix is
+  `width: parent.width` on the loaded item's own root, same as
+  `settingsContentCol` in `SettingsPage.qml` already does for the identical
+  reason (not being a Layout child of anything).
+- A QML load failure from a bad property assignment can look exactly like a
+  hung headless screenshot run — the process never exits, and truncated
+  `2>&1 | tail` output hides the actual `QQmlApplicationEngine failed to load
+  component` error. Always re-run with `timeout N` and full untruncated
+  output before treating an unexplained hang as a real performance issue.
+
+---
+
 ### [2026-08-03] Claude Opus 5 — qt6-gstreamer-player-b3
 
 **What Changed:**
