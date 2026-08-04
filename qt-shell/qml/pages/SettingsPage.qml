@@ -209,12 +209,18 @@ Rectangle {
             ColumnLayout {
                 id: settingsContentCol
                 width: parent.width
-                x: 28
                 y: 24
+                // x was 28 here previously, WITH width: parent.width — that
+                // pushed the column's right edge to 28 + parent.width,
+                // 28px past the viewport, so the 28px gutter only existed
+                // on the left. The gutter is now applied symmetrically via
+                // the Loader's left/right margins below instead, keeping
+                // the column itself at the full available width.
 
                 Loader {
                     id: settingsPanelLoader
                     Layout.fillWidth: true
+                    Layout.leftMargin: 28
                     Layout.rightMargin: 28
                     // Loader has no resize-item-to-loader mode — it sizes
                     // ITSELF around the loaded item, not the other way
