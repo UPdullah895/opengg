@@ -387,7 +387,7 @@
       "screenshotDirectories": "Screenshot Directories",
       "addScreenshotPath": "Add Directory",
       "removeDir": "Remove",
-      "clips": "clips",
+      "clips": "Clips",
       "used": "Used",
       "diskUsage": "Disk Usage",
       "loading": "Loading…",
@@ -513,6 +513,7 @@
     "notificationsPage": {
       "title": "Notifications",
       "description": "Configure how OpenGG notifies you when clips are saved or recording events occur.",
+      "display": "Display",
       "style": "Notification Style",
       "styleAuto": "Automatic",
       "styleGsrNotify": "GSR-Notify",
@@ -897,7 +898,9 @@
   },
   "eq": {
     "title": "Graphic EQ",
-    "flat": "Flat"
+    "flat": "Flat",
+    "enabled": "Enabled",
+    "preamp": "Preamp"
   },
   "chatMix": {
     "title": "ChatMix",

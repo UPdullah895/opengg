@@ -82,167 +82,203 @@ ColumnLayout {
         root.applyToEngine()
     }
 
-    RowLayout {
+    // Whole EQ (header + bands + preamp) in one bordered card — matching
+    // DspControls' Noise Reduction/Gate/Compressor cards directly below on
+    // the same tab, which previously made this the only unbordered block
+    // floating on the bare page background next to fully-carded siblings.
+    Rectangle {
         Layout.fillWidth: true
-        spacing: 10
+        radius: Theme.radius
+        color: Theme.surface
+        border.width: 1
+        border.color: root.eqEnabled ? root.accentColor : Theme.border
+        implicitHeight: eqCardCol.implicitHeight + 28
 
-        Text {
-            text: (I18n.language, I18n.t("eq.title"))
-            color: Theme.text
-            font.pixelSize: 16
-            font.weight: Font.DemiBold
-        }
-        Text {
-            text: root.channel
-            color: root.accentColor
-            font.pixelSize: 13
-            font.weight: Font.DemiBold
-        }
+        ColumnLayout {
+            id: eqCardCol
+            anchors.fill: parent
+            anchors.margins: 14
+            spacing: 14
 
-        Item { Layout.fillWidth: true }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
 
-        // Preset dropdown (custom-styled ComboBox — established pattern)
-        ComboBox {
-            id: presetCombo
-            Layout.preferredWidth: 150
-            model: root.activePreset === "Custom" ? root.presetNames.concat(["Custom"]) : root.presetNames
-            currentIndex: model.indexOf(root.activePreset)
-            onActivated: root.applyPreset(model[currentIndex])
-
-            contentItem: Text {
-                text: presetCombo.displayText
-                color: Theme.text
-                font.pixelSize: 12
-                verticalAlignment: Text.AlignVCenter
-                leftPadding: 10
-            }
-            background: Rectangle {
-                radius: Theme.radius
-                color: Theme.bg
-                border.width: 1
-                border.color: Theme.border
-            }
-            delegate: ItemDelegate {
-                width: presetCombo.width
-                contentItem: Text { text: modelData; color: Theme.text; font.pixelSize: 12 }
-                background: Rectangle { color: highlighted ? Theme.accent : "transparent"; opacity: highlighted ? 0.15 : 1 }
-            }
-            popup: Popup {
-                y: presetCombo.height
-                width: presetCombo.width
-                implicitHeight: contentItem.implicitHeight
-                padding: 1
-                contentItem: ListView {
-                    clip: true
-                    implicitHeight: contentEnabled ? contentHeight : 0
-                    model: presetCombo.popup.visible ? presetCombo.delegateModel : null
+                Text {
+                    text: (I18n.language, I18n.t("eq.title"))
+                    color: Theme.text
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
                 }
-                background: Rectangle { color: Theme.surface; border.width: 1; border.color: Theme.border; radius: Theme.radius }
+                Text {
+                    text: root.channel
+                    color: root.accentColor
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // Preset dropdown (custom-styled ComboBox — established pattern)
+                ComboBox {
+                    id: presetCombo
+                    Layout.preferredWidth: 150
+                    model: root.activePreset === "Custom" ? root.presetNames.concat(["Custom"]) : root.presetNames
+                    currentIndex: model.indexOf(root.activePreset)
+                    onActivated: root.applyPreset(model[currentIndex])
+
+                    contentItem: Text {
+                        text: presetCombo.displayText
+                        color: Theme.text
+                        font.pixelSize: 12
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                    }
+                    background: Rectangle {
+                        radius: Theme.radius
+                        color: Theme.bg
+                        border.width: 1
+                        border.color: Theme.border
+                    }
+                    delegate: ItemDelegate {
+                        width: presetCombo.width
+                        contentItem: Text { text: modelData; color: Theme.text; font.pixelSize: 12 }
+                        background: Rectangle { color: highlighted ? Theme.accent : "transparent"; opacity: highlighted ? 0.15 : 1 }
+                    }
+                    popup: Popup {
+                        y: presetCombo.height
+                        width: presetCombo.width
+                        implicitHeight: contentItem.implicitHeight
+                        padding: 1
+                        contentItem: ListView {
+                            clip: true
+                            implicitHeight: contentEnabled ? contentHeight : 0
+                            model: presetCombo.popup.visible ? presetCombo.delegateModel : null
+                        }
+                        background: Rectangle { color: Theme.surface; border.width: 1; border.color: Theme.border; radius: Theme.radius }
+                    }
+                }
+
+                // A bare toggle with no label reads ambiguous ("enabled for
+                // what?") — every other enable/disable toggle in this app
+                // (DspControls' three cards, Settings' Daemon & Startup)
+                // pairs the switch with adjacent text.
+                Text {
+                    text: (I18n.language, I18n.t("eq.enabled"))
+                    color: Theme.textDim
+                    font.pixelSize: 12
+                }
+                ToggleSwitch {
+                    checked: root.eqEnabled
+                    onToggled: (v) => root.setEnabled(v)
+                }
             }
-        }
 
-        ToggleSwitch {
-            checked: root.eqEnabled
-            onToggled: (v) => root.setEnabled(v)
-        }
-    }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                opacity: root.eqEnabled ? 1.0 : 0.45
 
-    ColumnLayout {
-        Layout.fillWidth: true
-        spacing: 10
-        opacity: root.eqEnabled ? 1.0 : 0.45
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 4
-            Repeater {
-                model: 10
-                ColumnLayout {
-                    id: bandCol
-                    required property int index
+                RowLayout {
                     Layout.fillWidth: true
                     spacing: 4
+                    Repeater {
+                        model: 10
+                        ColumnLayout {
+                            id: bandCol
+                            required property int index
+                            Layout.fillWidth: true
+                            spacing: 4
 
-                    Text {
-                        text: root.bands[bandCol.index] > 0 ? "+" + root.bands[bandCol.index] : String(root.bands[bandCol.index])
-                        color: Theme.textDim
-                        font.pixelSize: 9
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                    Slider {
-                        id: bandSlider
-                        orientation: Qt.Vertical
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.preferredHeight: 110
-                        from: -12; to: 12
-                        value: root.bands[bandCol.index]
-                        enabled: root.eqEnabled
-                        onMoved: root.setBand(bandCol.index, Math.round(value))
+                            Text {
+                                text: root.bands[bandCol.index] > 0 ? "+" + root.bands[bandCol.index] : String(root.bands[bandCol.index])
+                                color: Theme.text
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                                Layout.alignment: Qt.AlignHCenter
+                            }
+                            Slider {
+                                id: bandSlider
+                                orientation: Qt.Vertical
+                                Layout.alignment: Qt.AlignHCenter
+                                Layout.preferredHeight: 110
+                                from: -12; to: 12
+                                value: root.bands[bandCol.index]
+                                enabled: root.eqEnabled
+                                onMoved: root.setBand(bandCol.index, Math.round(value))
 
-                        background: Rectangle {
-                            x: bandSlider.leftPadding + bandSlider.availableWidth / 2 - width / 2
-                            y: bandSlider.topPadding
-                            width: 5
-                            height: bandSlider.availableHeight
-                            radius: 2.5
-                            color: Theme.border
-                            Rectangle {
-                                // 0dB is the midpoint; fill from center toward the handle.
-                                // visualPosition 0 = top = max value (+12), matching the
-                                // convention already established by the unipolar fader above.
-                                width: parent.width
-                                radius: 2.5
-                                color: root.accentColor
-                                property real curY: bandSlider.visualPosition * parent.height
-                                property real midY: parent.height / 2
-                                y: Math.min(curY, midY)
-                                height: Math.abs(curY - midY)
+                                background: Rectangle {
+                                    x: bandSlider.leftPadding + bandSlider.availableWidth / 2 - width / 2
+                                    y: bandSlider.topPadding
+                                    width: 5
+                                    height: bandSlider.availableHeight
+                                    radius: 2.5
+                                    color: Theme.border
+                                    Rectangle {
+                                        // 0dB is the midpoint; fill from center toward the handle.
+                                        // visualPosition 0 = top = max value (+12), matching the
+                                        // convention already established by the unipolar fader above.
+                                        width: parent.width
+                                        radius: 2.5
+                                        color: root.accentColor
+                                        property real curY: bandSlider.visualPosition * parent.height
+                                        property real midY: parent.height / 2
+                                        y: Math.min(curY, midY)
+                                        height: Math.abs(curY - midY)
+                                    }
+                                }
+                                handle: Rectangle {
+                                    x: bandSlider.leftPadding + bandSlider.availableWidth / 2 - width / 2
+                                    y: bandSlider.topPadding + bandSlider.visualPosition * (bandSlider.availableHeight - height)
+                                    width: 16; height: 16; radius: 8
+                                    color: Theme.text
+                                    border.width: 2
+                                    border.color: root.accentColor
+                                }
+                            }
+                            Text {
+                                text: root.bandLabels[bandCol.index]
+                                color: Theme.textDim
+                                font.pixelSize: 9
+                                Layout.alignment: Qt.AlignHCenter
                             }
                         }
-                        handle: Rectangle {
-                            x: bandSlider.leftPadding + bandSlider.availableWidth / 2 - width / 2
-                            y: bandSlider.topPadding + bandSlider.visualPosition * (bandSlider.availableHeight - height)
-                            width: 16; height: 16; radius: 8
-                            color: Theme.text
-                            border.width: 2
-                            border.color: root.accentColor
-                        }
-                    }
-                    Text {
-                        text: root.bandLabels[bandCol.index]
-                        color: Theme.textDim
-                        font.pixelSize: 9
-                        Layout.alignment: Qt.AlignHCenter
                     }
                 }
-            }
-        }
 
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.topMargin: 6
-            spacing: 12
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 6
+                    spacing: 12
 
-            Text { text: "Preamp"; color: Theme.textDim; font.pixelSize: 12 }
-            HSlider {
-                Layout.preferredWidth: 200
-                from: -12; to: 12
-                value: root.preamp
-                suffix: " dB"
-                sliderColor: root.accentColor
-                enabled: root.eqEnabled
-                onMoved: (v) => root.setPreamp(Math.round(v))
-            }
+                    Text { text: (I18n.language, I18n.t("eq.preamp")); color: Theme.textDim; font.pixelSize: 12 }
+                    HSlider {
+                        Layout.preferredWidth: 200
+                        from: -12; to: 12
+                        value: root.preamp
+                        suffix: " dB"
+                        sliderColor: root.accentColor
+                        enabled: root.eqEnabled
+                        onMoved: (v) => root.setPreamp(Math.round(v))
+                    }
 
-            Item { Layout.fillWidth: true }
+                    Item { Layout.fillWidth: true }
 
-            Rectangle {
-                width: 70; height: 26; radius: Theme.radius
-                color: "transparent"
-                border.width: 1
-                border.color: Theme.border
-                Text { anchors.centerIn: parent; text: I18n.t("eq.flat"); color: Theme.textDim; font.pixelSize: 11 }
-                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.resetEq() }
+                    Rectangle {
+                        width: 70; height: 26; radius: Theme.radius
+                        color: flatArea.containsMouse ? Theme.bgHover : "transparent"
+                        border.width: 1
+                        border.color: Theme.border
+                        Text { anchors.centerIn: parent; text: I18n.t("eq.flat"); color: Theme.textDim; font.pixelSize: 11 }
+                        MouseArea {
+                            id: flatArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.resetEq()
+                        }
+                    }
+                }
             }
         }
     }

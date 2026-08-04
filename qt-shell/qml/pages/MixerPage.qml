@@ -149,6 +149,11 @@ Rectangle {
         // real audio engine is.
         AudioController.refreshVirtualAudioStatus()
         AudioController.refreshEarBlast()
+        // Dev-only: let `--screenshot --page mixer --panel <tab>` open a
+        // specific DSP/EQ tab so each one can be captured headlessly, same
+        // convention as SettingsPage's `--panel`.
+        if (ScreenshotController.active && ScreenshotController.panel.length > 0)
+            page.activeTab = ScreenshotController.panel
     }
     Timer { interval: 2000; running: true; repeat: true; onTriggered: AudioController.refresh() }
 

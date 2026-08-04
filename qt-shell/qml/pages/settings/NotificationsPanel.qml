@@ -39,144 +39,100 @@ ColumnLayout {
     SettingsHeading { titleText: (I18n.language, I18n.t("settings.notificationsPage.title")) }
 
     // ── Style card ──
-    Rectangle {
-        Layout.fillWidth: true
-        radius: Theme.radius
-        color: Theme.surface
-        border.width: 1
-        border.color: Theme.border
-        implicitHeight: styleCol.implicitHeight + 40
+    SettingsCard {
+        title: (I18n.language, I18n.t("settings.notificationsPage.style"))
+        infoText: I18n.t("settings.notificationsPage.description")
 
-        ColumnLayout {
-            id: styleCol
-            anchors.fill: parent
-            anchors.margins: 20
-            spacing: 14
+        Flow {
+            Layout.fillWidth: true
+            spacing: 10
 
-            RowLayout {
-                spacing: 8
-                Text {
-                    text: (I18n.language, I18n.t("settings.notificationsPage.style"))
-                    color: Theme.text
-                    font.pixelSize: 16
-                    font.weight: Font.DemiBold
-                }
-                InfoIcon { tooltipText: I18n.t("settings.notificationsPage.description") }
-            }
+            Repeater {
+                model: root.styleOptions
+                Rectangle {
+                    required property var modelData
+                    width: 110; height: 60
+                    radius: Theme.radius
+                    color: root.style === modelData.value ? Theme.accentAlpha(12) : Theme.bg
+                    border.width: 1
+                    border.color: root.style === modelData.value ? Theme.accent : Theme.border
 
-            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
+                    Text {
+                        anchors.centerIn: parent
+                        text: I18n.t("settings.notificationsPage." + modelData.key)
+                        color: root.style === modelData.value ? Theme.accent : Theme.textDim
+                        font.pixelSize: 12
+                        width: parent.width - 12
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                    }
 
-            Flow {
-                Layout.fillWidth: true
-                spacing: 10
-
-                Repeater {
-                    model: root.styleOptions
-                    Rectangle {
-                        required property var modelData
-                        width: 110; height: 60
-                        radius: Theme.radius
-                        color: root.style === modelData.value ? Theme.accentAlpha(12) : Theme.bg
-                        border.width: 1
-                        border.color: root.style === modelData.value ? Theme.accent : Theme.border
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: I18n.t("settings.notificationsPage." + modelData.key)
-                            color: root.style === modelData.value ? Theme.accent : Theme.textDim
-                            font.pixelSize: 12
-                            width: parent.width - 12
-                            horizontalAlignment: Text.AlignHCenter
-                            wrapMode: Text.WordWrap
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.setStyle(modelData.value)
-                        }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.setStyle(modelData.value)
                     }
                 }
             }
         }
     }
 
-    // ── Position + duration card ──
-    Rectangle {
+    // ── Position + duration card ── previously a bare, unstyled "Position"
+    // label (14px, not bold) next to a raw ComboBox — the only field card in
+    // Settings without a proper section title, and the only place still
+    // using a plain ComboBox instead of the SelectField + uppercase-label
+    // pattern Clip Preferences established.
+    SettingsCard {
         visible: root.style !== "disabled"
-        Layout.fillWidth: true
-        radius: Theme.radius
-        color: Theme.surface
-        border.width: 1
-        border.color: Theme.border
-        implicitHeight: posCol.implicitHeight + 40
+        title: (I18n.language, I18n.t("settings.notificationsPage.display"))
 
-        ColumnLayout {
-            id: posCol
-            anchors.fill: parent
-            anchors.margins: 20
-            spacing: 16
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 24
 
-            RowLayout {
+            ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 8
-                Text {
-                    text: (I18n.language, I18n.t("settings.notificationsPage.position"))
-                    color: Theme.textDim
-                    font.pixelSize: 14
-                    Layout.fillWidth: true
+                spacing: 6
+                RowLayout {
+                    spacing: 6
+                    Text {
+                        text: (I18n.language, I18n.t("settings.notificationsPage.position").toUpperCase())
+                        color: Theme.textMuted
+                        font.pixelSize: 11
+                        font.weight: Font.Bold
+                        font.letterSpacing: 0.5
+                    }
+                    InfoIcon { tooltipText: I18n.t("settings.notificationsPage.positionDesc") }
                 }
-                InfoIcon { tooltipText: I18n.t("settings.notificationsPage.positionDesc") }
-
-                ComboBox {
-                    id: posCombo
-                    Layout.preferredWidth: 180
-                    model: root.positionOptions.map(o => I18n.t("settings.notificationsPage." + o.key))
-                    currentIndex: root.positionOptions.findIndex(o => o.value === root.position)
-                    onActivated: (index) => SettingsController.setValue(
-                        "notificationPosition", JSON.stringify(root.positionOptions[index].value))
-
-                    contentItem: Text {
-                        leftPadding: 12
-                        text: posCombo.displayText
-                        color: Theme.text
-                        font.pixelSize: 13
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        implicitHeight: 34
-                        radius: Theme.radius
-                        color: Theme.bg
-                        border.width: 1
-                        border.color: posCombo.activeFocus ? Theme.accent : Theme.border
-                    }
+                SelectField {
+                    Layout.fillWidth: true
+                    options: root.positionOptions.map(o => ({ value: o.value, label: I18n.t("settings.notificationsPage." + o.key) }))
+                    value: root.position
+                    onPicked: (v) => SettingsController.setValue("notificationPosition", JSON.stringify(v))
                 }
             }
 
-            RowLayout {
+            ColumnLayout {
                 visible: root.style === "x11-overlay"
                 Layout.fillWidth: true
-                spacing: 8
-
-                Text {
-                    text: (I18n.language, I18n.t("settings.notificationsPage.duration"))
-                    color: Theme.textDim
-                    font.pixelSize: 14
+                spacing: 6
+                RowLayout {
+                    spacing: 6
+                    Text {
+                        text: (I18n.language, I18n.t("settings.notificationsPage.duration").toUpperCase())
+                        color: Theme.textMuted
+                        font.pixelSize: 11
+                        font.weight: Font.Bold
+                        font.letterSpacing: 0.5
+                    }
+                    InfoIcon { tooltipText: I18n.t("settings.notificationsPage.durationDesc") }
                 }
-                InfoIcon { tooltipText: I18n.t("settings.notificationsPage.durationDesc") }
-
-                Slider {
-                    id: durSlider
+                HSlider {
                     Layout.fillWidth: true
-                    from: 1; to: 10; stepSize: 1
+                    from: 1; to: 10
                     value: root.duration
-                    onMoved: SettingsController.setValue("notificationDuration", JSON.stringify(value))
-                }
-                Text {
-                    text: Math.round(durSlider.value) + "s"
-                    color: Theme.text
-                    font.pixelSize: 13
-                    Layout.preferredWidth: 28
+                    suffix: "s"
+                    onMoved: (v) => SettingsController.setValue("notificationDuration", JSON.stringify(Math.round(v)))
                 }
             }
         }

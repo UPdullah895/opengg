@@ -6,6 +6,50 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-04] Claude Opus 5 — qt6-gstreamer-player-b3 (Settings/Mixer consistency pass)
+
+**What Changed:**
+- Fixed a settings-panel right-edge overflow: `settingsContentCol` combined
+  an explicit `x: 28` offset with `width: parent.width`, pushing its right
+  edge 28px past the viewport — a 28px left gutter with none on the right,
+  visible as cards bleeding past the window boundary at wide window sizes.
+  Moved the gutter to symmetric `Loader` margins instead.
+- Mixer EQ/DSP tabs: `GraphicEQ.qml` had no card wrapper at all, unlike its
+  `DspControls.qml` sibling on the same Chat tab (Noise Reduction/Gate/
+  Compressor, each in a bordered card) — it floated directly on the bare
+  page background. Wrapped it in a matching bordered card, added an
+  "Enabled" label next to the previously-unlabeled EQ toggle, and gave the
+  "Flat" reset button a hover state matching other outlined buttons.
+- Settings → Notifications: the "Position" field was the only field in
+  Settings still using a plain, unstyled label (14px, not bold) and a raw
+  ComboBox instead of the SelectField + uppercase-label pattern Clip
+  Preferences established. Gave it a real "Display" card title and moved
+  Position/Duration onto that pattern.
+- Fixed "clips"/"Used" stat-label casing mismatch in Storage's Disk Usage
+  card (English locale only — Arabic has no case distinction).
+- Added `--panel <tab>` support to the Mixer page's screenshot path
+  (`MixerPage.qml`), matching Settings' existing convention, so EQ/DSP tabs
+  can be captured headlessly for review.
+
+**Why:**
+User asked for a design consistency pass (spacing, icons, text) across
+Settings and Mixer, after flagging the settings right-edge overflow via a
+live screenshot at 1920×1080. Rather than guess app-wide, scoped to
+Settings + Mixer via AskUserQuestion, then surveyed every panel with
+`ui-shots.sh`-adjacent screenshots to find concrete inconsistencies (missing
+cards, unlabeled controls, mismatched patterns) instead of restyling things
+that were already fine.
+
+**Deliberately not touched:** Capture & Sound's label-left field rows
+(Quality/FPS/Replay Buffer/Monitor Target) use a different, but internally
+consistent, "label left of control" pattern rather than Clip Preferences'
+"uppercase label above control" pattern. Both are legitimate settings-UI
+conventions; converting one to the other across a 4-row/2-toggle card
+control risked regressions for a stylistic judgment call, not a bug — left
+as-is.
+
+---
+
 ### [2026-08-04] Claude Opus 5 — qt6-gstreamer-player-b3 (Language panel redesign)
 
 **What Changed:**

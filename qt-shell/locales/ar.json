@@ -476,6 +476,7 @@
     "notificationsPage": {
       "title": "الإشعارات",
       "description": "اضبط كيفية إخطار OpenGG لك عند حفظ المقاطع أو حدوث أحداث التسجيل.",
+      "display": "العرض",
       "style": "نمط الإشعار",
       "styleAuto": "تلقائي",
       "styleGsrNotify": "GSR-Notify",
@@ -897,7 +898,9 @@
   },
   "eq": {
     "title": "معادل الرسومات",
-    "flat": "مسطح"
+    "flat": "مسطح",
+    "enabled": "مفعّل",
+    "preamp": "التضخيم المسبق"
   },
   "chatMix": {
     "title": "ChatMix",
