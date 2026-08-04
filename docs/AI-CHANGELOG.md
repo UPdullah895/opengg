@@ -6,6 +6,76 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-05] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Toggle centering, real toggle-row bug, Shortcuts overcorrection, icon picker, module→nav gating)
+
+**What Changed:**
+- `ToggleSwitch.qml`: knob was `y: 3` against a `parent.height-8` knob in a
+  22px track — 3px top / 5px bottom, not centered. Fixed to
+  `(parent.height - height) / 2`.
+- `GeneralPanel.qml` — the real "toggle attached to the title" bug: "Start
+  on Boot" / "Minimize to Tray" wrapped their title+info-icon in a *nested*
+  `RowLayout` marked `Layout.fillWidth: true`. Unlike a plain `Item` or
+  `ColumnLayout` spacer, that nested RowLayout doesn't actually stretch to
+  claim the row's remaining space, so the toggle ended up clustered right
+  next to the icon instead of pushed to the card's right edge like every
+  other toggle row in the app. Found by systematically screenshotting every
+  ToggleSwitch call site (7 files) at both 1280px and a narrow 960px test
+  width — this was the only one that didn't match the established
+  Item-spacer pattern. Replaced with the same dedicated
+  `Item { Layout.fillWidth: true }` spacer used everywhere else.
+- `ShortcutsPanel.qml`: last session's fix for "crammed" rows (10px/10px
+  margins) overcorrected — user's side-by-side comparison showed the
+  reference/old design is markedly more compact than what shipped. Reduced
+  to 5px/5px, keeping the divider.
+- `TrackManagementPanel.qml`: the per-track icon button just cycled blindly
+  through a fixed 6-icon array on every click with no way to see or choose
+  a specific one. Replaced with an inline icon-choice strip (plain `Row`
+  toggled by a `openIconPickerFor` property) — deliberately *not* a
+  Popup/ComboBox, since a separate `IconPicker.qml` built on those was
+  already documented in this file as hanging the app at startup for
+  unknown reasons.
+- `Sidebar.qml`: Settings → Extensions → Modules toggles (audio/device/
+  replay) called `ExtensionsController.setModule()` but nothing ever read
+  `modulesJson` outside the Extensions panel itself — confirmed via grep
+  this was never wired even in the archived Vue reference, so it's a new
+  feature rather than a porting gap. Added `visibleNavItems`, filtering
+  `navItems` by module state (mixer→audio, devices→device, clips→replay;
+  home/settings have no backing module and always show), and an
+  `ExtensionsController.refresh()` call in `Component.onCompleted` so the
+  sidebar reflects saved module state from the first frame rather than only
+  after the user visits the Extensions panel.
+
+**Why:**
+Follow-up to the previous design-fidelity pass: user reported the toggle
+knob still looked off-center, pointed at a toggle sitting flush against a
+title in a screenshot, provided a direct before/after comparison showing
+Shortcuts had gone too far the other way, and asked for the Timeline Tracks
+icon control and Extensions module toggles to actually do something instead
+of being decorative. Also asked for a GPU Screen Recorder install
+explanation — `RecorderInstallHelper.qml` (distro-aware install command +
+installed/missing states) already covers this and is embedded in Capture &
+Sound; screenshot-verified it renders the installed-confirmation state
+correctly, so no code change was needed there.
+
+**Deliberately not touched:** Timeline Tracks config still doesn't affect
+the actual clip editor (`ClipEditorPage.qml`) — that's audio/video editor
+scope, out of bounds per the standing agreement that playback/editor work
+is handled elsewhere. Only the settings-panel icon-picker UX itself was
+fixed.
+
+**Verification:**
+- `cargo build` succeeded
+- `qt-shell/tools/check-colors.sh` passed
+- `qt-shell/tools/ui-shots.sh` — all 16 pages, zero QML warnings, including
+  after the TrackManagementPanel delegate restructure (risk of reintroducing
+  the documented Popup/ComboBox hang — confirmed clean)
+- `cargo test` — 21/21 passing
+- Screenshotted every ToggleSwitch call site at 1280px and 960px to find
+  the actual "attached to title" offender before writing a fix
+- Live app relaunched (`QT_FORCE_STDERR_LOGGING=1`) — clean startup
+
+---
+
 ### [2026-08-04] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Toggle/dropdown/shortcuts/storage fidelity fixes)
 
 **What Changed:**

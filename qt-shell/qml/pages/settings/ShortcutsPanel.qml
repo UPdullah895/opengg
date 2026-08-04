@@ -128,15 +128,14 @@ ColumnLayout {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        // Each row previously sat directly against its
-                        // neighbors with only a 4px top margin and no
-                        // divider — every action ran together into one
-                        // dense block. A real top/bottom margin plus a
-                        // divider between rows (matching the header
-                        // divider above) gives each shortcut its own
-                        // visual space.
-                        Layout.topMargin: 10
-                        Layout.bottomMargin: 10
+                        // Originally 4px/no divider (rows ran together);
+                        // then overcorrected to 10px/10px, which made each
+                        // row far taller than the reference design's
+                        // compact list. 5px/5px + the divider below is the
+                        // middle ground: separated rows without the
+                        // padding bloat.
+                        Layout.topMargin: 5
+                        Layout.bottomMargin: 5
 
                         RowLayout {
                             spacing: 6

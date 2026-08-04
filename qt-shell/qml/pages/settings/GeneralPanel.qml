@@ -178,17 +178,23 @@ ColumnLayout {
         title: (I18n.language, I18n.t("settings.daemon.title"))
 
         RowLayout {
+            // A nested RowLayout wrapping the title+icon, marked
+            // Layout.fillWidth here, does NOT stretch to fill the outer
+            // row the way an Item or ColumnLayout spacer does — leaving
+            // the toggle clustered right next to the title instead of
+            // pushed to the card's right edge like every other toggle row
+            // in this app (Ear Blast Protection, GraphicEQ's Enabled).
+            // Use a dedicated fillWidth spacer instead of a fillWidth
+            // wrapper Layout.
             Layout.fillWidth: true
-            RowLayout {
-                spacing: 6
-                Layout.fillWidth: true
-                Text {
-                    text: (I18n.language, I18n.t("settings.daemon.runAtStartup"))
-                    color: Theme.text
-                    font.pixelSize: 13
-                }
-                InfoIcon { tooltipText: I18n.t("settings.daemon.runAtStartupTooltip") }
+            spacing: 6
+            Text {
+                text: (I18n.language, I18n.t("settings.daemon.runAtStartup"))
+                color: Theme.text
+                font.pixelSize: 13
             }
+            InfoIcon { tooltipText: I18n.t("settings.daemon.runAtStartupTooltip") }
+            Item { Layout.fillWidth: true }
             ToggleSwitch {
                 checked: SystemController.getAutostart()
                 onToggled: (v) => SystemController.setAutostart(v)
@@ -197,16 +203,14 @@ ColumnLayout {
 
         RowLayout {
             Layout.fillWidth: true
-            RowLayout {
-                spacing: 6
-                Layout.fillWidth: true
-                Text {
-                    text: (I18n.language, I18n.t("settings.daemon.keepInBackground"))
-                    color: Theme.text
-                    font.pixelSize: 13
-                }
-                InfoIcon { tooltipText: I18n.t("settings.daemon.keepInBackgroundTooltip") }
+            spacing: 6
+            Text {
+                text: (I18n.language, I18n.t("settings.daemon.keepInBackground"))
+                color: Theme.text
+                font.pixelSize: 13
             }
+            InfoIcon { tooltipText: I18n.t("settings.daemon.keepInBackgroundTooltip") }
+            Item { Layout.fillWidth: true }
             ToggleSwitch {
                 checked: root.s.runInBackground || false
                 onToggled: (v) => SettingsController.setValue("runInBackground", JSON.stringify(v))

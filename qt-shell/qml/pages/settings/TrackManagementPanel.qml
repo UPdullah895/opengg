@@ -41,16 +41,16 @@ ColumnLayout {
 
     // IconPicker.qml as a separate component file was found to hang the app at
     // startup for unknown reasons (Popup- and ComboBox-based versions both hung,
-    // even with a bare empty Popup). Inlined here as a plain cycling button instead.
+    // even with a bare empty Popup). The picker below is a plain inline Row
+    // toggled by a property, not a Popup/ComboBox, to sidestep that landmine
+    // while still giving a real "choose one of six" picker instead of the
+    // blind cycle-on-click button this replaced.
     readonly property var iconIds: ["video", "game", "chat", "mic", "media", "overlay"]
     readonly property var trackIcons: ({
         video: "track-video", game: "track-game", chat: "headphones",
         mic: "track-mic", media: "track-media", overlay: "track-overlay"
     })
-    function nextIcon(current) {
-        const i = root.iconIds.indexOf(current)
-        return root.iconIds[(i + 1) % root.iconIds.length]
-    }
+    property string openIconPickerFor: ""
 
     SettingsHeading { titleText: (I18n.language, I18n.t("settings.timelineTracks.title")) }
 
@@ -83,10 +83,17 @@ ColumnLayout {
 
             Repeater {
                 model: root.trackDefs
-                RowLayout {
-                    id: tRow
+                ColumnLayout {
+                    id: tCol2
                     required property var modelData
                     required property int index
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                RowLayout {
+                    id: tRow
+                    property var modelData: tCol2.modelData
+                    property int index: tCol2.index
                     Layout.fillWidth: true
                     spacing: 8
 
@@ -148,11 +155,13 @@ ColumnLayout {
                     }
 
                     Rectangle {
+                        id: iconBtn
                         width: 32; height: 28
                         radius: Theme.radius
-                        color: Theme.bg
+                        property bool pickerOpen: root.openIconPickerFor === tRow.modelData.id
+                        color: pickerOpen ? Theme.accentAlpha(15) : Theme.bg
                         border.width: 1
-                        border.color: Theme.border
+                        border.color: pickerOpen ? Theme.accent : Theme.border
                         Icon {
                             anchors.centerIn: parent
                             name: root.trackIcons[tRow.modelData.icon] || "track-game"; size: 16
@@ -160,7 +169,7 @@ ColumnLayout {
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.updateTrack(tRow.index, { icon: root.nextIcon(tRow.modelData.icon) })
+                            onClicked: root.openIconPickerFor = iconBtn.pickerOpen ? "" : tRow.modelData.id
                         }
                     }
 
@@ -182,6 +191,44 @@ ColumnLayout {
                             onClicked: root.removeTrack(tRow.index)
                         }
                     }
+                }
+
+                // Inline icon-choice strip — a plain Row toggled by
+                // openIconPickerFor, not a Popup/ComboBox (see the landmine
+                // note above). Lets you pick a specific icon instead of
+                // cycling blind through six options one click at a time.
+                Row {
+                    visible: root.openIconPickerFor === tCol2.modelData.id
+                    Layout.leftMargin: 68
+                    spacing: 6
+
+                    Repeater {
+                        model: root.iconIds
+                        Rectangle {
+                            id: iconChoice
+                            required property string modelData
+                            width: 30; height: 28
+                            radius: Theme.radius
+                            property bool isCurrent: tCol2.modelData.icon === modelData
+                            color: isCurrent ? Theme.accentAlpha(20) : Theme.bg
+                            border.width: 1
+                            border.color: isCurrent ? Theme.accent : Theme.border
+                            Icon {
+                                anchors.centerIn: parent
+                                name: root.trackIcons[iconChoice.modelData]
+                                size: 15
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    root.updateTrack(tCol2.index, { icon: iconChoice.modelData })
+                                    root.openIconPickerFor = ""
+                                }
+                            }
+                        }
+                    }
+                }
                 }
             }
 

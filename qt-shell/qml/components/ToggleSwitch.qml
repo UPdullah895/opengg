@@ -28,7 +28,7 @@ Item {
         height: parent.height - 8
         radius: height / 2
         color: root.checked ? Theme.accent : Theme.textMuted
-        y: 3
+        y: (parent.height - height) / 2
         x: root.checked ? parent.width - width - 3 : 3
         Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
         Behavior on color { ColorAnimation { duration: 120 } }

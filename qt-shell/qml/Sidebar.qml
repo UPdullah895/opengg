@@ -11,6 +11,16 @@ Rectangle {
     signal navigate(string page)
     property string currentPage: "home"
 
+    // Core-module toggles (Settings → Extensions → Modules) hide the
+    // corresponding nav entry entirely rather than leaving a dead link —
+    // home/settings have no backing module and always stay visible.
+    property var modules: JSON.parse(ExtensionsController.modulesJson || "{}")
+    readonly property var moduleForNav: ({ mixer: "audio", devices: "device", clips: "replay" })
+    readonly property var visibleNavItems: sidebar.navItems.filter(function(item) {
+        const modKey = sidebar.moduleForNav[item.id]
+        return !modKey || sidebar.modules[modKey] !== false
+    })
+
     // Navigation items: stable id (used for routing), i18n key, SVG stroke path.
     property var navItems: [
         {
@@ -58,7 +68,7 @@ Rectangle {
         anchors.bottomMargin: 40
 
         Repeater {
-            model: sidebar.navItems
+            model: sidebar.visibleNavItems
 
             Rectangle {
                 id: navItem
@@ -169,4 +179,9 @@ Rectangle {
     }
 
     // TODO(i18n): migrate to qsTrId + JsonTranslator per plan §3.1
+
+    // modulesJson defaults to empty until refreshed — load it here so a
+    // disabled module hides its nav item from the first frame, not only
+    // after the user happens to open Settings → Extensions.
+    Component.onCompleted: ExtensionsController.refresh()
 }
