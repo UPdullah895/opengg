@@ -213,21 +213,23 @@ ColumnLayout {
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             // Reset
+            //
+            // Same fillWidth-wrapper bug as GeneralPanel/ShortcutsPanel: a
+            // nested Layout (here a ColumnLayout, not a RowLayout) marked
+            // Layout.fillWidth doesn't stretch to claim the row's remaining
+            // space the way a plain Item spacer does — it left the button
+            // clustered right next to the label instead of at the card's
+            // right edge. Dedicated spacer instead.
             RowLayout {
                 Layout.fillWidth: true
-                ColumnLayout {
-                    spacing: 2
-                    Layout.fillWidth: true
-                    RowLayout {
-                        spacing: 6
-                        Text {
-                            text: (I18n.language, I18n.t("settings.dangerZone.resetVirtualAudio"))
-                            color: Theme.text
-                            font.pixelSize: 13
-                        }
-                        InfoIcon { tooltipText: I18n.t("settings.dangerZone.resetVirtualAudioDesc") }
-                    }
+                spacing: 6
+                Text {
+                    text: (I18n.language, I18n.t("settings.dangerZone.resetVirtualAudio"))
+                    color: Theme.text
+                    font.pixelSize: 13
                 }
+                InfoIcon { tooltipText: I18n.t("settings.dangerZone.resetVirtualAudioDesc") }
+                Item { Layout.fillWidth: true }
                 Rectangle {
                     width: 32; height: 32; radius: Theme.radius
                     color: "transparent"
@@ -245,25 +247,20 @@ ColumnLayout {
             // Create (when not ready) / Remove (when ready)
             RowLayout {
                 Layout.fillWidth: true
-                ColumnLayout {
-                    spacing: 2
-                    Layout.fillWidth: true
-                    RowLayout {
-                        spacing: 6
-                        Text {
-                            text: AudioController.virtualAudioReady
-                                ? (I18n.language, I18n.t("settings.dangerZone.removeVirtualAudio"))
-                                : (I18n.language, I18n.t("settings.dangerZone.createVirtualAudio"))
-                            color: Theme.text
-                            font.pixelSize: 13
-                        }
-                        InfoIcon {
-                            tooltipText: AudioController.virtualAudioReady
-                                ? I18n.t("settings.dangerZone.removeVirtualAudioDesc")
-                                : I18n.t("settings.dangerZone.createVirtualAudioDesc")
-                        }
-                    }
+                spacing: 6
+                Text {
+                    text: AudioController.virtualAudioReady
+                        ? (I18n.language, I18n.t("settings.dangerZone.removeVirtualAudio"))
+                        : (I18n.language, I18n.t("settings.dangerZone.createVirtualAudio"))
+                    color: Theme.text
+                    font.pixelSize: 13
                 }
+                InfoIcon {
+                    tooltipText: AudioController.virtualAudioReady
+                        ? I18n.t("settings.dangerZone.removeVirtualAudioDesc")
+                        : I18n.t("settings.dangerZone.createVirtualAudioDesc")
+                }
+                Item { Layout.fillWidth: true }
                 Rectangle {
                     visible: !AudioController.virtualAudioReady
                     width: 120; height: 32; radius: Theme.radius

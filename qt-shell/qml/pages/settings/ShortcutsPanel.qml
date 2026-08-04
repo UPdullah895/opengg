@@ -84,17 +84,20 @@ ColumnLayout {
 
             RowLayout {
                 Layout.fillWidth: true
-                RowLayout {
-                    spacing: 8
-                    Layout.fillWidth: true
-                    Text {
-                        text: (I18n.language, I18n.t("settings.shortcuts.title"))
-                        color: Theme.text
-                        font.pixelSize: 16
-                        font.weight: Font.DemiBold
-                    }
-                    InfoIcon { tooltipText: I18n.t("settings.shortcuts.hint") }
+                spacing: 8
+                // Same nested-RowLayout-fillWidth bug as the shortcut rows
+                // below: a wrapper Layout marked fillWidth doesn't stretch,
+                // so "Reset to Defaults" was landing right next to the
+                // title instead of the card's far-right edge. Dedicated
+                // spacer instead.
+                Text {
+                    text: (I18n.language, I18n.t("settings.shortcuts.title"))
+                    color: Theme.text
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
                 }
+                InfoIcon { tooltipText: I18n.t("settings.shortcuts.hint") }
+                Item { Layout.fillWidth: true }
                 Rectangle {
                     width: 130; height: 28
                     radius: Theme.radius
@@ -136,17 +139,23 @@ ColumnLayout {
                         // padding bloat.
                         Layout.topMargin: 5
                         Layout.bottomMargin: 5
+                        spacing: 6
 
-                        RowLayout {
-                            spacing: 6
-                            Layout.fillWidth: true
-                            Text {
-                                text: I18n.t("settings.shortcuts.actions." + actionCol.modelData)
-                                color: Theme.text
-                                font.pixelSize: 13
-                            }
-                            InfoIcon { tooltipText: I18n.t("settings.shortcuts.hints." + actionCol.modelData) }
+                        // A nested RowLayout wrapping the label+icon, marked
+                        // Layout.fillWidth, does NOT stretch to claim the
+                        // row's remaining space the way an Item spacer does
+                        // (same root cause as GeneralPanel's Start on
+                        // Boot/Minimize to Tray toggles) — it left the key
+                        // box sitting right next to the label instead of
+                        // right-aligned to the card edge like the reference
+                        // design. Use a dedicated fillWidth spacer instead.
+                        Text {
+                            text: I18n.t("settings.shortcuts.actions." + actionCol.modelData)
+                            color: Theme.text
+                            font.pixelSize: 13
                         }
+                        InfoIcon { tooltipText: I18n.t("settings.shortcuts.hints." + actionCol.modelData) }
+                        Item { Layout.fillWidth: true }
 
                         Rectangle {
                             id: keyBox

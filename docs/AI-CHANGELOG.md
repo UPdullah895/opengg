@@ -6,6 +6,51 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-05] Claude Sonnet 5 — qt6-gstreamer-player-b3 (fillWidth-wrapper bug, round 2: ShortcutsPanel + MixerRoutingPanel)
+
+**What Changed:**
+User's follow-up screenshot showed ShortcutsPanel's key-recorder boxes still
+clustered next to their labels instead of right-aligned like the reference
+design — the exact same root cause just fixed in `GeneralPanel.qml` (a
+nested Layout marked `Layout.fillWidth: true` doesn't stretch the way a
+plain `Item` spacer does), just missed there because the earlier sweep only
+grepped for `ToggleSwitch` call sites and this row uses a plain `Rectangle`
+key-box instead.
+- `ShortcutsPanel.qml`: fixed both the header row ("Reset to Defaults" was
+  landing next to the title) and every per-shortcut row (key box was landing
+  next to the label) — replaced the nested-RowLayout wrappers with
+  `Item { Layout.fillWidth: true }` spacers.
+- Audited the rest of `qml/` for the same shape (a wrapper Layout whose sole
+  child is another Layout, followed by a trailing sibling control) and found
+  two more live instances in `MixerRoutingPanel.qml`'s Danger Zone card
+  ("Reset Virtual Audio" / "Remove Virtual Audio & Restore OS Defaults" —
+  both `ColumnLayout`-wrapped). Fixed the same way.
+- Confirmed via screenshot that `DspControls.qml`'s Noise Reduction/Gate/
+  Compressor toggles, `GraphicEQ.qml`'s Enabled toggle, and Extensions'
+  Modules list do **not** have this bug — they either use a dedicated `Item`
+  spacer already, put `Layout.fillWidth` directly on a `Text`, or wrap
+  multiple `Text` children directly in a `ColumnLayout` (no intermediate
+  nested Layout) — narrowing the actual defect to "a Layout whose *sole*
+  child is itself a Layout doesn't propagate `Layout.fillWidth` to its
+  parent's stretch calculation," not "any nested Layout is broken."
+
+**Why:**
+Direct user follow-up with a labeled before/after crop pinpointing the
+Shortcuts key-box position. Given the same bug had just been found once,
+did a systematic sweep rather than fixing only the reported instance.
+
+**Verification:**
+- `cargo build` succeeded
+- `qt-shell/tools/check-colors.sh` passed
+- `qt-shell/tools/ui-shots.sh` — all 16 pages, zero QML warnings
+- `cargo test` — 21/21 passing
+- Screenshotted Shortcuts, Audio Engine (Danger Zone), and Mixer → Chat tab
+  (DSP Controls) to confirm right-alignment matches the reference pattern
+  and that the DspControls toggles were never actually affected
+- Live app relaunched (`QT_FORCE_STDERR_LOGGING=1`) — clean startup
+
+---
+
 ### [2026-08-05] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Toggle centering, real toggle-row bug, Shortcuts overcorrection, icon picker, module→nav gating)
 
 **What Changed:**
