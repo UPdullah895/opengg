@@ -119,48 +119,70 @@ ColumnLayout {
 
             Repeater {
                 model: root.actions
-                RowLayout {
+                ColumnLayout {
+                    id: actionCol
                     required property string modelData
+                    required property int index
                     Layout.fillWidth: true
-                    Layout.topMargin: 4
+                    spacing: 0
 
                     RowLayout {
-                        spacing: 6
                         Layout.fillWidth: true
-                        Text {
-                            text: I18n.t("settings.shortcuts.actions." + modelData)
-                            color: Theme.text
-                            font.pixelSize: 13
+                        // Each row previously sat directly against its
+                        // neighbors with only a 4px top margin and no
+                        // divider — every action ran together into one
+                        // dense block. A real top/bottom margin plus a
+                        // divider between rows (matching the header
+                        // divider above) gives each shortcut its own
+                        // visual space.
+                        Layout.topMargin: 10
+                        Layout.bottomMargin: 10
+
+                        RowLayout {
+                            spacing: 6
+                            Layout.fillWidth: true
+                            Text {
+                                text: I18n.t("settings.shortcuts.actions." + actionCol.modelData)
+                                color: Theme.text
+                                font.pixelSize: 13
+                            }
+                            InfoIcon { tooltipText: I18n.t("settings.shortcuts.hints." + actionCol.modelData) }
                         }
-                        InfoIcon { tooltipText: I18n.t("settings.shortcuts.hints." + modelData) }
+
+                        Rectangle {
+                            id: keyBox
+                            width: 140; height: 30
+                            radius: Theme.radius
+                            property bool isRecordingThis: root.recordingKey === actionCol.modelData
+                            color: isRecordingThis ? Theme.accentAlpha(15) : Theme.bg
+                            border.width: 1
+                            border.color: isRecordingThis ? Theme.accent : Theme.border
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: keyBox.isRecordingThis
+                                    ? I18n.t("settings.shortcuts.recording")
+                                    : ((root.s.shortcuts && root.s.shortcuts[actionCol.modelData]) || "—")
+                                color: keyBox.isRecordingThis ? Theme.accent : Theme.text
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                                width: parent.width - 12
+                                horizontalAlignment: Text.AlignHCenter
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.recordingKey === actionCol.modelData ? root.cancelRecord() : root.startRecord(actionCol.modelData)
+                            }
+                        }
                     }
 
                     Rectangle {
-                        id: keyBox
-                        width: 140; height: 30
-                        radius: Theme.radius
-                        property bool isRecordingThis: root.recordingKey === modelData
-                        color: isRecordingThis ? Theme.accentAlpha(15) : Theme.bg
-                        border.width: 1
-                        border.color: isRecordingThis ? Theme.accent : Theme.border
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: keyBox.isRecordingThis
-                                ? I18n.t("settings.shortcuts.recording")
-                                : ((root.s.shortcuts && root.s.shortcuts[modelData]) || "—")
-                            color: keyBox.isRecordingThis ? Theme.accent : Theme.text
-                            font.pixelSize: 12
-                            elide: Text.ElideRight
-                            width: parent.width - 12
-                            horizontalAlignment: Text.AlignHCenter
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.recordingKey === modelData ? root.cancelRecord() : root.startRecord(modelData)
-                        }
+                        visible: actionCol.index < root.actions.length - 1
+                        Layout.fillWidth: true
+                        height: 1
+                        color: Theme.border
                     }
                 }
             }

@@ -10,21 +10,28 @@ Item {
     implicitWidth: 40
     implicitHeight: 22
 
+    // Matches ToggleSwitch.vue exactly: an accent-TINTED track (not a solid
+    // fill) with an accent border when on, and a knob that's text-muted when
+    // off / accent when on — never a flat white circle regardless of theme.
     Rectangle {
         anchors.fill: parent
         radius: height / 2
-        color: root.checked ? Theme.accent : Theme.border
+        color: root.checked ? Theme.accentAlpha(20) : Theme.bgDeep
+        border.width: 1
+        border.color: root.checked ? Theme.accent : Theme.border
         Behavior on color { ColorAnimation { duration: 120 } }
+        Behavior on border.color { ColorAnimation { duration: 120 } }
     }
 
     Rectangle {
-        width: parent.height - 4
-        height: parent.height - 4
+        width: parent.height - 8
+        height: parent.height - 8
         radius: height / 2
-        color: "#ffffff"
-        y: 2
-        x: root.checked ? parent.width - width - 2 : 2
+        color: root.checked ? Theme.accent : Theme.textMuted
+        y: 3
+        x: root.checked ? parent.width - width - 3 : 3
         Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
+        Behavior on color { ColorAnimation { duration: 120 } }
     }
 
     MouseArea {

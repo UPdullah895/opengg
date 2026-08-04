@@ -6,6 +6,58 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-04] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Toggle/dropdown/shortcuts/storage fidelity fixes)
+
+**What Changed:**
+- `ToggleSwitch.qml`: the knob was hardcoded `"#ffffff"` and the track was a
+  solid accent fill with no border — user asked why the toggle's white
+  didn't match the theme. Read the original `ToggleSwitch.vue`: it was never
+  white. Track is an accent-tinted (not solid) fill with an accent border
+  when on; knob is `text-muted` off / `accent` on. Rewrote to match exactly.
+- `SelectField.qml`: bumped from `implicitHeight: 26, font.pixelSize: 11,
+  color: Theme.textDim`, no focus feedback, to `34px/13px/Theme.text` with an
+  `activeFocus` border — matching every other ComboBox in the app (Capture &
+  Sound's Quality/FPS fields). This was the "dropdown menus are weak/small"
+  complaint; SelectField backs Clip Preferences and Notifications'
+  Position/Duration fields, so it read as visibly weaker than the plain
+  ComboBoxes used elsewhere despite being the more common variant.
+- `ShortcutsPanel.qml`: rows had no divider between them and only a 4px top
+  margin, so all 9 actions ran together into one dense block ("crammed
+  together"). Restructured the Repeater delegate to a `ColumnLayout` with a
+  divider after every row except the last, plus real 10px top/bottom margins.
+- `StoragePanel.qml`: Clip/Screenshot directory rows were bare text with no
+  background, reading as "just text" rather than a file location. Wrapped
+  each row in a bordered `Theme.bg` chip (36px, radius, folder icon + path +
+  remove icon), same treatment for both `clipDirRow` and `shotDirRow`.
+
+**Why:**
+User sent 6 screenshots (toggle switches, Clip Preferences dropdown,
+Shortcuts page, Language panel, Timeline Tracks, Storage panel) with four
+explicit text complaints: toggle color mismatch, cramped Shortcuts spacing,
+storage rows looking like plain text, and weak/small dropdowns. Addressed
+each by reading the original Vue source (`ToggleSwitch.vue`) or comparing
+against sibling components already in the QML port (other ComboBoxes, other
+card dividers) rather than guessing at new styling.
+
+**Deliberately not touched:** two elements visible in the reference images
+but not named in the text complaint were left alone — the Language panel's
+folder/refresh header icons (no backend command wired for them) and Timeline
+Tracks' "Live Preview" section (documented Phase 5/editor scope, not
+implemented in the Qt port yet). Both would be net-new feature work, not
+part of this design-fidelity pass.
+
+**Verification:**
+- `cargo build` succeeded
+- `qt-shell/tools/check-colors.sh` passed
+- `qt-shell/tools/ui-shots.sh` — all 16 pages captured, zero QML warnings
+- `cargo test` — 21/21 passing
+- Individual screenshots of General/Shortcuts/Storage/MixerRouting panels
+  visually inspected
+- Live app relaunched (`QT_FORCE_STDERR_LOGGING=1`) — clean startup, no QML
+  errors in the log
+
+---
+
 ### [2026-08-04] Claude Opus 5 — qt6-gstreamer-player-b3 (Settings/Mixer consistency pass)
 
 **What Changed:**

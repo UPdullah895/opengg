@@ -99,28 +99,41 @@ ColumnLayout {
                 }
                 Repeater {
                     model: root.clipDirs
-                    RowLayout {
+                    Rectangle {
                         id: clipDirRow
                         required property string modelData
                         required property int index
                         Layout.fillWidth: true
-                        Text {
-                            text: clipDirRow.modelData || I18n.t("settings.storage.defaultClipPath")
-                            color: Theme.text
-                            font.pixelSize: 12
-                            Layout.fillWidth: true
-                            elide: Text.ElideMiddle
-                        }
-                        Icon {
-                            name: "x"; size: 12
-                            color: Theme.textDim
-                            MouseArea {
-                                anchors.fill: parent
-                                anchors.margins: -6
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    const next = root.clipDirs.filter((_, i) => i !== clipDirRow.index)
-                                    SettingsController.setValue("clip_directories", JSON.stringify(next))
+                        implicitHeight: 36
+                        radius: Theme.radius
+                        color: Theme.bg
+                        border.width: 1
+                        border.color: Theme.border
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            spacing: 8
+                            Icon { name: "folder"; size: 13; color: Theme.textDim }
+                            Text {
+                                text: clipDirRow.modelData || I18n.t("settings.storage.defaultClipPath")
+                                color: Theme.text
+                                font.pixelSize: 12
+                                Layout.fillWidth: true
+                                elide: Text.ElideMiddle
+                            }
+                            Icon {
+                                name: "x"; size: 12
+                                color: Theme.textDim
+                                MouseArea {
+                                    anchors.fill: parent
+                                    anchors.margins: -6
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        const next = root.clipDirs.filter((_, i) => i !== clipDirRow.index)
+                                        SettingsController.setValue("clip_directories", JSON.stringify(next))
+                                    }
                                 }
                             }
                         }
@@ -157,28 +170,41 @@ ColumnLayout {
                 }
                 Repeater {
                     model: root.shotDirs
-                    RowLayout {
+                    Rectangle {
                         id: shotDirRow
                         required property string modelData
                         required property int index
                         Layout.fillWidth: true
-                        Text {
-                            text: shotDirRow.modelData
-                            color: Theme.text
-                            font.pixelSize: 12
-                            Layout.fillWidth: true
-                            elide: Text.ElideMiddle
-                        }
-                        Icon {
-                            name: "x"; size: 12
-                            color: Theme.textDim
-                            MouseArea {
-                                anchors.fill: parent
-                                anchors.margins: -6
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    const next = root.shotDirs.filter((_, i) => i !== shotDirRow.index)
-                                    SettingsController.setValue("screenshotDirs", JSON.stringify(next))
+                        implicitHeight: 36
+                        radius: Theme.radius
+                        color: Theme.bg
+                        border.width: 1
+                        border.color: Theme.border
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            spacing: 8
+                            Icon { name: "folder"; size: 13; color: Theme.textDim }
+                            Text {
+                                text: shotDirRow.modelData
+                                color: Theme.text
+                                font.pixelSize: 12
+                                Layout.fillWidth: true
+                                elide: Text.ElideMiddle
+                            }
+                            Icon {
+                                name: "x"; size: 12
+                                color: Theme.textDim
+                                MouseArea {
+                                    anchors.fill: parent
+                                    anchors.margins: -6
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        const next = root.shotDirs.filter((_, i) => i !== shotDirRow.index)
+                                        SettingsController.setValue("screenshotDirs", JSON.stringify(next))
+                                    }
                                 }
                             }
                         }

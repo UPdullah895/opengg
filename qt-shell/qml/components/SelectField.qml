@@ -23,29 +23,35 @@ ComboBox {
     }
     onActivated: box.picked(box.options[currentIndex].value)
 
-    implicitHeight: 26
-    font.pixelSize: 11
+    // Sized and colored to match the plain ComboBoxes used elsewhere in this
+    // app (CaptureSoundPanel's Quality/FPS/etc) — this was previously a
+    // visibly smaller, dimmer, focus-feedback-less variant (26px/11px/
+    // textDim, no activeFocus border) that read as "weaker" than every
+    // other dropdown despite being the more common one (Clip Preferences,
+    // Notifications' Position/Duration).
+    implicitHeight: 34
+    font.pixelSize: 13
 
     contentItem: Text {
-        leftPadding: 8
+        leftPadding: 12
         text: box.displayText
-        color: Theme.textDim
+        color: Theme.text
         font: box.font
         elide: Text.ElideRight
         verticalAlignment: Text.AlignVCenter
     }
     indicator: Icon {
-        x: box.width - width - 8
+        x: box.width - width - 10
         anchors.verticalCenter: parent.verticalCenter
         name: "chevron-down"
-        size: 11
+        size: 12
         color: Theme.textMuted
     }
     background: Rectangle {
         radius: Theme.radius
         color: Theme.bg
         border.width: 1
-        border.color: Theme.border
+        border.color: box.activeFocus ? Theme.accent : Theme.border
     }
     delegate: ItemDelegate {
         width: box.width
@@ -53,7 +59,7 @@ ComboBox {
         contentItem: Text {
             text: modelData.label
             color: highlighted ? Theme.accent : Theme.text
-            font.pixelSize: 11
+            font.pixelSize: 12
             elide: Text.ElideRight
             verticalAlignment: Text.AlignVCenter
         }
