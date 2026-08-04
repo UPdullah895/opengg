@@ -3,8 +3,9 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import com.opengg.app
 
-// Settings → Language. Extracted from the original inline SettingsPage.qml
-// card, now that SettingsPage hosts a nav + multiple panels.
+// Settings → Language. QML port of LanguageSettings.vue: a selectable list
+// of language rows (code badge + name + LTR/RTL tag), not a dropdown — the
+// Vue original never used a ComboBox here.
 ColumnLayout {
     width: parent.width
     spacing: 20
@@ -14,74 +15,64 @@ ColumnLayout {
     SettingsCard {
         title: (I18n.language, I18n.t("settings.language.title"))
 
-        RowLayout {
-                Layout.fillWidth: true
-                spacing: 16
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 6
 
-                Text {
-                    text: (I18n.language, I18n.t("settings.language.selectLanguage"))
-                    color: Theme.textDim
-                    font.pixelSize: 14
+            Repeater {
+                model: I18n.availableLanguages()
+                Rectangle {
+                    id: langBtn
+                    required property string modelData
+                    readonly property bool active: modelData === I18n.language
                     Layout.fillWidth: true
-                }
+                    implicitHeight: 46
+                    radius: Theme.radius
+                    color: active ? Theme.accentAlpha(10) : Theme.bgInput
+                    border.width: 1
+                    border.color: active ? Theme.accent : (langArea.containsMouse ? Theme.accent : Theme.border)
 
-                ComboBox {
-                    id: langCombo
-                    Layout.preferredWidth: 200
-                    model: I18n.availableLanguages()
-                    currentIndex: Math.max(0, model.indexOf(I18n.language))
-                    displayText: I18n.languageName(I18n.language)
-                    onActivated: (index) => I18n.applyLanguage(model[index])
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 14
+                        anchors.rightMargin: 14
+                        spacing: 10
 
-                    contentItem: Text {
-                        leftPadding: 12
-                        rightPadding: 12
-                        text: langCombo.displayText
-                        color: Theme.text
-                        font.pixelSize: 14
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
-                    }
-
-                    background: Rectangle {
-                        implicitHeight: 38
-                        radius: Theme.radius
-                        color: Theme.bg
-                        border.width: 1
-                        border.color: langCombo.activeFocus ? Theme.accent : Theme.border
-                    }
-
-                    delegate: ItemDelegate {
-                        width: langCombo.width
-                        highlighted: langCombo.highlightedIndex === index
-                        contentItem: Text {
-                            text: I18n.languageName(modelData)
-                            color: highlighted ? Theme.accent : Theme.text
+                        Text {
+                            text: langBtn.modelData.toUpperCase()
+                            color: Theme.accent
+                            font.pixelSize: 11
+                            font.weight: Font.Black
+                            Layout.minimumWidth: 26
+                        }
+                        Text {
+                            text: (I18n.language, I18n.languageName(langBtn.modelData))
+                            color: langBtn.active ? Theme.text : Theme.textDim
                             font.pixelSize: 14
-                            verticalAlignment: Text.AlignVCenter
+                            font.weight: Font.DemiBold
+                            Layout.fillWidth: true
                         }
-                        background: Rectangle {
-                            color: highlighted ? Theme.accentAlpha(10) : Theme.surface
+                        Rectangle {
+                            radius: 3
+                            color: Theme.bgDeep
+                            implicitWidth: dirLabel.implicitWidth + 12
+                            implicitHeight: 18
+                            Text {
+                                id: dirLabel
+                                anchors.centerIn: parent
+                                text: (I18n.language, I18n.languageDir(langBtn.modelData).toUpperCase())
+                                color: Theme.textMuted
+                                font.pixelSize: 10
+                            }
                         }
                     }
 
-                    popup: Popup {
-                        y: langCombo.height + 4
-                        width: langCombo.width
-                        implicitHeight: contentItem.implicitHeight
-                        padding: 4
-                        contentItem: ListView {
-                            clip: true
-                            implicitHeight: contentHeight
-                            model: langCombo.popup.visible ? langCombo.delegateModel : null
-                            currentIndex: langCombo.highlightedIndex
-                        }
-                        background: Rectangle {
-                            radius: Theme.radius
-                            color: Theme.surface
-                            border.width: 1
-                            border.color: Theme.border
-                        }
+                    MouseArea {
+                        id: langArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: I18n.applyLanguage(langBtn.modelData)
                     }
                 }
             }
@@ -91,7 +82,9 @@ ColumnLayout {
                 color: Theme.textDim
                 font.pixelSize: 12
                 Layout.fillWidth: true
+                Layout.topMargin: 4
                 wrapMode: Text.WordWrap
             }
+        }
     }
 }

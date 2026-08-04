@@ -6,6 +6,35 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-04] Claude Opus 5 — qt6-gstreamer-player-b3 (Language panel redesign)
+
+**What Changed:**
+- Settings → Language: replaced the ComboBox dropdown with the original
+  Vue design's selectable list of language rows (2-letter code badge, name,
+  LTR/RTL tag), matching `LanguageSettings.vue` faithfully. Active language
+  gets an accent border + tinted background; clicking any row calls
+  `I18n.applyLanguage()` directly.
+- Added `I18n.languageDir(code)` (`src/i18n.rs`) — the existing
+  `available_languages()`/`rtl` surface only exposed the *current* language's
+  direction; the per-row LTR/RTL badge needed direction for every language in
+  the list, not just the active one.
+
+**Why:**
+User supplied side-by-side screenshots of the old Tauri/Vue Language and
+Shortcuts pages vs. the current Qt port and asked to close the gap. Shortcuts
+already matched closely (header, divider, reset button, keybind pills);
+Language was the real gap — a plain dropdown instead of the original's list.
+
+**Deliberately not ported:** the Vue original's two extra header icon
+buttons (open a user-locales folder in the file manager; hot-reload
+JSON locale files dropped there at runtime). Neither has a backend
+equivalent in the Qt port — `qt-shell` only loads locales once at startup
+from `OPENGG_LOCALES_DIR`. Porting the buttons faithfully would mean adding
+that runtime-reload feature first, which is out of scope for a visual-parity
+pass; flagging here rather than shipping dead buttons.
+
+---
+
 ### [2026-08-04] Claude Opus 5 — qt6-gstreamer-player-b3
 
 **What Changed:**

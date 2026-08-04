@@ -60,6 +60,13 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "availableLanguages"]
         fn available_languages(self: &Self) -> QStringList;
+
+        /// Text direction for a language code ("rtl" or "ltr"), independent of
+        /// which language is currently active — the Settings language list
+        /// shows this per row, not just for the selected language.
+        #[qinvokable]
+        #[cxx_name = "languageDir"]
+        fn language_dir(self: &Self, code: &QString) -> QString;
     }
 }
 
@@ -162,6 +169,11 @@ impl qobject::I18n {
             codes.insert(0, en);
         }
         codes.iter().map(QString::from).collect()
+    }
+
+    pub fn language_dir(&self, code: &QString) -> QString {
+        let is_rtl = *self.rtl_dirs.get(&code.to_string()).unwrap_or(&false);
+        QString::from(if is_rtl { "rtl" } else { "ltr" })
     }
 }
 
