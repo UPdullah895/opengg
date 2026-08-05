@@ -31,19 +31,34 @@ Item {
         SettingsController.setValue(key, JSON.stringify(value))
         if (rec.settingsObj.gsrEnabled) RecordingController.restart()
     }
-    readonly property var gsrQualityOptions: [
-        { value: "cbr", label: "Constant bitrate" },
-        { value: "medium", label: "Medium" },
-        { value: "high", label: "High" },
-        { value: "very_high", label: "Very high" },
-        { value: "ultra", label: "Ultra" }
-    ]
-    readonly property var gsrFpsOptions: [30, 60, 120].map(v => ({ value: v, label: v + " FPS" }))
-    readonly property var gsrReplayOptions: [15, 30, 60, 90, 120].map(v => ({ value: v, label: v + "s" }))
-    readonly property var gsrTargetOptions: [
-        { value: "screen", label: "Primary Monitor" },
-        { value: "focused", label: "Fullscreen Application" }
-    ]
+    // Each is a function, not a `readonly property var` array literal: QML's
+    // automatic dependency tracking only follows PROPERTY reads made while a
+    // binding evaluates, not invokable calls like I18n.t() — an array
+    // literal built once from I18n.t() results never re-evaluates on a live
+    // language switch (see MixerPage.qml's `tabs`/`tabLabel()` for the same
+    // landmine). The `(I18n.language, ...)` pattern at each call site below
+    // is what actually re-triggers this.
+    function gsrQualityOptions() {
+        return [
+            { value: "cbr", label: I18n.t("settings.captureGsr.qualityCbr") },
+            { value: "medium", label: I18n.t("settings.captureGsr.qualityMedium") },
+            { value: "high", label: I18n.t("settings.captureGsr.qualityHigh") },
+            { value: "very_high", label: I18n.t("settings.captureGsr.qualityVeryHigh") },
+            { value: "ultra", label: I18n.t("settings.captureGsr.qualityUltra") }
+        ]
+    }
+    function gsrFpsOptions() {
+        return [30, 60, 120].map(v => ({ value: v, label: I18n.t("dashboard.gsrFps." + v) }))
+    }
+    function gsrReplayOptions() {
+        return [15, 30, 60, 90, 120].map(v => ({ value: v, label: I18n.t("dashboard.gsrReplay." + v) }))
+    }
+    function gsrTargetOptions() {
+        return [
+            { value: "screen", label: I18n.t("dashboard.gsrTarget.screen") },
+            { value: "focused", label: I18n.t("dashboard.gsrTarget.focused") }
+        ]
+    }
 
     Component.onCompleted: RecordingController.refresh()
 
@@ -238,28 +253,28 @@ Item {
                 Text { text: (I18n.language, I18n.t("settings.captureGsr.quality")); color: Theme.textDim; font.pixelSize: 12 }
                 SelectField {
                     Layout.fillWidth: true
-                    options: rec.gsrQualityOptions
+                    options: (I18n.language, rec.gsrQualityOptions())
                     value: rec.settingsObj.gsrQuality
                     onPicked: (v) => rec.setSetting("gsrQuality", v)
                 }
                 Text { text: (I18n.language, I18n.t("settings.captureGsr.fps")); color: Theme.textDim; font.pixelSize: 12 }
                 SelectField {
                     Layout.fillWidth: true
-                    options: rec.gsrFpsOptions
+                    options: (I18n.language, rec.gsrFpsOptions())
                     value: rec.settingsObj.gsrFps
                     onPicked: (v) => rec.setSetting("gsrFps", v)
                 }
                 Text { text: (I18n.language, I18n.t("recording.buffer")); color: Theme.textDim; font.pixelSize: 12 }
                 SelectField {
                     Layout.fillWidth: true
-                    options: rec.gsrReplayOptions
+                    options: (I18n.language, rec.gsrReplayOptions())
                     value: rec.settingsObj.gsrReplaySecs
                     onPicked: (v) => rec.setSetting("gsrReplaySecs", v)
                 }
                 Text { text: (I18n.language, I18n.t("recording.target")); color: Theme.textDim; font.pixelSize: 12 }
                 SelectField {
                     Layout.fillWidth: true
-                    options: rec.gsrTargetOptions
+                    options: (I18n.language, rec.gsrTargetOptions())
                     value: rec.settingsObj.gsrMonitorTarget
                     onPicked: (v) => rec.setSetting("gsrMonitorTarget", v)
                 }

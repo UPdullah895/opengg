@@ -79,13 +79,22 @@ Rectangle {
         }
     }
     readonly property var tabs: [
-        { id: "mixer", label: "Mixer", icon: "sliders" },
-        { id: "game", label: "Game", icon: "gamepad" },
-        { id: "chat", label: "Chat", icon: "headphones" },
-        { id: "media", label: "Media", icon: "play" },
-        { id: "aux", label: "Aux", icon: "music" },
-        { id: "mic", label: "Mic", icon: "mic" },
+        { id: "mixer", icon: "sliders" },
+        { id: "game", icon: "gamepad" },
+        { id: "chat", icon: "headphones" },
+        { id: "media", icon: "play" },
+        { id: "aux", icon: "music" },
+        { id: "mic", icon: "mic" },
     ]
+    // `tabs` above is a plain JS array evaluated once — not reactive to
+    // language changes — so the label is resolved on demand here instead of
+    // baked into the model. Both the TextMetrics width measurement and the
+    // visible Text below call this, so the tab's sizing (see the landmine
+    // comments on labelW/maxLabelWidth) is measuring the actual displayed
+    // string, not always the English one.
+    function tabLabel(id) {
+        return I18n.t("mixer.tabs." + id)
+    }
     // MixerPage.vue renders SIX strips: Master + the five daemon channels.
     // Master is not returned by the daemon — audio.ts synthesizes it (volume
     // defaults to 100, unmuted), so this does the same.
@@ -224,7 +233,7 @@ Rectangle {
                         id: labelMetrics
                         font.pixelSize: 12
                         font.weight: tabBtn.isActive ? Font.DemiBold : Font.Normal
-                        text: tabBtn.modelData.label
+                        text: (I18n.language, page.tabLabel(tabBtn.modelData.id))
                     }
                     // Layout.preferredWidth, not a plain `width:` binding:
                     // this Rectangle is a Repeater delegate living directly
@@ -277,7 +286,7 @@ Rectangle {
                             // instead keeps the Text always live.
                             clip: true
                             width: page.compactTabs ? 0 : tabBtn.labelW
-                            text: tabBtn.modelData.label
+                            text: (I18n.language, page.tabLabel(tabBtn.modelData.id))
                             color: tabBtn.isActive ? Theme.text : Theme.textDim
                             font.pixelSize: 12
                             font.weight: tabBtn.isActive ? Font.DemiBold : Font.Normal
@@ -297,7 +306,7 @@ Rectangle {
                     // this is before clicking it.
                     ToolTip {
                         visible: page.compactTabs && tabArea.containsMouse
-                        text: tabBtn.modelData.label
+                        text: (I18n.language, page.tabLabel(tabBtn.modelData.id))
                         delay: 400
                     }
                 }

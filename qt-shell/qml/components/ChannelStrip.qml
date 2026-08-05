@@ -14,6 +14,13 @@ Rectangle {
     id: strip
 
     property string name: ""
+    // `name` doubles as the channel identifier passed straight to
+    // AudioController (setVolume/setMute/etc.) by the caller, so it can't be
+    // swapped for a translated string — only the label rendered below is.
+    function displayName() {
+        var t = I18n.t("mixer.channels." + strip.name.toLowerCase())
+        return t.toUpperCase()
+    }
     property real volume: 100
     property bool muted: false
     property color channelColor: Theme.accent
@@ -117,7 +124,7 @@ Rectangle {
 
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: strip.name.toUpperCase()
+            text: (I18n.language, strip.displayName())
             color: Theme.text
             font.pixelSize: 12
             font.weight: Font.Bold

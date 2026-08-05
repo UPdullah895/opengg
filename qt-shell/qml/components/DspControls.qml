@@ -75,7 +75,10 @@ ColumnLayout {
             font.weight: Font.DemiBold
         }
         Text {
-            text: root.channel
+            // root.channel is the identifier passed to EqController
+            // (applyNoiseReduction/applyNoiseGate/applyCompressor) — only
+            // this label is translated, not the property itself.
+            text: (I18n.language, I18n.t("mixer.channels." + root.channel.toLowerCase()))
             color: root.accentColor
             font.pixelSize: 13
             font.weight: Font.DemiBold

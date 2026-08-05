@@ -6,6 +6,79 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-05] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Mixer + GSR-dropdown translation gaps from user screenshots)
+
+**What Changed:**
+- User supplied 6 Arabic-mode screenshots showing the Mixer page (tab bar,
+  channel strip headers, GraphicEQ/DspControls channel labels) rendering
+  fully in English, and the GSR quality/FPS/replay-buffer dropdowns in
+  Settings → Capture & Sound and the Clips-page recording popover showing
+  stale/English option labels.
+- Root cause (Mixer): `MixerPage.qml`'s `tabs` array and every channel
+  identifier (`"Master"`, `"Game"`, `"Chat"`, `"Media"`, `"Aux"`, `"Mic"`)
+  were rendered directly as display text via `.toUpperCase()` — these
+  strings double as functional identifiers passed straight to
+  `AudioController`/`EqController` (`setVolume`, `applyEq`,
+  `applyNoiseReduction`, etc.), so they can't be swapped for translated
+  values; only the *rendered label* could change. Added `mixer.tabs.*`
+  and `mixer.channels.*` keys to `en.json`/`ar.json` and a translation
+  lookup at each render site — `MixerPage.qml`'s new `tabLabel(id)`
+  function, `ChannelStrip.qml`'s new `displayName()` function, and a
+  direct `I18n.t("mixer.channels." + channel.toLowerCase())` in
+  `GraphicEQ.qml` and `DspControls.qml` — leaving every identifier passed
+  to the controllers untouched.
+- Root cause (GSR dropdowns): the option-list properties
+  (`gsrQualityOptions`, `gsrFpsOptions`, `gsrReplayOptions`, and in
+  `RecordingControl.qml` also `gsrTargetOptions`) were `readonly property
+  var` array literals built once from `I18n.t()` calls. QML's binding
+  dependency tracking only follows *property* reads, not invokable calls
+  — so `I18n.t()` inside an array literal never registers a dependency on
+  `I18n.language`, and the array never re-evaluates on a live language
+  switch (same landmine as the earlier `MixerPage.tabs` fix in the prior
+  i18n-scan session). Converted all option lists in both
+  `RecordingControl.qml` and `CaptureSoundPanel.qml` from properties to
+  functions, and wrapped every call site — `model:`/`options:`,
+  `currentIndex:`, `onActivated:` — in the `(I18n.language, ...)`
+  comma-trick to force the re-evaluation.
+- Investigated `devices.appsShown`/`devices.appsPerRow` (flagged in one
+  of the screenshots) and found both already correctly wired through
+  `I18n.t()` in `MixerPage.qml` with matching Arabic strings present —
+  no change made; likely a reading/rendering ambiguity in the screenshot,
+  not a real gap.
+
+**Why:**
+Direct user follow-up with screenshots after the prior i18n-scan session:
+"I have included some problems with the Arabic language and some pages
+that are not covered by the translations."
+
+**Landmines & Discoveries:**
+- Confirms the `readonly property var` + `I18n.t()` dependency-tracking
+  gap (first found for `MixerPage.tabs` in the previous session) is a
+  recurring pattern, not a one-off — it hit two more files
+  (`RecordingControl.qml`, `CaptureSoundPanel.qml`) across four option
+  lists this round. The fix is always the same: property → function,
+  every call site wrapped in `(I18n.language, fn())`.
+- Channel-identifier-as-display-text is a distinct trap from the missing
+  translation issue: the string itself must stay untranslated (it's an
+  API parameter), only the label shown to the user changes — a plain
+  key-swap in the underlying property would have broken audio routing.
+
+**Verification:**
+- `cargo build` clean
+- `cargo test` — 22/22 passing
+- `qt-shell/tools/check-colors.sh` — clean
+- `qt-shell/tools/ui-shots.sh` — zero QML warnings across all 16 targets
+- Manual `OPENGG_LANG=ar` screenshots of Mixer and Settings → Capture &
+  Sound confirm the tab bar, channel headers, and GSR quality/FPS/replay
+  dropdowns now render translated Arabic text on a fresh launch. The live
+  language-switch case for the GSR dropdowns (app already running, user
+  flips language) was not separately screenshot-verified — the
+  `--screenshot` capture path only supports a fresh single-language
+  launch — but is covered by the same `(I18n.language, ...)` fix pattern
+  already confirmed working for `MixerPage.tabLabel()`.
+
+---
+
 ### [2026-08-05] Claude Sonnet 5 — qt6-gstreamer-player-b3 (i18n scan: missing translations + LTR alignment bug)
 
 **What Changed:**

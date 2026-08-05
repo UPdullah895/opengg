@@ -930,6 +930,24 @@
     "game": "Game",
     "chat": "Chat"
   },
+  "mixer": {
+    "tabs": {
+      "mixer": "Mixer",
+      "game": "Game",
+      "chat": "Chat",
+      "media": "Media",
+      "aux": "Aux",
+      "mic": "Mic"
+    },
+    "channels": {
+      "master": "Master",
+      "game": "Game",
+      "chat": "Chat",
+      "media": "Media",
+      "aux": "Aux",
+      "mic": "Mic"
+    }
+  },
   "videoPlayer": {
     "fullscreen": "Fullscreen",
     "mute": "Mute",

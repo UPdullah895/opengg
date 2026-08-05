@@ -60,22 +60,35 @@ ColumnLayout {
         return (root.s.captureTracks || []).map(t => t.source)
     }
 
-    readonly property var gsrQualityOptions: [
-        { value: "cbr", label: I18n.t("settings.captureGsr.qualityCbr") },
-        { value: "medium", label: I18n.t("settings.captureGsr.qualityMedium") },
-        { value: "high", label: I18n.t("settings.captureGsr.qualityHigh") },
-        { value: "very_high", label: I18n.t("settings.captureGsr.qualityVeryHigh") },
-        { value: "ultra", label: I18n.t("settings.captureGsr.qualityUltra") },
-    ]
-    readonly property var gsrFpsOptions: [30, 60, 120].map(v => ({ value: v, label: I18n.t("dashboard.gsrFps." + v) }))
-    readonly property var gsrReplayOptions: [
-        { value: "15", label: I18n.t("dashboard.gsrReplay.15") },
-        { value: "30", label: I18n.t("dashboard.gsrReplay.30") },
-        { value: "60", label: I18n.t("dashboard.gsrReplay.60") },
-        { value: "90", label: I18n.t("dashboard.gsrReplay.90") },
-        { value: "120", label: I18n.t("dashboard.gsrReplay.120") },
-        { value: "custom", label: I18n.t("settings.captureGsr.replayCustom") },
-    ]
+    // Functions, not `readonly property var` array literals: QML's automatic
+    // dependency tracking only follows PROPERTY reads made while a binding
+    // evaluates, not invokable calls like I18n.t() — an array built once from
+    // I18n.t() results never re-evaluates on a live language switch (same
+    // landmine as MixerPage.qml's `tabs`/`tabLabel()`). The
+    // `(I18n.language, ...)` pattern at each SelectField call site is what
+    // actually re-triggers this.
+    function gsrQualityOptions() {
+        return [
+            { value: "cbr", label: I18n.t("settings.captureGsr.qualityCbr") },
+            { value: "medium", label: I18n.t("settings.captureGsr.qualityMedium") },
+            { value: "high", label: I18n.t("settings.captureGsr.qualityHigh") },
+            { value: "very_high", label: I18n.t("settings.captureGsr.qualityVeryHigh") },
+            { value: "ultra", label: I18n.t("settings.captureGsr.qualityUltra") },
+        ]
+    }
+    function gsrFpsOptions() {
+        return [30, 60, 120].map(v => ({ value: v, label: I18n.t("dashboard.gsrFps." + v) }))
+    }
+    function gsrReplayOptions() {
+        return [
+            { value: "15", label: I18n.t("dashboard.gsrReplay.15") },
+            { value: "30", label: I18n.t("dashboard.gsrReplay.30") },
+            { value: "60", label: I18n.t("dashboard.gsrReplay.60") },
+            { value: "90", label: I18n.t("dashboard.gsrReplay.90") },
+            { value: "120", label: I18n.t("dashboard.gsrReplay.120") },
+            { value: "custom", label: I18n.t("settings.captureGsr.replayCustom") },
+        ]
+    }
 
     function estFileMb() {
         const q = root.s.gsrQuality
@@ -141,14 +154,14 @@ ColumnLayout {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
-                    Text { text: I18n.t("settings.captureGsr.quality"); color: Theme.textDim; font.pixelSize: 12; Layout.preferredWidth: 140 }
+                    Text { text: (I18n.language, I18n.t("settings.captureGsr.quality")); color: Theme.textDim; font.pixelSize: 12; Layout.preferredWidth: 140 }
                     ComboBox {
                         id: qualityCombo
                         Layout.fillWidth: true
-                        model: root.gsrQualityOptions
+                        model: (I18n.language, root.gsrQualityOptions())
                         textRole: "label"; valueRole: "value"
-                        currentIndex: root.gsrQualityOptions.findIndex(o => o.value === root.s.gsrQuality)
-                        onActivated: root.set("gsrQuality", root.gsrQualityOptions[currentIndex].value)
+                        currentIndex: root.gsrQualityOptions().findIndex(o => o.value === root.s.gsrQuality)
+                        onActivated: root.set("gsrQuality", root.gsrQualityOptions()[currentIndex].value)
                         contentItem: Text { leftPadding: 12; text: qualityCombo.displayText; color: Theme.text; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
                         background: Rectangle { implicitHeight: 32; radius: Theme.radius; color: Theme.bg; border.width: 1; border.color: qualityCombo.activeFocus ? Theme.accent : Theme.border }
                         delegate: ItemDelegate {
@@ -181,14 +194,14 @@ ColumnLayout {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
-                    Text { text: I18n.t("settings.captureGsr.fps"); color: Theme.textDim; font.pixelSize: 12; Layout.preferredWidth: 140 }
+                    Text { text: (I18n.language, I18n.t("settings.captureGsr.fps")); color: Theme.textDim; font.pixelSize: 12; Layout.preferredWidth: 140 }
                     ComboBox {
                         id: fpsCombo
                         Layout.fillWidth: true
-                        model: root.gsrFpsOptions
+                        model: (I18n.language, root.gsrFpsOptions())
                         textRole: "label"; valueRole: "value"
-                        currentIndex: root.gsrFpsOptions.findIndex(o => o.value === root.s.gsrFps)
-                        onActivated: root.set("gsrFps", root.gsrFpsOptions[currentIndex].value)
+                        currentIndex: root.gsrFpsOptions().findIndex(o => o.value === root.s.gsrFps)
+                        onActivated: root.set("gsrFps", root.gsrFpsOptions()[currentIndex].value)
                         contentItem: Text { leftPadding: 12; text: fpsCombo.displayText; color: Theme.text; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
                         background: Rectangle { implicitHeight: 32; radius: Theme.radius; color: Theme.bg; border.width: 1; border.color: fpsCombo.activeFocus ? Theme.accent : Theme.border }
                         delegate: ItemDelegate {
@@ -211,15 +224,15 @@ ColumnLayout {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
-                    Text { text: I18n.t("settings.captureGsr.replayBuffer"); color: Theme.textDim; font.pixelSize: 12; Layout.preferredWidth: 140 }
+                    Text { text: (I18n.language, I18n.t("settings.captureGsr.replayBuffer")); color: Theme.textDim; font.pixelSize: 12; Layout.preferredWidth: 140 }
                     ComboBox {
                         id: replayCombo
                         Layout.fillWidth: true
-                        model: root.gsrReplayOptions
+                        model: (I18n.language, root.gsrReplayOptions())
                         textRole: "label"; valueRole: "value"
-                        currentIndex: root.gsrReplayOptions.findIndex(o => o.value === root.s.gsrReplayPreset)
+                        currentIndex: root.gsrReplayOptions().findIndex(o => o.value === root.s.gsrReplayPreset)
                         onActivated: {
-                            const preset = root.gsrReplayOptions[currentIndex].value
+                            const preset = root.gsrReplayOptions()[currentIndex].value
                             SettingsController.setValue("gsrReplayPreset", JSON.stringify(preset))
                             if (preset !== "custom") root.set("gsrReplaySecs", Number(preset))
                         }
