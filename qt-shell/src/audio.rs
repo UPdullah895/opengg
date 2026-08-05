@@ -391,6 +391,14 @@ impl qobject::AudioController {
                 });
                 std::thread::sleep(std::time::Duration::from_millis(32));
             }
+            // Force-release any channel still ducked when the loop stops
+            // (page closed, app quitting, or a newer start_vu_stream call
+            // superseding this thread) — otherwise a duck that was active
+            // right when metering stopped never gets its release check and
+            // the channel's real PipeWire volume is left stuck at the Ear
+            // Blast target indefinitely. See ear_blast::release_all's
+            // header comment for the user-visible symptom this fixes.
+            opengg_core::ear_blast::release_all(&mut eb_state);
             let _ = qt_thread.queue(move |mut controller| {
                 controller.as_mut().set_vu_running(false);
             });

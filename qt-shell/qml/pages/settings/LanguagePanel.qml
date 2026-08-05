@@ -12,14 +12,121 @@ ColumnLayout {
 
     SettingsHeading { titleText: (I18n.language, I18n.t("settings.sections.language")) }
 
-    SettingsCard {
-        title: (I18n.language, I18n.t("settings.language.title"))
+    // Bespoke header (not SettingsCard) so the title row can host the three
+    // action buttons below — same reasoning as MixerRoutingPanel's Ear Blast
+    // Protection card, per SettingsCard.qml's own header-note comment.
+    Rectangle {
+        id: langCard
+        Layout.fillWidth: true
+        radius: Theme.radius
+        color: Theme.surface
+        border.width: 1
+        border.color: Theme.border
+        implicitHeight: langCol.implicitHeight + 40
 
         ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 6
+            id: langCol
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 14
 
-            Repeater {
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Text {
+                    text: (I18n.language, I18n.t("settings.language.title"))
+                    color: Theme.text
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                }
+                Item { Layout.fillWidth: true }
+
+                // Open the locales folder (en.json + ar.json side by side) so a
+                // translator can edit/copy the English pack directly — this is
+                // task #101's "export the English language pack" ask; opening
+                // the folder rather than just en.json also surfaces ar.json as
+                // a second reference file for whoever is adding a new language.
+                Rectangle {
+                    width: 30; height: 30
+                    radius: Theme.radius
+                    color: openFolderArea.containsMouse ? Theme.bgHover : Theme.bgInput
+                    border.width: 1
+                    border.color: Theme.border
+                    Icon { anchors.centerIn: parent; name: "folder"; size: 14; color: Theme.textDim }
+                    MouseArea {
+                        id: openFolderArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: I18n.openLocalesFolder()
+                    }
+                    ToolTip.visible: openFolderArea.containsMouse
+                    ToolTip.text: I18n.t("settings.language.addLanguage")
+                }
+
+                // Reload locale files from disk — picks up a translator's edits
+                // (or a newly-dropped locale JSON) without restarting the app.
+                Rectangle {
+                    width: 30; height: 30
+                    radius: Theme.radius
+                    color: reloadLangArea.containsMouse ? Theme.bgHover : Theme.bgInput
+                    border.width: 1
+                    border.color: Theme.border
+                    Icon { anchors.centerIn: parent; name: "refresh-cw"; size: 14; color: Theme.textDim }
+                    MouseArea {
+                        id: reloadLangArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: I18n.reloadLocales()
+                    }
+                    ToolTip.visible: reloadLangArea.containsMouse
+                    ToolTip.text: I18n.t("settings.language.reloadLanguages")
+                }
+
+                // RTL toggle — only shown for languages actually tagged RTL
+                // (their _meta.dir). Arabic defaults to LTR ("set to English"
+                // layout) like every other language; this lets the user opt
+                // back into RTL, and the choice is a separate persisted field
+                // (I18n.rtlOverride) from the active language, so switching
+                // languages later doesn't reset it.
+                Rectangle {
+                    id: rtlToggle
+                    visible: (I18n.language, I18n.languageDir(I18n.language) === "rtl")
+                    width: rtlLabel.implicitWidth + 20
+                    height: 30
+                    radius: Theme.radius
+                    color: I18n.rtlOverride ? Theme.accentAlpha(10) : (rtlArea.containsMouse ? Theme.bgHover : Theme.bgInput)
+                    border.width: 1
+                    border.color: I18n.rtlOverride ? Theme.accent : Theme.border
+                    Text {
+                        id: rtlLabel
+                        anchors.centerIn: parent
+                        text: "RTL"
+                        color: I18n.rtlOverride ? Theme.accent : Theme.textDim
+                        font.pixelSize: 11
+                        font.weight: Font.Black
+                    }
+                    MouseArea {
+                        id: rtlArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: I18n.setRtlEnabled(!I18n.rtlOverride)
+                    }
+                    ToolTip.visible: rtlArea.containsMouse
+                    ToolTip.text: I18n.t("settings.language.rtlModeHint")
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Repeater {
                 model: I18n.availableLanguages()
                 Rectangle {
                     id: langBtn
@@ -87,4 +194,5 @@ ColumnLayout {
             }
         }
     }
+}
 }

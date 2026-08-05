@@ -52,6 +52,17 @@ impl EarBlastState {
     pub fn is_active(&self, channel: &str) -> bool {
         *self.active.get(channel).unwrap_or(&false)
     }
+
+    /// Every channel currently ducked, with the volume it should be
+    /// restored to. Used by `release_all` and by callers that need to know
+    /// what's still ducked without forcing a restore.
+    pub fn active_channels(&self) -> Vec<(String, u32)> {
+        self.active
+            .iter()
+            .filter(|(_, &active)| active)
+            .filter_map(|(ch, _)| self.original_volumes.get(ch).map(|v| (ch.clone(), *v)))
+            .collect()
+    }
 }
 
 /// Reads `mixer.earBlast` out of the shared `ui-settings.json` envelope.
@@ -173,4 +184,29 @@ pub fn check(state: &mut EarBlastState, channel: &str, db: f32) {
         }
         log::info!("ear_blast: deactivated on {channel} (level={db:.1} dB < release={release_db:.1} dB) -> restored {orig_vol}%");
     }
+}
+
+/// Force-restores every currently-ducked channel, ignoring the dB/hold-time
+/// gating `check` uses. Call this when the VU-metering loop is about to
+/// stop (page navigated away, app closing) — without it, a channel ducked
+/// right before the loop stops never gets its `check()` release pass
+/// (nothing is left monitoring its level), so its PipeWire volume stays
+/// stuck at `target_pct` indefinitely. The next time metering starts back
+/// up, `AudioController.refresh()` reports that stale ducked volume as if
+/// it just happened, which is what "the channel drops to 60% when I open
+/// the Mixer page" actually was: a duck from an earlier session that never
+/// got released, not a new duck triggered by opening the page.
+pub fn release_all(state: &mut EarBlastState) {
+    for (channel, orig_vol) in state.active_channels() {
+        let Some(sink_name) = pa_object_name_for_channel(&channel) else { continue };
+        let pactl_vol = format!("{orig_vol}%");
+        let _ = if channel == "Mic" {
+            crate::subprocess::run_cmd_sync("pactl", &["set-source-volume", &sink_name, &pactl_vol])
+        } else {
+            crate::subprocess::run_cmd_sync("pactl", &["set-sink-volume", &sink_name, &pactl_vol])
+        };
+        log::info!("ear_blast: force-released {channel} on stream stop -> restored {orig_vol}%");
+    }
+    state.active.clear();
+    state.original_volumes.clear();
 }

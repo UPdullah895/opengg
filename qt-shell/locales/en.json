@@ -10,6 +10,10 @@
     "devices": "Devices",
     "settings": "Settings"
   },
+  "tray": {
+    "show": "Show OpenGG",
+    "quit": "Quit"
+  },
   "common": {
     "confirm": "Confirm",
     "cancel": "Cancel",

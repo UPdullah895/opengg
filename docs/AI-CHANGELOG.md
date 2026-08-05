@@ -6,6 +6,97 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-05] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Mixer stuck-duck, theme reset, minimize-to-tray, RTL language toggle)
+
+**What Changed:**
+- `core/src/ear_blast.rs`: added `EarBlastState::active_channels()` and
+  `release_all()` — force-restores every currently-ducked channel's real
+  PipeWire volume, bypassing the normal dB/hold-time gating.
+- `qt-shell/src/audio.rs`: `start_vu_stream`'s reader thread now calls
+  `ear_blast::release_all()` right after its main loop exits (page
+  navigated away or app quitting). Root cause of "Game/Media drop to 60%
+  when I open the Mixer": Ear Blast Protection was ducking a channel, then
+  the VU stream stopped before its next `check()` pass could release it —
+  nothing was left monitoring the level, so PipeWire's real sink volume
+  stayed stuck at the duck target indefinitely, surfacing next time as "the
+  Mixer opened at 60%."
+- `qt-shell/src/theme.rs`: added a real `reset()` qinvokable that discards
+  `theme.json`'s saved override and re-derives from built-in defaults.
+  `GeneralPanel.qml`'s reset button previously called `reload()`, which
+  only re-applies whatever is already on disk — a no-op once a custom
+  accent had been saved, since disk had nothing else to fall back to.
+- `qt-shell/qml/Main.qml`: built a full minimize-to-tray feature via
+  `Qt.labs.platform.SystemTrayIcon` (confirmed present system-wide, no new
+  native bindings needed) — a root `s`/`Connections` mirror of
+  `SettingsController.settingsJson` reads `runInBackground`; `onClosing`
+  intercepts the frameless titlebar's close button and hides instead of
+  quitting unless the setting is off or the tray menu's "Quit" was used
+  (`reallyQuit` flag). "Start on Boot" was already correct at the backend
+  level (verified `~/.config/autostart/opengg.desktop` on disk) — the real
+  gap was that Minimize to Tray had no implementation anywhere.
+- `qt-shell/src/i18n.rs`: added a `rtlOverride` qproperty (persisted
+  independently of the active language) plus `setRtlEnabled`,
+  `openLocalesFolder`, and `reloadLocales` qinvokables. Arabic (and any
+  future RTL-tagged locale) now defaults to LTR rendering like every other
+  language instead of auto-flipping the layout; a separate opt-in toggle
+  lets the user switch to RTL, and that choice survives later language
+  switches because it's a distinct persisted field, not derived from the
+  active language.
+- `qt-shell/qml/pages/settings/LanguagePanel.qml`: replaced the plain
+  `SettingsCard` title with a bespoke header row (same reasoning as
+  MixerRoutingPanel's Ear Blast Protection card — see `SettingsCard.qml`'s
+  own header-note) hosting three buttons: open the locales folder
+  (`en.json`/`ar.json` side by side, for translating or adding a new
+  language pack), reload locales from disk, and an RTL toggle pill that
+  only appears when the active language's `_meta.dir` is `"rtl"`.
+- `qt-shell/locales/en.json` / `ar.json`: added a `"tray"` block
+  (`show`/`quit` strings for the tray menu). The `"language"` block's
+  `addLanguage`/`reloadLanguages`/`rtlModeHint` keys already existed in
+  both locales (ported earlier, unused until this session).
+- `core/src/system.rs`: added `open_path()` — opens any file/dir with the
+  desktop's default handler; used by `openLocalesFolder` instead of adding
+  a duplicate `open` crate dependency to `qt-shell`.
+
+**Why:**
+Direct user report of five issues: Mixer volume unexpectedly dropping,
+General's theme reset button doing nothing, Start on Boot/Minimize to Tray
+not working, and a request to default Arabic to LTR with an opt-in RTL
+toggle plus a way to export the English strings for translation. The
+RTL/language design (independent `rtlMode` field, default `false`, header
+button layout) was not invented — it mirrors an already-designed-but-never-
+ported feature found in the archived `frontend/src/components/settings/
+LanguageSettings.vue` and `frontend/src/stores/persistence.ts`.
+
+**Landmines & Discoveries:**
+- **cxx-qt qinvokable/qproperty name collisions**: a hand-written
+  qinvokable's Rust name or its `#[cxx_name]` cannot reuse the name a
+  `#[qproperty(...)]` auto-generates for its setter (`set_<field>` in Rust,
+  camelCase `set<Field>` in C++/QML) — collides even if the invokable's own
+  QML-facing name differs. `rtl_override`'s qproperty setter is
+  `setRtlOverride`; the invokable had to become `apply_rtl_override` /
+  `cxx_name = "setRtlEnabled"` to avoid a `defined multiple times` /
+  "cannot be overloaded" build error.
+- **`self.as_mut()` + reading `self.*` in the same statement** trips
+  Rust's borrow checker under cxx-qt's `Pin<&mut Self>` pattern — hoist
+  every needed `self.*` read into a `let` binding before any
+  `self.as_mut()` mutation call.
+- **`use cxx_qt::CxxQtType;`** is required to call `.rust_mut()` on
+  `Pin<&mut Self>` for mutating a plain (non-qproperty) struct field after
+  construction — not imported by default; found by grepping `eq.rs`/
+  `clips.rs` for existing working uses.
+- The `open` crate is only a dependency of the `core` crate, not
+  `qt-shell` directly — route new "open this path" calls through a
+  `core::system` helper rather than adding a second copy of the dependency.
+
+**Verification:**
+- `cargo build` clean (qt-shell)
+- `cargo test` — 22/22 passing (including a new
+  `i18n::tests::language_and_rtl_mode_are_independent`)
+- `qt-shell/tools/check-colors.sh` — clean
+- `qt-shell/tools/ui-shots.sh` — zero QML warnings
+
+---
+
 ### [2026-08-05] Claude Sonnet 5 — qt6-gstreamer-player-b3 (fillWidth-wrapper bug, round 2: ShortcutsPanel + MixerRoutingPanel)
 
 **What Changed:**

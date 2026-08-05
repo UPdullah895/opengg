@@ -36,6 +36,13 @@ pub fn reveal_in_folder(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Open any path (file or directory) with the desktop's default handler —
+/// e.g. the locales folder, so a translator can open `en.json` in their
+/// text editor and see `ar.json` alongside it as a second reference.
+pub fn open_path(path: &std::path::Path) -> Result<(), String> {
+    open::that(path).map_err(|e| format!("{e}"))
+}
+
 /// Returns true if the XDG autostart entry for OpenGG exists.
 pub fn get_autostart() -> Result<bool, String> {
     let desktop = dirs::home_dir()

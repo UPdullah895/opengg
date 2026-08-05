@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Qt.labs.platform as Labs
 import com.opengg.app
 
 ApplicationWindow {
@@ -22,6 +23,56 @@ ApplicationWindow {
 
     // Current navigation page
     property string currentPage: "home"
+
+    // Settings → General → "Minimize to Tray" was persisted but nothing
+    // ever read it — the close button always fully quit regardless of the
+    // toggle. `s` mirrors SettingsController's JSON the same way every
+    // settings panel does, just at the root so the close handler below can
+    // see it.
+    property var s: JSON.parse(SettingsController.settingsJson || "{}")
+    Connections {
+        target: SettingsController
+        function onSettingsJsonChanged() { root.s = JSON.parse(SettingsController.settingsJson || "{}") }
+    }
+    // Set right before a real quit (tray menu's Quit, or Ctrl+Q-style exits
+    // if added later) so onClosing lets it through instead of hiding.
+    property bool reallyQuit: false
+
+    onClosing: (close) => {
+        if (root.s.runInBackground && !root.reallyQuit) {
+            close.accepted = false
+            root.hide()
+            return
+        }
+        // Safety net for Ear Blast Protection: if the app quits while a
+        // channel is mid-duck, stopping the VU stream force-releases it
+        // back to its original volume (see ear_blast::release_all)
+        // instead of leaving PipeWire's real sink volume stuck at the
+        // duck target forever.
+        AudioController.stopVuStream()
+    }
+
+    Labs.SystemTrayIcon {
+        id: trayIcon
+        visible: true
+        icon.name: "opengg"
+        tooltip: "OpenGG"
+        onActivated: (reason) => {
+            if (reason === Labs.SystemTrayIcon.Trigger) {
+                root.visible ? root.hide() : (root.show(), root.raise(), root.requestActivate())
+            }
+        }
+        menu: Labs.Menu {
+            Labs.MenuItem {
+                text: (I18n.language, I18n.t("tray.show"))
+                onTriggered: { root.show(); root.raise(); root.requestActivate() }
+            }
+            Labs.MenuItem {
+                text: (I18n.language, I18n.t("tray.quit"))
+                onTriggered: { root.reallyQuit = true; root.close() }
+            }
+        }
+    }
 
     // RTL layout mirroring driven by the active language (§3.2). childrenInherit
     // propagates it down the whole tree; L4-exempt subtrees opt back out locally.

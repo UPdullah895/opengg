@@ -24,7 +24,18 @@ pub mod qobject {
         #[qml_element]
         #[qml_singleton]
         #[qproperty(QString, language)]
+        // Effective mirroring flag — what LayoutMirroring.enabled binds to.
+        // `rtl = languageDir(language) == "rtl" && rtlOverride`: language and
+        // direction are independent settings (matching the archived Vue
+        // app's LanguageSettings.vue), so switching to an RTL-capable
+        // language does NOT itself flip this — the user opts in via the
+        // toggle, and that choice persists across later language changes.
         #[qproperty(bool, rtl)]
+        // The raw persisted preference ("has the user turned RTL on"),
+        // independent of which language is currently active. Defaults to
+        // false — Arabic and any other RTL-tagged language render LTR
+        // ("like English") until the user explicitly opts in.
+        #[qproperty(bool, rtl_override, cxx_name = "rtlOverride")]
         type I18n = super::I18nRust;
 
         /// Translate a dotted catalog key (e.g. "nav.home") for the current
@@ -67,10 +78,33 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "languageDir"]
         fn language_dir(self: &Self, code: &QString) -> QString;
+
+        /// User-facing RTL toggle (Language panel, shown only when the
+        /// active language is RTL-capable). Persists independently of
+        /// `language` and re-derives the effective `rtl` mirroring flag.
+        #[qinvokable]
+        #[cxx_name = "setRtlEnabled"]
+        fn apply_rtl_override(self: Pin<&mut Self>, enabled: bool);
+
+        /// Opens the locales directory in the desktop file manager — the
+        /// same directory `en.json` (the reference translation) lives in
+        /// and the same one new `<code>.json` language packs are loaded
+        /// from, so "translate en.json" and "drop your translation here"
+        /// are the same folder.
+        #[qinvokable]
+        #[cxx_name = "openLocalesFolder"]
+        fn open_locales_folder(self: &Self);
+
+        /// Re-scans the locales directory so a language pack dropped in
+        /// while the app is running becomes selectable without a restart.
+        #[qinvokable]
+        #[cxx_name = "reloadLocales"]
+        fn reload_locales(self: Pin<&mut Self>);
     }
 }
 
 use core::pin::Pin;
+use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QString, QStringList};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -78,6 +112,7 @@ use std::path::{Path, PathBuf};
 pub struct I18nRust {
     language: QString,
     rtl: bool,
+    rtl_override: bool,
     // Non-property internal state: flattened catalogs + metadata.
     catalogs: HashMap<String, HashMap<String, String>>,
     /// Unflattened parsed catalogs, so `tRaw` can return arrays/objects.
@@ -96,10 +131,18 @@ impl Default for I18nRust {
             .filter(|c| catalogs.contains_key(c))
             .or_else(|| read_settings_language(&settings_path()).filter(|c| catalogs.contains_key(c)))
             .unwrap_or_else(|| "en".to_string());
-        let rtl = *rtl_dirs.get(&initial).unwrap_or(&false);
+        // Direction is an independent persisted preference (`settings.rtlMode`
+        // in the shared ui-settings.json, default false) — NOT auto-derived
+        // from the language's own `_meta.dir`. Matches the archived Vue
+        // app's LanguageSettings.vue: selecting Arabic doesn't itself turn
+        // RTL on, the user opts in via the toggle, and that choice survives
+        // later language switches.
+        let rtl_override = read_settings_rtl_mode(&settings_path()).unwrap_or(false);
+        let lang_is_rtl = *rtl_dirs.get(&initial).unwrap_or(&false);
         Self {
             language: QString::from(&initial),
-            rtl,
+            rtl: lang_is_rtl && rtl_override,
+            rtl_override,
             catalogs,
             trees,
             names,
@@ -145,12 +188,50 @@ impl qobject::I18n {
         if !self.catalogs.contains_key(&code) {
             return;
         }
-        let rtl = *self.rtl_dirs.get(&code).unwrap_or(&false);
+        // Language and direction are independent — switching language never
+        // touches rtl_override, it only re-derives the effective flag against
+        // whatever the user already chose for RTL.
+        let lang_is_rtl = *self.rtl_dirs.get(&code).unwrap_or(&false);
+        let rtl_override = self.rtl_override;
         self.as_mut().set_language(QString::from(&code));
-        self.as_mut().set_rtl(rtl);
-        // Persist to the shared ui-settings.json so the choice survives restart
-        // and stays compatible with the Tauri UI (R11 / Phase 1 acceptance).
-        write_settings_language(&settings_path(), &code, rtl);
+        self.as_mut().set_rtl(lang_is_rtl && rtl_override);
+        write_settings_language(&settings_path(), &code);
+    }
+
+    pub fn apply_rtl_override(mut self: Pin<&mut Self>, enabled: bool) {
+        let lang_is_rtl = *self.rtl_dirs.get(&self.language.to_string()).unwrap_or(&false);
+        self.as_mut().set_rtl_override(enabled);
+        self.as_mut().set_rtl(lang_is_rtl && enabled);
+        write_settings_rtl_mode(&settings_path(), enabled);
+    }
+
+    pub fn open_locales_folder(&self) {
+        let dir = locales_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = opengg_core::system::open_path(&dir);
+    }
+
+    pub fn reload_locales(mut self: Pin<&mut Self>) {
+        let (catalogs, trees, names, rtl_dirs) = load_catalogs();
+        // If the currently-active language vanished (its file was renamed
+        // or deleted), fall back to English rather than translating
+        // everything to raw keys.
+        let code = if catalogs.contains_key(&self.language.to_string()) {
+            self.language.to_string()
+        } else {
+            "en".to_string()
+        };
+        let lang_is_rtl = *rtl_dirs.get(&code).unwrap_or(&false);
+        let rtl_override = self.rtl_override;
+
+        let mut s = self.as_mut().rust_mut();
+        s.catalogs = catalogs;
+        s.trees = trees;
+        s.names = names;
+        s.rtl_dirs = rtl_dirs;
+
+        self.as_mut().set_language(QString::from(&code));
+        self.as_mut().set_rtl(lang_is_rtl && rtl_override);
     }
 
     pub fn language_name(&self, code: &QString) -> QString {
@@ -184,11 +265,19 @@ type Catalogs = (
     HashMap<String, bool>,
 );
 
+/// Dev default: the crate's bundled locales. Override with OPENGG_LOCALES_DIR
+/// (an installed share path in production). This is deliberately the single
+/// directory both `load_catalogs` reads from and `open_locales_folder`
+/// opens — a language pack dropped in by a translator is already in the
+/// right place, no separate "user locales" merge layer needed.
+fn locales_dir() -> PathBuf {
+    std::env::var("OPENGG_LOCALES_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/locales")))
+}
+
 fn load_catalogs() -> Catalogs {
-    // Dev default: the crate's bundled locales. Override with OPENGG_LOCALES_DIR
-    // (an installed share path in production; user locales are merged later).
-    let dir = std::env::var("OPENGG_LOCALES_DIR")
-        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/locales").to_string());
+    let dir = locales_dir();
 
     let mut catalogs = HashMap::new();
     let mut trees = HashMap::new();
@@ -284,10 +373,19 @@ fn read_settings_language(path: &Path) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Write `settings.language` and `settings.rtlMode` into the shared settings
-/// file, **preserving every other key** (reads the whole document, edits only
-/// those two fields, writes it back). Creates the file if absent.
-fn write_settings_language(path: &Path, code: &str, rtl: bool) {
+/// Read `settings.rtlMode` from the shared settings file, if present.
+/// Independent of `language` — see the header comment on `I18nRust`'s
+/// `rtl_override` field.
+fn read_settings_rtl_mode(path: &Path) -> Option<bool> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("settings")?.get("rtlMode")?.as_bool()
+}
+
+/// Merge one key into `settings.<key>` in the shared settings file,
+/// **preserving every other key** (reads the whole document, edits only
+/// that one field, writes it back). Creates the file if absent.
+fn write_settings_field(path: &Path, key: &str, value: serde_json::Value) {
     let mut root: serde_json::Value = std::fs::read_to_string(path)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
@@ -302,8 +400,7 @@ fn write_settings_language(path: &Path, code: &str, rtl: bool) {
         *settings = serde_json::json!({});
     }
     let s = settings.as_object_mut().expect("settings is an object");
-    s.insert("language".into(), serde_json::Value::String(code.to_string()));
-    s.insert("rtlMode".into(), serde_json::Value::Bool(rtl));
+    s.insert(key.to_string(), value);
 
     if let Ok(text) = serde_json::to_string_pretty(&root) {
         if let Some(parent) = path.parent() {
@@ -313,9 +410,22 @@ fn write_settings_language(path: &Path, code: &str, rtl: bool) {
     }
 }
 
+/// Persist just `settings.language` — direction is a separate, independent
+/// preference (`write_settings_rtl_mode`), never touched by a language
+/// switch.
+fn write_settings_language(path: &Path, code: &str) {
+    write_settings_field(path, "language", serde_json::Value::String(code.to_string()));
+}
+
+/// Persist just `settings.rtlMode` — the user's RTL toggle choice,
+/// independent of which language is active.
+fn write_settings_rtl_mode(path: &Path, enabled: bool) {
+    write_settings_field(path, "rtlMode", serde_json::Value::Bool(enabled));
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{read_settings_language, write_settings_language};
+    use super::{read_settings_language, read_settings_rtl_mode, write_settings_language, write_settings_rtl_mode};
 
     #[test]
     fn language_round_trips_and_preserves_other_keys() {
@@ -328,12 +438,11 @@ mod tests {
         )
         .unwrap();
 
-        write_settings_language(&path, "ar", true);
+        write_settings_language(&path, "ar");
 
         assert_eq!(read_settings_language(&path).as_deref(), Some("ar"));
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(v["settings"]["rtlMode"], serde_json::json!(true));
         // untouched keys survive
         assert_eq!(v["settings"]["tutorialSeen"], serde_json::json!(true));
         assert_eq!(v["_schemaVersion"], serde_json::json!(3));
@@ -348,9 +457,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("ui-settings.json");
 
-        write_settings_language(&path, "ar", true);
+        write_settings_language(&path, "ar");
 
         assert_eq!(read_settings_language(&path).as_deref(), Some("ar"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The whole point of splitting these into two functions: switching
+    /// language must never touch the independently-persisted rtlMode
+    /// preference, and vice versa.
+    #[test]
+    fn language_and_rtl_mode_are_independent() {
+        let dir = std::env::temp_dir().join(format!("opengg-i18n-rtl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ui-settings.json");
+
+        write_settings_rtl_mode(&path, true);
+        write_settings_language(&path, "ar");
+        write_settings_language(&path, "en");
+
+        assert_eq!(read_settings_language(&path).as_deref(), Some("en"));
+        assert_eq!(read_settings_rtl_mode(&path), Some(true));
+
+        write_settings_rtl_mode(&path, false);
+        assert_eq!(read_settings_language(&path).as_deref(), Some("en"));
+        assert_eq!(read_settings_rtl_mode(&path), Some(false));
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

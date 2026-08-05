@@ -111,7 +111,10 @@ ColumnLayout {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: ThemeController.reload()
+                    // reload() just re-applies whatever's already on disk —
+                    // a no-op once a custom accent had been saved. reset()
+                    // actually discards the saved override.
+                    onClicked: ThemeController.reset()
                 }
             }
         }

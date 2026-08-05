@@ -60,6 +60,14 @@ pub mod qobject {
         /// Persist a new accent color + dark/light mode, then re-derive.
         #[qinvokable]
         fn save(self: Pin<&mut Self>, accent_hex: QString, dark: bool);
+
+        /// Discard every saved override in theme.json and re-derive from
+        /// built-in defaults. The General page's reset button used to call
+        /// `reload()`, which only re-applies whatever is *currently on
+        /// disk* — a no-op once a custom accent had already been saved,
+        /// since there was nothing else to fall back to.
+        #[qinvokable]
+        fn reset(self: Pin<&mut Self>);
     }
 }
 
@@ -330,6 +338,11 @@ impl qobject::ThemeController {
         if let Ok(s) = serde_json::to_string_pretty(&v) {
             let _ = opengg_core::settings::save_theme(&s);
         }
+        self.reload();
+    }
+
+    pub fn reset(self: Pin<&mut Self>) {
+        let _ = opengg_core::settings::save_theme("{}");
         self.reload();
     }
 }
