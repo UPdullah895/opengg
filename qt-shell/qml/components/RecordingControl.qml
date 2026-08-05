@@ -203,7 +203,7 @@ Item {
                     border.color: Theme.danger
                     Text {
                         anchors.centerIn: parent
-                        text: "Save Clip"
+                        text: (I18n.language, I18n.t("recording.saveClip"))
                         color: Theme.danger
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -222,7 +222,7 @@ Item {
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Text {
-                text: "QUICK SETTINGS"
+                text: (I18n.language, I18n.t("recording.quickSettings").toUpperCase())
                 color: Theme.textMuted
                 font.pixelSize: 10
                 font.weight: Font.Bold
@@ -235,28 +235,28 @@ Item {
                 columnSpacing: 8
                 rowSpacing: 7
 
-                Text { text: "Quality"; color: Theme.textDim; font.pixelSize: 12 }
+                Text { text: (I18n.language, I18n.t("settings.captureGsr.quality")); color: Theme.textDim; font.pixelSize: 12 }
                 SelectField {
                     Layout.fillWidth: true
                     options: rec.gsrQualityOptions
                     value: rec.settingsObj.gsrQuality
                     onPicked: (v) => rec.setSetting("gsrQuality", v)
                 }
-                Text { text: "FPS"; color: Theme.textDim; font.pixelSize: 12 }
+                Text { text: (I18n.language, I18n.t("settings.captureGsr.fps")); color: Theme.textDim; font.pixelSize: 12 }
                 SelectField {
                     Layout.fillWidth: true
                     options: rec.gsrFpsOptions
                     value: rec.settingsObj.gsrFps
                     onPicked: (v) => rec.setSetting("gsrFps", v)
                 }
-                Text { text: "Buffer"; color: Theme.textDim; font.pixelSize: 12 }
+                Text { text: (I18n.language, I18n.t("recording.buffer")); color: Theme.textDim; font.pixelSize: 12 }
                 SelectField {
                     Layout.fillWidth: true
                     options: rec.gsrReplayOptions
                     value: rec.settingsObj.gsrReplaySecs
                     onPicked: (v) => rec.setSetting("gsrReplaySecs", v)
                 }
-                Text { text: "Target"; color: Theme.textDim; font.pixelSize: 12 }
+                Text { text: (I18n.language, I18n.t("recording.target")); color: Theme.textDim; font.pixelSize: 12 }
                 SelectField {
                     Layout.fillWidth: true
                     options: rec.gsrTargetOptions

@@ -203,6 +203,7 @@ ColumnLayout {
                 }
             }
             Text {
+                horizontalAlignment: Text.AlignLeft
                 text: (I18n.language, I18n.t("settings.dangerZone.subtitle"))
                 color: Theme.textDim
                 font.pixelSize: 12

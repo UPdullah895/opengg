@@ -387,7 +387,7 @@ Rectangle {
                     spacing: 10
 
                     Text {
-                        text: "INFO"
+                        text: (I18n.language, I18n.t("common.info").toUpperCase())
                         color: Theme.textMuted
                         font.pixelSize: 11
                         font.weight: Font.Bold
@@ -730,7 +730,7 @@ Rectangle {
         Text {
             id: shotText
             anchors.centerIn: parent
-            text: "Frame saved"
+            text: (I18n.language, I18n.t("editor.frameSaved"))
             color: Theme.text
             font.pixelSize: 12
         }

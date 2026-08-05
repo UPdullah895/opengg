@@ -19,7 +19,10 @@
     "cancel": "Cancel",
     "confirmDelete": "Confirm Deletion",
     "close": "Close",
-    "copy": "Copy"
+    "copy": "Copy",
+    "beta": "Beta",
+    "info": "Info",
+    "notAvailableInQt": "Not yet available in the Qt UI — use the Tauri app for this section."
   },
   "editor": {
     "masterVolume": "Volume — affects all tracks (preview & export)",
@@ -39,7 +42,8 @@
     "exporting": "Exporting…",
     "cancelExport": "Cancel Export",
     "targetSize": "Target Size",
-    "original": "Original"
+    "original": "Original",
+    "frameSaved": "Frame saved"
   },
   "sidebar": {
     "tip": "Tip: You can customize your shortcuts from the settings page."
@@ -512,7 +516,8 @@
       "crashWarning": "Recording stopped unexpectedly. Check logs for details.",
       "crashRestarting": "Recording crashed — restarting…",
       "errorGeneric": "Recording error: {message}",
-      "errorMissingAudio": "Audio source not found: {source}"
+      "errorMissingAudio": "Audio source not found: {source}",
+      "estUsage": "Est. RAM: ~{ram} MB  |  File: ~{file} MB"
     },
     "notificationsPage": {
       "title": "Notifications",
@@ -620,6 +625,18 @@
       "copyPath": "Copy Path",
       "delete": "Delete"
     },
+    "emptyTitle": "No clips yet",
+    "emptyHint": "Records saved from the replay buffer will appear here.",
+    "noMatchTitle": "No clips match",
+    "noMatchHint": "Try a different search or game filter.",
+    "deleteConfirm": {
+      "title": "Delete clip?",
+      "body": "This permanently deletes “{name}” from disk."
+    },
+    "bulkDeleteConfirm": {
+      "title": "Delete {count} clips?",
+      "body": "This permanently deletes every selected clip from disk."
+    },
     "sortOptions": {
       "newest": "Newest",
       "oldest": "Oldest",
@@ -723,7 +740,9 @@
     "quickSettings": "Quick Settings",
     "saveClip": "Save Clip",
     "restartSuccess": "Recording restarted successfully",
-    "restartFailed": "Failed to restart recording: {error}"
+    "restartFailed": "Failed to restart recording: {error}",
+    "buffer": "Buffer",
+    "target": "Target"
   },
   "devices": {
     "title": "Devices",
@@ -913,7 +932,8 @@
   },
   "videoPlayer": {
     "fullscreen": "Fullscreen",
-    "mute": "Mute"
+    "mute": "Mute",
+    "loading": "Loading…"
   },
   "mouse": {
     "lmb": "LMB",

@@ -153,6 +153,7 @@ ColumnLayout {
                             Layout.minimumWidth: 26
                         }
                         Text {
+                            horizontalAlignment: Text.AlignLeft
                             text: (I18n.language, I18n.languageName(langBtn.modelData))
                             color: langBtn.active ? Theme.text : Theme.textDim
                             font.pixelSize: 14
@@ -185,6 +186,7 @@ ColumnLayout {
             }
 
             Text {
+                horizontalAlignment: Text.AlignLeft
                 text: (I18n.language, I18n.t("settings.language.hint"))
                 color: Theme.textDim
                 font.pixelSize: 12

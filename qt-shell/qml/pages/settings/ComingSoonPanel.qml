@@ -9,7 +9,7 @@ ColumnLayout {
 
     SettingsHeading { titleText: sectionTitle }
     Text {
-        text: "Not yet available in the Qt UI — use the Tauri app for this section."
+        text: (I18n.language, I18n.t("common.notAvailableInQt"))
         color: Theme.textDim
         font.pixelSize: 13
     }

@@ -5,7 +5,7 @@
   },
   "nav": {
     "home": "الرئيسية",
-    "mixer": "الخلاط",
+    "mixer": "المكسر",
     "clips": "المقاطع",
     "devices": "الأجهزة",
     "settings": "الإعدادات"
@@ -19,7 +19,10 @@
     "cancel": "إلغاء",
     "confirmDelete": "تأكيد الحذف",
     "close": "إغلاق",
-    "copy": "نسخ"
+    "copy": "نسخ",
+    "beta": "تجريبي",
+    "info": "معلومات",
+    "notAvailableInQt": "غير متوفر بعد في واجهة Qt — استخدم تطبيق Tauri لهذا القسم."
   },
   "editor": {
     "masterVolume": "مستوى الصوت — يؤثر على جميع المسارات (المعاينة والتصدير)",
@@ -39,7 +42,8 @@
     "exporting": "جارٍ التصدير…",
     "cancelExport": "إلغاء التصدير",
     "targetSize": "الحجم المستهدف",
-    "original": "الأصلي"
+    "original": "الأصلي",
+    "frameSaved": "تم حفظ الإطار"
   },
   "sidebar": {
     "tip": "نصيحة: يمكنك تخصيص اختصاراتك من صفحة الإعدادات."
@@ -599,7 +603,8 @@
       "crashWarning": "توقف التسجيل بشكل غير متوقع. تحقق من السجلات لمزيد من التفاصيل.",
       "crashRestarting": "انهيار التسجيل — إعادة التشغيل…",
       "errorGeneric": "خطأ في التسجيل: {message}",
-      "errorMissingAudio": "مصدر الصوت غير موجود: {source}"
+      "errorMissingAudio": "مصدر الصوت غير موجود: {source}",
+      "estUsage": "الذاكرة المقدرة: ~{ram} ميجابايت  |  الملف: ~{file} ميجابايت"
     },
     "recorderInstall": {
       "installed": "gpu-screen-recorder مثبّت.",
@@ -652,6 +657,18 @@
       "showInFolder": "إظهار في المجلد",
       "copyPath": "نسخ المسار",
       "delete": "حذف"
+    },
+    "emptyTitle": "لا توجد مقاطع بعد",
+    "emptyHint": "ستظهر هنا التسجيلات المحفوظة من مخزن الإعادة.",
+    "noMatchTitle": "لا توجد مقاطع مطابقة",
+    "noMatchHint": "جرّب بحثاً مختلفاً أو غيّر عامل تصفية اللعبة.",
+    "deleteConfirm": {
+      "title": "حذف المقطع؟",
+      "body": "سيؤدي هذا إلى حذف \"{name}\" نهائياً من القرص."
+    },
+    "bulkDeleteConfirm": {
+      "title": "حذف {count} مقاطع؟",
+      "body": "سيؤدي هذا إلى حذف كل المقاطع المحددة نهائياً من القرص."
     },
     "sortOptions": {
       "newest": "الأحدث",
@@ -756,7 +773,9 @@
     "quickSettings": "إعدادات سريعة",
     "saveClip": "حفظ المقطع",
     "restartSuccess": "تمت إعادة تشغيل التسجيل بنجاح",
-    "restartFailed": "فشل إعادة تشغيل التسجيل: {error}"
+    "restartFailed": "فشل إعادة تشغيل التسجيل: {error}",
+    "buffer": "المخزن المؤقت",
+    "target": "الهدف"
   },
   "devices": {
     "title": "الأجهزة",
@@ -913,7 +932,8 @@
   },
   "videoPlayer": {
     "fullscreen": "ملء الشاشة",
-    "mute": "كتم"
+    "mute": "كتم",
+    "loading": "جارٍ التحميل…"
   },
   "mouse": {
     "lmb": "LMB",

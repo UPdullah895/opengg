@@ -6,6 +6,90 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-05] Claude Sonnet 5 — qt6-gstreamer-player-b3 (i18n scan: missing translations + LTR alignment bug)
+
+**What Changed:**
+- Root-caused "some texts move to the right even in LTR mode": Qt's `Text`
+  element auto-detects RTL-script content (Arabic) via the Unicode BiDi
+  algorithm and right-aligns itself *within its own box* whenever
+  `horizontalAlignment` isn't explicitly set — independent of
+  `LayoutMirroring`/`I18n.rtl`. Any `Text { Layout.fillWidth: true }`
+  bound to a translated string was therefore silently right-anchoring
+  itself the moment its content happened to be Arabic, even with the
+  app's actual layout direction still LTR. Scanned every `qml/**/*.qml`
+  file for `Text` blocks combining `Layout.fillWidth: true` (or
+  `width: parent.width`) + an `I18n.t()`-sourced `text:` with no explicit
+  `horizontalAlignment`, and added `horizontalAlignment: Text.AlignLeft`
+  to all 28 matches across `Sidebar.qml`, `DevicesPage.qml`,
+  `HomePage.qml`, `MixerPage.qml`, `CaptureSoundPanel.qml`,
+  `ExtensionsPanel.qml`, `AboutPanel.qml`, `StoragePanel.qml`,
+  `MixerRoutingPanel.qml`, `LanguagePanel.qml`, `DspControls.qml`,
+  `RecorderInstallHelper.qml` — explicit `AlignLeft` still mirrors
+  correctly to `AlignRight` when true RTL mode (the toggle from the
+  previous session) is turned on, since `LayoutMirroring` flips
+  *explicit* Left/Right alignment but does nothing for content-based
+  auto-alignment.
+- Scanned for hardcoded English strings never routed through `I18n.t()`
+  (and therefore invisible to translators — the other half of the user's
+  report) by diffing every `I18n.t("key")` call site against `en.json`'s
+  flattened key set, plus a manual grep for bare `text:`/`placeholderText:`
+  literals. Wired ~35 previously-hardcoded strings to the catalog across
+  `ClipsPage.qml` (empty states, rename/delete confirmation dialogs,
+  search placeholder), `ExportDialog.qml` (target size/codec section
+  labels — these already had unused matching keys from an earlier port),
+  `RecordingControl.qml`, `DevicesPage.qml`, `ClipEditorPage.qml`,
+  `VideoPlayer.qml` (loading label only — no playback logic touched),
+  `CaptureSoundPanel.qml`, `ExtensionsPanel.qml`, `Titlebar.qml` (Beta
+  badge), `ComingSoonPanel.qml`. Added the genuinely-missing keys (with
+  Arabic translations) to both `en.json` and `ar.json`: `common.beta`,
+  `common.info`, `common.notAvailableInQt`, `editor.frameSaved`,
+  `clips.emptyTitle/emptyHint/noMatchTitle/noMatchHint/deleteConfirm.*/
+  bulkDeleteConfirm.*`, `recording.buffer/target`,
+  `videoPlayer.loading`, `settings.captureGsr.estUsage`. Deliberately
+  left untranslated: brand names (OpenGG/GitHub/Discord), the version
+  prefix, single-character icon glyphs, and the RTL toggle's "RTL" badge
+  (consistent with the pre-existing untranslated LTR/RTL direction badge
+  next to every language row).
+- Verified key parity both directions (`en.json` keys ⊆ used keys ⊆
+  `ar.json` keys) via a small Python diff script rather than by eye,
+  after every edit round.
+
+**Why:**
+Direct user follow-up after the RTL/language-toggle session: some UI
+text still showed raw untranslated strings, and some text visibly sat
+flush-right in the settings while the app was in plain English/LTR mode.
+
+**Landmines & Discoveries:**
+- **A one-line `Text { ... }` block edited by a line-based insertion
+  script** (used for the 28-file alignment sweep) can silently produce a
+  syntactically-valid-looking but semantically-broken file: inserting a
+  new property line "after the opening line" lands it as a *sibling*
+  property of the block's parent, not inside the `Text{}}`, if the whole
+  block was written on one line. This doesn't throw a QML syntax error at
+  parse time for some property names, but for `horizontalAlignment` on a
+  non-Text parent it throws `Cannot assign to non-existent property` and
+  crashes the QML engine at load — caught immediately by `ui-shots.sh`
+  (`cargo build` does not catch it; QML type-checking is a runtime
+  concern in this cxx-qt/QRC setup, not a compile-time one). Fixed by
+  re-scanning every insertion for a preceding single-line `Text { ... }`
+  and merging the property into that line instead.
+- Confirms the existing AGENTS.md rule that `ui-shots.sh` (with
+  `QT_FORCE_STDERR_LOGGING=1`) is the only reliable gate for QML
+  correctness — a clean `cargo build` here still shipped a page that
+  hard-crashed on load.
+
+**Verification:**
+- `cargo build` clean
+- `cargo test` — 22/22 passing
+- `qt-shell/tools/check-colors.sh` — clean
+- `qt-shell/tools/ui-shots.sh` — zero QML warnings across all 16 targets
+  (after finding and fixing the single-line-Text insertion bug above)
+- Manual `OPENGG_LANG=ar` screenshots of Home and Settings → Language
+  confirm every nav/label/heading now sits flush-left with the sidebar
+  still on the left, matching the "Arabic defaults to LTR" design intent
+
+---
+
 ### [2026-08-05] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Mixer stuck-duck, theme reset, minimize-to-tray, RTL language toggle)
 
 **What Changed:**

@@ -279,7 +279,7 @@ Rectangle {
             anchors.centerIn: parent
             visible: mp.mediaStatus === MediaPlayer.LoadingMedia
                      || mp.mediaStatus === MediaPlayer.BufferingMedia
-            text: "Loading…"
+            text: (I18n.language, I18n.t("videoPlayer.loading"))
             color: Theme.textDim
             font.pixelSize: 14
         }

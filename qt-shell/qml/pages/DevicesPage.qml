@@ -46,6 +46,7 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 Text {
+                    horizontalAlignment: Text.AlignLeft
                     text: (I18n.language, I18n.t("nav.devices"))
                     color: Theme.text
                     font.pixelSize: 26
@@ -162,7 +163,7 @@ Rectangle {
 
             Text {
                 visible: page.devices.length === 0
-                text: "No devices detected."
+                text: (I18n.language, I18n.t("devices.noDevices"))
                 color: Theme.textDim
                 font.pixelSize: 13
             }

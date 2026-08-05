@@ -128,6 +128,7 @@ ColumnLayout {
             Timer { id: copiedTimer; interval: 1500; onTriggered: root.copied = false }
 
             Text {
+                horizontalAlignment: Text.AlignLeft
                 text: (I18n.language, I18n.t("settings.installHint.gsrNote"))
                 color: Theme.textDim
                 font.pixelSize: 10

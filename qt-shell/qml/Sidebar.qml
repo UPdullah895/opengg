@@ -108,6 +108,7 @@ Rectangle {
                     }
 
                     Text {
+                        horizontalAlignment: Text.AlignLeft
                         // Reading I18n.language makes this binding re-evaluate live
                         // when the language changes (invokables alone aren't tracked).
                         text: (I18n.language, I18n.t(modelData.tkey))
@@ -168,6 +169,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
             }
             Text {
+                horizontalAlignment: Text.AlignLeft
                 width: parent.width - 26
                 text: (I18n.language, I18n.t("sidebar.tip"))
                 color: Theme.textMuted

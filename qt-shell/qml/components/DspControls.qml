@@ -144,7 +144,7 @@ ColumnLayout {
                     spacing: 1
                     Layout.fillWidth: true
                     Text { text: (I18n.language, I18n.t("dsp.noiseReduction")); color: Theme.text; font.pixelSize: 13 }
-                    Text { text: (I18n.language, I18n.t("dsp.noiseReductionDesc")); color: Theme.textDim; font.pixelSize: 10; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                    Text { text: (I18n.language, I18n.t("dsp.noiseReductionDesc")); color: Theme.textDim; font.pixelSize: 10; wrapMode: Text.WordWrap; Layout.fillWidth: true; horizontalAlignment: Text.AlignLeft }
                 }
                 ToggleSwitch { checked: root.nrEnabled; onToggled: (v) => root.setNr(v, root.nrIntensity) }
             }
@@ -187,7 +187,7 @@ ColumnLayout {
                     spacing: 1
                     Layout.fillWidth: true
                     Text { text: (I18n.language, I18n.t("dsp.noiseGate")); color: Theme.text; font.pixelSize: 13 }
-                    Text { text: (I18n.language, I18n.t("dsp.noiseGateDesc")); color: Theme.textDim; font.pixelSize: 10; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                    Text { text: (I18n.language, I18n.t("dsp.noiseGateDesc")); color: Theme.textDim; font.pixelSize: 10; wrapMode: Text.WordWrap; Layout.fillWidth: true; horizontalAlignment: Text.AlignLeft }
                 }
                 ToggleSwitch { checked: root.gateEnabled; onToggled: (v) => root.setGate(v, root.gateThreshold, root.gateAuto) }
             }
@@ -244,7 +244,7 @@ ColumnLayout {
                     spacing: 1
                     Layout.fillWidth: true
                     Text { text: (I18n.language, I18n.t("dsp.compressor")); color: Theme.text; font.pixelSize: 13 }
-                    Text { text: (I18n.language, I18n.t("dsp.compressorDesc")); color: Theme.textDim; font.pixelSize: 10; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                    Text { text: (I18n.language, I18n.t("dsp.compressorDesc")); color: Theme.textDim; font.pixelSize: 10; wrapMode: Text.WordWrap; Layout.fillWidth: true; horizontalAlignment: Text.AlignLeft }
                 }
                 ToggleSwitch { checked: root.compEnabled; onToggled: (v) => root.setComp(v, root.compLevel) }
             }

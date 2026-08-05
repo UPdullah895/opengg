@@ -174,6 +174,7 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
             Text {
+                horizontalAlignment: Text.AlignLeft
                 // MixerPage.vue's heading is "Audio Mixer", not the nav label.
             text: (I18n.language, I18n.t("dashboard.audioMixer"))
                 color: Theme.text
@@ -528,6 +529,7 @@ Rectangle {
                 RowLayout {
                     Layout.fillWidth: true
                     Text {
+                        horizontalAlignment: Text.AlignLeft
                         text: (I18n.language, I18n.t("chatMix.title"))
                         color: Theme.textDim
                         font.pixelSize: 11
@@ -794,6 +796,7 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: 8
                     Text {
+                        horizontalAlignment: Text.AlignLeft
                         text: (I18n.language, I18n.t("devices.appsShown"))
                         color: Theme.text
                         font.pixelSize: 12
@@ -844,6 +847,7 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: 8
                     Text {
+                        horizontalAlignment: Text.AlignLeft
                         text: (I18n.language, I18n.t("devices.appsPerRow"))
                         color: Theme.text
                         font.pixelSize: 12

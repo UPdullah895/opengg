@@ -52,7 +52,7 @@ Rectangle {
             Text {
                 id: betaLabel
                 anchors.centerIn: parent
-                text: "Beta"
+                text: (I18n.language, I18n.t("common.beta"))
                 color: Theme.accent
                 font.pixelSize: 9
                 font.weight: Font.Bold

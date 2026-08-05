@@ -312,7 +312,7 @@ Rectangle {
                     verticalAlignment: TextInput.AlignVCenter
                     color: Theme.text
                     font.pixelSize: 13
-                    placeholderText: "Search clips…"
+                    placeholderText: (I18n.language, I18n.t("clips.search"))
                     placeholderTextColor: Theme.textDim
                     selectByMouse: true
                     background: Item {}
@@ -694,7 +694,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.leftMargin: 14
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Failed to load clips: " + ClipsController.error
+                text: (I18n.language, I18n.t("clips.loadError") + ": " + ClipsController.error)
                 color: Theme.text
                 font.pixelSize: 13
             }
@@ -710,14 +710,14 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: 8
                 Text {
-                    text: "No clips yet"
+                    text: (I18n.language, I18n.t("clips.emptyTitle"))
                     color: Theme.text
                     font.pixelSize: 18
                     font.weight: Font.Bold
                     Layout.alignment: Qt.AlignHCenter
                 }
                 Text {
-                    text: "Records saved from the replay buffer will appear here."
+                    text: (I18n.language, I18n.t("clips.emptyHint"))
                     color: Theme.textDim
                     font.pixelSize: 13
                     Layout.alignment: Qt.AlignHCenter
@@ -734,14 +734,14 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: 8
                 Text {
-                    text: "No clips match"
+                    text: (I18n.language, I18n.t("clips.noMatchTitle"))
                     color: Theme.text
                     font.pixelSize: 16
                     font.weight: Font.Bold
                     Layout.alignment: Qt.AlignHCenter
                 }
                 Text {
-                    text: "Try a different search or game filter."
+                    text: (I18n.language, I18n.t("clips.noMatchHint"))
                     color: Theme.textDim
                     font.pixelSize: 13
                     Layout.alignment: Qt.AlignHCenter
@@ -1061,7 +1061,7 @@ Rectangle {
                 spacing: 12
 
                 Text {
-                    text: "Rename clip"
+                    text: (I18n.language, I18n.t("clips.renameDialog.title"))
                     color: Theme.text
                     font.pixelSize: 15
                     font.weight: Font.DemiBold
@@ -1096,7 +1096,7 @@ Rectangle {
                         color: cancelR.containsMouse ? Theme.border : "transparent"
                         border.width: 1
                         border.color: Theme.border
-                        Text { anchors.centerIn: parent; text: "Cancel"; color: Theme.text; font.pixelSize: 13 }
+                        Text { anchors.centerIn: parent; text: (I18n.language, I18n.t("common.cancel")); color: Theme.text; font.pixelSize: 13 }
                         MouseArea {
                             id: cancelR
                             anchors.fill: parent
@@ -1108,7 +1108,7 @@ Rectangle {
                     Rectangle {
                         width: 84; height: 32; radius: Theme.radius
                         color: Theme.accent
-                        Text { anchors.centerIn: parent; text: "Save"; color: "#ffffff"; font.pixelSize: 13 }
+                        Text { anchors.centerIn: parent; text: (I18n.language, I18n.t("clips.renameDialog.save")); color: "#ffffff"; font.pixelSize: 13 }
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
@@ -1156,16 +1156,16 @@ Rectangle {
                 spacing: 12
 
                 Text {
-                    text: page.bulkDeleteTarget
-                          ? "Delete " + page.bulkDeleteTarget.length + " clips?"
-                          : ""
+                    text: (I18n.language, page.bulkDeleteTarget
+                          ? I18n.t("clips.bulkDeleteConfirm.title").replace("{count}", page.bulkDeleteTarget.length)
+                          : "")
                     color: Theme.text
                     font.pixelSize: 15
                     font.weight: Font.DemiBold
                 }
                 Text {
                     width: parent.width
-                    text: "This permanently deletes every selected clip from disk."
+                    text: (I18n.language, I18n.t("clips.bulkDeleteConfirm.body"))
                     color: Theme.textDim
                     font.pixelSize: 13
                     wrapMode: Text.WordWrap
@@ -1179,7 +1179,7 @@ Rectangle {
                         color: cancelB.containsMouse ? Theme.border : "transparent"
                         border.width: 1
                         border.color: Theme.border
-                        Text { anchors.centerIn: parent; text: "Cancel"; color: Theme.text; font.pixelSize: 13 }
+                        Text { anchors.centerIn: parent; text: (I18n.language, I18n.t("common.cancel")); color: Theme.text; font.pixelSize: 13 }
                         MouseArea {
                             id: cancelB
                             anchors.fill: parent
@@ -1191,7 +1191,7 @@ Rectangle {
                     Rectangle {
                         width: 84; height: 32; radius: Theme.radius
                         color: Theme.danger
-                        Text { anchors.centerIn: parent; text: "Delete"; color: "#ffffff"; font.pixelSize: 13 }
+                        Text { anchors.centerIn: parent; text: (I18n.language, I18n.t("clips.contextMenu.delete")); color: "#ffffff"; font.pixelSize: 13 }
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
@@ -1232,16 +1232,16 @@ Rectangle {
                 spacing: 12
 
                 Text {
-                    text: "Delete clip?"
+                    text: (I18n.language, I18n.t("clips.deleteConfirm.title"))
                     color: Theme.text
                     font.pixelSize: 15
                     font.weight: Font.DemiBold
                 }
                 Text {
                     width: parent.width
-                    text: page.deleteTarget
-                          ? "This permanently deletes “" + page.deleteTarget.title + "” from disk."
-                          : ""
+                    text: (I18n.language, page.deleteTarget
+                          ? I18n.t("clips.deleteConfirm.body").replace("{name}", page.deleteTarget.title)
+                          : "")
                     color: Theme.textDim
                     font.pixelSize: 13
                     wrapMode: Text.WordWrap
@@ -1255,7 +1255,7 @@ Rectangle {
                         color: cancelD.containsMouse ? Theme.border : "transparent"
                         border.width: 1
                         border.color: Theme.border
-                        Text { anchors.centerIn: parent; text: "Cancel"; color: Theme.text; font.pixelSize: 13 }
+                        Text { anchors.centerIn: parent; text: (I18n.language, I18n.t("common.cancel")); color: Theme.text; font.pixelSize: 13 }
                         MouseArea {
                             id: cancelD
                             anchors.fill: parent
@@ -1267,7 +1267,7 @@ Rectangle {
                     Rectangle {
                         width: 84; height: 32; radius: Theme.radius
                         color: Theme.danger
-                        Text { anchors.centerIn: parent; text: "Delete"; color: "#ffffff"; font.pixelSize: 13 }
+                        Text { anchors.centerIn: parent; text: (I18n.language, I18n.t("clips.contextMenu.delete")); color: "#ffffff"; font.pixelSize: 13 }
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor

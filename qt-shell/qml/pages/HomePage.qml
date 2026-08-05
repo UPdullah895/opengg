@@ -597,6 +597,7 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 Text {
+                    horizontalAlignment: Text.AlignLeft
                     text: (I18n.language, I18n.t("dashboard.recordingSettings"))
                     color: Theme.textMuted
                     font.pixelSize: 10

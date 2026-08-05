@@ -235,6 +235,7 @@ ColumnLayout {
             RowLayout {
                 Layout.fillWidth: true
                 Text {
+                    horizontalAlignment: Text.AlignLeft
                     text: (I18n.language, I18n.t("settings.deps.title"))
                     color: Theme.text
                     font.pixelSize: 14
@@ -351,6 +352,7 @@ ColumnLayout {
                                 }
                             }
                             Text {
+                                horizontalAlignment: Text.AlignLeft
                                 visible: !!root.installCommand(depRow.modelData.binary).note
                                 text: (I18n.language, I18n.t(root.installCommand(depRow.modelData.binary).note))
                                 color: Theme.textDim
@@ -384,6 +386,7 @@ ColumnLayout {
             RowLayout {
                 Layout.fillWidth: true
                 Text {
+                    horizontalAlignment: Text.AlignLeft
                     text: (I18n.language, I18n.t("settings.deviceAccess.title"))
                     color: Theme.text
                     font.pixelSize: 14
@@ -498,6 +501,7 @@ ColumnLayout {
                                 }
                             }
                             Text {
+                                horizontalAlignment: Text.AlignLeft
                                 property string noteKey: (root.accessFixMaps[accessRow.modelData.id] || {}).note || ""
                                 visible: noteKey.length > 0
                                 text: (I18n.language, noteKey.length > 0 ? I18n.t(noteKey) : "")

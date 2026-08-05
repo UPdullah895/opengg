@@ -117,6 +117,7 @@ ColumnLayout {
                             spacing: 8
                             Icon { name: "folder"; size: 13; color: Theme.textDim }
                             Text {
+                                horizontalAlignment: Text.AlignLeft
                                 text: clipDirRow.modelData || I18n.t("settings.storage.defaultClipPath")
                                 color: Theme.text
                                 font.pixelSize: 12
@@ -250,6 +251,7 @@ ColumnLayout {
             RowLayout {
                 Layout.fillWidth: true
                 Text {
+                    horizontalAlignment: Text.AlignLeft
                     text: (I18n.language, I18n.t("settings.storage.diskUsage"))
                     color: Theme.text
                     font.pixelSize: 16

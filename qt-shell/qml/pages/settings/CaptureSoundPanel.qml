@@ -118,13 +118,14 @@ ColumnLayout {
                     color: Theme.accentAlpha(15)
                     implicitWidth: betaText.implicitWidth + 12
                     implicitHeight: 18
-                    Text { id: betaText; anchors.centerIn: parent; text: "Beta"; color: Theme.accent; font.pixelSize: 9; font.weight: Font.Bold }
+                    Text { id: betaText; anchors.centerIn: parent; text: (I18n.language, I18n.t("common.beta")); color: Theme.accent; font.pixelSize: 9; font.weight: Font.Bold }
                 }
                 InfoIcon { tooltipText: I18n.t("settings.captureGsr.hint") }
                 Item { Layout.fillWidth: true }
                 Text {
                     visible: !!root.s.gsrEnabled
-                    text: "Est. RAM: ~" + root.estRamMb() + " MB  |  File: ~" + root.estFileMb() + " MB"
+                    text: (I18n.language, I18n.t("settings.captureGsr.estUsage")
+                           .replace("{ram}", root.estRamMb()).replace("{file}", root.estFileMb()))
                     color: Theme.textDim
                     font.pixelSize: 10
                 }
@@ -281,6 +282,7 @@ ColumnLayout {
                     }
                 }
                 Text {
+                    horizontalAlignment: Text.AlignLeft
                     visible: root.isWayland && root.monitorOptions.some(o => o.value === "focused")
                     text: I18n.t("settings.captureGsr.waylandHint")
                     color: Theme.overdrive
@@ -291,7 +293,7 @@ ColumnLayout {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    Text { text: I18n.t("settings.captureGsr.autoStart"); color: Theme.textDim; font.pixelSize: 12; Layout.fillWidth: true }
+                    Text { text: I18n.t("settings.captureGsr.autoStart"); color: Theme.textDim; font.pixelSize: 12; Layout.fillWidth: true; horizontalAlignment: Text.AlignLeft }
                     InfoIcon { tooltipText: I18n.t("settings.captureGsr.autoStartTooltip") }
                     ToggleSwitch {
                         checked: !!root.s.gsrAutoStart
@@ -300,7 +302,7 @@ ColumnLayout {
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Text { text: I18n.t("settings.captureGsr.autoRestart"); color: Theme.textDim; font.pixelSize: 12; Layout.fillWidth: true }
+                    Text { text: I18n.t("settings.captureGsr.autoRestart"); color: Theme.textDim; font.pixelSize: 12; Layout.fillWidth: true; horizontalAlignment: Text.AlignLeft }
                     InfoIcon { tooltipText: I18n.t("settings.captureGsr.autoRestartTooltip") }
                     ToggleSwitch {
                         checked: !!root.s.gsrAutoRestart
@@ -418,6 +420,7 @@ ColumnLayout {
             }
 
             Text {
+                horizontalAlignment: Text.AlignLeft
                 visible: !root.s.gsrEnabled
                 text: I18n.t("settings.captureGsr.extensionsHint")
                 color: Theme.textDim
@@ -449,6 +452,7 @@ ColumnLayout {
                 spacing: 8
                 Icon { name: "alert-triangle"; size: 13; color: Theme.danger}
                 Text {
+                    horizontalAlignment: Text.AlignLeft
                     text: I18n.t("settings.deps.missingFfmpeg")
                     color: Theme.text
                     font.pixelSize: 12

@@ -158,7 +158,7 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: 7
                     Text {
-                        text: "TARGET SIZE"
+                        text: (I18n.language, I18n.t("editor.targetSize").toUpperCase())
                         color: Theme.textMuted
                         font.pixelSize: 10
                         font.weight: Font.Bold
@@ -168,7 +168,7 @@ Rectangle {
                         spacing: 8
                         Repeater {
                             model: [
-                                { label: "ORIGINAL", mb: 0 },
+                                { label: I18n.t("editor.original").toUpperCase(), mb: 0 },
                                 { label: "100MB",    mb: 100 },
                                 { label: "50MB",     mb: 50 },
                                 { label: "10MB",     mb: 10 }
@@ -208,7 +208,7 @@ Rectangle {
                             }
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: "Advanced Settings"
+                                text: (I18n.language, I18n.t("editor.advancedSettings"))
                                 color: Theme.textDim
                                 font.pixelSize: 12
                             }
@@ -238,7 +238,7 @@ Rectangle {
                             spacing: 8
 
                             Text {
-                                text: "CODEC"
+                                text: (I18n.language, I18n.t("editor.codec").toUpperCase())
                                 color: Theme.textMuted
                                 font.pixelSize: 10
                                 font.weight: Font.Bold
@@ -263,7 +263,7 @@ Rectangle {
                                 }
                             }
                             ChoiceChip {
-                                text: "ORIGINAL — NO RE-ENCODE"
+                                text: (I18n.language, I18n.t("editor.codecOriginal").toUpperCase())
                                 selected: dlg.codec === "copy"
                                 // Only meaningful at original size; a target
                                 // size requires re-encoding to reach it.

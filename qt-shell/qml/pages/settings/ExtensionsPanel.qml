@@ -165,7 +165,7 @@ ColumnLayout {
                     color: Theme.accentAlpha(15)
                     width: betaText.implicitWidth + 12
                     height: 18
-                    Text { id: betaText; anchors.centerIn: parent; text: "Beta"; color: Theme.accent; font.pixelSize: 10; font.weight: Font.DemiBold }
+                    Text { id: betaText; anchors.centerIn: parent; text: (I18n.language, I18n.t("common.beta")); color: Theme.accent; font.pixelSize: 10; font.weight: Font.DemiBold }
                 }
                 InfoIcon { tooltipText: I18n.t("settings.captureGsr.hint") }
                 Item { Layout.fillWidth: true }
@@ -206,6 +206,7 @@ ColumnLayout {
             RowLayout {
                 Layout.fillWidth: true
                 Text {
+                    horizontalAlignment: Text.AlignLeft
                     text: (I18n.language, I18n.t("settings.extensions.sectionTitle"))
                     color: Theme.text
                     font.pixelSize: 16
@@ -229,6 +230,7 @@ ColumnLayout {
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Text {
+                horizontalAlignment: Text.AlignLeft
                 visible: root.extList.length === 0
                 text: (I18n.language, I18n.t("settings.extensions.noExtensions"))
                 color: Theme.textDim
