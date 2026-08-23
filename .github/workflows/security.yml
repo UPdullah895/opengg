@@ -29,10 +29,10 @@ jobs:
         run: cargo audit
         working-directory: ./daemon
 
-  # Audits the Qt6/QML shell. The archived Tauri backend and Vue frontend
-  # under frontend/ are no longer built or shipped (see frontend/ARCHIVED.md),
-  # so scanning their dependency trees only produced noise — advisories
-  # against code that never runs.
+  # Audits the Qt6/QML shell. The Tauri backend and Vue frontend that used
+  # to live under frontend/ have been removed entirely — they were archived
+  # and no longer built or shipped, so scanning their dependency trees only
+  # produced noise: advisories against code that never ran.
   cargo-audit-qt-shell:
     name: Cargo Audit (Qt Shell)
     runs-on: ubuntu-latest

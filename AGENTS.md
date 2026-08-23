@@ -530,8 +530,7 @@ See [`docs/AI-CHANGELOG.md`](docs/AI-CHANGELOG.md) for examples.
 
 ## Key References
 
-- **`CLAUDE.md`** (root) — Full-stack architecture, IPC design, Pinia stores, data paths
-- **`frontend/CLAUDE.md`** — Frontend-specific concerns (no longer primary, for reference)
+- **`CLAUDE.md`** (root) — Full-stack architecture, IPC design, data paths
 - **`docs/superpowers/plans/2026-08-01-clip-audio-and-design-parity.md`** — Upstream feature plan (GStreamer unification, design requirements)
 - **`qt-shell/build.rs`** — QML registration, resource bundling
 - **`qt-shell/tools/check-colors.sh`** — Color/emoji/icon linter

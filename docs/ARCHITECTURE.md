@@ -1,6 +1,15 @@
 # OpenGG — System Architecture Blueprint
 ## Open-Source Linux Gaming Hub (SteelSeries GG Alternative)
 
+> **⚠️ Historical document — predates the Qt6/QML migration and is out of date
+> in multiple ways beyond just the frontend swap.** It describes the original
+> Tauri 2 + Vue 3 frontend (removed from the repository), and its "Status:
+> What is Built vs. Planned" section is frozen at an early v1.0.0 snapshot —
+> several "Planned (Phase 2)" items below (parametric EQ, RGB sync, etc.) have
+> since shipped. **For current architecture, read [`CLAUDE.md`](../CLAUDE.md)
+> and [`AGENTS.md`](../AGENTS.md) instead** — this file is kept only as a
+> record of the original design blueprint.
+
 ---
 
 ## 1. System Architecture

@@ -38,8 +38,8 @@ We take security seriously. If you discover a vulnerability in OpenGG, please re
 Security reports are in-scope for the following components:
 
 - **Daemon** (`daemon/src/`) — D-Bus service, device access (ratbagd, OpenRGB SDK), audio routing (PipeWire), extension loading
-- **Tauri Host** (`frontend/src-tauri/src/`) — IPC commands, file operations, media server (warp), system integrations, GPU access
-- **Media Server** (`frontend/src-tauri/src/media_server.rs`) — HTTP video/thumbnail serving, path traversal, symlink handling
+- **Qt6/QML Shell** (`qt-shell/src/`) — cxx-qt controllers, file operations (clip export, editor), system integrations, GPU/GStreamer access
+- **opengg-core** (`core/src/`) — shared PipeWire/SQLite/media/subprocess logic called directly by the Qt shell and the daemon; clip file handling (`core/src/clips/`, `core/src/media.rs`) in particular
 - **Extension System** (`daemon/src/extensions/`) — Plugin loading, sandboxing, manifest parsing
 
 ## Out of Scope
@@ -69,17 +69,15 @@ All future security patches will follow the same strict validation and least-pri
 
 The repository runs automated security scanning on every push and pull request:
 
-- **Cargo Audit** — Checks both daemon and Tauri crates against RUSTSEC database
+- **Cargo Audit** — Checks the daemon and qt-shell crates against the RUSTSEC database
 - **Cargo Deny** — Enforces license policies and bans vulnerable/yanked crates
-- **npm Audit** — Scans frontend npm dependencies (high-severity failures block merges)
-- **CodeQL** — Static analysis for Rust and JavaScript/TypeScript
+- **CodeQL** — Static analysis for Rust (daemon, core, qt-shell) and JavaScript/TypeScript (extension-template, the only JS/TS left in the repo)
 
 ## Contributing
 
 When submitting PRs, please:
 
-- Ensure `cargo clippy -- -D warnings` passes in both crates
-- Run `npx vue-tsc --noEmit` in the frontend
+- Ensure `cargo clippy -- -D warnings` passes in daemon, core, and qt-shell
 - Avoid third-party services that require credentials or runtime escapes
 - If adding new IPC endpoints, validate all user input and document threat model
 
@@ -89,4 +87,4 @@ For non-security questions, use the issue tracker. For security-related question
 
 ---
 
-Last updated: 2026-06-10
+Last updated: 2026-08-23

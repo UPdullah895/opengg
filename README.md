@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/src-tauri/icons/128x128.png" alt="OpenGG" width="120" />
+  <img src="packaging/icons/128x128.png" alt="OpenGG" width="120" />
 </p>
 
 **v0.1.5** · Open-source Linux gaming hub — unified audio mixer, device/RGB manager, and instant replay. A modular alternative to SteelSeries GG (Sonar + Engine + Moments).
@@ -34,8 +34,6 @@ See [Quick Start](#quick-start) below.
 
 **Daemon**: `openggd` — background process managing audio routing, device profiles, and replay buffer via D-Bus.
 
-**Legacy UI**: Tauri + Vue UI archived under `frontend/` — preserved for historical reference and reversibility; no longer built by default. See [`frontend/ARCHIVED.md`](frontend/ARCHIVED.md) for details.
-
 **Process Model**: Each crate (`daemon/`, `core/`, `qt-shell/`) is built independently — there is no shared Cargo workspace. The Qt binary links to `opengg-core` and communicates with `openggd` via D-Bus.
 
 ## Requirements
@@ -45,8 +43,8 @@ See [Quick Start](#quick-start) below.
 | Tool | Notes |
 |------|-------|
 | **Rust + Cargo** (stable) | [rustup.rs](https://rustup.rs) |
-| **Node.js 18+** | Only needed to build archived frontend; `sudo pacman -S nodejs` |
-| **npm** | Only needed to build archived frontend; bundled with Node.js |
+| **Node.js 18+** | Optional — only needed to scaffold/build third-party extensions via `make new-extension` |
+| **npm** | Optional — same as above; bundled with Node.js |
 
 ### System Dependencies
 
@@ -83,16 +81,14 @@ cd opengg
 | `./dev.sh` | Full stack — daemon + Qt6 frontend |
 | `./dev.sh daemon` | Daemon only |
 | `./dev.sh ui` | Qt6/QML frontend only (debug build + run) |
-| `./dev.sh ui-legacy` | Tauri/Vue frontend only (archived, for reference) |
 | `./dev.sh build` | Release build (daemon + Qt6 frontend) |
 | `./dev.sh setup` | First-time: udev rules, groups, D-Bus policy, data dirs |
 | `make dev` | Same as `./dev.sh` |
 | `make ui` | Same as `./dev.sh ui` |
-| `make ui-legacy` | Same as `./dev.sh ui-legacy` |
 | `make build` | Release build |
 | `make clean` | Remove build artifacts |
 | `make install` | Install daemon to `~/.local/bin` and Qt binary as `~/.local/bin/opengg` |
-| `make lint` | cargo clippy (daemon + qt-shell) + vue-tsc + check-colors.sh |
+| `make lint` | cargo clippy (daemon + qt-shell) + check-colors.sh |
 
 ## Project Structure
 
@@ -123,20 +119,7 @@ opengg/
 ├── core/                   # Shared opengg-core crate
 │   └── src/                # audio.rs, clips/, media.rs, settings/,
 │                           #   gsr.rs, daemon.rs, device.rs, vu.rs, …
-├── frontend/               # ARCHIVED: Tauri + Vue UI
-│   ├── ARCHIVED.md         # Archive notes
-│   ├── src/
-│   │   ├── App.vue         # Root: nav, theme, onboarding
-│   │   ├── pages/          # Home, Mixer, Clips, Devices, Settings
-│   │   ├── components/     # ClipCard, ChannelStrip, GraphicEQ, …
-│   │   ├── stores/         # Pinia: audio, replay, persistence, dsp
-│   │   └── locales/        # en.json, ar.json (full RTL)
-│   └── src-tauri/
-│       └── src/
-│           ├── main.rs     # Tauri: tray, shortcuts, file watcher
-│           ├── commands.rs # All invoke() handlers
-│           └── media_server.rs  # Local warp server for assets
-├── packaging/              # udev rules, systemd, D-Bus, polkit
+├── packaging/              # udev rules, systemd, D-Bus, polkit, icons
 └── opengg-launch.sh        # Launcher: finds and runs the release binary
 ```
 

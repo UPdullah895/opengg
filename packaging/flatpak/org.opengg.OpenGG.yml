@@ -1,14 +1,14 @@
 app-id: org.opengg.OpenGG
-runtime: org.gnome.Platform
-runtime-version: '46'
-sdk: org.gnome.Sdk
+runtime: org.kde.Platform
+runtime-version: '6.7'
+sdk: org.kde.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 
 command: opengg
 
 finish-args:
-  # Wayland and X11 sockets for display — OpenGG is a Tauri app
+  # Wayland and X11 sockets for display — OpenGG is a Qt6/QML app
   - --socket=wayland
   - --socket=x11
   - --share=ipc
@@ -25,7 +25,7 @@ finish-args:
   # Clip database, thumbnails, crash logs (~/.local/share/opengg)
   - --filesystem=xdg-data/opengg:create
 
-  # GPU rendering (for Tauri webview and FFmpeg video processing)
+  # GPU rendering (Qt Quick scene graph, qml6glsink video, FFmpeg processing)
   - --device=dri
 
   # D-Bus session bus for org.opengg.Daemon (app owns this service name)
@@ -44,7 +44,7 @@ finish-args:
   - --system-talk-name=org.freedesktop.systemd1
 
   # Network socket access for OpenRGB device communication (localhost:6742 TCP)
-  # Also required for internal warp media server loopback and future update checks
+  # Also required for internal media server loopback and future update checks
   - --share=network
 
   # Desktop notifications (optional; uses org.freedesktop.Notifications over D-Bus)
@@ -77,26 +77,23 @@ modules:
       # TODO: Install D-Bus service file
       # - install -Dm 644 ../org.opengg.Daemon.service $FLATPAK_DEST/share/dbus-1/services/org.opengg.Daemon.service
 
-  # ── Tauri Frontend Module ────────────────────────────────────────────────
+  # ── Qt6/QML Shell Module ─────────────────────────────────────────────────
+  # NOTE: `opengg-core` (../../core) is a path dependency of qt-shell and is
+  # picked up automatically by cargo/flatpak-cargo-generator via qt-shell's
+  # Cargo.lock — it does not need its own module here.
   - name: opengg
     buildsystem: cargo
     build-options:
-      # Enable network for npm/cargo builds
       build-args:
         - --share=network
-    builddir: frontend/src-tauri
+    builddir: qt-shell
     sources:
-      # Tauri app sources
       - type: dir
-        path: ../../frontend
-      # TODO: Generate npm-sources.json with:
-      #   flatpak-builder-tools/npm/flatpak-npm-generator.py ../../frontend/package-lock.json -o npm-sources.json
+        path: ../../qt-shell
+      # TODO: Generate cargo-sources.json for the qt-shell + opengg-core tree:
+      #   flatpak-builder-tools/cargo/flatpak-cargo-generator.py ../../qt-shell/Cargo.lock -o qt-shell-cargo-sources.json
       - type: file
-        path: npm-sources.json
-        dest-filename: npm-sources.json
-      # TODO: Generate cargo-sources.json for Tauri dependencies
-      - type: file
-        path: tauri-cargo-sources.json
+        path: qt-shell-cargo-sources.json
         dest-filename: cargo-sources.json
     cargo-args:
       - --offline
@@ -104,22 +101,26 @@ modules:
     cargo-build-args:
       - --release
     post-install:
-      # Install the Tauri app binary
-      - install -Dm 755 target/release/opengg $FLATPAK_DEST/bin/opengg
+      # Install the Qt6/QML app binary (built as opengg-qt, installed as opengg)
+      - install -Dm 755 target/release/opengg-qt $FLATPAK_DEST/bin/opengg
       # Install desktop entry
-      - install -Dm 644 opengg.desktop $FLATPAK_DEST/share/applications/org.opengg.OpenGG.desktop
+      - install -Dm 644 ../../packaging/opengg.desktop $FLATPAK_DEST/share/applications/org.opengg.OpenGG.desktop
       # Install appdata/metainfo
-      - install -Dm 644 opengg.metainfo.xml $FLATPAK_DEST/share/metainfo/org.opengg.OpenGG.metainfo.xml
-      # Install icon (256x256 as fallback)
-      - install -Dm 644 src-tauri/icons/256x256.png $FLATPAK_DEST/share/icons/hicolor/256x256/apps/org.opengg.OpenGG.png
-      - install -Dm 644 src-tauri/icons/128x128.png $FLATPAK_DEST/share/icons/hicolor/128x128/apps/org.opengg.OpenGG.png
-      - install -Dm 644 src-tauri/icons/512x512.png $FLATPAK_DEST/share/icons/hicolor/512x512/apps/org.opengg.OpenGG.png
+      - install -Dm 644 org.opengg.OpenGG.metainfo.xml $FLATPAK_DEST/share/metainfo/org.opengg.OpenGG.metainfo.xml
+      # Install icons
+      - install -Dm 644 ../../packaging/icons/128x128.png $FLATPAK_DEST/share/icons/hicolor/128x128/apps/org.opengg.OpenGG.png
+      - install -Dm 644 ../../packaging/icons/256x256.png $FLATPAK_DEST/share/icons/hicolor/256x256/apps/org.opengg.OpenGG.png
+      - install -Dm 644 ../../packaging/icons/512x512.png $FLATPAK_DEST/share/icons/hicolor/512x512/apps/org.opengg.OpenGG.png
       # Install SVG icon
-      - install -Dm 644 src-tauri/icons/logo.svg $FLATPAK_DEST/share/icons/hicolor/scalable/apps/org.opengg.OpenGG.svg
+      - install -Dm 644 ../../packaging/icons/logo.svg $FLATPAK_DEST/share/icons/hicolor/scalable/apps/org.opengg.OpenGG.svg
 
   # ── System Dependencies ──────────────────────────────────────────────────
-  # TODO: Add optional modules for:
+  # TODO: The KDE runtime provides Qt6 base/declarative, but not necessarily
+  # at 6.7+ (see qt-shell's Qt-version requirement, documented in ci.yml) or
+  # with the GStreamer Qt6 sink plugin (gst-plugin-qml6) qt-shell's video
+  # playback depends on. Add explicit modules here for:
+  # - gstreamer + gst-plugins-{base,good,bad} + gst-plugin-qml6, if the
+  #   runtime's versions don't satisfy qt-shell's requirements
   # - gpu-screen-recorder (if bundling instead of using host via flatpak-spawn)
   # - ffmpeg (if not already in runtime)
-  # - libpulse (for PulseAudio API bindings)
   # - openrgb (optional; only if bundling instead of connecting to host service)

@@ -4,9 +4,11 @@ Living inventory of **new runtime dependencies introduced by the Qt6/QML UI
 migration** (plan §5.3). It is reviewed once before the Phase 0 gate closes and
 updated in the same PR whenever a phase adds a runtime dependency.
 
-Scope: this file tracks the *new* footprint the Qt UI adds. The existing daemon
-(`openggd`) and the Tauri app carry their own dependency sets and are unchanged
-by the migration until switchover.
+Scope: this file tracks the footprint the Qt UI added during the migration.
+The daemon (`openggd`) carries its own, separate dependency set. The Tauri
+app this migration replaced has since been removed from the repository
+entirely — this file predates that removal and is kept as the license
+inventory for what actually shipped.
 
 ## Hard rules (from plan §5.1)
 

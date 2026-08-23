@@ -24,27 +24,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Install system dependencies for Rust autobuild of the Tauri crate
-      # (daemon-only scope would be lighter, but Tauri's Tauri UI means both are
-      # relevant security attack surfaces; we scan both)
+      # Install system dependencies for Rust autobuild of qt-shell (Qt6/GStreamer
+      # headers) — daemon-only scope would be lighter, but the Qt shell is a
+      # relevant security attack surface too, so we scan both. Note: this runs
+      # on ubuntu-latest's Qt packages, which are older than the 6.7+ qt-shell's
+      # QML needs at runtime (see ci.yml) — that's fine for a `cargo build`
+      # used only to let CodeQL trace data flow, not for a shippable binary.
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
+            qt6-base-dev \
+            qt6-declarative-dev \
+            qt6-multimedia-dev \
+            qt6-shadertools-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
 
-      # For JS/TS, CodeQL runs the build context it finds.
-      # For Rust, autobuild will invoke `cargo build` in the workspace.
-      # Both crates have independent Cargo.toml files (not a Cargo workspace),
-      # so autobuild will attempt to build each independently as it discovers them.
+      # For JS/TS, CodeQL scans extension-template/ (the only JS/TS/Vue source
+      # left in the repo since the archived Tauri+Vue frontend was removed).
+      # For Rust, autobuild will invoke `cargo build`. daemon/, core/, and
+      # qt-shell/ each have independent Cargo.toml files (not a Cargo
+      # workspace), so autobuild will attempt to build each independently as
+      # it discovers them.
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
 

@@ -13,7 +13,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DAEMON_DIR="$ROOT_DIR/daemon"
-FRONTEND_DIR="$ROOT_DIR/frontend"
 QT_SHELL_DIR="$ROOT_DIR/qt-shell"
 
 # ── Colors ───────────────────────────────────────────────────────
@@ -29,7 +28,6 @@ RESET='\033[0m'
 
 # Colored prefixes for log streams
 DAEMON_PREFIX="${RED}[daemon]${RESET}"
-TAURI_PREFIX="${BLUE}[tauri]${RESET}"
 DEV_PREFIX="${GREEN}[dev]${RESET}"
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -75,9 +73,10 @@ check_deps() {
     local missing=()
 
     command -v cargo   >/dev/null 2>&1 || missing+=("cargo (install rustup)")
-    command -v node    >/dev/null 2>&1 || missing+=("node (install nodejs)")
-    command -v npm     >/dev/null 2>&1 || missing+=("npm (install nodejs)")
     command -v pactl   >/dev/null 2>&1 || missing+=("pactl (install pipewire-pulse)")
+    # node/npm are NOT required to build or run OpenGG itself — only for
+    # scaffolding third-party extensions via `make new-extension` (see
+    # scripts/new-extension.sh), which degrades gracefully without them.
 
     if [ ${#missing[@]} -gt 0 ]; then
         loge "Missing required tools:"
@@ -93,16 +92,13 @@ do_setup() {
     log "${BOLD}Running first-time setup...${RESET}"
     echo ""
 
-    # Install frontend npm deps
-    log "Installing frontend dependencies..."
-    cd "$FRONTEND_DIR"
-    npm install
-    logs "Frontend deps installed"
-
     # Check Rust toolchain
     log "Checking Rust toolchain..."
     cd "$DAEMON_DIR"
     cargo check --quiet 2>/dev/null && logs "Daemon compiles OK" || logw "Daemon has compile issues — run 'cargo check' in daemon/"
+
+    cd "$QT_SHELL_DIR"
+    cargo check --quiet 2>/dev/null && logs "Qt6 frontend compiles OK" || logw "Qt6 frontend has compile issues — run 'cargo check' in qt-shell/"
 
     # Create data dirs
     mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/opengg"
@@ -179,32 +175,6 @@ run_frontend() {
     logs "Qt6 frontend running (PID ${PIDS[-1]})"
 }
 
-# ── Run Frontend Legacy (Tauri/Vue) ───────────────────────────────
-run_frontend_legacy() {
-    cd "$FRONTEND_DIR"
-
-    # Ensure node_modules exists
-    if [ ! -d "node_modules" ]; then
-        log "Installing frontend dependencies (first run)..."
-        npm install 2>&1 | tail -3
-    fi
-
-    # When running non-interactively (e.g. from a .desktop file or autostart),
-    # tauri dev's internal polling for the Vite server can race with window
-    # creation and show a white "Connection refused" screen. A short delay
-    # gives the Vite dev server headroom before Tauri opens the WebView.
-    if [ ! -t 0 ]; then
-        logw "Non-interactive terminal detected — adding 2 s delay before Tauri dev..."
-        sleep 2
-    fi
-
-    log "Starting Tauri dev server (legacy)..."
-    # Use npx to ensure local binaries are found
-    npx tauri dev 2>&1 | sed -u "s/^/$(echo -e "${TAURI_PREFIX} ")/" &
-    PIDS+=($!)
-    logs "Tauri dev server starting (PID ${PIDS[-1]})"
-}
-
 # ── Build Release ────────────────────────────────────────────────
 do_build() {
     log "${BOLD}Building release...${RESET}"
@@ -215,11 +185,10 @@ do_build() {
     cargo build --release 2>&1 | sed "s/^/$(echo -e "${DAEMON_PREFIX} ")/"
     logs "Daemon: $DAEMON_DIR/target/release/openggd"
 
-    log "Building frontend (release)..."
-    cd "$FRONTEND_DIR"
-    [ -d "node_modules" ] || npm install
-    npx tauri build 2>&1 | sed "s/^/$(echo -e "${TAURI_PREFIX} ")/"
-    logs "Frontend built"
+    log "Building Qt6/QML frontend (release)..."
+    cd "$QT_SHELL_DIR"
+    cargo build --release 2>&1 | sed "s/^/$(echo -e "${DEV_PREFIX} [qt-shell] ")/"
+    logs "Qt6 frontend: $QT_SHELL_DIR/target/release/opengg-qt"
 
     echo ""
     logs "${BOLD}Release build complete!${RESET}"
@@ -246,11 +215,6 @@ case "${1:-all}" in
         ;;
     ui|frontend|f)
         run_frontend
-        log "Press ${BOLD}Ctrl+C${RESET} to stop"
-        wait
-        ;;
-    ui-legacy|frontend-legacy)
-        run_frontend_legacy
         log "Press ${BOLD}Ctrl+C${RESET} to stop"
         wait
         ;;
@@ -282,7 +246,6 @@ case "${1:-all}" in
         echo "  (none)          Run daemon + frontend (full stack)"
         echo "  daemon          Run daemon only"
         echo "  ui              Run Qt6/QML frontend only"
-        echo "  ui-legacy       Run Tauri/Vue frontend only (archived, for reference)"
         echo "  build           Build everything for release"
         echo "  setup           First-time setup"
         echo ""

@@ -29,10 +29,9 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
-  # The Qt6/QML shell — the UI OpenGG actually ships. The old Tauri + Vue
-  # frontend/ is ARCHIVED (see frontend/ARCHIVED.md) and deliberately has no
-  # jobs here: gating merges on dead code buys nothing, and its stale tests
-  # were the only red checks on the board.
+  # The Qt6/QML shell — the only UI OpenGG ships. The old Tauri + Vue
+  # frontend/ was removed entirely (it had been archived, kept only for
+  # reference, and was never built or launched by default).
   #
   # Runs in the Arch container rather than on ubuntu-latest because the QML
   # uses Qt 6.7+ APIs (per-corner radii such as topLeftRadius); Ubuntu's Qt

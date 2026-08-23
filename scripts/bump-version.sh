@@ -20,24 +20,17 @@ echo "Bumping OpenGG to version $NEW_VERSION"
 
 # ── Rust crates ──
 sed -i "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" "$ROOT/daemon/Cargo.toml"
-sed -i "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" "$ROOT/frontend/src-tauri/Cargo.toml"
-
-# ── NPM ──
-sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$ROOT/frontend/package.json"
-
-# ── Tauri config ──
-sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$ROOT/frontend/src-tauri/tauri.conf.json"
+sed -i "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" "$ROOT/qt-shell/Cargo.toml"
 
 # ── Extension template ──
 sed -i "s/\"version\":\s*\"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$ROOT/extension-template/manifest.json"
 
-# Note: the app's own version is read at runtime via Tauri's getVersion()
-# (see frontend/src/composables/useAppVersion.ts) — there is no static
-# "About page version" string in the locale files to bump. Changelog
-# entries are historical and NOT bumped either. Don't add a blind
-# "version": "v..." sed here — settings.store.browse.version in both
-# locales is an unrelated per-extension display template ("v{version}")
-# and a prior version of this script clobbered it by mistake.
+# Note: the app's own version is read at runtime via env!("CARGO_PKG_VERSION")
+# in daemon/src/main.rs — there is no static "About page version" string in
+# the locale files to bump. Changelog entries are historical and NOT bumped
+# either. Don't add a blind "version": "v..." sed here — settings.store.browse.version
+# in qt-shell/locales is an unrelated per-extension display template
+# ("v{version}"), not the app version.
 
 # ── AUR packaging ──
 sed -i "s/^pkgver=.*/pkgver=$NEW_VERSION/" "$ROOT/packaging/aur/PKGBUILD"
@@ -46,10 +39,6 @@ if command -v makepkg >/dev/null 2>&1; then
 else
   echo "⚠ makepkg not found — packaging/aur/.SRCINFO NOT regenerated, do it manually before releasing."
 fi
-
-# ── package-lock.json ──
-cd "$ROOT/frontend"
-npm install --package-lock-only 2>/dev/null || true
 
 echo "✓ Version bumped to $NEW_VERSION"
 echo ""

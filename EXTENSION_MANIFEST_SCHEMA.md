@@ -61,7 +61,7 @@ The folder name is used as the extension `id`. Core extensions take precedence â
 
 The optional `permissions` field declares which data-access tiers the extension needs. If omitted, the extension defaults to **legacy behavior**: all read-only commands are allowed without explicit consent.
 
-Currently defined permission tiers (mapped to Tauri commands):
+Currently defined permission tiers (mapped to daemon-exposed commands):
 
 | Permission | Commands | Access |
 |------------|----------|--------|

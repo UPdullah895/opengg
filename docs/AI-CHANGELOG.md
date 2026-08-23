@@ -6,6 +6,140 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-23] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Remove the archived Tauri + Vue frontend entirely)
+
+**What Changed:**
+- Deleted `frontend/` in full (Tauri 2 + Vue 3 UI, its Rust backend, Pinia
+  stores, locales, and build config) — it had been archived and unbuilt for
+  some time; this removes it from the repository rather than just from the
+  default build path. Qt6/QML (`qt-shell/`) is now the only UI in the repo.
+- Preserved the app icon set (`128x128.png`, `256x256.png`, `32x32.png`,
+  `512x512.png`, `logo.svg`) by copying it to a new `packaging/icons/`
+  before deleting `frontend/` — it was the only asset under `frontend/`
+  still needed by anything outside it (`.desktop` files, AUR packaging,
+  the Flatpak manifest).
+- Deleted `scripts/fetch_device_assets.sh` and `docs/DESIGN_TOKENS.md` —
+  both were entirely about the archived frontend (per-device product
+  images that only ever existed in the Vue UI's asset pipeline — `qt-shell`
+  has no equivalent yet, this is a real feature gap, not silently dropped
+  functionality that existed in the Qt UI; and a CSS-custom-property
+  design-token doc for a component tree that no longer exists).
+- **Found and fixed the actual release/packaging pipeline was still building
+  and shipping the archived Tauri app**, not the Qt6 shell:
+  - `.github/workflows/release.yml` — rewritten to build `daemon/` +
+    `qt-shell/` (release) on the same Arch container CI already uses for
+    the Qt6/QML shell (Qt 6.7+ requirement), package a tarball, and create
+    the GitHub Release via `softprops/action-gh-release@v2` (replacing the
+    side effect `tauri-apps/tauri-action` used to provide). **Not verified
+    against a real tag push** — only YAML-validated and read through
+    carefully; flagged for a real dry run before the next release.
+  - `.github/workflows/distro-matrix.yml` — dropped the "Cargo check Tauri
+    backend" step and its now-pointless webkit2gtk/appindicator/librsvg/
+    patchelf system deps (the daemon has zero system-library dependencies
+    beyond libc).
+  - `.github/workflows/codeql.yml` — Rust autobuild now installs Qt6/
+    GStreamer dev packages instead of WebKitGTK/appindicator, so autobuild
+    can actually compile `qt-shell` instead of the now-deleted Tauri crate.
+  - `.github/dependabot.yml` — replaced the `frontend/src-tauri` and
+    `frontend` (npm) entries with `qt-shell` and `core` cargo entries.
+  - `packaging/aur/PKGBUILD` — dependencies were still `webkit2gtk-4.1` +
+    `libayatana-appindicator` (Tauri runtime) with zero Qt6/GStreamer
+    packages listed; replaced with the actual qt-shell/gstreamer runtime
+    deps, icon source URL repointed at `packaging/icons/`, `.SRCINFO`
+    regenerated via `makepkg --printsrcinfo`.
+  - `packaging/flatpak/org.opengg.OpenGG.yml` — replaced the Tauri module
+    (GNOME runtime, WebKitGTK finish-args) with a qt-shell module on the
+    KDE runtime; rewrote `packaging/flatpak/README.md` and
+    `FINISH_ARGS_REFERENCE.md` to match. This manifest was already
+    TODO-laden and never fully functional (missing vendored
+    `cargo-sources.json`), so this is an on-paper fix, not a verified build.
+- `Makefile` and `dev.sh` — removed `ui-legacy`/`ui-deps`/`FRONTEND` var,
+  `check`/`lint`/`clean` targets no longer touch `frontend/src-tauri` or
+  `vue-tsc`; `do_build`/`do_setup` in `dev.sh` now build/check `qt-shell`
+  instead of running `npx tauri build`/`npm install`.
+- `opengg.desktop(.template)` — icon path repointed at `packaging/icons/`.
+- `scripts/bump-version.sh` — dropped the `frontend/src-tauri/Cargo.toml`,
+  `frontend/package.json`, `frontend/src-tauri/tauri.conf.json` sed passes
+  and the trailing `npm install --package-lock-only`; added a
+  `qt-shell/Cargo.toml` version bump.
+- Rewrote the frontend-describing sections of `CLAUDE.md` (repo tree, IPC
+  map, "Frontend State (Pinia Stores)", VU counter, media server, file
+  watcher, theme system, MixerPage tabs, DSP engine, Key Constraints) to
+  describe the actual current `qt-shell`/`core`/`daemon` implementations
+  instead of deleted Vue/Tauri code — verified each replacement against
+  the real source (`qt-shell/src/{audio,theme,eq,i18n}.rs`,
+  `core/src/watcher.rs`) rather than assuming parity.
+- Updated `README.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+  `docs/TRANSLATING.md` (rewritten for `qt-shell/src/i18n.rs`'s real
+  locale-loading mechanism — single directory + `OPENGG_LOCALES_DIR`, no
+  separate user-locales merge layer, RTL is a separate toggle from
+  language choice, and there's no automated locale-parity checker yet),
+  `.github/pull_request_template.md`, `.github/ISSUE_TEMPLATE/
+  extension_api_rfc.yml`, `AGENTS.md`, `EXTENSION_MANIFEST_SCHEMA.md`,
+  `THIRD_PARTY_LICENSES.md`.
+- `docs/ARCHITECTURE.md` and `docs/CLIP_EDITOR_DESIGN_GAP.md` — these
+  describe the Tauri/Vue app in detail as historical design records, not
+  living documentation; added an explicit "historical, out of date, see
+  CLAUDE.md/AGENTS.md instead" banner to each rather than rewriting them
+  (`ARCHITECTURE.md` was already stale beyond just the frontend — its
+  "Planned (Phase 2)" list includes features that have since shipped).
+
+**Why:**
+User asked to remove the archived interface so the Qt6/QML shell is the
+only UI in the program. A first pass at just `rm -rf frontend/` would have
+left the release pipeline still building and shipping the deleted app
+(release.yml built `frontend/src-tauri` via `tauri-action` as the actual
+release artifact), so this went further than a straight deletion — every
+place that referenced, built, packaged, or documented the old frontend
+needed to change for "only one UI" to be true end-to-end, not just true of
+`dev.sh`.
+
+**Landmines & Discoveries:**
+- `core/src/audio.rs::create_virtual_audio`/`remove_virtual_audio` are
+  called directly from `qt-shell/src/audio.rs` (not through the daemon by
+  default for creation) — already fixed in the prior session's commit
+  `7cb924e`; unrelated to this session but worth remembering when auditing
+  what "still touches the old frontend" actually means for audio code.
+- `core/src/extensions.rs` still documents a `window.opengg.invoke(...)`
+  extension API and `docs/EXTENSION_DEV.md` describes extension UI panels
+  as Vue 3 components loaded into *something* — no `WebEngineView` or
+  similar embedding was found anywhere in `qt-shell/`. **Not resolved in
+  this session** — whether/how third-party extension UI panels are hosted
+  in the Qt6 shell at all is an open question that goes beyond removing
+  the archived main-app frontend, and needs its own investigation before
+  anyone trusts `docs/EXTENSION_DEV.md`'s Vue instructions to produce a
+  working panel today.
+- `packaging/aur/PKGBUILD`'s dependency list and the Flatpak manifest were
+  both silently stale for the Qt6 migration already (still listing Tauri
+  runtime deps with zero Qt6 packages) — worth periodically diffing
+  packaging manifests against what a crate's `Cargo.toml` actually needs,
+  since nothing catches this kind of drift automatically.
+
+**Verification:**
+- `cargo check` + `cargo test` in `daemon/`: 9/9 tests pass.
+- `cargo check` in `core/`: clean.
+- `cargo check` in `qt-shell/`: clean (pre-existing C++ header SFINAE
+  warnings only, unrelated to this change).
+- `make lint`: passes — `cargo clippy -W clippy::all` on daemon + qt-shell
+  (pre-existing, unrelated warnings only), `check-colors.sh` clean.
+- `bash -n dev.sh`, `bash -n scripts/bump-version.sh` passed.
+- `make -n dev/ui/build/install/lint/check/clean` all passed (dry-run).
+- All touched YAML (`release.yml`, `distro-matrix.yml`, `codeql.yml`,
+  `security.yml`, `ci.yml`, `dependabot.yml`, `org.opengg.OpenGG.yml`,
+  `extension_api_rfc.yml`) parsed successfully with `python3 -c "import
+  yaml; yaml.safe_load(...)"`.
+- `makepkg --printsrcinfo` regenerated `packaging/aur/.SRCINFO` cleanly.
+- **Not verified**: an actual GitHub Actions run of `release.yml` against a
+  real tag (no way to trigger that from this session) — this is the
+  highest-risk unverified piece of this change. Flag before the next
+  release tag is pushed.
+- **Not verified**: an actual `flatpak-builder` build of the rewritten
+  manifest — it was already non-functional (missing vendored sources)
+  before this change, so this is a like-for-like on-paper fix, not a
+  regression.
+
+---
+
 ### [2026-08-23] Claude Sonnet 5 — qt6-gstreamer-player-b3 (SIGTERM handling + single-owner virtual-sink creation)
 
 **What Changed:**

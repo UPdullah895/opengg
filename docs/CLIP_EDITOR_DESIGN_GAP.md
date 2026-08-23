@@ -1,5 +1,10 @@
 # Clip editor: design gap against the Vue original
 
+> **Historical note:** `frontend/` (the Tauri + Vue UI referenced throughout
+> this document) was removed from the repository after this comparison was
+> written. The file paths below no longer exist; this document is kept as a
+> record of the design decisions made during the QML port.
+
 A comparison of `frontend/src/components/AdvancedEditor.vue` (the shipping Vue
 editor) against `qt-shell/qml/pages/ClipEditorPage.qml` (the Qt/QML port), written
 after the port's first round of user feedback.

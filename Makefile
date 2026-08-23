@@ -1,22 +1,21 @@
 # OpenGG — Makefile
 #
 # Usage:
-#   make dev        → Full-stack dev mode (daemon + frontend)
+#   make dev        → Full-stack dev mode (daemon + Qt6/QML frontend)
 #   make daemon     → Build & run daemon only
-#   make ui         → Run Tauri frontend only
-#   make build      → Release build (daemon + frontend)
+#   make ui         → Run Qt6/QML frontend only
+#   make build      → Release build (daemon + Qt6/QML frontend)
 #   make setup      → First-time dependency install
 #   make clean      → Remove all build artifacts
-#   make install    → Install daemon binary to ~/.local/bin
+#   make install    → Install daemon + Qt6 binary to ~/.local/bin
 
 SHELL := /bin/bash
 
 ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
-FRONTEND := $(ROOT)/frontend
 QT_SHELL := $(ROOT)/qt-shell
 
-.PHONY: dev daemon ui ui-legacy build setup clean install install-service install-desktop lint check help new-extension validate-extension ui-shots lint-qml
+.PHONY: dev daemon ui build setup clean install install-service install-desktop lint check help new-extension validate-extension ui-shots lint-qml
 
 # ── Default ──────────────────────────────────────────────────────
 help:
@@ -26,7 +25,6 @@ help:
 	@echo "  make dev       Full-stack dev (daemon + Qt6 frontend)"
 	@echo "  make daemon    Build & run daemon (debug)"
 	@echo "  make ui        Build & run Qt6/QML frontend"
-	@echo "  make ui-legacy Build & run Tauri/Vue frontend (archived)"
 	@echo "  make build     Release build (daemon + Qt6 frontend)"
 	@echo "  make setup     Install all dependencies"
 	@echo "  make clean     Remove build artifacts"
@@ -54,12 +52,6 @@ daemon-release:
 # ── Frontend only ────────────────────────────────────────────────
 ui:
 	@chmod +x dev.sh && ./dev.sh ui
-
-ui-legacy:
-	@chmod +x dev.sh && ./dev.sh ui-legacy
-
-ui-deps:
-	cd $(FRONTEND) && npm install
 
 # ── Release build ────────────────────────────────────────────────
 build: daemon-release
@@ -111,12 +103,11 @@ install-desktop:
 # ── Code Quality ─────────────────────────────────────────────────
 check:
 	cd $(DAEMON) && cargo check
-	cd $(FRONTEND)/src-tauri && cargo check
+	cd $(QT_SHELL) && cargo check
 
 lint:
 	cd $(DAEMON) && cargo clippy -- -W clippy::all
 	cd $(QT_SHELL) && cargo clippy -- -W clippy::all
-	cd $(FRONTEND) && npx vue-tsc --noEmit
 	$(MAKE) lint-qml
 
 # Guards qt-shell/qml against bare colour literals, frozen Qt.rgba tints and
@@ -134,6 +125,5 @@ ui-shots:
 # ── Clean ────────────────────────────────────────────────────────
 clean:
 	cd $(DAEMON) && cargo clean
-	cd $(FRONTEND)/src-tauri && cargo clean
-	rm -rf $(FRONTEND)/node_modules $(FRONTEND)/dist
+	cd $(QT_SHELL) && cargo clean
 	@echo "✓ Cleaned all build artifacts"

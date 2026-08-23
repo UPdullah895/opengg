@@ -1,7 +1,8 @@
 name: Distro Matrix Build
 
-# Catch distro-specific build breakage (different glibc, webkit versions, package names).
-# This is a heavier matrix; runs on PR and weekly schedule to avoid CI strain.
+# Catch distro-specific build breakage for the daemon (different glibc,
+# package names) across distros. This is a heavier matrix; runs on PR and
+# weekly schedule to avoid CI strain.
 on:
   pull_request:
     branches: [main, master]
@@ -27,17 +28,17 @@ jobs:
             container: debian:stable
             setup-cmd: |
               apt-get update
-              apt-get install -y curl build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+              apt-get install -y curl build-essential pkg-config libssl-dev
 
           - distro: Fedora Latest
             container: fedora:latest
             setup-cmd: |
-              dnf install -y curl gcc gcc-c++ make pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel patchelf
+              dnf install -y curl gcc gcc-c++ make pkgconf-pkg-config openssl-devel
 
           - distro: Arch Linux
             container: archlinux:latest
             setup-cmd: |
-              pacman -Syu --noconfirm curl base-devel pkgconf openssl webkit2gtk-4.1 libayatana-appindicator librsvg patchelf
+              pacman -Syu --noconfirm curl base-devel pkgconf openssl
 
     steps:
       - name: Check out repository
@@ -59,5 +60,8 @@ jobs:
       - name: Cargo check daemon
         run: cd daemon && cargo check
 
-      - name: Cargo check Tauri backend
-        run: cd frontend/src-tauri && cargo check
+      # The Qt6/QML shell (qt-shell/) needs Qt 6.7+ and GStreamer plugin
+      # packages this matrix's distros don't reliably provide at matching
+      # versions — it gets its own dedicated build/test job on an Arch
+      # container in ci.yml instead. This matrix only catches daemon-side
+      # distro breakage (glibc, OpenSSL, etc.).
