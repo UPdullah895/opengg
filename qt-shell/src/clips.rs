@@ -306,7 +306,7 @@ fn title_for(clip: &ClipInfo) -> String {
 /// guessing — a clip with an unparseable timestamp should just never match a
 /// date search, not match every search by accident.
 fn created_ymd(created: &str) -> Option<(i32, u32, u32)> {
-    let date_part = created.split(|c| c == ' ' || c == 'T').next()?;
+    let date_part = created.split([' ', 'T']).next()?;
     let mut parts = date_part.split('-');
     let y = parts.next()?.parse().ok()?;
     let m = parts.next()?.parse().ok()?;
@@ -321,7 +321,7 @@ fn created_ymd(created: &str) -> Option<(i32, u32, u32)> {
 /// a plain text search like "boss fight" must fall through to the substring
 /// match below, not be silently swallowed here.
 fn try_parse_search_date(search: &str, date_format: &str) -> Option<(i32, u32, u32)> {
-    let parts: Vec<&str> = search.split(|c| c == '/' || c == '-').collect();
+    let parts: Vec<&str> = search.split(['/', '-']).collect();
     if parts.len() != 3 || !parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) {
         return None;
     }
