@@ -86,7 +86,18 @@ async fn main() -> Result<()> {
         });
     }
 
-    tokio::signal::ctrl_c().await?;
+    // Wait for either SIGINT (Ctrl-C) or SIGTERM (systemctl stop / session
+    // logout). Without the SIGTERM arm, `systemctl --user stop openggd` and
+    // most desktop-session shutdowns kill the process without ever reaching
+    // this `Ok(())` return, so `SinkManager`'s `Drop`-based cleanup never
+    // runs and its pactl-loaded sink modules leak until PipeWire itself
+    // restarts. SIGKILL still can't be handled — that's a hard OS limit —
+    // but SIGTERM is the far more common real-world shutdown signal.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        res = tokio::signal::ctrl_c() => { res?; info!("Received SIGINT"); }
+        _ = sigterm.recv() => { info!("Received SIGTERM"); }
+    }
     info!("Shutting down…");
     Ok(())
 }

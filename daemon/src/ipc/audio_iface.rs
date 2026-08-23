@@ -76,4 +76,8 @@ impl AudioInterface {
     async fn remove_virtual_audio(&self) -> zbus::fdo::Result<()> {
         self.hub.remove_virtual_audio().await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
+
+    async fn create_virtual_audio(&self) -> zbus::fdo::Result<()> {
+        self.hub.create_virtual_audio().await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
 }

@@ -6,6 +6,71 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-23] Claude Sonnet 5 — qt6-gstreamer-player-b3 (SIGTERM handling + single-owner virtual-sink creation)
+
+**What Changed:**
+- Followed up a technical audit's two confirmed findings on virtual-sink
+  lifecycle bugs (leaked/orphaned `OpenGG_*` PipeWire sinks):
+  1. `daemon/src/main.rs` previously only awaited `tokio::signal::ctrl_c()`
+     (SIGINT). `systemctl --user stop`, session logout, and most desktop
+     shutdown paths send SIGTERM, which terminates the process without
+     unwinding — so `SinkManager`'s `impl Drop` cleanup (the *only* cleanup
+     path) never ran. Added a `tokio::signal::unix::signal(SignalKind::terminate())`
+     arm alongside `ctrl_c()` in a `tokio::select!`, so either signal now
+     reaches the same graceful-shutdown `Ok(())` return.
+  2. The Qt UI's "Create Virtual Audio" control (Settings → Danger Zone,
+     and the onboarding tour) called `opengg_core::audio::create_virtual_audio()`
+     directly from the UI process — a raw `pactl load-module` call with no
+     module-ID tracking anywhere, invisible to the daemon's `SinkManager`.
+     Refactored `daemon/src/audio/sinks.rs` to extract sink+loopback
+     creation into a shared `create_sinks_and_loopbacks()` helper, added an
+     instance method `SinkManager::ensure_created()` that folds newly
+     created module IDs into the existing `module_ids` vec, wired it up
+     through `AudioHub::create_virtual_audio()` → a new
+     `org.opengg.Daemon.Audio.CreateVirtualAudio` D-Bus method, and changed
+     `core::audio::create_virtual_audio()` to call that D-Bus method first
+     (mirroring the existing daemon-preferred pattern already used by
+     `remove_virtual_audio()`), falling back to the old direct-`pactl` path
+     only when the daemon is unreachable.
+
+**Why:**
+Two independent, confirmed root causes for orphaned/duplicate `OpenGG_*`
+sinks: an unclean-shutdown gap (SIGTERM never handled) and a second,
+untracked sink-creation surface that didn't require any crash at all —
+just a user clicking "Create Virtual Audio." Both are now routed through
+the single `SinkManager` instance that owns cleanup.
+
+**Landmines & Discoveries:**
+- `SinkManager::teardown_all()` drains `module_ids` but does not clear the
+  `channels` map — `ensure_created()` re-seeds any missing channel entries
+  with `.entry().or_insert_with()` rather than assuming a fresh map, since
+  a create→remove→create cycle on the same daemon instance leaves
+  `channels` populated the whole time.
+- `remove_virtual_audio()`'s D-Bus-first-then-local-fallback pattern in
+  `core/src/audio.rs` was the template for `create_virtual_audio()` — same
+  `call_dbus_void` helper, same log-and-fall-through structure.
+- SIGKILL still cannot be caught by any means; the SIGTERM fix closes the
+  much more common real-world gap (service stop / logout), not every
+  possible way the daemon can die.
+
+**Verification:**
+- `cargo clippy -- -W clippy::all` in `daemon/` and `core/`: zero new
+  warnings (both crates had pre-existing, unrelated warnings in
+  untouched code — `core/src/audio.rs` doc-comment spacing,
+  `core/src/clips/mod.rs` char-comparison style — left as-is, out of scope).
+- `cargo test` in `daemon/` (9 passed) and `core/` (50 passed): all green.
+- `cargo check` in `qt-shell/` (which depends on `core`): builds clean;
+  no QML or qt-shell Rust source changed, since `qt-shell/src/audio.rs`'s
+  `create_virtual_audio()` already just delegates to
+  `opengg_core::audio::create_virtual_audio()` and needed no edit.
+- Not run: a live end-to-end test (kill `-TERM` the daemon, confirm sinks
+  are gone; click "Create Virtual Audio" with the daemon up, confirm the
+  daemon's own D-Bus method fires instead of the local pactl fallback) —
+  this was a static-analysis-driven fix, flagged here for a follow-up
+  manual pass before shipping.
+
+---
+
 ### [2026-08-05] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Mixer + GSR-dropdown translation gaps from user screenshots)
 
 **What Changed:**

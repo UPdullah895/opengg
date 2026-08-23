@@ -145,35 +145,67 @@ pub struct SinkManager {
     last_volume_spawn: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
+/// Create (idempotently) every OpenGG virtual sink and its loopbacks, and
+/// return the pactl module IDs created along the way. Shared by
+/// `SinkManager::create_all` (daemon boot) and `SinkManager::ensure_created`
+/// (the on-demand "Create Virtual Audio" D-Bus call), so there is exactly
+/// one code path that knows how to bring sinks into existence and exactly
+/// one place their module IDs get recorded for later cleanup.
+fn create_sinks_and_loopbacks() -> Vec<u32> {
+    remove_legacy_sink_config();
+
+    let mut module_ids = Vec::new();
+
+    for &ch in SINK_CHANNELS {
+        let sink_name = format!("OpenGG_{ch}");
+
+        // Step 1: Check if this sink already exists (idempotent)
+        if !sink_exists(&sink_name) {
+            // Step 2: Create via pactl load-module (non-destructive)
+            match create_null_sink(&sink_name, ch) {
+                Ok(module_id) => {
+                    module_ids.push(module_id);
+                    tracing::info!("Created sink {sink_name} (module {module_id})");
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create {sink_name}: {e}");
+                }
+            }
+        } else {
+            tracing::info!("Sink {sink_name} already exists — skipping creation");
+        }
+    }
+
+    // Step 3: Wait briefly for sinks to register, then set up loopbacks
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    if let Err(e) = setup_loopbacks() {
+        tracing::warn!("Loopback setup had issues: {e}");
+    }
+    // Dedup: WirePlumber session policies may auto-route system apps (plasmashell, kwin_*)
+    // to OpenGG sinks every time they are created. Move them back to default output.
+    cleanup_blacklisted_routing();
+
+    // Step 4: Wire hardware mic → OpenGG_Mic virtual sink via loopback.
+    // The sink's monitor port is what GSR and DSP chains capture from.
+    match setup_mic_loopback() {
+        Ok(mic_module_ids) => {
+            module_ids.extend(mic_module_ids);
+        }
+        Err(e) => {
+            tracing::warn!("Mic loopback setup failed (raw HW mic will be used as fallback): {e}");
+        }
+    }
+
+    module_ids
+}
+
 impl SinkManager {
     /// Create virtual sinks gracefully — NO PipeWire restart.
     pub fn create_all() -> Result<Self> {
-        remove_legacy_sink_config();
-
-        let channels = Arc::new(Mutex::new(HashMap::new()));
-        let module_ids = Arc::new(Mutex::new(Vec::new()));
-
-        for &ch in SINK_CHANNELS {
-            let sink_name = format!("OpenGG_{ch}");
-
-            // Step 1: Check if this sink already exists (idempotent)
-            if !sink_exists(&sink_name) {
-                // Step 2: Create via pactl load-module (non-destructive)
-                match create_null_sink(&sink_name, ch) {
-                    Ok(module_id) => {
-                        module_ids.lock().unwrap().push(module_id);
-                        tracing::info!("Created sink {sink_name} (module {module_id})");
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to create {sink_name}: {e}");
-                    }
-                }
-            } else {
-                tracing::info!("Sink {sink_name} already exists — skipping creation");
-            }
-        }
+        let module_ids = create_sinks_and_loopbacks();
 
         // Initialize all channel state (including Mic which doesn't need a virtual sink)
+        let channels = Arc::new(Mutex::new(HashMap::new()));
         for &name in CHANNEL_NAMES {
             channels.lock().unwrap().insert(
                 name.to_string(),
@@ -186,34 +218,39 @@ impl SinkManager {
             );
         }
 
-        // Step 3: Wait briefly for sinks to register, then set up loopbacks
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        if let Err(e) = setup_loopbacks() {
-            tracing::warn!("Loopback setup had issues: {e}");
-        }
-        // Dedup: WirePlumber session policies may auto-route system apps (plasmashell, kwin_*)
-        // to OpenGG sinks every time they are created. Move them back to default output.
-        cleanup_blacklisted_routing();
-
-        // Step 4: Wire hardware mic → OpenGG_Mic virtual sink via loopback.
-        // The sink's monitor port is what GSR and DSP chains capture from.
-        match setup_mic_loopback() {
-            Ok(mic_module_ids) => {
-                for id in mic_module_ids {
-                    module_ids.lock().unwrap().push(id);
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Mic loopback setup failed (raw HW mic will be used as fallback): {e}");
-            }
-        }
-
         tracing::info!("Virtual sinks ready (no PipeWire restart)");
         Ok(Self {
             channels,
-            module_ids,
+            module_ids: Arc::new(Mutex::new(module_ids)),
             last_volume_spawn: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    /// (Re)create any missing OpenGG virtual sinks on an already-running
+    /// `SinkManager`, e.g. after the user tore them down via the Settings
+    /// "Danger Zone" and then asks to recreate them. Newly created module
+    /// IDs are folded into `self.module_ids` so the same instance that owns
+    /// `Drop`-based cleanup knows about them — unlike the pre-fix behavior
+    /// where the Qt UI process created these sinks directly via
+    /// `opengg_core::audio::create_virtual_audio()`, invisible to this
+    /// struct entirely.
+    pub fn ensure_created(&self) -> Result<()> {
+        let new_ids = create_sinks_and_loopbacks();
+        self.module_ids.lock().unwrap().extend(new_ids);
+
+        // Re-seed channel state for any channel that isn't already tracked
+        // (fresh SinkManager instances always have all of them; this only
+        // matters if CHANNEL_NAMES ever grows without a daemon restart).
+        let mut channels = self.channels.lock().unwrap();
+        for &name in CHANNEL_NAMES {
+            channels.entry(name.to_string()).or_insert_with(|| ChannelInfo {
+                name: name.to_string(),
+                volume: 1.0,
+                muted: false,
+                assigned_apps: Vec::new(),
+            });
+        }
+        Ok(())
     }
 
     pub fn set_volume(&self, channel: &str, volume: f32) -> Result<()> {

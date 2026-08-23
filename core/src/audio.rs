@@ -295,9 +295,28 @@ pub fn check_virtual_audio_status() -> Result<bool, String> {
     Ok(any_present)
 }
 
-/// Create all OpenGG virtual null sinks via pactl (idempotent — skips existing).
-
+/// Create all OpenGG virtual null sinks (idempotent — skips existing).
+///
+/// Prefers routing through the daemon's D-Bus `CreateVirtualAudio` call —
+/// the daemon's `SinkManager` is the single owner of sink lifecycle and the
+/// only thing that tracks module IDs for cleanup. Only if the daemon is
+/// unreachable do we fall back to creating sinks directly from this
+/// process via raw `pactl` calls; those sinks won't be tracked by anything
+/// (this process has no equivalent of `SinkManager`/`Drop`-based cleanup),
+/// so this fallback should be treated as best-effort, not the common case.
 pub fn create_virtual_audio() -> Result<(), String> {
+    // Step 1: Try daemon-side creation via D-Bus — preferred path.
+    match call_dbus_void("CreateVirtualAudio", AU_PATH, AU_IFACE, ()) {
+        Ok(()) => {
+            log::info!("Virtual audio sinks created via daemon");
+            return Ok(());
+        }
+        Err(e) => {
+            log::warn!("Daemon-side sink creation failed ({}), falling back to local pactl calls", e);
+        }
+    }
+
+    // Step 2: Fallback — daemon unreachable; create sinks directly.
     let existing = run_cmd_sync("pactl", &["list", "sinks", "short"]).unwrap_or_default();
     for ch in VIRTUAL_CHANNELS {
         let sink_name = format!("OpenGG_{ch}");
@@ -318,7 +337,7 @@ pub fn create_virtual_audio() -> Result<(), String> {
             "channels=2", "channel_map=front-left,front-right",
         ])?;
     }
-    log::info!("Virtual audio sinks created");
+    log::info!("Virtual audio sinks created locally (daemon unreachable)");
     Ok(())
 }
 
