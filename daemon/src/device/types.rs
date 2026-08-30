@@ -41,6 +41,8 @@ pub struct DeviceInfo {
     pub polling_rate: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dpi_options: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub polling_rate_options: Option<Vec<u32>>,
     // Headset-only
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery_level: Option<i32>,

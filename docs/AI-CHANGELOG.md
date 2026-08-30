@@ -6,6 +6,89 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Fix SetDpi/SetPollingRate: three compounding ratbagd D-Bus bugs)
+
+**What Changed:** `daemon/src/device/ratbag.rs` — `SetDpi`/`SetPollingRate`
+were flagged as broken while verifying Phase 1 (previous entry). Fixing them
+required finding and fixing **three separate, pre-existing bugs**, each
+hiding the next one until the previous was fixed. All confirmed against real
+live hardware (this machine's Logitech G502) via `busctl`, not just unit
+tests.
+
+1. **`Resolution`'s wrong wire shape.** ratbagd declares this property
+   `:type: v` — its value is itself a nested variant (`u` or `(uu)`
+   depending on device/profile), confirmed live: `Properties.Get` returns
+   `v v u 400` (two levels). The old code's `Value::from(dpi)` only wrapped
+   once, which ratbagd rejected outright. Fixed via `extract_dpi_x`/
+   `build_resolution_value`, which read the current shape first and
+   preserve it — libratbag explicitly documents that changing shape
+   mid-flight is invalid.
+2. **`ReportRate`/`ReportRates` queried on the wrong D-Bus interface.**
+   libratbag's own dbus.rst places both on `Profile`, not `Resolution` — the
+   old code queried them from the active `Resolution` object, which simply
+   doesn't have them (confirmed via `GetAll` on a live Resolution object:
+   no such keys). This meant `SetPollingRate`/read-side polling rate never
+   worked for *any* device, on *any* machine, regardless of connection
+   mode — not something specific to this session's changes. Read now comes
+   from the active `Profile`; `DeviceInfo` gained `polling_rate_options`
+   (from `Profile.ReportRates`) alongside the pre-existing `dpi_options`.
+3. **`Device.Commit()`'s actual return type.** libratbag's dbus.rst says
+   `Commit() → ()`, but this installed ratbagd (0.18-1) really replies with
+   a `u` — confirmed via `busctl introspect`. The old `fn commit(&self) ->
+   zbus::Result<()>` made zbus fail deserializing every *successful* Commit
+   reply with "Signature mismatch: got `u`, expected ``", which is the
+   error that first surfaced once bug #1 was fixed and a write finally got
+   far enough to call it. Return type corrected to `u32`, logged at debug
+   level and otherwise ignored (docs: this call "always succeeds", real
+   errors surface via the separate `Resync` signal).
+4. **Read/write link-selection drift** (found while manually verifying the
+   above): this exact G502 has **both** its wired and wireless links
+   simultaneously reporting a real active profile/resolution — not one
+   live + one phantom. `build_device_info` (what a merged card displays)
+   and `resolve_sysname_for_id` (what a write targets) each had their own
+   copy of "prefer the live link" sorting logic, and the two orderings
+   disagreed on which link was primary when *both* were live. Confirmed
+   live: `SetPollingRate` wrote 250 to the `c08d` link but the merged
+   card kept showing `407f`'s untouched 1000. Fixed by extracting one
+   `select_primary` function both call — same selection by construction,
+   not by hoping two implementations stay in sync.
+
+**Why:** blocks Phase 2 (device controls UI) entirely — there's no point
+wiring a DPI slider to a D-Bus call that can never succeed, or that could
+succeed while silently displaying a different link's stale value back.
+
+**Landmines:**
+- `Device.Commit()`'s `u` return value is logged but not otherwise
+  interpreted — if it turns out to matter (e.g. non-zero means "queued,
+  not yet applied"), that's still unhandled. The `Resync` D-Bus signal
+  (fired async on a real failure) also isn't listened for anywhere in this
+  codebase — a failed write currently looks identical to a successful one
+  from the daemon's perspective, one commit each way.
+- The `Resolution`/`Commit` type mismatches came straight from libratbag's
+  own published dbus.rst not matching this installed ratbagd version's
+  real behavior (0.18-1) — if that package updates, these assumptions
+  should be re-verified against `busctl introspect` again rather than
+  trusted from docs alone.
+- `select_primary`'s tie-break (lowest `(vid, pid)` wins when multiple
+  links are live) is arbitrary — there's no "more correct" link when both
+  are equally live. A user changing DPI while both the wireless and wired
+  links are simultaneously connected will always land on the same
+  deterministic one, which is at least *consistent*, not necessarily the
+  one they think they're touching.
+
+**Verification:** `cargo clippy --all-targets -- -D warnings` → 0
+warnings; `cargo test` → 26/26 pass (5 new: DPI shape read/write
+round-trip, live-both-links selection agreement). Rebuilt release,
+reinstalled to `~/.local/bin/openggd`, restarted the live
+`openggd.service`, and verified against this machine's real G502 via
+`busctl`: `SetDpi`/`SetPollingRate` both now return success *and* the
+value actually changes on the device *and* reads back correctly and
+consistently afterward (tested with distinct values — 1600/500 — to rule
+out a no-op false positive, not just round-tripping the pre-existing
+value). Mouse restored to its original 800 DPI / 1000 Hz afterward.
+
+---
+
 ### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 1: cross-transport mouse identity merge)
 
 **What Changed:**

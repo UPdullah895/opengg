@@ -32,7 +32,19 @@ trait Device {
     #[zbus(property)]
     fn profiles(&self) -> zbus::Result<Vec<zbus::zvariant::OwnedObjectPath>>;
 
-    fn commit(&self) -> zbus::Result<()>;
+    // NOTE: libratbag's own dbus.rst documents `Commit() → ()` (no return
+    // value), but this installed ratbagd (0.18-1) actually replies with a
+    // `u` — confirmed live via `busctl --system introspect
+    // .../device/hidraw0`, which shows `.Commit  method  -  u  -`. A `()`
+    // return type here made zbus fail deserializing every successful
+    // Commit() reply with "Signature mismatch: got `u`, expected ``",
+    // silently breaking every write that got far enough to call it (i.e.
+    // once the separate `Resolution` variant-wrapping bug was fixed, this
+    // became the next thing blocking a real write). The docs' own wording
+    // ("this call always succeeds ... errors surface via the Resync
+    // signal") suggests this return value isn't a success/failure code to
+    // act on — it's logged at debug level and otherwise ignored.
+    fn commit(&self) -> zbus::Result<u32>;
 }
 
 #[proxy(
@@ -45,6 +57,24 @@ trait Profile {
 
     #[zbus(property)]
     fn is_active(&self) -> zbus::Result<bool>;
+
+    // NOTE: ReportRate/ReportRates live on **Profile**, not Resolution — see
+    // libratbag's own dbus.rst (`org.freedesktop.ratbag1.Profile.ReportRate`,
+    // type `u`), confirmed live against this machine's ratbagd
+    // (`busctl --system call ... /profile/hidraw0/p0 ... GetAll` shows
+    // `"ReportRate" u 1000` and `"ReportRates" au 4 125 250 500 1000`, and
+    // the *Resolution* object's own GetAll has neither key at all). The
+    // previous code queried both from the Resolution proxy, which doesn't
+    // have them — SetPollingRate/report_rate reads have never worked for
+    // any device, on any machine, regardless of connection mode.
+    #[zbus(property)]
+    fn report_rate(&self) -> zbus::Result<u32>;
+
+    #[zbus(property)]
+    fn set_report_rate(&self, value: u32) -> zbus::Result<()>;
+
+    #[zbus(property)]
+    fn report_rates(&self) -> zbus::Result<Vec<u32>>;
 }
 
 #[proxy(
@@ -52,20 +82,58 @@ trait Profile {
     default_service = "org.freedesktop.ratbag1"
 )]
 trait Resolution {
+    // NOTE: `Resolution` (the DPI value) is declared `:type: v` in
+    // libratbag's own dbus.rst — its value is itself a nested variant,
+    // holding either a plain `u` (both axes) or a `(uu)` pair (separate x/y),
+    // depending on the device/profile. Confirmed live:
+    // `busctl --system call ... Properties Get ss ... Resolution Resolution`
+    // returns `v v u 400` — a variant containing a variant. A typed
+    // `(u32, u32)` getter (the previous code) can't deserialize that at all,
+    // so it silently failed on every device — DPI never actually populated.
+    // Declared here as `OwnedValue` so `extract_dpi_x`/`set_resolution_value`
+    // can branch on the real shape instead of assuming one.
     #[zbus(property)]
-    fn resolution(&self) -> zbus::Result<(u32, u32)>;
+    fn resolution(&self) -> zbus::Result<zbus::zvariant::OwnedValue>;
 
     #[zbus(property)]
-    fn report_rate(&self) -> zbus::Result<u32>;
-
-    #[zbus(property)]
-    fn report_rates(&self) -> zbus::Result<Vec<u32>>;
-
-    #[zbus(property)]
-    fn resolutions(&self) -> zbus::Result<Vec<(u32, u32)>>;
+    fn resolutions(&self) -> zbus::Result<Vec<u32>>;
 
     #[zbus(property)]
     fn is_active(&self) -> zbus::Result<bool>;
+}
+
+/// Unwrap the one extra variant layer ratbagd's `Resolution` property adds on
+/// top of the real payload (see the `Resolution` proxy's doc comment above).
+fn unwrap_nested_variant<'a>(value: &'a zvariant::Value<'a>) -> &'a zvariant::Value<'a> {
+    match value {
+        zvariant::Value::Value(boxed) => boxed.as_ref(),
+        other => other,
+    }
+}
+
+/// Extract the x-axis DPI from a `Resolution` property value, regardless of
+/// whether it's currently shaped as a plain `u` or a `(uu)` pair.
+fn extract_dpi_x(value: &zvariant::Value) -> Option<u32> {
+    match unwrap_nested_variant(value) {
+        zvariant::Value::U32(x) => Some(*x),
+        zvariant::Value::Structure(s) => match s.fields().first() {
+            Some(zvariant::Value::U32(x)) => Some(*x),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Build the value to write back to a `Resolution` property for a new DPI,
+/// preserving whatever shape (`u` vs `(uu)`) it's currently using — libratbag
+/// explicitly documents that changing shape is invalid ("assigning a single
+/// u to a resolution object previously exporting (uu) is invalid").
+fn build_resolution_value(current: &zvariant::Value, dpi: u32) -> zvariant::Value<'static> {
+    let new_inner = match unwrap_nested_variant(current) {
+        zvariant::Value::Structure(_) => zvariant::Value::new((dpi, dpi)),
+        _ => zvariant::Value::new(dpi),
+    };
+    zvariant::Value::Value(Box::new(new_inner))
 }
 
 // ── Cross-transport identity ────────────────────────────────────────────────
@@ -159,8 +227,9 @@ struct RawRatbagDevice {
     name: String,
     model: String,
     dpi: Option<u32>,
-    polling_rate: Option<u32>,
     dpi_options: Option<Vec<u32>>,
+    polling_rate: Option<u32>,
+    polling_rate_options: Option<Vec<u32>>,
 }
 
 /// Union-find grouping of raw ratbagd devices believed to be the same
@@ -216,6 +285,32 @@ fn group_raw_devices(raw: &[RawRatbagDevice], overrides: &IdentityOverrides) -> 
     groups.into_values().collect()
 }
 
+/// Pick the "primary" link among a set of raw device indices believed to be
+/// the same physical mouse: whichever is currently "live" (reporting real
+/// dpi data), or — if none/more than one are — the first when sorted by
+/// `(vid, pid)`, for a deterministic tie-break.
+///
+/// Both `build_device_info` (what to *display*) and `resolve_sysname_for_id`
+/// (what a write should *target*) call this exact function rather than each
+/// keeping their own copy of the same logic — this hardware genuinely does
+/// have both transport links simultaneously "live" at once (confirmed: a
+/// Logitech G502 LIGHTSPEED's wired and receiver links both report a real
+/// active profile/resolution at the same time), and two independently
+/// written selection orderings previously drifted apart under exactly that
+/// condition: `SetPollingRate` would resolve to one link while the merged
+/// card kept displaying the other, untouched, link's value — a write that
+/// silently didn't show up. Sharing one function makes that impossible by
+/// construction instead of by two implementations happening to agree.
+fn select_primary(raw: &[RawRatbagDevice], idxs: &[usize]) -> usize {
+    let mut sorted = idxs.to_vec();
+    sorted.sort_by_key(|&i| (raw[i].vid, raw[i].pid));
+    sorted
+        .iter()
+        .copied()
+        .find(|&i| raw[i].dpi.is_some())
+        .unwrap_or(sorted[0])
+}
+
 /// Build the public `DeviceInfo` for one group of raw ratbagd devices. Field
 /// values (dpi/polling_rate/name/model) come from whichever member is
 /// currently "live" (has an active resolution reporting real values), so a
@@ -223,11 +318,7 @@ fn group_raw_devices(raw: &[RawRatbagDevice], overrides: &IdentityOverrides) -> 
 fn build_device_info(raw: &[RawRatbagDevice], group: &[usize]) -> DeviceInfo {
     let mut idxs = group.to_vec();
     idxs.sort_by_key(|&i| (raw[i].vid, raw[i].pid));
-    let primary_idx = idxs
-        .iter()
-        .copied()
-        .find(|&i| raw[i].dpi.is_some())
-        .unwrap_or(idxs[0]);
+    let primary_idx = select_primary(raw, &idxs);
     let primary = &raw[primary_idx];
 
     let (id, linked_ids) = if idxs.len() == 1 {
@@ -254,6 +345,7 @@ fn build_device_info(raw: &[RawRatbagDevice], group: &[usize]) -> DeviceInfo {
         dpi: primary.dpi,
         polling_rate: primary.polling_rate,
         dpi_options: primary.dpi_options.clone(),
+        polling_rate_options: primary.polling_rate_options.clone(),
         battery_level: None,
         battery_charging: None,
         sidetone: None,
@@ -340,8 +432,10 @@ impl RatbagManager {
         // Parse VID/PID from model string "usb:VVVV:PPPP:00"
         let (vid, pid) = parse_model_id(&model_str);
 
-        // Get DPI and polling rate from active profile's active resolution
-        let (dpi, polling_rate, dpi_options) = self.read_active_resolution(&dev).await;
+        // Get DPI/polling-rate (+ their permitted-value lists) from the
+        // active profile's active resolution.
+        let (dpi, dpi_options, polling_rate, polling_rate_options) =
+            self.read_active_profile_state(&dev).await;
 
         let sysname = path
             .as_str()
@@ -357,47 +451,46 @@ impl RatbagManager {
             name,
             model: model_str,
             dpi,
-            polling_rate,
             dpi_options,
+            polling_rate,
+            polling_rate_options,
         })
     }
 
-    async fn read_active_resolution(
+    /// Read DPI (from the active resolution) and polling rate (from the
+    /// active profile) for a device's currently-active profile. These are
+    /// two different ratbagd objects with different property sets — see the
+    /// `Profile`/`Resolution` proxy doc comments above for why.
+    #[allow(clippy::type_complexity)]
+    async fn read_active_profile_state(
         &self,
         dev: &DeviceProxy<'_>,
-    ) -> (Option<u32>, Option<u32>, Option<Vec<u32>>) {
+    ) -> (Option<u32>, Option<Vec<u32>>, Option<u32>, Option<Vec<u32>>) {
         let profiles = match dev.profiles().await {
             Ok(p) => p,
-            Err(_) => return (None, None, None),
+            Err(_) => return (None, None, None, None),
         };
 
         for profile_path in &profiles {
-            let profile = match ProfileProxy::builder(&self.conn)
+            let Ok(profile) = ProfileProxy::builder(&self.conn)
                 .path(profile_path.as_ref())
-                .ok()
-                .and(None::<ProfileProxy>)
-            {
-                Some(p) => p,
-                None => {
-                    let Ok(p) = ProfileProxy::builder(&self.conn)
-                        .path(profile_path.as_ref())
-                        .unwrap()
-                        .build()
-                        .await
-                    else {
-                        continue;
-                    };
-                    p
-                }
+                .unwrap()
+                .build()
+                .await
+            else {
+                continue;
             };
 
             if !profile.is_active().await.unwrap_or(false) {
                 continue;
             }
 
+            let polling_rate = profile.report_rate().await.ok();
+            let polling_rate_options = profile.report_rates().await.ok();
+
             let res_paths = match profile.resolutions().await {
                 Ok(r) => r,
-                Err(_) => continue,
+                Err(_) => return (None, None, polling_rate, polling_rate_options),
             };
 
             for res_path in &res_paths {
@@ -414,18 +507,21 @@ impl RatbagManager {
                     continue;
                 }
 
-                let dpi = res.resolution().await.ok().map(|(x, _)| x);
-                let rate = res.report_rate().await.ok();
-                let dpi_list = res
-                    .resolutions()
+                let dpi = res
+                    .resolution()
                     .await
                     .ok()
-                    .map(|v| v.into_iter().map(|(x, _)| x).collect());
+                    .and_then(|v| extract_dpi_x(&v));
+                let dpi_options = res.resolutions().await.ok();
 
-                return (dpi, rate, dpi_list);
+                return (dpi, dpi_options, polling_rate, polling_rate_options);
             }
+
+            // Active profile found, but no active resolution under it —
+            // still return the polling rate we already have.
+            return (None, None, polling_rate, polling_rate_options);
         }
-        (None, None, None)
+        (None, None, None, None)
     }
 
     /// Resolve a device id (legacy single-link `"vid:pid"` or merged
@@ -434,8 +530,10 @@ impl RatbagManager {
     /// sysnames are route-scoped and can change across replugs/reboots, and
     /// for a merged id more than one member may currently be enumerated
     /// (see the module doc comment), so this always re-derives which link is
-    /// actually live. Prefers a member that's reporting real resolution data
-    /// (i.e. actually responding) over one that's merely present.
+    /// actually live. Uses the exact same `select_primary` tie-break as
+    /// `build_device_info` — see that function's doc comment for why sharing
+    /// it (rather than each keeping its own "prefer the live one" logic)
+    /// matters here specifically.
     async fn resolve_sysname_for_id(&self, id_body: &str) -> Result<String> {
         let members = parse_id_members(id_body);
         if members.is_empty() {
@@ -443,17 +541,18 @@ impl RatbagManager {
         }
 
         let raw = self.list_raw_devices().await;
-        let mut candidates: Vec<&RawRatbagDevice> = raw
+        let idxs: Vec<usize> = raw
             .iter()
-            .filter(|d| members.contains(&(d.vid, d.pid)))
+            .enumerate()
+            .filter(|(_, d)| members.contains(&(d.vid, d.pid)))
+            .map(|(i, _)| i)
             .collect();
-        candidates.sort_by_key(|d| d.dpi.is_none());
 
-        candidates
-            .into_iter()
-            .next()
-            .map(|d| d.sysname.clone())
-            .ok_or_else(|| anyhow::anyhow!("no ratbagd device currently matches id {id_body}"))
+        if idxs.is_empty() {
+            anyhow::bail!("no ratbagd device currently matches id {id_body}");
+        }
+        let primary = select_primary(&raw, &idxs);
+        Ok(raw[primary].sysname.clone())
     }
 
     pub async fn set_dpi(&self, id_body: &str, dpi: u32) -> Result<()> {
@@ -484,8 +583,25 @@ impl RatbagManager {
                     .build()
                     .await?;
                 if res.is_active().await.unwrap_or(false) {
-                    res.inner().set_property("Resolution", zvariant::Value::from(dpi)).await?;
-                    dev.commit().await?;
+                    // `Resolution` is declared `:type: v` by ratbagd — its
+                    // value is itself a nested variant, holding either a
+                    // plain `u` or a `(uu)` pair (see the `Resolution` proxy
+                    // doc comment). A bare `Value::from(dpi)` only wraps it
+                    // once (the standard Properties.Set layer), which
+                    // ratbagd rejects: "Incorrect parameters for property
+                    // 'Resolution', expected 'v', got 'u'" — confirmed live
+                    // against this exact device. We re-read the current
+                    // value first to preserve its shape (libratbag: "a
+                    // client must leave the type intact"), then build the
+                    // correctly double-wrapped replacement.
+                    let current = res.resolution().await.context("read current Resolution")?;
+                    let new_value = build_resolution_value(&current, dpi);
+                    res.inner()
+                        .set_property("Resolution", new_value)
+                        .await
+                        .context("write Resolution")?;
+                    let commit_result = dev.commit().await?;
+                    tracing::debug!("Commit() returned {commit_result} for {sysname}");
                     tracing::info!("Set DPI to {dpi} on {sysname}");
                     return Ok(());
                 }
@@ -504,6 +620,9 @@ impl RatbagManager {
             .await
             .context("DeviceProxy build failed")?;
 
+        // ReportRate lives on the active **Profile**, not on a Resolution —
+        // see the `Profile` proxy doc comment. No per-resolution lookup
+        // needed at all.
         let profiles = dev.profiles().await.context("get profiles")?;
         for profile_path in &profiles {
             let profile = ProfileProxy::builder(&self.conn)
@@ -514,22 +633,16 @@ impl RatbagManager {
             if !profile.is_active().await.unwrap_or(false) {
                 continue;
             }
-            let res_paths = profile.resolutions().await?;
-            for res_path in &res_paths {
-                let res = ResolutionProxy::builder(&self.conn)
-                    .path(res_path.as_ref())
-                    .unwrap()
-                    .build()
-                    .await?;
-                if res.is_active().await.unwrap_or(false) {
-                    res.inner().set_property("ReportRate", zvariant::Value::from(rate)).await?;
-                    dev.commit().await?;
-                    tracing::info!("Set polling rate to {rate}Hz on {sysname}");
-                    return Ok(());
-                }
-            }
+            profile
+                .set_report_rate(rate)
+                .await
+                .context("write ReportRate")?;
+            let commit_result = dev.commit().await?;
+            tracing::debug!("Commit() returned {commit_result} for {sysname}");
+            tracing::info!("Set polling rate to {rate}Hz on {sysname}");
+            return Ok(());
         }
-        anyhow::bail!("active resolution not found for {sysname}")
+        anyhow::bail!("active profile not found for {sysname}")
     }
 
     /// Manual override: record that the devices behind `id_body_a` and
@@ -592,6 +705,44 @@ fn parse_model_id(model: &str) -> (u16, u16) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn extract_dpi_x_reads_single_u_shape() {
+        // What ratbagd actually sends for this shape, confirmed live via
+        // `busctl ... Properties Get ... Resolution Resolution` → "v v u 400"
+        // — one level of Properties.Get's standard wrapper (already stripped
+        // by the time this fn sees it) plus ratbagd's own declared `v` type.
+        let value = zvariant::Value::Value(Box::new(zvariant::Value::U32(400)));
+        assert_eq!(extract_dpi_x(&value), Some(400));
+    }
+
+    #[test]
+    fn extract_dpi_x_reads_tuple_shape() {
+        let value = zvariant::Value::Value(Box::new(zvariant::Value::new((800u32, 800u32))));
+        assert_eq!(extract_dpi_x(&value), Some(800));
+    }
+
+    #[test]
+    fn build_resolution_value_preserves_single_u_shape() {
+        let current = zvariant::Value::Value(Box::new(zvariant::Value::U32(400)));
+        let updated = build_resolution_value(&current, 1600);
+        assert_eq!(extract_dpi_x(&updated), Some(1600));
+        match unwrap_nested_variant(&updated) {
+            zvariant::Value::U32(_) => {}
+            other => panic!("expected the u32 shape to be preserved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_resolution_value_preserves_tuple_shape() {
+        let current = zvariant::Value::Value(Box::new(zvariant::Value::new((800u32, 800u32))));
+        let updated = build_resolution_value(&current, 1600);
+        assert_eq!(extract_dpi_x(&updated), Some(1600));
+        match unwrap_nested_variant(&updated) {
+            zvariant::Value::Structure(_) => {}
+            other => panic!("expected the (u,u) shape to be preserved, got {other:?}"),
+        }
+    }
+
     fn raw(sysname: &str, vid: u16, pid: u16, name: &str, dpi: Option<u32>) -> RawRatbagDevice {
         RawRatbagDevice {
             sysname: sysname.to_string(),
@@ -600,8 +751,9 @@ mod tests {
             name: name.to_string(),
             model: format!("usb:{vid:04x}:{pid:04x}:0"),
             dpi,
-            polling_rate: None,
             dpi_options: None,
+            polling_rate: None,
+            polling_rate_options: None,
         }
     }
 
@@ -646,6 +798,29 @@ mod tests {
         // sorts second by (vid, pid).
         assert_eq!(info.dpi, Some(800));
         assert_eq!(info.name, "Logitech G502 LIGHTSPEED Wireless Gaming Mouse");
+    }
+
+    #[test]
+    fn select_primary_agrees_when_both_links_are_simultaneously_live() {
+        // Confirmed live on real hardware: a G502 LIGHTSPEED's wired and
+        // receiver links can BOTH report a real active profile/resolution
+        // at once (both `dpi = Some`) — not just one live + one phantom.
+        // `build_device_info`'s display pick and `resolve_sysname_for_id`'s
+        // write target must agree in that case too, or a write silently
+        // lands on a link whose value the UI never shows.
+        let raw = vec![
+            raw("hidraw0", 0x046d, 0xc08d, "Logitech G502 LIGHTSPEED Wireless Gaming Mouse", Some(250)),
+            raw("hidraw13", 0x046d, 0x407f, "Logitech G502", Some(1000)),
+        ];
+        let idxs = vec![0, 1];
+        let display_primary = select_primary(&raw, &idxs);
+        // Same call resolve_sysname_for_id makes internally — must be the
+        // identical index, by construction (both call select_primary).
+        let write_primary = select_primary(&raw, &idxs);
+        assert_eq!(display_primary, write_primary);
+        // Deterministic tie-break: lowest (vid, pid) wins when both are live
+        // — that's raw[1] (046d:407f) here.
+        assert_eq!(write_primary, 1);
     }
 
     #[test]
