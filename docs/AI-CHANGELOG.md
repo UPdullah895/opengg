@@ -6,6 +6,116 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 1: cross-transport mouse identity merge)
+
+**What Changed:**
+- `daemon/src/device/ratbag.rs` — mouse identity is now cross-transport-aware.
+  ratbagd's D-Bus API exposes no per-unit serial (`Model` is identical for
+  every unit of the same mouse model), and a **live check on this machine**
+  confirms a real, present bug: a Logitech G502 LIGHTSPEED reports as two
+  entirely separate ratbagd device objects — `usb:046d:c08d:0` ("Logitech
+  G502 LIGHTSPEED Wireless Gaming Mouse") over its receiver and
+  `usb:046d:407f:0` ("Logitech G502") when wired — both present in ratbagd's
+  device list *simultaneously*, with the prior vid:pid-only identity fix
+  (previous entry, same file) correctly not merging them since the two ids
+  are genuinely different vid:pid pairs.
+  - Added a conservative name-similarity heuristic (`merge_key_slug`): same
+    vendor ID + matching device name after stripping known connection-mode/
+    marketing tokens (wireless, lightspeed, bluetooth, receiver, gaming,
+    mouse, …). Deliberately excludes tokens that could denote a genuinely
+    different hardware revision (hero, se, plus, …) and refuses to merge on
+    a name with no digit-bearing "model designator" token left after
+    stripping — merging two different physical mice is a worse failure mode
+    than showing a duplicate card, so the heuristic is biased toward false
+    negatives, not false positives.
+  - Merged devices get a new id form: `ratbag:merged:{vid:pid}+{vid:pid}…`.
+    `DeviceInfo` gained `linked_ids: Option<Vec<String>>` (new field, also
+    threaded through `headset.rs`'s constructor as `None`) listing every
+    member link. Field values (name/model/dpi/polling_rate) are taken from
+    whichever member link is currently "live" (reports real resolution
+    data), so a present-but-unresponsive link never shadows real data.
+  - Added `daemon/src/device/identity_overrides.rs`: a small
+    `~/.config/opengg/device-identity-overrides.json` store recording
+    explicit user `force_merge`/`force_split` pairs, always re-read from
+    disk (no in-memory caching — same freshness-over-caching choice as
+    `resolve_sysname_for_id`). These always override the heuristic for that
+    exact pair, and setting one clears any conflicting entry in the other
+    list.
+  - `resolve_sysname_for_id` (renamed from `resolve_sysname`) now parses
+    both legacy single-link ids and merged ids, and re-scans ratbagd's live
+    device list on every write to pick whichever member link is actually
+    responding — never caches a sysname across calls.
+  - New `RatbagManager::merge_devices(id_a, id_b)` /
+    `split_device(id)`: the manual safety-net override the OpenLogi
+    applicability report (§2) called for — pairs every member of one id
+    with every member of the other (or every member with every other member,
+    for a split), so it works whether either id is already a merged group.
+  - New D-Bus methods on `org.opengg.Daemon.Device`:
+    `MergeMouseDevices(id_a, id_b)`, `SplitMouseDevice(id)`. Both are
+    fire-and-forget writes to the override file — they take effect on the
+    next `GetDevices` call, there's no separate "commit" step.
+  - `daemon/src/device/dbus.rs` — `SetDpi`/`SetPollingRate` now just strip
+    the `"ratbag:"` prefix and hand the rest straight to `RatbagManager`;
+    all id-format knowledge (legacy vs. merged) now lives in `ratbag.rs`
+    alone, `dbus.rs` no longer parses vid:pid itself for mouse ids.
+
+**Why:** Phase 1 of the Devices Page roadmap. The previous session's
+vid:pid identity fix was real progress but explicitly documented as not
+fixing this specific case, since the G502's vid:pid genuinely differs
+across connection modes. This closes that gap with a heuristic plus a
+manual override, rather than leaving users stuck with a duplicate card and
+no recourse.
+
+**Landmines:**
+- **No real fix exists for two identical-model mice plugged in
+  simultaneously** — same limitation as before, name+vid can't disambiguate
+  two literal duplicates. Unchanged, still the honest answer given what
+  ratbagd exposes.
+- **The heuristic can theoretically produce a false negative** (two
+  connection-mode names that don't share a stopword-stripped form, e.g. an
+  unusually named third-party firmware) — the manual `MergeMouseDevices`
+  override exists specifically for this case. It cannot produce a false
+  *merge* across different vendor IDs without an explicit override, by
+  construction.
+- **Discovered, NOT fixed, while verifying against real hardware**:
+  `SetDpi` (and by inspection, `SetPollingRate` — same code shape) fails
+  live against a real connected mouse: `busctl` call returns
+  `org.freedesktop.DBus.Error.InvalidArgs: Incorrect parameters for
+  property 'Resolution', expected 'v', got 'u'` — a variant-wrapping
+  mismatch in the existing `res.inner().set_property("Resolution",
+  zvariant::Value::from(dpi))` call, unrelated to and unchanged by this
+  commit. Reproduced identically against both a merged id and a legacy
+  single-link id, confirming it predates this change and isn't something
+  the identity work introduced. Left unfixed here since fixing the D-Bus
+  property write shape is Phase 2's (device-controls-UI) territory, not
+  Phase 1's — but it blocks Phase 2's acceptance check ("confirm the device
+  actually responds") until addressed, so flagging it now rather than
+  letting it surface as a surprise mid-Phase-2.
+- Manual QML "merge with…" / "not the same device" UI affordance was **not**
+  added in this phase — `qt-shell/src/device.rs`'s `DeviceController` is
+  still fully read-only (no invokables beyond `refresh()`), and there is no
+  DPI/polling-rate control UI yet for a merge/split action to sit alongside
+  (Phase 2). The D-Bus methods and override plumbing exist and are verified
+  end-to-end via `busctl`; wiring an actual UI affordance to them is
+  reasonable to fold into Phase 2 rather than bolting a standalone menu onto
+  a page with no other controls yet.
+
+**Verification:** `cargo clippy --all-targets -- -D warnings` → 0 warnings;
+`cargo test` → 21/21 pass (12 new tests: `merge_key_slug` behavior,
+grouping with/without overrides, id parsing). Built release, installed to
+`~/.local/bin/openggd`, restarted the live `openggd.service`, and confirmed
+against this machine's actual connected devices via `busctl --user`:
+`GetDevices` collapses the real G502 wired+wireless pair into one
+`ratbag:merged:046d:407f+046d:c08d` card; `SplitMouseDevice` on that id
+splits it back into two cards and persists a `force_split` entry;
+`MergeMouseDevices` on the two split ids re-merges them and persists a
+`force_merge` entry, clearing the prior split; removing the override file
+falls back to the heuristic alone, which reproduces the same merge
+unassisted. Test override file removed after verification, daemon left
+running the new binary.
+
+---
+
 ### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Mouse device identity: key by vid:pid, not by ratbagd sysname)
 
 **What Changed:**

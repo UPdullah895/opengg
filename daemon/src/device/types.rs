@@ -26,6 +26,14 @@ pub struct DeviceInfo {
     pub device_type: DeviceType,
     pub vid: u16,
     pub pid: u16,
+    /// When this card represents a cross-transport merge of two or more
+    /// ratbagd device objects that are believed to be the same physical
+    /// mouse (see `ratbag::merge_key_slug` / `IdentityOverrides`), this
+    /// lists every member link as a `"{vid:04x}:{pid:04x}"` string. `None`
+    /// (or omitted) for an ordinary single-link device. `vid`/`pid` above
+    /// always describe the currently "primary" (live, if any) link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linked_ids: Option<Vec<String>>,
     // Mouse-only
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dpi: Option<u32>,

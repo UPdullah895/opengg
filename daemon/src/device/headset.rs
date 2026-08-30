@@ -154,6 +154,7 @@ impl HeadsetManager {
                     device_type: DeviceType::Headset,
                     vid,
                     pid,
+                    linked_ids: None,
                     dpi: None,
                     polling_rate: None,
                     dpi_options: None,

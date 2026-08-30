@@ -71,7 +71,8 @@ impl DeviceInterface {
     }
 
     async fn set_dpi(&self, device_id: &str, dpi: u32) -> zbus::fdo::Result<()> {
-        let (vid, pid) = parse_vid_pid_id(device_id, "ratbag:")
+        let id_body = device_id
+            .strip_prefix("ratbag:")
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("not a mouse device id".into()))?;
 
         self.ratbag
@@ -79,13 +80,14 @@ impl DeviceInterface {
             .await
             .as_ref()
             .ok_or_else(|| zbus::fdo::Error::ServiceUnknown("ratbagd not available".into()))?
-            .set_dpi(vid, pid, dpi)
+            .set_dpi(id_body, dpi)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
     async fn set_polling_rate(&self, device_id: &str, rate: u32) -> zbus::fdo::Result<()> {
-        let (vid, pid) = parse_vid_pid_id(device_id, "ratbag:")
+        let id_body = device_id
+            .strip_prefix("ratbag:")
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("not a mouse device id".into()))?;
 
         self.ratbag
@@ -93,7 +95,47 @@ impl DeviceInterface {
             .await
             .as_ref()
             .ok_or_else(|| zbus::fdo::Error::ServiceUnknown("ratbagd not available".into()))?
-            .set_polling_rate(vid, pid, rate)
+            .set_polling_rate(id_body, rate)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Manual identity-merge override (see `ratbag::RatbagManager::merge_devices`):
+    /// confirm that two mouse device ids are the same physical device even
+    /// though the automatic name heuristic didn't (or wouldn't) merge them.
+    /// Takes effect on the next `GetDevices` call.
+    async fn merge_mouse_devices(&self, device_id_a: &str, device_id_b: &str) -> zbus::fdo::Result<()> {
+        let id_a = device_id_a
+            .strip_prefix("ratbag:")
+            .ok_or_else(|| zbus::fdo::Error::InvalidArgs("not a mouse device id".into()))?;
+        let id_b = device_id_b
+            .strip_prefix("ratbag:")
+            .ok_or_else(|| zbus::fdo::Error::InvalidArgs("not a mouse device id".into()))?;
+
+        self.ratbag
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| zbus::fdo::Error::ServiceUnknown("ratbagd not available".into()))?
+            .merge_devices(id_a, id_b)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Manual identity-split override: undo an (auto or manual) merge and
+    /// remember that these links must never be auto-merged again. Takes
+    /// effect on the next `GetDevices` call.
+    async fn split_mouse_device(&self, device_id: &str) -> zbus::fdo::Result<()> {
+        let id_body = device_id
+            .strip_prefix("ratbag:")
+            .ok_or_else(|| zbus::fdo::Error::InvalidArgs("not a mouse device id".into()))?;
+
+        self.ratbag
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| zbus::fdo::Error::ServiceUnknown("ratbagd not available".into()))?
+            .split_device(id_body)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
