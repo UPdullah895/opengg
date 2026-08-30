@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import com.opengg.app
 
-// Devices — live device list from the openggd daemon (real D-Bus data, read-only).
+// Devices — live device list from the openggd daemon (real D-Bus data).
 Rectangle {
     id: page
     color: Theme.bg
@@ -12,34 +12,31 @@ Rectangle {
         ? JSON.parse(DeviceController.devicesJson)
         : []
 
+    // Persisted like any other real UI preference (SettingsController's
+    // `settings.<key>` envelope — see GeneralPanel.qml's `defaultClickAction`
+    // for the same pattern), not the page-local `property string` ClipsPage
+    // uses for its own grid/list toggle: the roadmap for this feature
+    // explicitly asked for a setting that survives a restart, and this is
+    // the mechanism every other persisted-across-restarts UI preference in
+    // this app already goes through — no new persistence path invented.
+    property var settingsObj: JSON.parse(SettingsController.settingsJson || "{}")
+    readonly property string deviceViewMode: settingsObj.deviceViewMode || "list"
+    Connections {
+        target: SettingsController
+        function onSettingsJsonChanged() {
+            page.settingsObj = JSON.parse(SettingsController.settingsJson || "{}")
+        }
+    }
+    function setViewMode(mode) {
+        SettingsController.setValue("deviceViewMode", JSON.stringify(mode))
+    }
+
     Component.onCompleted: {
         DeviceController.refresh()
         TourController.registerTarget("devices-list", page)
     }
     Component.onDestruction: TourController.unregisterTarget("devices-list")
     Timer { interval: 3000; running: true; repeat: true; onTriggered: DeviceController.refresh() }
-
-    // DeviceCard.vue only branches headset vs. everything else, so there is
-    // no separate keyboard/gamepad glyph in the original to port.
-    function iconFor(type) {
-        return type === "headset" ? "headphones" : "mouse"
-    }
-
-    // Capability-gated, not device-type-gated (Devices Phase 2, roadmap §2's
-    // rule): checks "does this device report a dpi/polling_rate capability"
-    // rather than "is this a mouse" — a mouse ratbagd can't currently read
-    // resolution data for has no capabilities at all and correctly shows no
-    // control, and a future non-mouse device reporting the same capability
-    // would get the same control with no new branch needed here.
-    function hasCapability(modelData, cap) {
-        return !!(modelData.capabilities && modelData.capabilities.indexOf(cap) !== -1)
-    }
-    function dpiOptionsFor(modelData) {
-        return (modelData.dpiOptions || []).map(d => ({ value: d, label: d + " DPI" }))
-    }
-    function pollingRateOptionsFor(modelData) {
-        return (modelData.pollingRateOptions || []).map(r => ({ value: r, label: r + " Hz" }))
-    }
 
     ScrollView {
         id: devicesScroll
@@ -69,10 +66,44 @@ Rectangle {
                     font.weight: Font.Bold
                     Layout.fillWidth: true
                 }
+
+                // View-mode switcher (Devices roadmap Phase 4) — same
+                // SegmentedToggle+IconToggle pair ClipsPage's grid/list
+                // toggle already uses, just with a third segment. "square"
+                // stands in for carousel/one-at-a-time: there's no
+                // dedicated carousel glyph in Icons.qml yet and this reuses
+                // an existing icon rather than adding a new asset for one
+                // button (see AGENTS.md's icon-registry rule for what
+                // adding a real one would require).
+                SegmentedToggle {
+                    IconToggle {
+                        flat: true
+                        icon: "list"
+                        active: page.deviceViewMode === "list"
+                        tooltip: "List view"
+                        onTriggered: page.setViewMode("list")
+                    }
+                    IconToggle {
+                        flat: true
+                        icon: "grid"
+                        active: page.deviceViewMode === "grid"
+                        tooltip: "Grid view"
+                        onTriggered: page.setViewMode("grid")
+                    }
+                    IconToggle {
+                        flat: true
+                        icon: "square"
+                        active: page.deviceViewMode === "carousel"
+                        tooltip: "Carousel view"
+                        onTriggered: page.setViewMode("carousel")
+                    }
+                }
+
                 Rectangle {
                     width: 8; height: 8; radius: 4
                     color: DeviceController.connected ? Theme.success : Theme.danger
                     Layout.alignment: Qt.AlignVCenter
+                    Layout.leftMargin: 8
                 }
                 Text {
                     text: DeviceController.connected ? "daemon connected" : "daemon offline"
@@ -81,167 +112,101 @@ Rectangle {
                 }
             }
 
-            Repeater {
-                model: page.devices
+            // Three view modes as static siblings, switched by `visible`
+            // only — never a Loader that recreates content. Same reasoning
+            // as MixerPage.qml's EQ/DSP tab panels: recreating DeviceCard
+            // instances on every mode switch would re-run
+            // DeviceController.imagePath()/re-evaluate every SelectField's
+            // options from scratch and could flash empty content for a
+            // frame, exactly what the roadmap's acceptance check ("no
+            // re-fetch/flicker") rules out. All three read the same
+            // `page.devices` — switching modes never touches
+            // DeviceController itself.
 
-                // Device card
-                Rectangle {
-                    required property var modelData
+            // List — unchanged from before Phase 4, just using the
+            // extracted DeviceCard component.
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: page.deviceViewMode === "list"
+                spacing: 20
+
+                Repeater {
+                    model: page.devices
+                    DeviceCard {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 680
+                    }
+                }
+            }
+
+            // Grid — two columns of narrower cards.
+            GridLayout {
+                Layout.fillWidth: true
+                visible: page.deviceViewMode === "grid"
+                columns: 2
+                columnSpacing: 20
+                rowSpacing: 20
+
+                Repeater {
+                    model: page.devices
+                    DeviceCard {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 320
+                    }
+                }
+            }
+
+            // Carousel — one card at a time. A SwipeView (the standard QQC2
+            // control for exactly this "page through items" interaction) is
+            // used here rather than a hand-rolled PathView: it gets
+            // swipe/keyboard paging and current-item tracking for free,
+            // with far less surface area for a QML layout landmine than
+            // manually computing a PathView's path.
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: page.deviceViewMode === "carousel"
+                spacing: 12
+
+                SwipeView {
+                    id: carousel
                     Layout.fillWidth: true
                     Layout.preferredWidth: 680
-                    radius: Theme.radius
-                    color: Theme.surface
-                    border.width: 1
-                    border.color: Theme.border
-                    implicitHeight: card.implicitHeight + 32
+                    // SwipeView doesn't auto-size to its current page's
+                    // implicit height — each DeviceCard's height differs
+                    // (a headset's extra stats row, a mouse's controls row),
+                    // so this tracks whichever page is actually showing.
+                    // `currentItem` is a real SwipeView property; this is a
+                    // normal reactive binding, not the mapToItem()-style
+                    // one-shot-evaluation trap.
+                    Layout.preferredHeight: currentItem ? currentItem.implicitHeight : 120
+                    clip: true
 
-                    RowLayout {
-                        id: card
-                        anchors.fill: parent
-                        anchors.margins: 16
-                        spacing: 16
-
-                        // Device image — Devices roadmap Phase 3: a bundled
-                        // generic silhouette resolved via
-                        // opengg_core::device_assets (no real per-model
-                        // photo tier yet, see that module's doc comment for
-                        // why). Falls back to the small line-icon glyph
-                        // (unchanged from before this phase) whenever no
-                        // image resolves, so a card is never blank.
-                        Item {
-                            Layout.alignment: Qt.AlignTop
-                            Layout.preferredWidth: 56
-                            Layout.preferredHeight: 56
-
-                            Image {
-                                id: deviceImage
-                                anchors.fill: parent
-                                fillMode: Image.PreserveAspectFit
-                                source: DeviceController.imagePath(
-                                            modelData.vid, modelData.pid, modelData.deviceType)
-                                visible: source !== "" && status === Image.Ready
-                            }
-                            Icon {
-                                anchors.centerIn: parent
-                                name: page.iconFor(modelData.deviceType)
-                                size: 26
-                                color: Theme.textDim
-                                visible: !deviceImage.visible
-                            }
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            Text {
-                                text: modelData.name
-                                color: Theme.text
-                                font.pixelSize: 16
-                                font.weight: Font.DemiBold
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                            }
-                            Text {
-                                text: modelData.deviceType + " · " + modelData.model
-                                color: Theme.textDim
-                                font.pixelSize: 12
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                            }
-
-                            // Headset-specific live stats
-                            RowLayout {
-                                spacing: 18
-                                visible: modelData.deviceType === "headset"
-
-                                // Battery: icon + level, mirroring DeviceCard.vue's
-                                // ICON_BATTERY + "<n>%" pairing.
-                                Row {
-                                    visible: modelData.batteryLevel !== undefined
-                                    spacing: 5
-                                    Icon {
-                                        name: "battery"
-                                        size: 14
-                                        color: Theme.textDim
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                    Text {
-                                        text: modelData.batteryLevel >= 0
-                                              ? modelData.batteryLevel + "%"
-                                              : "n/a"
-                                        color: Theme.textDim
-                                        font.pixelSize: 12
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                }
-                                Text {
-                                    // No icon here: DeviceCard.vue renders chatmix
-                                    // as plain text, so the 🎚 glyph was invented.
-                                    visible: modelData.chatmix !== undefined
-                                    text: "chatmix " + modelData.chatmix
-                                    color: Theme.textDim
-                                    font.pixelSize: 12
-                                }
-                                Text {
-                                    // `visible: false` does NOT stop a `text`
-                                    // binding from evaluating, so the undefined
-                                    // guard has to live in the expression too.
-                                    visible: modelData.capabilities !== undefined
-                                    text: (modelData.capabilities ? modelData.capabilities.length : 0)
-                                          + " capabilities"
-                                    color: Theme.textDim
-                                    font.pixelSize: 12
-                                }
-                            }
-
-                            // Mouse controls — capability-gated (see
-                            // page.hasCapability), not deviceType-gated.
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Layout.topMargin: 4
-                                spacing: 16
-                                visible: page.hasCapability(modelData, "dpi")
-                                         || page.hasCapability(modelData, "polling_rate")
-
-                                ColumnLayout {
-                                    visible: page.hasCapability(modelData, "dpi")
-                                    spacing: 4
-                                    Text { text: "DPI"; color: Theme.textDim; font.pixelSize: 11 }
-                                    SelectField {
-                                        Layout.preferredWidth: 140
-                                        options: page.dpiOptionsFor(modelData)
-                                        value: modelData.dpi
-                                        onPicked: (v) => DeviceController.setDpi(modelData.id, v)
-                                    }
-                                }
-                                ColumnLayout {
-                                    visible: page.hasCapability(modelData, "polling_rate")
-                                    spacing: 4
-                                    Text { text: "Polling Rate"; color: Theme.textDim; font.pixelSize: 11 }
-                                    SelectField {
-                                        Layout.preferredWidth: 140
-                                        options: page.pollingRateOptionsFor(modelData)
-                                        value: modelData.pollingRate
-                                        onPicked: (v) => DeviceController.setPollingRate(modelData.id, v)
-                                    }
-                                }
-                            }
-
-                            // Write-failure feedback for this specific card —
-                            // keyed by device id so two cards mid-write at
-                            // once don't show each other's error.
-                            Text {
-                                visible: DeviceController.lastErrorDeviceId === modelData.id
-                                         && DeviceController.lastError !== ""
-                                text: DeviceController.lastError
-                                color: Theme.danger
-                                font.pixelSize: 11
-                                Layout.fillWidth: true
-                                wrapMode: Text.WordWrap
-                            }
+                    Repeater {
+                        model: page.devices
+                        DeviceCard {
+                            width: carousel.width
+                            // SwipeView positions every page, including the
+                            // off-screen ones, and relies on its own
+                            // `clip: true` to hide them -- but Icon.qml's
+                            // Shape-based glyphs don't respect that clip
+                            // under the offscreen QPA backend (confirmed via
+                            // ui-shots.sh: a headset card's battery icon
+                            // painted through the clip and floated outside
+                            // the visible page, reproducibly, independent of
+                            // settle delay -- not a one-frame race). Hiding
+                            // every non-current page outright sidesteps the
+                            // Shape/clip interaction entirely, at the cost
+                            // of the adjacent page no longer being visible
+                            // mid-drag during an interactive swipe gesture.
+                            visible: SwipeView.isCurrentItem
                         }
                     }
+                }
+                PageIndicator {
+                    Layout.alignment: Qt.AlignHCenter
+                    visible: carousel.count > 1
+                    count: carousel.count
+                    currentIndex: carousel.currentIndex
                 }
             }
 

@@ -6,6 +6,101 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 4: Grid/List/Carousel view modes)
+
+**What Changed:**
+- New `qt-shell/qml/components/DeviceCard.qml` — the single-device-card
+  content (image+icon-fallback, name/model, headset stats, capability-
+  gated DPI/Polling-Rate `SelectField`s, write-error feedback) extracted
+  out of `DevicesPage.qml`'s inline `Repeater` delegate into its own
+  reusable component with `required property var modelData` at the root
+  and no fixed sizing of its own — every caller sets its own `Layout.*`.
+  Registered in `qt-shell/build.rs`.
+- `qt-shell/qml/pages/DevicesPage.qml` — rewritten to add:
+  - A persisted `deviceViewMode` (`"list"` / `"grid"` / `"carousel"`,
+    default `"list"`), read via `SettingsController.settingsJson` and
+    written via `SettingsController.setValue("deviceViewMode", ...)` —
+    the same generic settings envelope every other persisted UI
+    preference in this app already goes through, not a new mechanism.
+  - A `SegmentedToggle` + three `IconToggle`s (`"list"`, `"grid"`,
+    `"square"` — there's no dedicated carousel glyph in `Icons.qml` yet,
+    so `"square"` is reused rather than adding a one-button icon asset)
+    in the page header, next to "daemon connected".
+  - Three permanently-instantiated sibling view containers — a
+    `ColumnLayout`+`Repeater` (List, unchanged layout, now using
+    `DeviceCard`), a two-column `GridLayout`+`Repeater` (Grid), and a
+    `SwipeView`+`PageIndicator`+`Repeater` (Carousel) — switched only via
+    `visible: page.deviceViewMode === "..."`, never a `Loader`. This is
+    the same "static children, `visible`-only toggling" pattern
+    `MixerPage.qml`'s EQ/DSP tabs already use, for the same reason: a
+    `Loader` would recreate every `DeviceCard` (re-running
+    `imagePath()`, re-evaluating every `SelectField`'s options) on every
+    mode switch, which is exactly the flicker/re-fetch the roadmap's
+    acceptance check rules out.
+  - Deliberate deviation from the roadmap text: it suggested a
+    "`PathView`-based carousel"; this uses `SwipeView`+`PageIndicator`
+    instead — the standard QQC2 control for "page through N items",
+    with paging/keyboard/current-item tracking built in, versus hand-
+    computing a `PathView`'s `path`. Same one-at-a-time carousel
+    behavior, less custom surface area.
+
+**Why:** Phase 4 of the Devices Page roadmap — let the same
+`DeviceController.devicesJson` data be viewed as a list, a grid, or a
+one-at-a-time carousel, with the choice remembered across a restart.
+
+**Bug found and fixed during verification (not from the roadmap):**
+`ui-shots.sh`'s Carousel screenshot showed a stray battery-icon glyph
+floating outside the visible card, roughly where the *second*,
+off-screen `SwipeView` page's headset stats row would sit. Root-caused
+by process of elimination, not guesswork:
+- Reproduced at `DELAY=900` and again at `DELAY=3000` — pixel-identical
+  position both times, ruling out a one-frame layout-settle race.
+- Added `clip: true` to `DeviceCard`'s own root `Rectangle` — no change
+  at all, ruling out "the card's own bounds aren't clipping its
+  children."
+- That leaves `Icon.qml`'s `QtQuick.Shapes`-based glyph (a `Shape` +
+  `ShapePath` + `PathSvg`, not a `Rectangle`/`Text`/`Image`) not
+  respecting *either* clip node under this Qt/offscreen-QPA
+  combination — `SwipeView`'s own `clip: true` positions off-screen
+  pages out of view and relies on that clip to hide them, but the Shape
+  painted through it regardless.
+- Fix: `visible: SwipeView.isCurrentItem` on each `DeviceCard` delegate
+  inside the Carousel's `Repeater`, in `DevicesPage.qml`. Hiding
+  non-current pages outright means nothing from them enters the scene
+  graph to leak, sidestepping the Shape/clip interaction entirely
+  rather than working around it. Traded off: the adjacent page is no
+  longer visible sliding in mid-drag during an interactive swipe
+  gesture (paging via the header switcher or `PageIndicator` dots is
+  unaffected — only the drag-preview cosmetic is lost). Re-verified at
+  both delays after the fix: clean.
+
+**Landmines:**
+- Same `core/` clippy gap noted in the Phase 3 entry above — untouched
+  by this phase (no `core/` files touched at all; Phase 4 is QML +
+  `build.rs` only).
+- Interactive drag-to-swipe on the Carousel view was not manually
+  click-tested (no native-GUI-automation tool available in this
+  session, same caveat as Phase 2's dropdown interactions) — verified
+  via the header switcher's `onTriggered` write path and via
+  `ui-shots.sh` screenshots of each mode with `deviceViewMode` set
+  directly in `ui-settings.json`, not via simulated pointer drags.
+
+**Verification:** `qt-shell`: `cargo build` → clean; `cargo clippy
+--all-targets -- -D warnings` → 0 warnings; `cargo test` → 22/22 pass
+(unrelated, no new Rust this phase). `check-colors.sh` → clean.
+`ui-shots.sh` with `QT_FORCE_STDERR_LOGGING=1` → "no QML warnings"
+across all 16 pages, run twice (once before, once after the
+Shape/clip fix). Manually set `~/.config/opengg/ui-settings.json`'s
+`settings.deviceViewMode` to `"grid"` and `"carousel"` in turn,
+re-ran `ONLY=devices ui-shots.sh` for each, visually inspected all
+three modes (List/Grid/Carousel screenshots) — controls, images, and
+headset stats render correctly in all three, switcher segment
+highlights the active mode — then restored the original
+`ui-settings.json` (no `deviceViewMode` key) so the file matches
+pre-session state, confirmed the page falls back to `"list"`.
+
+---
+
 ### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 3: bundled device-image placeholders)
 
 **What Changed:**

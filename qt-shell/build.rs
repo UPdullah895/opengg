@@ -34,6 +34,7 @@ fn main() {
         QmlFile::from("qml/components/VideoPlayer.qml"),
         QmlFile::from("qml/components/ClipVideoSurface.qml"),
         QmlFile::from("qml/components/ChannelStrip.qml"),
+        QmlFile::from("qml/components/DeviceCard.qml"),
         QmlFile::from("qml/components/AppBox.qml"),
         QmlFile::from("qml/components/ClipCard.qml"),
         QmlFile::from("qml/components/ClipContextMenu.qml"),
