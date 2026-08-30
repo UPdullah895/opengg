@@ -6,6 +6,89 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 2: DPI/polling-rate controls UI)
+
+**What Changed:**
+- `daemon/src/device/ratbag.rs` — `build_device_info` now populates
+  `capabilities` for mice too (`"dpi"` / `"polling_rate"`), derived from
+  whether `dpi_options`/`polling_rate_options` are actually non-empty —
+  never from `DeviceType`. This is the capability-gating data source the
+  roadmap's §2 rule requires; a mouse ratbagd can't currently read
+  resolution data for correctly advertises zero capabilities rather than a
+  hardcoded "it's a mouse, so it must have DPI" assumption.
+- `qt-shell/src/device.rs` — `DeviceController` gained two invokables,
+  `setDpi`/`setPollingRate`, following the exact background-thread +
+  qt_thread.queue pattern `AudioController::set_mute` already uses:
+  background thread does the blocking D-Bus round trip, refreshes
+  afterward *unconditionally* (success or failure) so the UI never keeps
+  showing a value the write didn't actually achieve. Added `lastError`/
+  `lastErrorDeviceId` qproperties — set on a failed write, cleared on the
+  next successful one, keyed by device id so two cards mid-write don't
+  show each other's error. This is a first for the device/audio
+  controllers: no existing write path (`setVolume`, `setMute`,
+  `routeApp`, …) surfaces failures to the UI today, they only
+  `eprintln!` — Phase 2's explicit requirement to not silently no-op on
+  a failed write is genuinely new territory for this codebase's
+  controller pattern, not a port of an existing convention.
+- `qt-shell/qml/pages/DevicesPage.qml` — added a DPI dropdown and a
+  Polling Rate dropdown to the mouse card, gated by
+  `hasCapability(modelData, "dpi"/"polling_rate")`, not
+  `deviceType === "mouse"`. Both reuse the existing `SelectField`
+  component (no new custom control), built from the device's own
+  `dpiOptions`/`pollingRateOptions` arrays — never a hardcoded numeric
+  range, since a device's real DPI stages are non-linear (confirmed: this
+  G502 jumps from 100-step increments below 2600 to 200+ step increments
+  above it). Added a per-card error `Text` reading
+  `DeviceController.lastError`, shown only when
+  `lastErrorDeviceId === modelData.id`.
+
+**Why:** Phase 2 of the Devices Page roadmap — the daemon's write surface
+(`SetDpi`/`SetPollingRate`, fixed working in the previous two entries) had
+no UI in front of it at all.
+
+**Landmines:**
+- Verification gap, stated plainly: there is no tool available in this
+  session to drive a native Qt window's mouse/keyboard (the offscreen
+  `ui-shots.sh` renderer takes a static screenshot only, it doesn't
+  simulate clicks). The actual QML→Rust dropdown-selection→D-Bus-write
+  round trip was **not** interactively click-tested end-to-end. What
+  *was* verified: (1) the screenshot shows the dropdowns correctly
+  reflecting the real device's live 800 DPI / 1000 Hz — proving the read/
+  display binding is correct; (2) the exact D-Bus calls
+  `setDpi`/`setPollingRate` invoke (`opengg_core::device::set_mouse_dpi`/
+  `set_mouse_polling_rate` → `SetDpi`/`SetPollingRate`) were already
+  proven to work live against this same hardware via `busctl` in the
+  previous entry; (3) the Rust invokable code compiles and follows the
+  same background-thread pattern already working for `setVolume`/
+  `setMute`. Actually clicking through the dropdown in a running app is
+  a reasonable follow-up check for whoever picks up Phase 3/4, or for the
+  user to do directly (`./dev.sh ui`).
+- The first screenshot attempt (before rebuilding+reinstalling the
+  daemon with this session's capability-population change) showed the
+  G502 card with no controls at all — not a QML bug, just a stale
+  installed daemon binary from an earlier point in this same session
+  (AGENTS.md's "Daemon Binary Can Be Stale" landmine, hit for real here).
+  Re-verify the installed daemon's mtime against the daemon source
+  whenever a screenshot looks like it's missing daemon-sourced data.
+- No manual "merge with…"/"not the same device" UI affordance was added
+  in Phase 1 or here — still just the D-Bus methods + override file,
+  verified via `busctl` only (see that entry's landmine note). Phase 2's
+  card now has real controls on it, so this would be a more natural time
+  to add that affordance than when the card had nothing else on it — left
+  for whoever picks up Phase 3/4 unless the user wants it sooner.
+
+**Verification:** `cargo clippy --all-targets -- -D warnings` → 0
+warnings (daemon: 27/27 tests incl. 2 new capability tests; qt-shell:
+22/22 tests, all pre-existing/unrelated). `qt-shell/tools/check-colors.sh`
+→ clean. `qt-shell/tools/ui-shots.sh` with `QT_FORCE_STDERR_LOGGING=1` →
+"no QML warnings" across all 16 pages, twice (once before, once after
+catching the stale-daemon issue above). Visually inspected
+`devices.png`: DPI/Polling Rate dropdowns render correctly showing
+"800 DPI"/"1000 Hz", matching the real connected G502; the headset card
+correctly shows neither control.
+
+---
+
 ### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Fix SetDpi/SetPollingRate: three compounding ratbagd D-Bus bugs)
 
 **What Changed:** `daemon/src/device/ratbag.rs` — `SetDpi`/`SetPollingRate`

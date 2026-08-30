@@ -334,6 +334,23 @@ fn build_device_info(raw: &[RawRatbagDevice], group: &[usize]) -> DeviceInfo {
         )
     };
 
+    // Capability-gated, not DeviceType-gated: the QML side checks
+    // `capabilities.includes("dpi")` rather than `deviceType === "mouse"`
+    // before showing a control, so a mouse whose active resolution doesn't
+    // (yet) report options — or a future non-mouse device that does — is
+    // handled correctly without a new branch in the UI.
+    let mut capabilities = Vec::new();
+    if primary.dpi_options.as_ref().is_some_and(|v| !v.is_empty()) {
+        capabilities.push("dpi".to_string());
+    }
+    if primary
+        .polling_rate_options
+        .as_ref()
+        .is_some_and(|v| !v.is_empty())
+    {
+        capabilities.push("polling_rate".to_string());
+    }
+
     DeviceInfo {
         id,
         name: primary.name.clone(),
@@ -350,7 +367,7 @@ fn build_device_info(raw: &[RawRatbagDevice], group: &[usize]) -> DeviceInfo {
         battery_charging: None,
         sidetone: None,
         chatmix: None,
-        capabilities: None,
+        capabilities: if capabilities.is_empty() { None } else { Some(capabilities) },
         eq_presets: None,
         eq_meta: None,
     }
@@ -798,6 +815,25 @@ mod tests {
         // sorts second by (vid, pid).
         assert_eq!(info.dpi, Some(800));
         assert_eq!(info.name, "Logitech G502 LIGHTSPEED Wireless Gaming Mouse");
+    }
+
+    #[test]
+    fn capabilities_are_populated_from_option_lists_not_device_type() {
+        let mut with_options = raw("hidraw0", 0x046d, 0xc08d, "Logitech G502", Some(800));
+        with_options.dpi_options = Some(vec![400, 800, 1600]);
+        with_options.polling_rate_options = Some(vec![125, 250, 500, 1000]);
+        let info = build_device_info(&[with_options], &[0]);
+        assert_eq!(
+            info.capabilities.as_deref(),
+            Some(&["dpi".to_string(), "polling_rate".to_string()][..])
+        );
+
+        // No option lists (e.g. a device ratbagd can't currently read
+        // resolution/profile data for) → no capabilities advertised, not a
+        // default/empty-but-present list.
+        let no_options = raw("hidraw1", 0x046d, 0x1234, "Some Other Mouse", None);
+        let info = build_device_info(&[no_options], &[0]);
+        assert_eq!(info.capabilities, None);
     }
 
     #[test]

@@ -25,6 +25,22 @@ Rectangle {
         return type === "headset" ? "headphones" : "mouse"
     }
 
+    // Capability-gated, not device-type-gated (Devices Phase 2, roadmap §2's
+    // rule): checks "does this device report a dpi/polling_rate capability"
+    // rather than "is this a mouse" — a mouse ratbagd can't currently read
+    // resolution data for has no capabilities at all and correctly shows no
+    // control, and a future non-mouse device reporting the same capability
+    // would get the same control with no new branch needed here.
+    function hasCapability(modelData, cap) {
+        return !!(modelData.capabilities && modelData.capabilities.indexOf(cap) !== -1)
+    }
+    function dpiOptionsFor(modelData) {
+        return (modelData.dpiOptions || []).map(d => ({ value: d, label: d + " DPI" }))
+    }
+    function pollingRateOptionsFor(modelData) {
+        return (modelData.pollingRateOptions || []).map(r => ({ value: r, label: r + " Hz" }))
+    }
+
     ScrollView {
         id: devicesScroll
         anchors.fill: parent
@@ -155,6 +171,52 @@ Rectangle {
                                     color: Theme.textDim
                                     font.pixelSize: 12
                                 }
+                            }
+
+                            // Mouse controls — capability-gated (see
+                            // page.hasCapability), not deviceType-gated.
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: 4
+                                spacing: 16
+                                visible: page.hasCapability(modelData, "dpi")
+                                         || page.hasCapability(modelData, "polling_rate")
+
+                                ColumnLayout {
+                                    visible: page.hasCapability(modelData, "dpi")
+                                    spacing: 4
+                                    Text { text: "DPI"; color: Theme.textDim; font.pixelSize: 11 }
+                                    SelectField {
+                                        Layout.preferredWidth: 140
+                                        options: page.dpiOptionsFor(modelData)
+                                        value: modelData.dpi
+                                        onPicked: (v) => DeviceController.setDpi(modelData.id, v)
+                                    }
+                                }
+                                ColumnLayout {
+                                    visible: page.hasCapability(modelData, "polling_rate")
+                                    spacing: 4
+                                    Text { text: "Polling Rate"; color: Theme.textDim; font.pixelSize: 11 }
+                                    SelectField {
+                                        Layout.preferredWidth: 140
+                                        options: page.pollingRateOptionsFor(modelData)
+                                        value: modelData.pollingRate
+                                        onPicked: (v) => DeviceController.setPollingRate(modelData.id, v)
+                                    }
+                                }
+                            }
+
+                            // Write-failure feedback for this specific card —
+                            // keyed by device id so two cards mid-write at
+                            // once don't show each other's error.
+                            Text {
+                                visible: DeviceController.lastErrorDeviceId === modelData.id
+                                         && DeviceController.lastError !== ""
+                                text: DeviceController.lastError
+                                color: Theme.danger
+                                font.pixelSize: 11
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
                             }
                         }
                     }
