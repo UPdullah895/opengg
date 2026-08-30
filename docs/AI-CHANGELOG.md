@@ -6,6 +6,73 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Mouse device identity: key by vid:pid, not by ratbagd sysname)
+
+**What Changed:**
+- `daemon/src/device/ratbag.rs` — `DeviceInfo.id` for mice is now
+  `"ratbag:{vid:04x}:{pid:04x}"` instead of `"ratbag:{sysname}"`. `sysname`
+  is the last path segment of the ratbagd D-Bus object path — a route/
+  enumeration-order artifact, not a stable device identity. It changes
+  across replugs, USB re-enumeration, or a driver reset, which would
+  duplicate the same physical mouse into a "new" device on OpenGG's side
+  every time that happens.
+- Added `RatbagManager::resolve_sysname(vid, pid)`: re-derives the current
+  sysname from ratbagd's live device list on every write, by matching
+  `Model` ("usb:VVVV:PPPP:version"). `set_dpi`/`set_polling_rate` now take
+  `(vid, pid, ...)` and resolve internally instead of taking a
+  caller-supplied sysname — callers were never meant to cache a sysname
+  across calls anyway, this just makes the resolution the daemon's job.
+- `daemon/src/device/dbus.rs` — generalized `parse_headset_id` into
+  `parse_vid_pid_id(id, prefix)`, reused for both `"headset:"` (unchanged)
+  and now `"ratbag:"`. `set_dpi`/`set_polling_rate` D-Bus handlers updated
+  to parse vid:pid instead of stripping a sysname. Removed the now-unused
+  `strip_prefix` helper.
+
+**Why:** flagged in this session's OpenLogi-applicability report (§2) —
+OpenLogi's `docs/DECISIONS.md` documents fixing the exact same bug class
+(device identity keyed by transport/route instead of physical identity),
+after hitting "same device, two cards" bugs on receiver re-enumeration.
+OpenGG's `ratbag:{sysname}` scheme had the identical exposure. It wasn't
+observable yet only because no per-device settings were persisted anywhere
+keyed by that id — the moment any feature does that (button remapping,
+per-device RGB profiles, cached device images), a route-scoped id turns
+into silent, hard-to-diagnose data loss on replug. Headsets already used a
+vid:pid-based id (`headset:{vid}:{pid}` in `headset.rs`) — this makes mice
+consistent with that scheme rather than being the odd one out.
+
+**Landmines:**
+- **Known, accepted limitation**: vid:pid is *not* a full identity fix.
+  ratbagd's D-Bus API exposes no per-unit serial (`Model` is identical for
+  every unit of the same mouse model — confirmed against
+  `/usr/share/doc/libratbag/html/_sources/dbus.rst.txt`), so two identical-
+  model mice plugged in simultaneously will still collide onto the same
+  `id`. This is a real gap, not silently swept under the rug — there is
+  currently no stronger identity signal available from ratbagd to
+  disambiguate them. If/when this needs fixing for real (someone actually
+  hits it), the fix has to come from somewhere ratbagd doesn't expose today
+  (e.g. reading the kernel `uniq`/serial via udev/hidraw directly, bypassing
+  ratbagd for identity purposes only).
+- `resolve_sysname` walks ratbagd's live device list once per write call
+  rather than caching a vid→sysname map — deliberate, since caching would
+  reintroduce exactly the staleness bug this fix removes if a replug happens
+  between calls. This makes each `set_dpi`/`set_polling_rate` call slightly
+  more expensive (one extra `Manager.Devices` + N `Device.Model` round
+  trips), which is a non-issue at the call frequency these see (interactive
+  slider commits, not a hot path).
+- Nothing outside `daemon/src/device/` constructed or parsed a `"ratbag:"`
+  id anywhere in the tree (confirmed via `grep -rn "ratbag:"` before making
+  this change) — `qt-shell/src/device.rs`'s `DeviceController` is read-only
+  today and `core/src/device.rs` treats `device_id` as an opaque string
+  passed straight through to D-Bus. So this change has no client-side
+  fallout, but it does mean the write path (`set_dpi`/`set_polling_rate`)
+  is still not wired up to any UI yet — that remains a separate gap.
+
+**Verification:** `cargo clippy --all-targets -- -D warnings` → 0 warnings;
+`cargo test` → 9/9 pass (daemon crate; no device-specific unit tests exist
+yet, this exercises the crate compiles/links cleanly only).
+
+---
+
 ### [2026-08-23] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Remove the archived Tauri + Vue frontend entirely)
 
 **What Changed:**

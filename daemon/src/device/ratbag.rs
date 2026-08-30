@@ -137,16 +137,18 @@ impl RatbagManager {
         // Get DPI and polling rate from active profile's active resolution
         let (dpi, polling_rate, dpi_options) = self.read_active_resolution(&dev).await;
 
-        // Use last segment of object path as sysname
-        let sysname = path
-            .as_str()
-            .rsplit('/')
-            .next()
-            .unwrap_or("unknown")
-            .to_string();
-
+        // NOTE on identity: ratbagd's D-Bus API exposes no persistent
+        // per-unit serial — `Model` is only "usb:VVVV:PPPP:version", identical
+        // for every unit of the same mouse model. We key `id` on vid:pid
+        // (matching the headset id scheme in headset.rs) rather than on the
+        // object-path sysname, which is a route/enumeration-order artifact
+        // that changes across replugs/reboots and would otherwise duplicate
+        // the same physical mouse into a new "device" whenever ratbagd
+        // re-enumerates it. The tradeoff: two identical-model mice plugged in
+        // at once collide onto one id — accepted for now since ratbagd gives
+        // us nothing more specific to disambiguate them by.
         Some(DeviceInfo {
-            id: format!("ratbag:{sysname}"),
+            id: format!("ratbag:{vid:04x}:{pid:04x}"),
             name: name.clone(),
             model: model_str,
             device_type: DeviceType::Mouse,
@@ -231,7 +233,41 @@ impl RatbagManager {
         (None, None, None)
     }
 
-    pub async fn set_dpi(&self, sysname: &str, dpi: u32) -> Result<()> {
+    /// Resolve a stable vid:pid identity back to the ratbagd sysname
+    /// currently backing it. Sysnames are route-scoped and can change across
+    /// replugs/reboots, so callers should re-resolve on every write rather
+    /// than caching the result (see the identity note in `read_device`).
+    async fn resolve_sysname(&self, vid: u16, pid: u16) -> Result<String> {
+        let manager = ManagerProxy::new(&self.conn)
+            .await
+            .context("connect to ratbagd Manager")?;
+        let paths = manager.devices().await.context("list ratbagd devices")?;
+
+        for path in &paths {
+            let Ok(dev) = DeviceProxy::builder(&self.conn)
+                .path(path.as_ref())
+                .unwrap()
+                .build()
+                .await
+            else {
+                continue;
+            };
+            let model_str = dev.model().await.unwrap_or_default();
+            if parse_model_id(&model_str) == (vid, pid) {
+                let sysname = path
+                    .as_str()
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("unknown")
+                    .to_string();
+                return Ok(sysname);
+            }
+        }
+        anyhow::bail!("no ratbagd device currently matches {vid:04x}:{pid:04x}")
+    }
+
+    pub async fn set_dpi(&self, vid: u16, pid: u16, dpi: u32) -> Result<()> {
+        let sysname = self.resolve_sysname(vid, pid).await?;
         let path = format!("/org/freedesktop/ratbag1/device/{sysname}");
         let dev = DeviceProxy::builder(&self.conn)
             .path(path.as_str())
@@ -268,7 +304,8 @@ impl RatbagManager {
         anyhow::bail!("active resolution not found for {sysname}")
     }
 
-    pub async fn set_polling_rate(&self, sysname: &str, rate: u32) -> Result<()> {
+    pub async fn set_polling_rate(&self, vid: u16, pid: u16, rate: u32) -> Result<()> {
+        let sysname = self.resolve_sysname(vid, pid).await?;
         let path = format!("/org/freedesktop/ratbag1/device/{sysname}");
         let dev = DeviceProxy::builder(&self.conn)
             .path(path.as_str())

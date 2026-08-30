@@ -48,14 +48,20 @@ impl DeviceInterface {
     }
 }
 
-/// Parse a headset device ID of the form "headset:{vid}:{pid}" and return (vid, pid).
-/// Returns None if the string does not match the expected format.
-fn parse_headset_id(device_id: &str) -> Option<(u16, u16)> {
-    let body = device_id.strip_prefix("headset:")?;
+/// Parse a `"{prefix}{vid}:{pid}"` device ID (e.g. `"headset:046d:0a5c"` or
+/// `"ratbag:046d:c08b"`) and return (vid, pid). Returns None if the string
+/// does not match the expected format.
+fn parse_vid_pid_id(device_id: &str, prefix: &str) -> Option<(u16, u16)> {
+    let body = device_id.strip_prefix(prefix)?;
     let (vid_str, pid_str) = body.split_once(':')?;
     let vid = u16::from_str_radix(vid_str, 16).ok()?;
     let pid = u16::from_str_radix(pid_str, 16).ok()?;
     Some((vid, pid))
+}
+
+/// Parse a headset device ID of the form "headset:{vid}:{pid}" and return (vid, pid).
+fn parse_headset_id(device_id: &str) -> Option<(u16, u16)> {
+    parse_vid_pid_id(device_id, "headset:")
 }
 
 #[interface(name = "org.opengg.Daemon.Device")]
@@ -65,7 +71,7 @@ impl DeviceInterface {
     }
 
     async fn set_dpi(&self, device_id: &str, dpi: u32) -> zbus::fdo::Result<()> {
-        let sysname = strip_prefix(device_id, "ratbag:")
+        let (vid, pid) = parse_vid_pid_id(device_id, "ratbag:")
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("not a mouse device id".into()))?;
 
         self.ratbag
@@ -73,13 +79,13 @@ impl DeviceInterface {
             .await
             .as_ref()
             .ok_or_else(|| zbus::fdo::Error::ServiceUnknown("ratbagd not available".into()))?
-            .set_dpi(sysname, dpi)
+            .set_dpi(vid, pid, dpi)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
     async fn set_polling_rate(&self, device_id: &str, rate: u32) -> zbus::fdo::Result<()> {
-        let sysname = strip_prefix(device_id, "ratbag:")
+        let (vid, pid) = parse_vid_pid_id(device_id, "ratbag:")
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("not a mouse device id".into()))?;
 
         self.ratbag
@@ -87,7 +93,7 @@ impl DeviceInterface {
             .await
             .as_ref()
             .ok_or_else(|| zbus::fdo::Error::ServiceUnknown("ratbagd not available".into()))?
-            .set_polling_rate(sysname, rate)
+            .set_polling_rate(vid, pid, rate)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
@@ -195,8 +201,4 @@ impl DeviceInterface {
     async fn get_profiles(&self) -> String {
         "[]".into()
     }
-}
-
-fn strip_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    s.strip_prefix(prefix)
 }
