@@ -32,6 +32,18 @@ pub fn thumb_dir() -> PathBuf {
         .join("opengg/thumbnails")
 }
 
+/// Per-user cache for real per-model device images:
+/// `~/.local/share/opengg/device-images`. Nothing populates this yet —
+/// Devices roadmap Phase 3 (see [`crate::device_assets`]) ships only bundled
+/// generic silhouettes. Defined now so a future sync tier that writes real
+/// images here doesn't need to change `device_assets::resolve_device_image`'s
+/// resolution order, only add a writer.
+pub fn device_images_cache_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("opengg/device-images")
+}
+
 /// Resolve the clip directory to use: the explicit `f` if given, else the first
 /// entry of `settings.clip_directories`, else [`default_clips_dir`].
 pub fn resolve_clips_dir(f: &str) -> PathBuf {

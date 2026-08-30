@@ -101,11 +101,33 @@ Rectangle {
                         anchors.margins: 16
                         spacing: 16
 
-                        Icon {
-                            name: page.iconFor(modelData.deviceType)
-                            size: 26
-                            color: Theme.textDim
+                        // Device image — Devices roadmap Phase 3: a bundled
+                        // generic silhouette resolved via
+                        // opengg_core::device_assets (no real per-model
+                        // photo tier yet, see that module's doc comment for
+                        // why). Falls back to the small line-icon glyph
+                        // (unchanged from before this phase) whenever no
+                        // image resolves, so a card is never blank.
+                        Item {
                             Layout.alignment: Qt.AlignTop
+                            Layout.preferredWidth: 56
+                            Layout.preferredHeight: 56
+
+                            Image {
+                                id: deviceImage
+                                anchors.fill: parent
+                                fillMode: Image.PreserveAspectFit
+                                source: DeviceController.imagePath(
+                                            modelData.vid, modelData.pid, modelData.deviceType)
+                                visible: source !== "" && status === Image.Ready
+                            }
+                            Icon {
+                                anchors.centerIn: parent
+                                name: page.iconFor(modelData.deviceType)
+                                size: 26
+                                color: Theme.textDim
+                                visible: !deviceImage.visible
+                            }
                         }
 
                         ColumnLayout {

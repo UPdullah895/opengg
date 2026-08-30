@@ -42,6 +42,19 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "setPollingRate"]
         fn set_polling_rate(self: Pin<&mut Self>, device_id: &QString, rate: i32);
+
+        /// Resolve the image to show for a device — Devices roadmap Phase 3
+        /// (bundled generic silhouettes only, see `opengg_core::device_assets`
+        /// for the resolution order and why there's no real per-model photo
+        /// tier yet). `vid`/`pid`/`device_type` are the same fields already
+        /// present in every entry of `devicesJson` (`.vid`, `.pid`,
+        /// `.deviceType`) — no new D-Bus round trip needed. Returns a
+        /// `file://` URL for QML's `Image.source`, or an empty string when
+        /// there's genuinely nothing to show (never a broken-image path).
+        /// Synchronous — just a couple of filesystem `stat` calls.
+        #[qinvokable]
+        #[cxx_name = "imagePath"]
+        fn image_path(self: &Self, vid: i32, pid: i32, device_type: &QString) -> QString;
     }
 
     impl cxx_qt::Threading for DeviceController {}
@@ -134,5 +147,18 @@ impl qobject::DeviceController {
                 controller.as_mut().refresh();
             });
         });
+    }
+
+    pub fn image_path(&self, vid: i32, pid: i32, device_type: &QString) -> QString {
+        let kind = opengg_core::device_assets::DeviceKind::from_device_type(&device_type.to_string());
+        let resolved = opengg_core::device_assets::resolve_device_image(
+            vid.max(0) as u16,
+            pid.max(0) as u16,
+            kind,
+        );
+        match resolved {
+            Some(path) => QString::from(&format!("file://{}", path.display())),
+            None => QString::from(""),
+        }
     }
 }

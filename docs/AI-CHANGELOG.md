@@ -6,6 +6,95 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 3: bundled device-image placeholders)
+
+**What Changed:**
+- New `core/src/device_assets.rs` — `resolve_device_image(vendor_id,
+  product_id, kind: Option<DeviceKind>) -> Option<PathBuf>`. This is
+  genuinely greenfield: qt-shell has never had a device-image pipeline at
+  all (the old Tauri+Vue UI's `deviceAssets.ts`/`device_database.json`/
+  `frontend/src/assets/devices/` and `scripts/fetch_device_assets.sh` were
+  removed with `frontend/` in an earlier session, per that entry's own
+  note that this was a real feature gap, not silently-dropped Qt-side
+  functionality). Resolution order: (1) a per-user cache at
+  `~/.local/share/opengg/device-images/<vid>-<pid>.png` — new
+  `core/src/paths.rs::device_images_cache_dir()`, nothing populates it
+  yet; (2) a bundled generic silhouette for the device's kind; (3)
+  `None` — callers must show nothing, never a broken-image path.
+- Two new bundled placeholder images at `packaging/device-images/`:
+  `mouse-silhouette.png` and `headset-silhouette.png` — plain, original,
+  hand-drawn geometric shapes (a rounded body + scroll-wheel notch; a
+  headband arc + two ear cups), generated locally via Python/Pillow, not
+  derived from or resembling any real product photo. **Deliberately not
+  reusing any real device-render catalog** — per this session's earlier
+  OpenLogi-applicability report (§6.2), a project like this typically
+  sources those from an externally-hosted catalog (e.g.
+  `assets.openlogi.org` / `@logi-assets` npm packages) with **no stated
+  licensing anywhere in that project's own repo** — only a trademark
+  disclaimer. Syncing from a catalog like that would be introducing an
+  asset of unverified license, not "using the same approach as an MIT
+  project" — flagged explicitly, not silently avoided.
+- `qt-shell/src/device.rs` — `DeviceController` gained a synchronous
+  `imagePath(vid, pid, deviceType) -> QString` invokable (a `self: &Self`
+  invokable returning a value, matching the existing `translate`/
+  `default_export_dir` pattern — not backgrounded, since this is a
+  couple of filesystem `stat` calls, not I/O worth a thread). Returns a
+  `file://` URL for QML's `Image.source`, or `""` when nothing resolves.
+- `qt-shell/qml/pages/DevicesPage.qml` — each device card's small 26px
+  line-icon glyph is now a 56×56 `Image` sourced from `imagePath(...)`,
+  falling back to that same small `Icon` glyph (unchanged) whenever the
+  image doesn't load — a card is never blank, and never shows a
+  broken-image icon either.
+
+**Why:** Phase 3 of the Devices Page roadmap — "device cards show
+something better than a blank space," scoped explicitly to bundled
+placeholders only, no network sync, per the roadmap's own instruction to
+defer that until a real, license-clear image source is settled.
+
+**Landmines:**
+- `core/`'s clippy has **20 pre-existing errors** under `-D warnings`
+  (in `audio.rs`, `clips/mod.rs`, `media.rs`, `vu.rs` — none touched by
+  this or any recent phase), and — separately — `Makefile`'s `lint`
+  target **does not run clippy on `core/` at all**, only `daemon` and
+  `qt-shell` (`grep -n "lint:" -A3 Makefile`). This isn't something this
+  phase introduced or fixed; confirmed via `git status` that none of the
+  20-error files are touched here, and `cargo clippy --all-targets`
+  (no `-D warnings`) shows zero warnings on the two files this phase did
+  touch (`device_assets.rs`, `paths.rs`). Worth its own follow-up: either
+  add `core/` to `make lint`'s clippy pass and fix the 20 pre-existing
+  errors, or explicitly document why `core/` is excluded.
+- The dev-default silhouette path
+  (`$CARGO_MANIFEST_DIR/../packaging/device-images`) mirrors
+  `qt-shell/src/i18n.rs`'s `locales_dir()` idiom exactly, including that
+  idiom's own unfinished half: like `OPENGG_LOCALES_DIR`, the
+  `OPENGG_DEVICE_IMAGES_DIR` production override is **not wired into any
+  packaging manifest** (AUR/Flatpak/deb/rpm/systemd unit) — confirmed
+  `OPENGG_LOCALES_DIR` itself has zero hits anywhere under `packaging/`
+  today. A real installed build's `CARGO_MANIFEST_DIR`-baked fallback
+  path would point at wherever the package was *built*, not installed —
+  this is a pre-existing gap in the same shape for locales, not a new
+  one; both need the same packaging fix together whenever that's tackled.
+- Deliberately did **not** implement the report's `InventoryHealth`-style
+  Scanning/Ready gating: with a purely synchronous, always-resolves-
+  instantly bundled-only resolver, there is nothing async to gate against
+  — no moment where the UI doesn't yet know if an image exists. Adding
+  that state machine now would be structure with no observable behavior
+  difference. Revisit once a real async/network image tier exists (per
+  the explicit non-goal above, not yet).
+
+**Verification:** `core/`: `cargo test` → 53/53 pass (3 new); `cargo
+clippy --all-targets` (no `-D warnings`, see landmine above) → zero
+warnings on the two files this phase touched. `qt-shell`: `cargo clippy
+--all-targets -- -D warnings` → 0 warnings; `cargo test` → 22/22 pass
+(unrelated, no new qt-shell tests — `device.rs` has none, consistent
+with the rest of that file). `check-colors.sh` → clean. `ui-shots.sh`
+with `QT_FORCE_STDERR_LOGGING=1` → "no QML warnings" across all 16
+pages. Visually inspected `devices.png`: both cards now show the larger
+bundled silhouette image instead of the small icon glyph, at correct
+size, with controls and headset stats unaffected.
+
+---
+
 ### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 2: DPI/polling-rate controls UI)
 
 **What Changed:**
