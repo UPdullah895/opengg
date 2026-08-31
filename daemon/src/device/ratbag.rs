@@ -600,6 +600,22 @@ impl RatbagManager {
                     .build()
                     .await?;
                 if res.is_active().await.unwrap_or(false) {
+                    // ratbagd accepts a Properties.Set on `Resolution` for
+                    // basically any u32 and reports success either way, but
+                    // an out-of-stage value gets silently dropped by the
+                    // device/protocol underneath it — confirmed live: a
+                    // SetDpi(999999) call returned Ok(()) and the mouse's
+                    // actual DPI never moved off its prior value. Validate
+                    // against this resolution's own advertised stage list
+                    // before writing so a bad value is a real, visible
+                    // error instead of a silent no-op that the caller has
+                    // no way to distinguish from "it worked."
+                    let valid = res.resolutions().await.context("read valid DPI stages")?;
+                    if !valid.contains(&dpi) {
+                        anyhow::bail!(
+                            "{dpi} is not a supported DPI stage for {sysname} (valid: {valid:?})"
+                        );
+                    }
                     // `Resolution` is declared `:type: v` by ratbagd — its
                     // value is itself a nested variant, holding either a
                     // plain `u` or a `(uu)` pair (see the `Resolution` proxy
@@ -649,6 +665,19 @@ impl RatbagManager {
                 .await?;
             if !profile.is_active().await.unwrap_or(false) {
                 continue;
+            }
+            // Unlike Resolution, ratbagd does NOT clamp/reject an
+            // out-of-stage ReportRate write at all — confirmed live: a
+            // SetPollingRate(999) call returned Ok(()) *and* the device's
+            // raw ReportRate property actually became 999, an arbitrary
+            // value never advertised by ReportRates. Validate here so an
+            // out-of-range request is a real error, not real (bogus)
+            // hardware state.
+            let valid = profile.report_rates().await.context("read valid report rates")?;
+            if !valid.contains(&rate) {
+                anyhow::bail!(
+                    "{rate}Hz is not a supported report rate for {sysname} (valid: {valid:?})"
+                );
             }
             profile
                 .set_report_rate(rate)

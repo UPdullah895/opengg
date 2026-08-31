@@ -6,6 +6,98 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-31] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Phase 2 hardware verification: DPI/rate write validation gap)
+
+**What Changed:**
+- `daemon/src/device/ratbag.rs` — `set_dpi` and `set_polling_rate` now
+  validate the requested value against the device's own advertised
+  stage list (`Resolution.Resolutions` / `Profile.ReportRates`) before
+  writing, returning a descriptive `Err` instead of forwarding the
+  value straight to ratbagd.
+
+**Why:** Requested verification task — confirm Phase 2's DPI/Polling
+Rate controls actually work end-to-end against real connected hardware
+(a genuine G502 wired+wireless pair), not just re-read the code. Found
+via direct D-Bus testing, not the shipped UI (which can never send an
+invalid value — `SelectField`/`DeviceCard.qml`'s dropdowns are
+populated straight from the same stage lists and offer nothing else):
+- `SetDpi(<merged id>, 999999)` returned `Ok(())` — the daemon's own
+  `GetDevices` and a direct read of ratbagd's raw `Resolution` property
+  both showed the DPI **unchanged** from before the call. ratbagd
+  silently drops an out-of-stage Properties.Set on `Resolution` rather
+  than rejecting it.
+- `SetPollingRate(<merged id>, 999)` was worse: it also returned
+  `Ok(())`, but ratbagd's raw `ReportRate` property actually became
+  `999` — an arbitrary value never advertised by `ReportRates`, written
+  to the real device with no validation anywhere in the stack.
+  Restored to `1000` immediately after confirming this.
+- Both are exactly the "silently doing nothing / silently doing the
+  wrong thing, indistinguishable from success" failure mode Phase 2's
+  own `lastError` mechanism exists to surface — but only if the daemon
+  actually returns an `Err` in the first place, which it wasn't for
+  these two inputs.
+
+**Verified (real hardware — Logitech G502 LIGHTSPEED, wired `046d:407f`
++ wireless `046d:c08d`, merged id `ratbag:merged:046d:407f+046d:c08d`,
+plus a SteelSeries Arctis Nova 7 headset already connected):**
+1. **Capabilities**: `GetDevices` correctly reports
+   `["dpi","polling_rate"]` for the G502 and neither for the Arctis
+   Nova 7 (its own headset capability set instead) — confirmed the
+   Arctis Nova 7 card renders with no DPI/Polling Rate controls at all
+   in a fresh `ui-shots.sh` capture, not merely greyed out.
+2. **DPI write → readback**: `SetDpi(..., 1600)` → raw ratbagd
+   `Resolution` on the primary link read back `1600`; `GetDevices`
+   matched. Confirmed the write lands on the same link `select_primary`
+   picks for both reads and writes (Phase 1's fix held).
+3. **Polling rate write → readback**: same pattern, `SetPollingRate(...,
+   500)` → raw `ReportRate` = `500`, `GetDevices` matched, independent
+   of the DPI value (no cross-contamination between the two writes).
+4. **Restart persistence**: restarted `openggd.service`, then captured
+   the Devices page with a **fresh, cold-launched** `opengg-qt` process
+   (via `ui-shots.sh`, which spawns a new process per capture) —
+   correctly showed `1600 DPI` / `500 Hz`. This was never actually a
+   caching concern: neither `openggd` nor `qt-shell` persists these
+   values anywhere themselves — every read is a live ratbagd query, and
+   ratbagd/the mouse's own profile memory is the actual source of
+   truth. Restored to the original `800`/`1000` after testing.
+5. **Failure path — invalid device id**: `SetDpi("ratbag:merged:9999:
+   9999", 1600)` → real D-Bus error ("no ratbagd device currently
+   matches id..."), not a silent success.
+6. **Failure path — invalid value**: the gap above, now fixed and
+   re-verified live: both bad-DPI and bad-rate calls return a real
+   error with the valid-stage list included; valid calls still succeed
+   (re-confirmed `800`/`1000` round-trip after the fix).
+
+**Needs human confirmation (not verifiable from this session):**
+- The *shipped UI* actually rendering the red error `Text` in
+  `DeviceCard.qml` on a failed write — `qt-shell/src/device.rs`'s
+  `set_dpi`/`set_polling_rate` → `lastError`/`lastErrorDeviceId` path
+  was confirmed correct by inspection and the daemon-level `Err` it
+  depends on was confirmed to actually fire now, but there is no
+  native-GUI-automation tool in this session to click the dropdown and
+  see the pixels — `ui-shots.sh`'s offscreen `--screenshot` mode has no
+  flag to simulate interaction, only to load-and-capture.
+- Whether the cursor actually feels faster/slower after a DPI change or
+  the polling interval changed in practice — only that ratbagd/the
+  daemon accepted and echoed back the requested value.
+- Interactive drag-to-swipe (Carousel view, unrelated to this task) —
+  same pre-existing caveat from the Phase 4 entry below.
+
+**Landmines:** none new. The `core/` clippy gap from earlier entries is
+untouched (this fix is `daemon/` only).
+
+**Verification:** `daemon`: `cargo build` clean; `cargo clippy
+--all-targets -- -D warnings` → 0 warnings; `cargo test` → 27/27 pass
+(no new tests — the added checks are a two-line `Vec::contains` guard
+around existing live-D-Bus code with no pure-function seam to unit
+test in isolation, consistent with this file's existing test style of
+only unit-testing the pure helpers; verified instead against real
+hardware, see above). Rebuilt `--release`, reinstalled to
+`~/.local/bin/openggd`, restarted `openggd.service`, re-ran every write
+test above against the reinstalled binary.
+
+---
+
 ### [2026-08-30] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 4: Grid/List/Carousel view modes)
 
 **What Changed:**
