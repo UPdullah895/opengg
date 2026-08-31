@@ -6,6 +6,81 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-31] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 5, Part B: hotspot coordinate schema)
+
+**What Changed:** Second of three Phase 5 commits (backend → data model →
+UI). Pure data-model/storage work — no D-Bus, no daemon changes.
+
+- New `core/src/button_hotspots.rs`: `Hotspot { button_index: u32, x: f32,
+  y: f32 }` (normalized `0.0–1.0`, independent of the backing photo's
+  actual resolution/aspect ratio) and `save_hotspots`/`get_hotspots`,
+  persisted to a new `~/.config/opengg/button-hotspots.json` (`core/src/
+  settings/mod.rs` gained `button_hotspots_path()`, same directory as
+  `theme.json`/`ui-settings.json` — its own file, since this is
+  structured per-device data, not a flat UI preference; mirrors
+  `daemon/src/device/identity_overrides.rs`'s own separate JSON file for
+  the same reason).
+- **Keyed by vendor:product, not `DeviceInfo.id`** — this is exactly why
+  Phase 1 needed to be transport-independent first: a merged device's
+  `id` string can itself change over time (`"ratbag:046d:c08d"` vs
+  `"ratbag:merged:046d:407f+046d:c08d"`, depending on which links
+  ratbagd currently enumerates or whether a manual merge/split override
+  is in effect). Storing under that string directly would silently
+  "lose" a saved photo/hotspot set the next time the grouping changes
+  for any reason. `save_hotspots` instead takes an `aliases: &[(vid,
+  pid)]` list — the caller passes every member from that device's
+  `linkedIds` — and writes the same hotspot set under every one of
+  them, so a lookup by whichever link is "primary" today always finds
+  it.
+- Validation (`validate_hotspots`, a pure function so it's unit-testable
+  without touching the real config file — same split `identity_
+  overrides.rs` already uses between its pure mutation methods and its
+  untested `load`/`save`): every `button_index` must be `<
+  button_count` (the caller already has this from
+  `DeviceInfo.button_count`), no two hotspots may name the same button,
+  and `x`/`y` must each be in range. Enforced in `core`, not trusted
+  from QML — same "reject before it becomes stored junk" discipline as
+  the DPI/rate and button-action validation earlier in this log.
+- A `BUILTIN_PRESETS: &[DevicePreset]` table structure (vendor/product/
+  model-name/hotspots), plus `find_preset()`.
+
+**Presets: deliberately shipped empty, not populated.** The task this
+was written for asked for coordinates "genuinely measured against a
+real reference image" viewed *during the session that adds them* —
+explicitly not values recalled from general familiarity with a
+product's typical layout, which is a different thing from having
+actually looked at one. This session tried to do that properly: opened
+a real Logitech G502 product page in the sandboxed Browser pane to
+measure its 11 buttons' positions directly. Every screenshot attempt
+failed with "the Browser pane is not displayed" in this environment —
+no image was ever actually viewed. Shipping numbers from memory and
+describing them as measured would be exactly the unverified-but-
+presented-as-checked accuracy the task's own scope boundary warns
+against, so the table ships empty instead. The schema, storage,
+validation, and (in Part C) the preset-assist wiring are fully built
+and ready for real entries the moment a future session can actually
+view a reference photo — `find_preset` and the empty-table state are
+both covered by tests specifically so the day an entry is added, an
+existing test has to change (a deliberate tripwire, not an oversight).
+
+**Landmines:** none new. `core/`'s pre-existing clippy gap (unrelated
+files) is being worked in a separate background session; not touched
+here.
+
+**Verification:** `cargo build` clean; `cargo clippy --all-targets --
+-D warnings` → zero warnings on the two files this part touched
+(`button_hotspots.rs`, `settings/mod.rs`); `cargo test` → 61/61 (8
+new). Confirmed no test writes to the real
+`~/.config/opengg/button-hotspots.json` (checked `ls` before/after —
+file doesn't exist; the only test that calls the real `save_hotspots`
+entry point hits an early-return error path before any file I/O runs).
+
+Part C (photo upload + hotspot editor UI, which is where the user's
+actual photo gets saved — see `core/src/device_assets.rs`'s per-user
+image-cache tier) is a separate, subsequent commit.
+
+---
+
 ### [2026-08-31] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 5, Part A: button action backend)
 
 **What Changed:** OpenGG's daemon had no button-remapping backend at all

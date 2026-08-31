@@ -11,6 +11,7 @@
 //! pipewire/gstreamer/zbus except through this crate.
 
 pub mod audio;
+pub mod button_hotspots;
 pub mod clips;
 pub mod daemon;
 pub mod device;

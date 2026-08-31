@@ -39,6 +39,18 @@ pub fn locales_dir() -> PathBuf {
     config_root().join("opengg/locales")
 }
 
+/// `~/.config/opengg/button-hotspots.json` — per-device button-hotspot
+/// placements for the Devices roadmap Phase 5 button-mapping editor (see
+/// [`crate::button_hotspots`]). Same directory as `theme.json`/
+/// `ui-settings.json`, its own file — this is structured per-device data
+/// keyed by vendor:product, not a flat UI preference, matching how
+/// `daemon/src/device/identity_overrides.rs`'s
+/// `device-identity-overrides.json` is also its own file alongside (not
+/// folded into) the daemon's own config.
+pub fn button_hotspots_path() -> PathBuf {
+    config_root().join("opengg/button-hotspots.json")
+}
+
 /// Fallback theme served when no `theme.json` exists yet.
 pub const DEFAULT_THEME_JSON: &str =
     "{\"colors\":{\"--accent\":\"#E94560\"},\"layout\":{\"--clips-grid-cols\":\"4\"}}";
