@@ -135,6 +135,7 @@ Rectangle {
                     DeviceCard {
                         Layout.fillWidth: true
                         Layout.preferredWidth: 680
+                        onConfigureButtonsRequested: buttonEditor.device = modelData
                     }
                 }
             }
@@ -152,6 +153,7 @@ Rectangle {
                     DeviceCard {
                         Layout.fillWidth: true
                         Layout.preferredWidth: 320
+                        onConfigureButtonsRequested: buttonEditor.device = modelData
                     }
                 }
             }
@@ -199,6 +201,7 @@ Rectangle {
                             // of the adjacent page no longer being visible
                             // mid-drag during an interactive swipe gesture.
                             visible: SwipeView.isCurrentItem
+                            onConfigureButtonsRequested: buttonEditor.device = modelData
                         }
                     }
                 }
@@ -224,4 +227,13 @@ Rectangle {
         WheelScroller { anchors.fill: parent; flick: devicesScroll.contentItem }
     }
 
+    // One shared instance rather than one per DeviceCard: the same device
+    // can have up to three live DeviceCard instances at once (List/Grid/
+    // Carousel Repeaters all bind the same `page.devices`), so each of
+    // their `configureButtonsRequested` signals points at this single
+    // editor instead of each owning its own dialog.
+    ButtonMapEditor {
+        id: buttonEditor
+        z: 100
+    }
 }

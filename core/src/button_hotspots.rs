@@ -40,6 +40,7 @@ use std::collections::HashMap;
 
 /// One placed hotspot on a device's photo.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Hotspot {
     /// 0-based, matches `ButtonMapping.index` — see the module doc comment.
     pub button_index: u32,

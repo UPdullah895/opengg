@@ -6,6 +6,148 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-31] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 5, Part C: photo + hotspot editor UI)
+
+**What Changed:** Third and final Phase 5 commit (backend → data model →
+UI). Wires Part A's D-Bus button-action calls and Part B's hotspot
+storage into an actual QML editor, reached from a new per-device
+"Configure buttons" gear icon.
+
+- New `qt-shell/qml/components/ButtonMapEditor.qml` — one shared dialog
+  instance (`DevicesPage.qml`), not one per card: the same device can
+  have up to three live `DeviceCard`s at once (List/Grid/Carousel
+  Repeaters all bind the same device list), so all three point their
+  `configureButtonsRequested` signal at this single instance instead of
+  each owning its own. Same full-screen-`Rectangle` + centered-card
+  modal pattern as `ExportDialog.qml` (not a QQC2 `Popup`), same
+  click-outside-to-close behavior.
+  - **Photo step** (no photo saved yet): a `FileDialog` picks a local
+    image, saved via `DeviceController.saveDevicePhoto` into the exact
+    same per-model image-cache directory convention Phase 3's
+    `device_assets` already reads from
+    (`crate::paths::device_images_cache_dir`) — no new storage location
+    invented, and the file **never leaves local disk**: no upload, no
+    bundling, no network call anywhere in this path.
+  - **Preset-assist step**: if `find_preset(vid, pid)` matches, offers
+    one-click auto-placement of that preset's hotspots (framing may not
+    match the user's own photo exactly — offered as a starting point,
+    not applied silently).
+  - **Editor step**: the photo renders via `Image.fillMode:
+    PreserveAspectFit`; hotspots are positioned against
+    `Image.paintedWidth/paintedHeight` and its centered letterbox
+    offset — *not* the full `Image` item bounds — so normalized
+    coordinates stay correct regardless of how the photo's aspect ratio
+    compares to the display box. Click empty space to add a hotspot
+    (capped at the device's real `buttonCount`, no duplicate button
+    bindings — same `validate_hotspots` rules from Part B, enforced
+    again here before the save call); drag an existing one
+    (`HotspotMarker.qml`, new — reports an absolute `mapToItem()`
+    position on move, same pattern as `TrimHandle.qml`, never a delta);
+    delete via its badge.
+  - **Binding step**: selecting a hotspot opens a flat action-type
+    picker (`none`/`button`/`special`/`key` — matches exactly what Part
+    A can write; `macro` isn't offered since Part A can't write it
+    either) sourced from `GetButtonActionCatalog`; picking a value calls
+    `DeviceController.setButtonAction` immediately — no separate "Save"
+    step for the binding itself, matching the task's spec. Hotspot
+    *positions* do get one explicit save call
+    (`saveDeviceHotspots`) whenever the placed set changes, since unlike
+    a button binding there's no single D-Bus round-trip a placement
+    could hang off of.
+  - Current bound action is shown next to each hotspot the moment the
+    editor opens (`refreshButtonMappings` on load), not only after the
+    user touches something.
+- `qt-shell/src/device.rs`: new qinvokables — `refreshButtonMappings`,
+  `setButtonAction`, `refreshButtonActionCatalog` (background-thread,
+  mirror the existing `refresh()` pattern and set `lastError`/
+  `lastErrorDeviceId` on failure), `saveDevicePhoto` (synchronous file
+  copy + extension validation + stale-copy cleanup), `hasDevicePhoto`,
+  `deviceHotspots`, `saveDeviceHotspots`, `findDevicePreset`. New
+  qproperties `buttonMappingsJson`, `buttonActionCatalogJson`,
+  `photoRevision`.
+- `core/src/device_assets.rs`: `resolve_device_image` previously only
+  ever checked for a cached `.png` — a latent bug, since a photo saved
+  through this new upload path can be any of several formats. Extracted
+  a shared `pub const CACHE_EXTENSIONS: &[&str] = &["png", "jpg",
+  "jpeg", "webp", "bmp"]` and made both the resolver and `device.rs`'s
+  photo-save/lookup loop over it, removing a duplicated inline allow-
+  list that used to live only in `device.rs`.
+- `DeviceCard.qml`: added the "Configure buttons" gear icon
+  (`hasCapability("buttons")`-gated); fixed a real gap where the DPI/
+  Polling-Rate row's `visible` condition only checked
+  `hasCapability("dpi") || hasCapability("polling_rate")` — a
+  hypothetical buttons-only device would never have shown the row (and
+  therefore never the gear icon) at all. Also added `cache: false` +
+  a `?v=<photoRevision>` query param to the device image's `source`,
+  needed because re-saving a photo under the same cache path leaves the
+  `Image.source` URL string unchanged, so nothing would otherwise tell
+  QML to reload the pixmap after a re-upload.
+
+**Bugs found and fixed during this part (not from the roadmap):**
+1. `resolve_device_image`'s PNG-only extension check (above).
+2. `DeviceCard.qml`'s DPI/Polling-Rate row visibility gap (above) —
+   caught by re-reading the condition against Part A's new `buttons`
+   capability, not observed live (this session's test G502 has all
+   three capabilities together).
+3. Initially used a non-existent `EditorButton { text: ...; onClicked:
+   ... }` API — `EditorButton.qml` is actually icon-only. Replaced all
+   three usages with `ClipsBarButton { label: ...; icon: ...; onTriggered:
+   ... }` (confirmed correct via `ExportDialog.qml`'s own usage).
+4. `page.buttonEditor.device = modelData` in `DevicesPage.qml` — QML
+   `id`s are file-scoped, not reachable through a parent item's
+   property. Fixed to a bare `buttonEditor.device = modelData`.
+5. `#[allow(clippy::too_many_arguments)]` on `saveDeviceHotspots`'s
+   `#[cxx_qt::bridge]` declaration was a build error — bridge macro
+   declarations only accept a fixed attribute allow-list (`cxx_name`,
+   `qinvokable`, etc.). Moved the attribute to the real `impl` method.
+
+**Landmines:** the shared-single-editor-instance pattern — a new
+per-device dialog usage must *not* instantiate its own
+`ButtonMapEditor`; wire `configureButtonsRequested` to the existing
+`buttonEditor` id in `DevicesPage.qml` instead, same as all three
+current Repeaters do. `core/`'s pre-existing clippy gap (4 unrelated
+files: `audio.rs`, `clips/mod.rs`, `media.rs`, `vu.rs`) is being worked
+in a separate background session; not touched here, and confirmed via
+`grep` that neither file this part changed (`device_assets.rs`,
+`button_hotspots.rs`) appears anywhere in the current clippy failure
+log.
+
+**Verification:** `cargo build`/`cargo check` clean in both `core/` and
+`qt-shell/`; `qt-shell/tools/check-colors.sh` clean; `qt-shell/tools/
+ui-shots.sh`'s full 16-page sweep finished with **zero QML warnings**;
+`core`'s `cargo clippy --all-targets -- -D warnings` shows zero
+warnings on `device_assets.rs`/`button_hotspots.rs` specifically (all
+20 current failures are the pre-existing, unrelated gap above);
+`cargo test` → 61/61, run standalone (not chained after clippy) to get
+an unambiguous fresh result. Manually verified, with real files against
+the real production code paths (not mocks): the multi-extension photo
+fix, by placing a real `.jpg` at the exact save-path convention and
+confirming `ui-shots.sh` rendered it over the silhouette, then removing
+it and re-confirming the fallback; the hotspot-storage round-trip, via
+a temporary `#[ignore]`-marked test that wrote and read back real
+camelCase JSON keyed by a `"dead:beef"` vendor:product pair, then was
+fully deleted along with its generated file. Part A's D-Bus button-
+action writes were already verified against the real connected G502 in
+the Part A commit above — Part C only adds a UI on top of that same,
+already-proven call.
+
+**Needs human confirmation:** the actual interactive click-through of
+this dialog — opening it from the gear icon, dragging a marker,
+picking an action from the dropdown, and watching the D-Bus write
+happen from a live UI click — could **not** be performed this session:
+no native GUI automation tool was available for the Qt app window
+(only the `ui-shots.sh` offscreen-capture pipeline, which renders
+static pages but doesn't drive drag gestures or dropdown selection).
+Please confirm by hand: (1) the gear icon opens the editor for a real
+mouse; (2) picking a photo file actually shows it; (3) clicking empty
+space adds a marker, dragging repositions it, and it's still there in
+the same place after fully restarting the app; (4) picking an action
+from a hotspot's dropdown actually changes the physical button's
+behavior; (5) a device with fewer buttons than a preset's coordinate
+count doesn't get hotspots placed for buttons it doesn't have.
+
+---
+
 ### [2026-08-31] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 5, Part B: hotspot coordinate schema)
 
 **What Changed:** Second of three Phase 5 commits (backend → data model →

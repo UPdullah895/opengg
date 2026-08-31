@@ -61,19 +61,32 @@ impl DeviceKind {
     }
 }
 
+/// Extensions checked in the per-user cache tier, in preference order.
+/// `png` first since that's what this cache tier originally (Phase 3)
+/// assumed exclusively; the rest were added in Phase 5 when the
+/// button-mapping editor's photo upload started actually populating this
+/// tier with whatever format the user's own file happened to be, saved
+/// as-is rather than re-encoded (no image-processing dependency needed to
+/// just copy bytes).
+pub const CACHE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp"];
+
 /// Resolve the image to show for a device. `vendor_id`/`product_id` drive
-/// the (currently always-empty) per-model cache lookup; `kind` drives the
-/// bundled-silhouette fallback. Returns `None` — never a broken-image
-/// path — when neither tier has anything.
+/// the per-user cache lookup (populated by the Devices Phase 5
+/// button-mapping editor's photo upload — see `qt-shell/src/device.rs`'s
+/// `saveDevicePhoto`); `kind` drives the bundled-silhouette fallback.
+/// Returns `None` — never a broken-image path — when neither tier has
+/// anything.
 pub fn resolve_device_image(
     vendor_id: u16,
     product_id: u16,
     kind: Option<DeviceKind>,
 ) -> Option<PathBuf> {
-    let cached = crate::paths::device_images_cache_dir()
-        .join(format!("{vendor_id:04x}-{product_id:04x}.png"));
-    if cached.is_file() {
-        return Some(cached);
+    let cache_dir = crate::paths::device_images_cache_dir();
+    for ext in CACHE_EXTENSIONS {
+        let cached = cache_dir.join(format!("{vendor_id:04x}-{product_id:04x}.{ext}"));
+        if cached.is_file() {
+            return Some(cached);
+        }
     }
 
     let silhouette = bundled_dir().join(kind?.silhouette_filename());

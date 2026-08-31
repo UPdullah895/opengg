@@ -12,6 +12,12 @@ Rectangle {
     id: root
     required property var modelData
 
+    /// Devices roadmap Phase 5: the card itself owns no dialog (it's
+    /// instantiated 3x per device across the List/Grid/Carousel view modes
+    /// — see DevicesPage.qml). Each Repeater delegate site connects this to
+    /// one shared editor instance instead.
+    signal configureButtonsRequested()
+
     radius: Theme.radius
     color: Theme.surface
     border.width: 1
@@ -60,8 +66,15 @@ Rectangle {
                 id: deviceImage
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectFit
+                // `cache: false` + photoRevision — see that qproperty's doc
+                // comment in device.rs (Devices Phase 5's button-mapping
+                // editor can replace this device's photo while this card is
+                // showing, and the resolved file:// URL is otherwise
+                // unchanged, so nothing would tell this Image to reload).
+                cache: false
                 source: DeviceController.imagePath(
                             root.modelData.vid, root.modelData.pid, root.modelData.deviceType)
+                        + "?v=" + DeviceController.photoRevision
                 visible: source !== "" && status === Image.Ready
             }
             Icon {
@@ -145,6 +158,7 @@ Rectangle {
                 Layout.topMargin: 4
                 spacing: 16
                 visible: root.hasCapability("dpi") || root.hasCapability("polling_rate")
+                         || root.hasCapability("buttons")
 
                 ColumnLayout {
                     visible: root.hasCapability("dpi")
@@ -167,6 +181,15 @@ Rectangle {
                         value: root.modelData.pollingRate
                         onPicked: (v) => DeviceController.setPollingRate(root.modelData.id, v)
                     }
+                }
+                Item { Layout.fillWidth: true }
+                IconToggle {
+                    Layout.alignment: Qt.AlignVCenter
+                    visible: root.hasCapability("buttons")
+                    flat: true
+                    icon: "gear"
+                    tooltip: "Configure buttons"
+                    onTriggered: root.configureButtonsRequested()
                 }
             }
 
