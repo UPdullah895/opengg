@@ -28,13 +28,16 @@ fi
 
 mkdir -p "$OUTDIR"
 
-# Top-level pages, and the settings sub-panels (keyed as settings:<panel>).
+# Top-level pages, and per-page sub-panels (keyed as <page>:<panel> — the
+# same generic ScreenshotController.panel property MixerPage.qml already
+# reuses for its own tab selection, not a settings-only concept).
 TARGETS=(
     home mixer clips devices
     settings:general settings:language settings:shortcuts
     settings:mixerRouting settings:captureSound settings:trackManagement
     settings:storage settings:notifications settings:extensions
     settings:store settings:about
+    devices:buttons
     tour
 )
 
@@ -44,8 +47,8 @@ shot() {
         # The tour overlay is suppressed in normal capture runs (it would cover
         # whatever page we asked for), so it needs an explicit opt-in.
         page=home; panel=""; name=tour; args+=(--with-tour)
-    elif [[ "$target" == settings:* ]]; then
-        page=settings; panel="${target#settings:}"; name="settings-$panel"
+    elif [[ "$target" == *:* ]]; then
+        page="${target%%:*}"; panel="${target#*:}"; name="${page}-${panel}"
     else
         page="$target"; panel=""; name="$target"
     fi

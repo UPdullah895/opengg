@@ -6,6 +6,93 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-31] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 5: headless capture hook for the button-mapping editor, plus real-hardware re-verification)
+
+**What Changed:** Follow-up to Part C, closing part of that commit's own
+"needs human confirmation" gap rather than leaving it purely for a human
+to click through by hand.
+
+- `qt-shell/tools/ui-shots.sh`: generalized the `<page>:<panel>` target
+  parsing from a `settings:*`-only special case to any `page:panel`
+  pair — `ScreenshotController.panel` was already being reused this way
+  by `MixerPage.qml` for its own tab selection, so this just extends
+  the harness to match a pattern that already existed, rather than
+  inventing a new one. Added a `devices:buttons` target.
+- `DevicesPage.qml`: when `ScreenshotController.active`, `page ===
+  "devices"`, and `panel === "buttons"`, opens the shared
+  `ButtonMapEditor` for the first device reporting the `"buttons"`
+  capability, the first time the (asynchronously D-Bus-loaded) device
+  list actually contains one — not at `Component.onCompleted`, since
+  the list isn't populated yet at that point.
+- No Rust changes were needed — `ScreenshotController.panel` already
+  existed and was already generic across pages.
+
+**Why this doesn't fully close the earlier gap:** this makes the dialog
+*itself* reachable and renderable in the zero-click offscreen harness,
+but the harness still can't click a marker, drag one, or drive the
+native file-picker — `ui-shots.sh` only ever launches the app with a
+fixed set of `--page`/`--panel`/`--delay` flags and grabs one frame,
+it doesn't have an input-injection layer. What changed is that the
+"dialog opens and renders correctly" slice of the checklist is now
+machine-checked on every future `ui-shots.sh` run instead of resting
+on a one-time manual look; the drag/click/file-picker slice is still
+real human-hands territory.
+
+**Verification, in order, all against the real production code paths
+(no mocks):**
+1. `cargo build` in `qt-shell/` — clean.
+2. `ONLY=devices:buttons ./tools/ui-shots.sh` with no photo saved for
+   the real connected G502 — captured the photo-step (no image yet),
+   correctly showing the "stays on this computer only" copy and a
+   working close button.
+3. Placed a real, freshly generated JPEG at the exact
+   `~/.local/share/opengg/device-images/046d-407f.jpg` save-path
+   convention (`core/src/device_assets.rs`'s per-user cache tier,
+   matched by this G502's real vendor:product pair) and re-ran the
+   same capture: the editor step rendered the real photo,
+   letterboxed correctly, with the real live `buttonCount` (11) in
+   the "0 / 11 buttons placed" counter.
+4. Wrote a real, schema-correct `~/.config/opengg/button-hotspots.json`
+   for the same vendor:product key with 3 hotspots and re-ran the
+   capture again — a genuinely fresh `opengg-qt` process (`ui-shots.sh`
+   launches a new one every invocation) loaded and rendered all 3
+   numbered markers at the correct normalized positions against the
+   letterboxed photo, and the counter read "3 / 11". Since this is a
+   brand-new process reading a file written by nothing in the current
+   run, this *is* a restart-persistence check for hotspot placement,
+   not a simulation of one — arguably stronger than a manual GUI
+   restart, since there's no leftover in-memory QML state to
+   coincidentally paper over a real load bug.
+5. Deleted both the synthetic photo and the hotspot file afterward —
+   confirmed gone, nothing left behind on the real user's machine.
+6. Re-verified Part A's D-Bus write path live against the real G502,
+   independent of OpenGG's own cache: `SetButtonAction` on button 8
+   (the real factory `special "unknown"` button) to `key "e"`, then
+   read `Mapping` directly from **ratbagd's own object**
+   (`/org/freedesktop/ratbag1/button/hidraw13/p1/b8`) on the system
+   bus — `(uv) 3 u 18` (`KEY`, `KEY_E`) — not just OpenGG's own
+   `GetButtonMappings` re-read. Restored it back to `special "unknown"`
+   afterward and re-confirmed via the same direct ratbagd read: `(uv) 2
+   u 1073741824`, the exact original value.
+7. Full 17-target `ui-shots.sh` sweep (16 original + the new
+   `devices:buttons`) after cleanup — zero QML warnings across all of
+   them, including `devices-buttons` in its default no-photo state.
+8. `check-colors.sh` — clean.
+
+**Landmines:** none new — reused an existing generic property instead
+of adding one.
+
+**Still needs human confirmation** (updated from Part C's entry — items
+1 and 3's photo/hotspot *rendering* are now machine-verified above,
+narrowing what's left): actually clicking the gear icon in a running
+window, dragging a marker with a mouse, using the native file picker to
+choose a photo, and picking an action from a hotspot's dropdown from a
+live click (as opposed to the equivalent D-Bus call, already verified
+directly above) — none of these can be driven without a GUI automation
+tool for the Qt window, which wasn't available this session.
+
+---
+
 ### [2026-08-31] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 5, Part C: photo + hotspot editor UI)
 
 **What Changed:** Third and final Phase 5 commit (backend → data model →

@@ -12,6 +12,33 @@ Rectangle {
         ? JSON.parse(DeviceController.devicesJson)
         : []
 
+    // Headless-capture hook (qt-shell/tools/ui-shots.sh's `devices:buttons`
+    // target) — the button-mapping editor has no reachable state via
+    // --page/--panel alone since it only opens from a live click on
+    // DeviceCard's gear icon, and there's no GUI automation available to
+    // actually click it in the offscreen capture harness. Reusing
+    // ScreenshotController.panel the same way MixerPage.qml already does
+    // for its own tabs, rather than inventing a new dialog-specific
+    // property, lets the sweep open it deterministically instead. The
+    // device list loads asynchronously over D-Bus, so this fires once, the
+    // first time a "buttons"-capable device actually shows up, not at
+    // Component.onCompleted.
+    property bool screenshotButtonEditorOpened: false
+    onDevicesChanged: {
+        if (!ScreenshotController.active || ScreenshotController.page !== "devices"
+                || ScreenshotController.panel !== "buttons" || page.screenshotButtonEditorOpened) {
+            return
+        }
+        for (var i = 0; i < devices.length; i++) {
+            var caps = devices[i].capabilities || []
+            if (caps.indexOf("buttons") !== -1) {
+                buttonEditor.device = devices[i]
+                page.screenshotButtonEditorOpened = true
+                break
+            }
+        }
+    }
+
     // Persisted like any other real UI preference (SettingsController's
     // `settings.<key>` envelope — see GeneralPanel.qml's `defaultClickAction`
     // for the same pattern), not the page-local `property string` ClipsPage
