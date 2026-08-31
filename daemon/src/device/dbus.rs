@@ -100,6 +100,62 @@ impl DeviceInterface {
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
+    /// Every button on a mouse's active profile: index, which action types
+    /// it supports, and its current action — JSON array of `ButtonMapping`
+    /// (Devices Phase 5). Returns `"[]"` (not an error) if ratbagd is
+    /// unavailable or the id isn't a mouse, matching `get_devices`'s
+    /// always-succeeds shape rather than `set_dpi`'s fail-loud shape, since
+    /// this is a read the UI polls opportunistically.
+    async fn get_button_mappings(&self, device_id: &str) -> String {
+        let Some(id_body) = device_id.strip_prefix("ratbag:") else {
+            return "[]".into();
+        };
+        let guard = self.ratbag.lock().await;
+        let Some(mgr) = guard.as_ref() else {
+            return "[]".into();
+        };
+        match mgr.get_button_mappings(id_body).await {
+            Ok(mappings) => serde_json::to_string(&mappings).unwrap_or_else(|_| "[]".into()),
+            Err(e) => {
+                tracing::warn!("GetButtonMappings failed for {device_id}: {e}");
+                "[]".into()
+            }
+        }
+    }
+
+    /// Set one button's action. `action_json` is a `ButtonAction` (Devices
+    /// Phase 5) — e.g. `{"type":"key","name":"e"}` or `{"type":"none"}`.
+    /// Applies immediately, no separate "save" step, matching `SetDpi`.
+    async fn set_button_action(
+        &self,
+        device_id: &str,
+        button_index: u32,
+        action_json: &str,
+    ) -> zbus::fdo::Result<()> {
+        let id_body = device_id
+            .strip_prefix("ratbag:")
+            .ok_or_else(|| zbus::fdo::Error::InvalidArgs("not a mouse device id".into()))?;
+        let action: super::ratbag::ButtonAction = serde_json::from_str(action_json)
+            .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("bad action JSON: {e}")))?;
+
+        self.ratbag
+            .lock()
+            .await
+            .as_ref()
+            .ok_or_else(|| zbus::fdo::Error::ServiceUnknown("ratbagd not available".into()))?
+            .set_button_action(id_body, button_index, &action)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Static catalog of every action `SetButtonAction` will accept for the
+    /// `special`/`key` types (device-independent — no D-Bus round trip to
+    /// ratbagd needed). `button`/`none` aren't listed here since they need
+    /// no picker beyond "which of this device's own buttons/disable".
+    async fn get_button_action_catalog(&self) -> String {
+        super::ratbag::button_action_catalog_json()
+    }
+
     /// Manual identity-merge override (see `ratbag::RatbagManager::merge_devices`):
     /// confirm that two mouse device ids are the same physical device even
     /// though the automatic name heuristic didn't (or wouldn't) merge them.

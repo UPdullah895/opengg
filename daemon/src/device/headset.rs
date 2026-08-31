@@ -159,6 +159,7 @@ impl HeadsetManager {
                     polling_rate: None,
                     dpi_options: None,
                     polling_rate_options: None,
+                    button_count: None,
                     battery_level,
                     battery_charging,
                     sidetone: None,

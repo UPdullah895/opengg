@@ -6,6 +6,118 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-08-31] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 5, Part A: button action backend)
+
+**What Changed:** OpenGG's daemon had no button-remapping backend at all
+before this — Phase 2 only wired DPI/Polling Rate. This is Part A of a
+3-part Phase 5 (backend → data model → UI), split into separate commits
+as the task requested.
+
+- Investigated `ratbagd`'s real `Button` D-Bus interface live rather than
+  assuming method names: `busctl introspect .../button/hidraw13/p1/b0`
+  shows **no** `SetActionSpecial`/`SetActionButton`/`SetActionKey`/
+  `SetActionMacro`/`SetActionNone` methods at all — only two properties,
+  `ActionTypes` (`au`, which of 5 action types this button supports) and
+  `Mapping` (`(uv)`, writable: a `u` selecting the active type + a `v`
+  holding that type's own payload). Cross-referenced the exact enum
+  values and payload shapes against `/usr/bin/ratbagctl`'s own
+  `RatbagdButton` class (libratbag 0.18-1, installed alongside this
+  ratbagd) rather than guessing:
+  - `NONE=0` (payload `u`, always 0), `BUTTON=1` (payload `u`, a
+    **1-based** physical button number — confirmed against
+    `Button.Index`, which is 0-based, a real off-by-one trap),
+    `SPECIAL=2` (payload `u`, one of libratbag's `ActionSpecial`
+    sentinel constants, `(1<<30)+N`), `KEY=3` (payload `u`, a raw Linux
+    evdev keycode), `MACRO=4` (payload `a(uu)`, a press/release/wait
+    sequence).
+- `daemon/src/device/ratbag.rs`: added a `Button` proxy trait and
+  `Profile.buttons()`; `RatbagManager::get_button_mappings(id)` (every
+  button's 0-based index, supported action-type tags, and current
+  action) and `set_button_action(id, button_index, action)` (validates
+  the button actually supports the requested type via `ActionTypes`
+  before writing, same "reject before it becomes silent hardware state"
+  discipline as the DPI/rate validation fix above). `DeviceInfo` gained
+  `button_count`, and a `"buttons"` capability when it's `> 0` — same
+  capability-gated pattern as `dpi`/`polling_rate`, not `DeviceType`.
+- `daemon/src/device/dbus.rs`: `GetButtonMappings`/`SetButtonAction`/
+  `GetButtonActionCatalog` on `org.opengg.Daemon.Device`, same shape and
+  error-handling convention as `SetDpi`/`SetPollingRate`.
+- `core/src/device.rs`: matching `get_button_mappings`/
+  `set_button_action`/`get_button_action_catalog` wrappers, same
+  `call_dbus`/`call_dbus_void` pattern as every other device function
+  in this file.
+- **Action types actually wired up for writing**: `none`, `button`,
+  `special`, `key`. **Deliberately deferred**: `macro` — a compound
+  press/release/wait sequence needs a materially bigger editor than
+  "pick one action from a flat list," explicitly out of scope for this
+  pass per the task's own allowance. A button currently holding a macro
+  is reported back as `{"type":"macro"}` (the UI can show *that*
+  something is bound, just not decode what) rather than silently
+  misreporting it as `none`; `SetButtonAction` rejects writing one.
+- `SPECIAL_ACTIONS`/`KEY_ACTIONS` are static Rust tables, not files or a
+  network catalog — `ActionSpecial`/`KEY_*` numeric values copied
+  verbatim from `/usr/bin/ratbagctl`'s enum and this machine's own
+  `/usr/include/linux/input-event-codes.h` (protocol constants, the
+  same category as HTTP status codes — not creative expression). `KEY_
+  ACTIONS` is a deliberately modest ~70-entry common-keys subset
+  (letters, digits, F-keys, modifiers, navigation) — no numpad, media,
+  or international keys.
+
+**Bug found and fixed during hardware verification (not from the
+roadmap):** `SPECIAL_ACTIONS` initially started at `(1<<30)+1`, omitting
+`ActionSpecial.UNKNOWN` itself (`1<<30`, no offset) — a real, documented
+libratbag enum member, not a placeholder. Found because this session's
+own connected G502's button index 8 genuinely has that exact factory
+mapping: `GetButtonMappings` reported it as a made-up
+`"unknown_1073741824"` name instead of a real catalog entry. Added
+`("unknown", 1<<30, "Unknown")` to the table and re-verified.
+
+**Verified against real hardware** (Logitech G502 LIGHTSPEED, merged id
+`ratbag:merged:046d:407f+046d:c08d`, 11 buttons):
+- `GetDevices` reports `buttonCount: 11` and a `"buttons"` capability.
+- `GetButtonMappings` matches the device's actual factory layout exactly
+  (buttons 0–4 → their own physical clicks via `button` actions with
+  1-based targets 1–5; 5 → `resolution_alternate`; 6/7 →
+  `resolution_down`/`up`; 8 → `unknown`; 9/10 → `wheel_right`/`left` —
+  cross-checked against `ratbagctl info`'s independent printout of the
+  same device, which agrees).
+- `SetButtonAction(button 8, key "e")` → raw ratbagd `Mapping` became
+  `(uv) 3 u 18` (type=KEY, value=`KEY_E`) — the exact wire shape this
+  code constructs, not just "no error." `GetButtonMappings` re-read
+  matched. Restored button 8 to its original `special`/`unknown`
+  mapping immediately after, confirmed via a final raw ratbagd read
+  that it's back to the pre-test value.
+- Failure paths: invalid button index → real error ("button index 99 not
+  found"); invalid action name → real error ("unknown key..."); malformed
+  action JSON → real error, not a panic or silent no-op.
+
+**Needs human confirmation:** whether pressing the remapped button 8
+actually produced a real "E" keypress in an application — only that
+ratbagd/the device accepted and echoed back the requested mapping (same
+caveat as every prior hardware-verification entry in this log).
+
+**Landmines:** `core/`'s pre-existing clippy gap (unrelated files —
+confirmed `device.rs` itself has zero clippy warnings) is being worked
+in a separate, already-running background session per the earlier
+follow-up task; not touched here.
+
+**Verification:** `daemon`: `cargo build`/`clippy --all-targets -- -D
+warnings` clean; `cargo test` → 39/39 (10 new). `core`: `cargo build`
+clean; `cargo test` → 53/53 (no new tests — `device.rs`'s wrapper
+functions are thin `call_dbus`/`call_dbus_void` pass-throughs with no
+new pure logic, consistent with every other function already in that
+file having no dedicated tests either); `cargo clippy --all-targets`
+(no `-D warnings`, see landmine) → zero warnings on `device.rs`.
+Rebuilt `--release`, reinstalled to `~/.local/bin/openggd`, restarted
+`openggd.service`, and ran every hardware test above against the
+reinstalled binary.
+
+Part B (hotspot coordinate schema + storage + verified preset table)
+and Part C (photo upload + hotspot editor UI) are separate, subsequent
+commits.
+
+---
+
 ### [2026-08-31] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Phase 2 hardware verification: DPI/rate write validation gap)
 
 **What Changed:**

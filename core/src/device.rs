@@ -21,6 +21,32 @@ pub fn set_mouse_polling_rate(device_id: String, rate: u32) -> Result<(), String
     call_dbus_void("SetPollingRate", DV_PATH, DV_IFACE, (device_id.as_str(), rate))
 }
 
+/// Fetch a mouse's per-button mappings (index, supported action types,
+/// current action) as a JSON string — Devices Phase 5's button-mapping
+/// editor. `"[]"` on any failure (ratbagd unavailable, non-mouse id), same
+/// always-succeeds shape as `get_devices`.
+pub fn get_button_mappings(device_id: String) -> Result<String, String> {
+    call_dbus("GetButtonMappings", DV_PATH, DV_IFACE, (device_id.as_str(),))
+}
+
+/// Set one button's action. `action_json` is a `ButtonAction` (see
+/// `daemon/src/device/ratbag.rs`), e.g. `{"type":"key","name":"e"}`. Applies
+/// immediately, same as `set_mouse_dpi`.
+pub fn set_button_action(device_id: String, button_index: u32, action_json: String) -> Result<(), String> {
+    call_dbus_void(
+        "SetButtonAction",
+        DV_PATH,
+        DV_IFACE,
+        (device_id.as_str(), button_index, action_json.as_str()),
+    )
+}
+
+/// Fetch the static catalog of `special`/`key` actions the button-mapping
+/// editor can offer, as a JSON string. Device-independent.
+pub fn get_button_action_catalog() -> Result<String, String> {
+    call_dbus("GetButtonActionCatalog", DV_PATH, DV_IFACE, ())
+}
+
 /// Set headset sidetone level.
 pub fn set_headset_sidetone(device_id: String, level: u32) -> Result<(), String> {
     call_dbus_void("SetSidetone", DV_PATH, DV_IFACE, (device_id.as_str(), level))

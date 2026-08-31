@@ -43,6 +43,10 @@ pub struct DeviceInfo {
     pub dpi_options: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub polling_rate_options: Option<Vec<u32>>,
+    /// Number of physical buttons on the active profile (Devices Phase 5's
+    /// hotspot editor needs this to cap how many hotspots can be placed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub button_count: Option<u32>,
     // Headset-only
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery_level: Option<i32>,
