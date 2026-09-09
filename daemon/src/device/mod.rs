@@ -1,3 +1,4 @@
+pub mod connection;
 pub mod ratbag;
 pub mod types;
 pub mod headset;

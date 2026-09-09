@@ -16,12 +16,41 @@ ComboBox {
 
     model: box.options
     textRole: "label"
-    currentIndex: {
-        for (var i = 0; i < box.options.length; i++)
-            if (box.options[i].value === box.value) return i
-        return -1
+
+    // AGENTS.md landmine #5, hit for real here: a *declarative* binding on
+    // `currentIndex` is permanently severed the first time QQC2 assigns that
+    // property itself — which it does on every user pick, since that is
+    // exactly what `activated` means. The binding this replaced therefore
+    // stopped tracking `value` after the very first interaction, leaving the
+    // control displaying whatever was last clicked instead of what the
+    // backing data actually reports. For the Devices page that meant a DPI /
+    // polling-rate dropdown could sit on a stale number indefinitely — including
+    // presenting a write that silently failed as though the hardware had
+    // accepted it. Re-asserting the index imperatively survives the severing.
+    function syncIndex() {
+        var idx = -1
+        for (var i = 0; i < box.options.length; i++) {
+            if (box.options[i].value === box.value) { idx = i; break }
+        }
+        box.currentIndex = idx
     }
-    onActivated: box.picked(box.options[currentIndex].value)
+    onOptionsChanged: box.syncIndex()
+    onValueChanged: box.syncIndex()
+    Component.onCompleted: box.syncIndex()
+
+    // Report the pick, then immediately snap back to the last *known* value
+    // rather than leaving the user's selection showing optimistically. The
+    // control then only ever displays state the backing data has actually
+    // confirmed: a write that lands moves it here via `onValueChanged` once
+    // the refresh arrives, and a write that fails leaves it on the truth
+    // instead of silently reading as success.
+    onActivated: (index) => {
+        if (index < 0 || index >= box.options.length)
+            return
+        var pickedValue = box.options[index].value
+        box.syncIndex()
+        box.picked(pickedValue)
+    }
 
     // Sized and colored to match the plain ComboBoxes used elsewhere in this
     // app (CaptureSoundPanel's Quality/FPS/etc) — this was previously a

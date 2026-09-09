@@ -6,6 +6,124 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-09-09] Claude Opus 5 — qt6-gstreamer-player-b3 (Devices page correctness + UI regression pass)
+
+**What Changed:** Five issues raised from live testing — the first two
+correctness, the rest structural UI.
+
+**1. DPI / polling-rate dropdowns could show a stale value as if it were
+confirmed hardware state.** The daemon was never at fault: an external
+`ratbagctl dpi set 3200` was reflected by `GetDevices` immediately, and a
+cold app launch rendered it correctly. The bug was **AGENTS.md landmine #5**,
+hit for real in `SelectField.qml` — it drove `currentIndex` from a
+*declarative binding*, and QQC2 assigns that property itself on every user
+pick (that is what `activated` means), which severs the binding permanently.
+From the first interaction onward the dropdown showed whatever was last
+clicked and stopped tracking the device, so a write that silently failed
+still read as success. Replaced with an imperative `syncIndex()` driven by
+`onValueChanged` / `onOptionsChanged` / `Component.onCompleted`, plus a snap
+back to the last known value on pick so the control only ever displays state
+the device has actually confirmed. This fixes every `SelectField` in the app,
+not just Devices.
+
+**2. Card overlap / ragged sizing in Grid and Carousel.** `DeviceCard`
+derived its own `implicitHeight` from a child that was simultaneously
+`anchors.fill`-ed to it, while its content height varied by how many controls
+a given device reported — so a mouse and a headset in the same Grid row came
+out different heights and could overlap. The card is now a **fixed 72px
+regardless of device type or content**, and carries no controls at all (see
+#5). Name text uses `elide: Text.ElideRight` with a real width bound
+(`Layout.maximumWidth`), so long names get a proper ellipsis instead of a
+hard clip.
+
+**3. Photo picker no longer drops straight into the OS portal.** New
+`PhotoDropZone.qml`: a themed in-app step with drag-and-drop
+(`DropArea`), live accept/reject feedback during the hover, and a Browse
+fallback. **On the Qt question the task asked about:** non-native *is*
+available here — `FileDialog.DontUseNativeDialog` resolves (to `8`) under
+this Qt 6.11.2 build, verified by running it under `qml6`, and it is now set.
+But a file chooser is a separate top-level window either way, so
+drag-and-drop is built as the primary path, not a nice-to-have.
+
+**4. Device names and identifiers.**
+- New `core/src/device_display.rs` (pure + unit-tested) trims the trailing
+  marketing run: "Logitech G502 LIGHTSPEED Wireless Gaming Mouse" →
+  "Logitech G502". Deliberately conservative — it stops at the first
+  unrecognized word, never trims below two tokens, and never drops
+  load-bearing model words ("G Pro" survives), because naming a *different*
+  product is worse than one extra word on screen.
+- New `daemon/src/device/connection.rs` derives wired/wireless/bluetooth
+  from **kernel USB/HID topology**, shown as a separate `ConnectionBadge`.
+  **ratbagd has no connection-type property** — introspecting
+  `org.freedesktop.ratbag1.Device` yields only `DeviceType`,
+  `FirmwareVersion`, `Model`, `Name`, `Profiles` — so this walks from the
+  hidraw node to the nearest USB device ancestor: if that ancestor carries
+  the device's own product id it enumerated directly (wired); a *different*
+  id means a receiver is relaying (wireless). Bluetooth comes off the `Model`
+  bus field. Explicitly **not** string-matching "Wireless" in the name, which
+  describes what the hardware supports rather than how it is attached — the
+  connected G502 is named "…LIGHTSPEED Wireless Gaming Mouse" and correctly
+  badges as **Wired** while on its cable.
+- The raw `usb:vid:pid` string is gone from the default UI and now sits
+  behind an "Advanced" disclosure in the detail panel, with the full
+  untrimmed name and internal device id.
+
+**5. Master-detail layout.** New `DeviceDetailPanel.qml` occupies the page
+width that previously sat empty. DPI/polling-rate, headset stats, the
+button-mapping entry point and the Advanced disclosure all live there; the
+list is now purely for selection. Selection is tracked by device **id**, not
+index or object reference, because `devices` is re-parsed into fresh JS
+objects every 3s refresh — an index would silently point at a different
+device on reorder.
+
+**Bugs found and fixed during verification (not from the task list):**
+1. `imagePath()` returning `""` (a deviceType with no bundled silhouette)
+   produced `source: "?v=0"`, which QML resolved *relative to the .qml file*
+   and tried to decode as an image — "Unsupported image format". Guarded in
+   both card and panel. Latent before this pass; only surfaced once a
+   keyboard-type device existed.
+2. The new `displayName` invokable was declared without `#[qinvokable]` — it
+   compiled fine and failed only at runtime as "not a function". The
+   attribute sat on the line above the anchor I edited.
+3. `PhotoDropZone.qml` was missing `import QtQuick.Dialogs`.
+All three were caught by `ui-shots.sh`, not by the compiler.
+
+**Landmines:** the fixed-height card is load-bearing — restoring
+content-derived height to `DeviceCard` brings the Grid overlap straight back.
+`core/`'s pre-existing clippy gap (`audio.rs`, `clips/mod.rs`, `media.rs`,
+`vu.rs`) is unrelated and untouched.
+
+**Verification:**
+- **The severed-binding bug and its fix are demonstrated empirically**, not
+  just argued: a standalone Qt6 QML harness drives two real QQC2 ComboBoxes
+  through the exact sequence (seed → simulated user pick assigning
+  `currentIndex` → external value change). Old pattern stays stale at index
+  2; new pattern correctly follows to index 1.
+- **External-hardware test, twice, as the task required** — not an
+  OpenGG-write-then-read round trip. `ratbagctl dpi set 3200` (and later
+  `dpi set 1600` / `rate set 500`) applied entirely outside OpenGG; the
+  daemon's independent `GetDevices` reported the externally-set values each
+  time, and a fresh capture rendered them. Hardware restored afterward.
+- Connection detection verified live: G502 correctly reports `wired` (its
+  USB parent's `idProduct` is `c08d`, its own), headset reports nothing.
+- `ui-shots.sh` full sweep, zero QML warnings; new `devices:list-many`,
+  `devices:grid-many`, `devices:carousel-many` targets inject three extra
+  synthetic devices (gated on `ScreenshotController.active`) so the "3+
+  devices of different types, no overlap" criterion is actually testable on a
+  machine with only two devices attached. Screenshots inspected directly.
+- `check-colors.sh` clean. daemon: 45 tests + clippy `-D warnings` clean
+  (6 new). core: 69 tests (8 new), `device_display.rs` clippy-clean.
+
+**Needs human confirmation:** anything requiring real input — actually
+clicking a DPI dropdown and watching it resync, and dragging a file onto the
+drop zone (the offscreen harness has no input injection, and a file chooser
+opens as its own window the single-window grab cannot capture). The rendered
+non-native chooser specifically is unconfirmed: the option is set and the
+enum resolves, but whether this desktop honours it or still forces the portal
+can only be seen by opening it.
+
+---
+
 ### [2026-08-31] Claude Sonnet 5 — qt6-gstreamer-player-b3 (Devices roadmap Phase 5: headless capture hook for the button-mapping editor, plus real-hardware re-verification)
 
 **What Changed:** Follow-up to Part C, closing part of that commit's own

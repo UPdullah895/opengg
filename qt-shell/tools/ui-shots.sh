@@ -38,6 +38,7 @@ TARGETS=(
     settings:storage settings:notifications settings:extensions
     settings:store settings:about
     devices:buttons
+    devices:list-many devices:grid-many devices:carousel-many
     tour
 )
 

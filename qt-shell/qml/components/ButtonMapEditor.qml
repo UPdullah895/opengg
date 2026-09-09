@@ -140,19 +140,15 @@ Rectangle {
         onClicked: { dlg.device = null; dlg.closed() }
     }
 
-    FileDialog {
-        id: photoDialog
-        title: "Choose a photo of your mouse"
-        nameFilters: ["Images (*.png *.jpg *.jpeg *.webp *.bmp)"]
-        onAccepted: {
-            const err = DeviceController.saveDevicePhoto(
-                dlg.device.vid, dlg.device.pid, selectedFile.toString())
-            if (err !== "") {
-                dlg.photoError = err
-            } else {
-                dlg.photoError = ""
-                dlg.hasPhoto = true
-            }
+    // Both the drop zone and its Browse fallback funnel here, so the save +
+    // error handling is written once regardless of how the file arrived.
+    function acceptPhoto(url) {
+        const err = DeviceController.saveDevicePhoto(dlg.device.vid, dlg.device.pid, url)
+        if (err !== "") {
+            dlg.photoError = err
+        } else {
+            dlg.photoError = ""
+            dlg.hasPhoto = true
         }
     }
 
@@ -181,7 +177,7 @@ Rectangle {
                 Layout.fillWidth: true
                 Text {
                     Layout.fillWidth: true
-                    text: dlg.device ? ("Configure Buttons — " + dlg.device.name) : ""
+                    text: dlg.device ? ("Configure Buttons — " + DeviceController.displayName(dlg.device.name)) : ""
                     color: Theme.text
                     font.pixelSize: 18
                     font.weight: Font.DemiBold
@@ -209,11 +205,11 @@ Rectangle {
                           "This photo stays on this computer only — it is never uploaded " +
                           "or shared anywhere."
                 }
-                ClipsBarButton {
-                    Layout.alignment: Qt.AlignLeft
-                    label: "Choose Photo…"
-                    icon: "camera"
-                    onTriggered: photoDialog.open()
+                PhotoDropZone {
+                    Layout.fillWidth: true
+                    title: "Drag a photo of your mouse here"
+                    subtitle: "or use Browse to pick one. It stays on this computer."
+                    onPhotoChosen: (url) => dlg.acceptPhoto(url)
                 }
                 Text {
                     visible: dlg.photoError !== ""
@@ -347,7 +343,14 @@ Rectangle {
                         font.pixelSize: 11
                         text: dlg.hotspots.length + " / " + dlg.buttonCount + " buttons placed"
                     }
-                    ClipsBarButton { label: "Replace Photo…"; icon: "camera"; onTriggered: photoDialog.open() }
+                    PhotoDropZone {
+                        Layout.fillWidth: true
+                        implicitHeight: 104
+                        title: "Drop a new photo"
+                        subtitle: "Replaces the current one."
+                        browseLabel: "Replace…"
+                        onPhotoChosen: (url) => dlg.acceptPhoto(url)
+                    }
 
                     Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 

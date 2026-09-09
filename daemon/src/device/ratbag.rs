@@ -548,6 +548,11 @@ struct RawRatbagDevice {
     polling_rate: Option<u32>,
     polling_rate_options: Option<Vec<u32>>,
     button_count: Option<u32>,
+    /// Resolved once at enumeration time from kernel USB/HID topology — see
+    /// `super::connection`. Kept on the raw link rather than the merged card
+    /// because it describes *this* physical link, and a merged card's primary
+    /// link is exactly the one whose connection it should be showing.
+    connection: Option<super::connection::ConnectionType>,
 }
 
 /// Everything `read_active_profile_state` can learn from a device's active
@@ -697,6 +702,7 @@ fn build_device_info(raw: &[RawRatbagDevice], group: &[usize]) -> DeviceInfo {
         dpi_options: primary.dpi_options.clone(),
         polling_rate_options: primary.polling_rate_options.clone(),
         button_count: primary.button_count,
+        connection: primary.connection.map(|c| c.as_tag().to_string()),
         battery_level: None,
         battery_charging: None,
         sidetone: None,
@@ -794,6 +800,9 @@ impl RatbagManager {
             .unwrap_or("unknown")
             .to_string();
 
+        let sysname_for_conn = sysname.clone();
+        let model_for_conn = model_str.clone();
+
         Some(RawRatbagDevice {
             sysname,
             vid,
@@ -805,6 +814,7 @@ impl RatbagManager {
             polling_rate: state.polling_rate,
             polling_rate_options: state.polling_rate_options,
             button_count: state.button_count,
+            connection: super::connection::detect(&sysname_for_conn, &model_for_conn, pid),
         })
     }
 
@@ -1405,6 +1415,9 @@ mod tests {
             polling_rate: None,
             polling_rate_options: None,
             button_count: None,
+            // These grouping/merge tests are about identity, not topology;
+            // `detect` does real sysfs I/O and is verified live instead.
+            connection: None,
         }
     }
 

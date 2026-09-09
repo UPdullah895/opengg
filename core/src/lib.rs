@@ -16,6 +16,7 @@ pub mod clips;
 pub mod daemon;
 pub mod device;
 pub mod device_assets;
+pub mod device_display;
 pub mod ear_blast;
 pub mod extensions;
 pub mod gsr;

@@ -68,6 +68,16 @@ pub mod qobject {
         #[cxx_name = "imagePath"]
         fn image_path(self: &Self, vid: i32, pid: i32, device_type: &QString) -> QString;
 
+        /// Vendor marketing name trimmed to its brand+model part for display
+        /// (`opengg_core::device_display`) — the type line and the connection
+        /// badge beside the title already say "mouse" and "wired"/"wireless",
+        /// so repeating them in the title only costs width the model name
+        /// needs. Pure string work, so it lives in `core` with its own tests
+        /// rather than being open-coded in QML.
+        #[qinvokable]
+        #[cxx_name = "displayName"]
+        fn display_name(self: &Self, full_name: &QString) -> QString;
+
         // ── Devices roadmap Phase 5: button-mapping editor ──────────────
 
         /// Fetch a mouse's per-button mappings into `buttonMappingsJson`.
@@ -244,6 +254,10 @@ impl qobject::DeviceController {
                 controller.as_mut().refresh();
             });
         });
+    }
+
+    pub fn display_name(&self, full_name: &QString) -> QString {
+        QString::from(opengg_core::device_display::display_name(&full_name.to_string()).as_str())
     }
 
     pub fn image_path(&self, vid: i32, pid: i32, device_type: &QString) -> QString {

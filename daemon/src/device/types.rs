@@ -34,6 +34,13 @@ pub struct DeviceInfo {
     /// always describe the currently "primary" (live, if any) link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub linked_ids: Option<Vec<String>>,
+    /// How the device is physically attached ("wired" / "wireless" /
+    /// "bluetooth"), derived from kernel USB/HID topology in
+    /// `device::connection` — ratbagd itself reports no such property.
+    /// `None` when it genuinely could not be determined; the UI shows no
+    /// badge in that case rather than defaulting to either claim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<String>,
     // Mouse-only
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dpi: Option<u32>,
