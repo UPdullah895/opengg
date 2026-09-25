@@ -39,6 +39,7 @@ TARGETS=(
     settings:store settings:about
     devices:buttons
     devices:list-many devices:grid-many devices:carousel-many
+    devices:headset-many
     tour
 )
 

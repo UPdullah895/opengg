@@ -55,6 +55,66 @@ pub mod qobject {
         #[cxx_name = "setPollingRate"]
         fn set_polling_rate(self: Pin<&mut Self>, device_id: &QString, rate: i32);
 
+        // ── Headset controls ────────────────────────────────────────────
+        //
+        // `opengg_core::device` has had wrappers for all of these since the
+        // headset backend landed, and the daemon exposes the matching D-Bus
+        // methods — but nothing ever wired them through to QML, so a headset
+        // showed battery/chatmix readouts and not one control despite
+        // reporting eleven capabilities. Each is capability-gated in the UI
+        // exactly like DPI/polling-rate, so a headset that lacks one simply
+        // doesn't render it.
+
+        /// Sidetone (mic monitoring) level, 0-100.
+        #[qinvokable]
+        #[cxx_name = "setSidetone"]
+        fn set_sidetone(self: Pin<&mut Self>, device_id: &QString, level: i32);
+
+        /// Game/chat balance, 0-100 (64 is centre on SteelSeries hardware).
+        #[qinvokable]
+        #[cxx_name = "setChatmix"]
+        fn set_chatmix(self: Pin<&mut Self>, device_id: &QString, level: i32);
+
+        /// Auto-shutoff idle timeout, in minutes (0 disables).
+        #[qinvokable]
+        #[cxx_name = "setInactiveTime"]
+        fn set_inactive_time(self: Pin<&mut Self>, device_id: &QString, minutes: i32);
+
+        /// Microphone input volume, 0-100.
+        #[qinvokable]
+        #[cxx_name = "setMicVolume"]
+        fn set_mic_volume(self: Pin<&mut Self>, device_id: &QString, level: i32);
+
+        /// Brightness of the mic-muted indicator LED, 0-100.
+        #[qinvokable]
+        #[cxx_name = "setMicMuteLed"]
+        fn set_mic_mute_led(self: Pin<&mut Self>, device_id: &QString, brightness: i32);
+
+        /// Clamp peak output to protect hearing.
+        #[qinvokable]
+        #[cxx_name = "setVolumeLimiter"]
+        fn set_volume_limiter(self: Pin<&mut Self>, device_id: &QString, enabled: bool);
+
+        /// Keep Bluetooth enabled while the headset is powered on.
+        #[qinvokable]
+        #[cxx_name = "setBtPoweredOn"]
+        fn set_bt_powered_on(self: Pin<&mut Self>, device_id: &QString, enabled: bool);
+
+        /// Output volume applied to Bluetooth phone calls, 0-100.
+        #[qinvokable]
+        #[cxx_name = "setBtCallVolume"]
+        fn set_bt_call_volume(self: Pin<&mut Self>, device_id: &QString, level: i32);
+
+        /// Select one of the headset's built-in EQ presets by index.
+        #[qinvokable]
+        #[cxx_name = "setEqPreset"]
+        fn set_eq_preset(self: Pin<&mut Self>, device_id: &QString, preset_idx: i32);
+
+        /// Apply a custom EQ curve; `bands_json` is a JSON array of gains.
+        #[qinvokable]
+        #[cxx_name = "setEqCurve"]
+        fn set_eq_curve(self: Pin<&mut Self>, device_id: &QString, bands_json: &QString);
+
         /// Resolve the image to show for a device — Devices roadmap Phase 3
         /// (bundled generic silhouettes only, see `opengg_core::device_assets`
         /// for the resolution order and why there's no real per-model photo
@@ -253,6 +313,108 @@ impl qobject::DeviceController {
                 }
                 controller.as_mut().refresh();
             });
+        });
+    }
+
+    // ── Headset controls ────────────────────────────────────────────────
+    //
+    // Every one of these is the same shape as `set_dpi`: do the D-Bus round
+    // trip off the Qt thread, surface a failure against this device's card,
+    // then refresh regardless so the UI shows what the device actually
+    // reports rather than what we asked for. `device_write` holds that shape
+    // once instead of repeating it ten times.
+
+    fn device_write<F>(self: Pin<&mut Self>, label: &'static str, device_id: String, op: F)
+    where
+        F: FnOnce(String) -> Result<(), String> + Send + 'static,
+    {
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = op(device_id.clone());
+            let _ = qt_thread.queue(move |mut controller| {
+                match result {
+                    Ok(()) => {
+                        controller.as_mut().set_last_error(QString::from(""));
+                        controller.as_mut().set_last_error_device_id(QString::from(""));
+                    }
+                    Err(e) => {
+                        eprintln!("{label}: {e}");
+                        controller.as_mut().set_last_error(QString::from(&e));
+                        controller
+                            .as_mut()
+                            .set_last_error_device_id(QString::from(&device_id));
+                    }
+                }
+                controller.as_mut().refresh();
+            });
+        });
+    }
+
+    pub fn set_sidetone(self: Pin<&mut Self>, device_id: &QString, level: i32) {
+        let level = level.clamp(0, 100) as u32;
+        self.device_write("setSidetone", device_id.to_string(), move |id| {
+            opengg_core::device::set_headset_sidetone(id, level)
+        });
+    }
+
+    pub fn set_chatmix(self: Pin<&mut Self>, device_id: &QString, level: i32) {
+        let level = level.clamp(0, 100) as u32;
+        self.device_write("setChatmix", device_id.to_string(), move |id| {
+            opengg_core::device::set_headset_chatmix(id, level)
+        });
+    }
+
+    pub fn set_inactive_time(self: Pin<&mut Self>, device_id: &QString, minutes: i32) {
+        let minutes = minutes.max(0) as u32;
+        self.device_write("setInactiveTime", device_id.to_string(), move |id| {
+            opengg_core::device::set_headset_inactive_time(id, minutes)
+        });
+    }
+
+    pub fn set_mic_volume(self: Pin<&mut Self>, device_id: &QString, level: i32) {
+        let level = level.clamp(0, 100) as u32;
+        self.device_write("setMicVolume", device_id.to_string(), move |id| {
+            opengg_core::device::set_headset_mic_volume(id, level)
+        });
+    }
+
+    pub fn set_mic_mute_led(self: Pin<&mut Self>, device_id: &QString, brightness: i32) {
+        let brightness = brightness.clamp(0, 100) as u32;
+        self.device_write("setMicMuteLed", device_id.to_string(), move |id| {
+            opengg_core::device::set_headset_mic_mute_led(id, brightness)
+        });
+    }
+
+    pub fn set_volume_limiter(self: Pin<&mut Self>, device_id: &QString, enabled: bool) {
+        self.device_write("setVolumeLimiter", device_id.to_string(), move |id| {
+            opengg_core::device::set_headset_volume_limiter(id, enabled)
+        });
+    }
+
+    pub fn set_bt_powered_on(self: Pin<&mut Self>, device_id: &QString, enabled: bool) {
+        self.device_write("setBtPoweredOn", device_id.to_string(), move |id| {
+            opengg_core::device::set_headset_bt_powered_on(id, enabled)
+        });
+    }
+
+    pub fn set_bt_call_volume(self: Pin<&mut Self>, device_id: &QString, level: i32) {
+        let level = level.clamp(0, 100) as u32;
+        self.device_write("setBtCallVolume", device_id.to_string(), move |id| {
+            opengg_core::device::set_headset_bt_call_volume(id, level)
+        });
+    }
+
+    pub fn set_eq_preset(self: Pin<&mut Self>, device_id: &QString, preset_idx: i32) {
+        let preset_idx = preset_idx.max(0) as u32;
+        self.device_write("setEqPreset", device_id.to_string(), move |id| {
+            opengg_core::device::set_headset_eq_preset(id, preset_idx)
+        });
+    }
+
+    pub fn set_eq_curve(self: Pin<&mut Self>, device_id: &QString, bands_json: &QString) {
+        let bands = bands_json.to_string();
+        self.device_write("setEqCurve", device_id.to_string(), move |id| {
+            opengg_core::device::set_headset_eq_curve(id, bands.clone())
         });
     }
 

@@ -6,6 +6,113 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-09-25] Claude Opus 5 — qt6-gstreamer-player-b3 (audio-routing persistence + headset control surface)
+
+**What Changed:** Two user-reported faults, both of which turned out to be
+code that existed but was never connected to anything.
+
+**1. App links and channel devices were forgotten on every restart.** Two
+separate dead paths, not one:
+
+- `core::audio::hydrate_audio_routing()` — which restores the per-channel
+  output device map from `mixer.devices` — was **orphaned**. Its only caller
+  was the Tauri host, deleted along with the Vue frontend; the Qt shell never
+  took the job over. A repo-wide grep found exactly two references: the
+  definition, and a stale comment in `daemon/src/audio/hub.rs` still
+  describing the Tauri host as calling it.
+- App→channel links were **never persisted at all**. `routeApp` performs a
+  live `pactl move-sink-input`, which lasts precisely as long as that
+  sink-input does. `mixer.appRules` already existed in the user's
+  `ui-settings.json` (the old frontend wrote it) but **no code in the repo
+  read or wrote that key** — verified by grep.
+
+  Fixes: `load_app_rules()` / `apply_saved_app_rules()` in `core::audio`
+  re-apply saved rules to live streams; `store_app_rule()` in
+  `qt-shell::audio` writes a rule on link and clears it on drop-to-Master,
+  through the same envelope read-modify-write `set_ear_blast` already uses.
+  A new `AudioController.hydrate()` runs both restorations once at startup
+  from `Main.qml` — deliberately there and not in `MixerPage`, so it happens
+  whether or not the user ever opens the Mixer, and exactly once. It is
+  skipped under the screenshot harness so captures never mutate real routing.
+
+  Rules are matched on **either** process binary or display name,
+  case-insensitively, because the old frontend wrote both kinds of key
+  ("vlc", "sd_dummy" alongside "Discord", "Playback Stream") — so the user's
+  existing saved rules start working again rather than needing re-entry.
+
+**2. The Devices page had no headset controls.** `core::device` has carried
+all ten headset setters since the headset backend landed, and the daemon
+exposes the matching D-Bus methods (`SetSidetone`, `SetInactiveTime`,
+`SetMicrophoneVolume`, `SetVolumeLimiter`, …) — but `DeviceController`
+exposed **none** of them; only `setDpi`/`setPollingRate`. A headset therefore
+rendered battery and chatmix readouts and not one control, despite reporting
+eleven capabilities, which is both the "tools don't work" complaint and most
+of the "empty layout" one. Added the ten invokables (via a shared
+`device_write` helper rather than ten copies of the same block) and a real
+headset section in `DeviceDetailPanel`.
+
+**Honesty constraints that shaped the UI, not cosmetic choices:**
+- The daemon reads back **only** battery, chatmix and EQ presets.
+  `DeviceInfo.sidetone` is hardcoded `None`; `headsetcontrol` is write-only
+  for the rest. So sidetone / mic volume / mic-mute LED / BT call volume /
+  auto-shutoff / volume limiter / BT-when-on are presented as write-only,
+  under an explicit caption saying they show the last value sent from here
+  and not hardware state. Binding them to a fabricated `0` would have
+  repeated exactly the severed-binding bug fixed in the previous entry — a
+  control asserting a value the device never confirmed.
+- EQ presets are applied with **`setEqCurve` and the preset's own band
+  values**, not `setEqPreset`. `eqPresets` arrives as an unordered
+  `HashMap<String, Vec<f32>>` while `SetEqPreset` takes a positional index
+  into headsetcontrol's own list; nothing defines those orders to be equal,
+  so selecting by JS key order would apply an arbitrary preset. The curve
+  carries the real values and is correct by construction.
+- Both no-readback dropdowns lead with a placeholder ("Set timeout…",
+  "Apply preset…") so they never appear to be displaying a current setting.
+
+**Bugs found during verification, not from the report:**
+1. **My own first cut of `apply_saved_app_rules` silently did nothing while
+   reporting success.** The daemon serializes `id` as a JSON *string*
+   (`{"id":"33191"}`) whereas the local `pactl` fallback emits a number, so
+   `as_u64()` returned `None` and the loop `continue`d past every app. Fixed
+   with a tolerant `json_u32` helper plus three unit tests covering both
+   shapes, non-numeric input, and `u32` overflow.
+2. **The hidden carousel hijacked device selection.** A `SwipeView` still
+   constructs and emits `currentIndexChanged` (index 0) while its parent is
+   `visible: false`, so in List or Grid mode it yanked the selection back to
+   the first device, overriding the user's click. Now guarded on the active
+   view mode. Caught because the new headset capture target kept showing the
+   mouse.
+
+**Landmines:** `hydrate()` must stay in `Main.qml`, not a page — moving it
+into `MixerPage` would restore routing only if the user visits that page, and
+re-run it on every visit. Saved rules are re-applied at startup and on the
+mixer's existing refresh path; an app launched while the UI is closed is
+routed at the next start, since the always-on component (the daemon) has no
+`opengg-core` dependency to read `ui-settings.json` through.
+
+**Verification:**
+- **Routing fix verified live, end to end**: with `mixer.appRules` saying
+  `sd_dummy → Chat` and the stream sitting on `OpenGG_Game`,
+  `apply_saved_app_rules()` moved it to `OpenGG_Chat`, while
+  `wine64-preloader` (rule already satisfied) was correctly left alone. Run
+  through a temporary `#[ignore]` test that was then removed and the file
+  diffed back to confirm nothing was left behind.
+- New `devices:headset-many` capture target selects a headset so the control
+  surface is swept without a click; screenshots inspected directly.
+- core 72 tests (3 new); daemon 45 tests, clippy clean; qt-shell clippy
+  clean; `check-colors.sh` clean; full `ui-shots.sh` sweep with zero QML
+  warnings. `core/`'s pre-existing clippy baseline (`audio.rs` doc-comment
+  spacing, `clips/mod.rs`, `media.rs`, `vu.rs`) is unchanged and untouched —
+  the three errors this work introduced were found and fixed before commit.
+
+**Needs human confirmation:** dragging an app onto a channel and restarting
+to confirm the link returns (the offscreen harness has no input injection, so
+the drag itself is untested); and the write-only headset controls actually
+taking effect on the hardware — they are write-only by design, so the UI
+cannot confirm them and neither can I.
+
+---
+
 ### [2026-09-09] Claude Opus 5 — qt6-gstreamer-player-b3 (Devices page correctness + UI regression pass)
 
 **What Changed:** Five issues raised from live testing — the first two

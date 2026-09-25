@@ -82,6 +82,14 @@ ApplicationWindow {
     Component.onCompleted: {
         ThemeController.reload()
         SettingsController.refresh()
+        // Restore saved audio state once per app start: per-channel output
+        // devices and app→channel links. Deliberately here and not in
+        // MixerPage — hydration must happen whether or not the user ever
+        // opens the Mixer, and it must happen exactly once, not on every
+        // visit to that page. Skipped under the screenshot harness, which
+        // must not mutate the developer's real routing.
+        if (!ScreenshotController.active)
+            AudioController.hydrate()
         if (ScreenshotController.active && ScreenshotController.page.length > 0)
             root.currentPage = ScreenshotController.page
         // --with-tour opens the overlay directly. This used to hang off

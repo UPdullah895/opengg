@@ -1687,6 +1687,93 @@ pub fn route_app(app_id: u32, channel: String, binary: String) -> Result<(), Str
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+//  Persisted app→channel routing rules
+//
+//  `pactl move-sink-input` is a live, stateless move: it lasts exactly as
+//  long as that sink-input does. Nothing in the Qt shell ever wrote the
+//  user's choice down or replayed it, so every app link was lost the moment
+//  the stream (or the machine) restarted — the user had to re-drag every
+//  app by hand. `mixer.appRules` in ui-settings.json already held exactly
+//  this map (the removed Vue frontend wrote it), so these read and reapply
+//  that existing key rather than inventing a second store.
+// ══════════════════════════════════════════════════════════════════════
+
+/// Saved binary/app-name → channel rules, keyed lowercase for matching.
+///
+/// Entries written by the old frontend are a mix of process binaries
+/// ("vlc", "sd_dummy") and display names ("Discord", "Playback Stream"),
+/// so [`apply_saved_app_rules`] deliberately matches a stream on *either*.
+pub fn load_app_rules() -> std::collections::HashMap<String, String> {
+    let path = crate::settings::settings_path();
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return std::collections::HashMap::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return std::collections::HashMap::new();
+    };
+    let Some(obj) = v["mixer"]["appRules"].as_object() else {
+        return std::collections::HashMap::new();
+    };
+    obj.iter()
+        .filter_map(|(k, val)| {
+            let ch = val.as_str()?.trim();
+            (!ch.is_empty()).then(|| (k.trim().to_lowercase(), ch.to_string()))
+        })
+        .collect()
+}
+
+/// Read a numeric field that may arrive as a JSON number *or* a JSON string.
+///
+/// The daemon's `GetApps` serializes `id` (and `volume`) as strings —
+/// `{"id":"33191", ...}` — while the local `pactl` fallback emits real
+/// numbers. Accepting only one shape silently skipped every app on the D-Bus
+/// path, which is exactly how the first cut of `apply_saved_app_rules` did
+/// nothing at all while appearing to succeed.
+fn json_u32(v: &serde_json::Value) -> Option<u32> {
+    if let Some(n) = v.as_u64() {
+        return u32::try_from(n).ok();
+    }
+    v.as_str()?.trim().parse::<u32>().ok()
+}
+
+/// Re-apply every saved rule to any live stream currently sitting on the
+/// wrong channel.
+///
+/// Safe to call repeatedly: `route_app` already no-ops when a stream is
+/// where it belongs, and skips blacklisted system processes.
+pub fn apply_saved_app_rules() {
+    let rules = load_app_rules();
+    if rules.is_empty() {
+        return;
+    }
+    let Ok(apps_json) = get_apps() else { return };
+    let Ok(apps) = serde_json::from_str::<Vec<serde_json::Value>>(&apps_json) else {
+        return;
+    };
+
+    for app in &apps {
+        let binary = app["binary"].as_str().unwrap_or("");
+        let name = app["name"].as_str().unwrap_or("");
+        let current = app["channel"].as_str().unwrap_or("");
+        let Some(id) = json_u32(&app["id"]) else { continue };
+
+        // Binary first: it is the stabler identifier. Display names drift
+        // with whatever the app puts in media.name.
+        let target = rules
+            .get(&binary.to_lowercase())
+            .or_else(|| rules.get(&name.to_lowercase()));
+        let Some(target) = target else { continue };
+
+        if target == current {
+            continue;
+        }
+        if let Err(e) = route_app(id, target.clone(), binary.to_string()) {
+            log::debug!("apply_saved_app_rules: {binary}/{name} → {target} failed: {e}");
+        }
+    }
+}
+
 /// Route an app back to the system default sink ("unroute").
 pub fn unroute_app(app_id: u32, binary: String) -> Result<(), String> {
     route_app(app_id, "default".to_string(), binary)
@@ -1695,6 +1782,29 @@ pub fn unroute_app(app_id: u32, binary: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_u32_accepts_a_real_number() {
+        assert_eq!(json_u32(&serde_json::json!(33191)), Some(33191));
+    }
+
+    #[test]
+    fn json_u32_accepts_the_daemons_stringified_form() {
+        // GetApps returns {"id":"33191"} — reading only as_u64() here made
+        // apply_saved_app_rules skip every app while reporting success.
+        assert_eq!(json_u32(&serde_json::json!("33191")), Some(33191));
+        assert_eq!(json_u32(&serde_json::json!(" 42 ")), Some(42));
+    }
+
+    #[test]
+    fn json_u32_rejects_values_that_are_not_ids() {
+        assert_eq!(json_u32(&serde_json::json!("")), None);
+        assert_eq!(json_u32(&serde_json::json!("abc")), None);
+        assert_eq!(json_u32(&serde_json::json!(null)), None);
+        assert_eq!(json_u32(&serde_json::json!(-1)), None);
+        // Wider than u32 must not silently truncate into a wrong stream id.
+        assert_eq!(json_u32(&serde_json::json!(u64::from(u32::MAX) + 1)), None);
+    }
 
     #[test]
     fn test_normalized_stream_name_prefers_app() {
@@ -1928,4 +2038,3 @@ mod tests {
         assert!(result.contains_key(&500u32), "stream with object.serial should be present");
     }
 }
-

@@ -62,6 +62,16 @@ pub mod qobject {
         #[qinvokable]
         fn refresh(self: Pin<&mut Self>);
 
+        /// Restore saved audio state at startup: per-channel output devices
+        /// (`mixer.devices`) and app→channel links (`mixer.appRules`).
+        ///
+        /// `hydrate_audio_routing` had been dead code since the Tauri host
+        /// that used to call it was removed — nothing in the Qt shell ever
+        /// took over the job, so both the channel device map and every app
+        /// link were silently dropped on each restart.
+        #[qinvokable]
+        fn hydrate(self: Pin<&mut Self>);
+
         /// Set a channel's volume (0–100) and refresh.
         #[qinvokable]
         #[cxx_name = "setVolume"]
@@ -196,13 +206,29 @@ impl qobject::AudioController {
         });
     }
 
+    pub fn hydrate(self: Pin<&mut Self>) {
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            // Both touch pactl/pw-link, so they stay off the Qt thread.
+            opengg_core::audio::hydrate_audio_routing();
+            opengg_core::audio::apply_saved_app_rules();
+            let _ = qt_thread.queue(move |controller| {
+                controller.refresh();
+            });
+        });
+    }
+
     pub fn route_app(self: Pin<&mut Self>, app_id: i32, channel: &QString, binary: &QString) {
         let channel = channel.to_string();
         let binary = binary.to_string();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
-            if let Err(e) = opengg_core::audio::route_app(app_id as u32, channel, binary) {
-                eprintln!("routeApp: {e}");
+            match opengg_core::audio::route_app(app_id as u32, channel.clone(), binary.clone()) {
+                // Remember the choice so it survives the stream ending and
+                // the machine restarting — a bare `move-sink-input` lasts
+                // only as long as this sink-input does.
+                Ok(()) => store_app_rule(&binary, Some(&channel)),
+                Err(e) => eprintln!("routeApp: {e}"),
             }
             let _ = qt_thread.queue(|mut controller| controller.as_mut().refresh());
         });
@@ -212,8 +238,11 @@ impl qobject::AudioController {
         let binary = binary.to_string();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
-            if let Err(e) = opengg_core::audio::unroute_app(app_id as u32, binary) {
-                eprintln!("unrouteApp: {e}");
+            match opengg_core::audio::unroute_app(app_id as u32, binary.clone()) {
+                // Back on Master means "no rule", not "a rule pointing at
+                // Master" — otherwise re-linking later would fight it.
+                Ok(()) => store_app_rule(&binary, None),
+                Err(e) => eprintln!("unrouteApp: {e}"),
             }
             let _ = qt_thread.queue(|mut controller| controller.as_mut().refresh());
         });
@@ -436,6 +465,39 @@ impl qobject::AudioController {
             let _ = opengg_core::settings::save_ui_settings(&s);
         }
         self.as_mut().refresh_ear_blast();
+    }
+}
+
+/// Insert or clear one `mixer.appRules` entry, preserving the rest of
+/// ui-settings.json. Read-modify-write through the same envelope helper
+/// `set_ear_blast` uses, so this stays consistent with how every other
+/// mixer preference in this file is persisted.
+///
+/// Keyed by process binary. A stream with no binary is skipped rather than
+/// keyed by its sink-input id — that id is regenerated every time the app
+/// starts, so a rule under it could never match again.
+fn store_app_rule(binary: &str, channel: Option<&str>) {
+    let key = binary.trim();
+    if key.is_empty() {
+        return;
+    }
+    let mut v = load_settings_envelope();
+    if !v["mixer"].is_object() {
+        v["mixer"] = serde_json::json!({});
+    }
+    if !v["mixer"]["appRules"].is_object() {
+        v["mixer"]["appRules"] = serde_json::json!({});
+    }
+    if let Some(rules) = v["mixer"]["appRules"].as_object_mut() {
+        // Drop any case variant first so one app can never hold two rules.
+        let lower = key.to_lowercase();
+        rules.retain(|k, _| k.trim().to_lowercase() != lower);
+        if let Some(ch) = channel {
+            rules.insert(key.to_string(), serde_json::json!(ch));
+        }
+    }
+    if let Ok(out) = serde_json::to_string(&v) {
+        let _ = opengg_core::settings::save_ui_settings(&out);
     }
 }
 

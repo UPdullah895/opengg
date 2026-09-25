@@ -40,7 +40,17 @@ Rectangle {
         {
             id: "shot:demo:pad", name: "SteelSeries Arctis Nova Pro Wireless Gaming Headset",
             model: "usb:1038:12e0:0", deviceType: "headset", vid: 4152, pid: 4832,
-            connection: "bluetooth", batteryLevel: 72, chatmix: 50, capabilities: []
+            connection: "bluetooth", batteryLevel: 72, chatmix: 50,
+            // The real capability list the connected Arctis Nova 7 reports,
+            // so a capture actually exercises the headset control surface
+            // rather than rendering an empty panel.
+            capabilities: ["sidetone", "battery_status", "inactive_time", "chatmix_status",
+                           "equalizer_preset", "equalizer", "microphone_mute_led_brightness",
+                           "microphone_volume", "volume_limiter", "bt_when_powered_on",
+                           "bt_call_volume"],
+            eqPresets: { "flat": [0,0,0,0,0,0,0,0,0,0], "bass": [3.5,5.5,4,1,-1.5,-1.5,-1,-1,-1,-1],
+                         "focus": [-5,-3.5,-1,-3.5,-2.5,4,6,-3.5,0,0],
+                         "smiley": [3,3.5,1.5,-1.5,-4,-4,-2.5,1.5,3,4] }
         },
         {
             id: "shot:demo:mouse2", name: "Razer DeathAdder V3 Pro Wired Gaming Mouse",
@@ -80,6 +90,17 @@ Rectangle {
         }
         if (page.selectedDevice === null)
             page.selectedId = page.devices[0].id
+
+        // A capture target ending in "headset" selects the first headset, so
+        // the headset control surface can be swept without a click.
+        if (page.shotPanel.indexOf("headset") !== -1) {
+            for (var h = 0; h < page.devices.length; h++) {
+                if (page.devices[h].deviceType === "headset") {
+                    page.selectedId = page.devices[h].id
+                    break
+                }
+            }
+        }
 
         // Headless-capture hook (qt-shell/tools/ui-shots.sh's
         // `devices:buttons` target) — the button-mapping editor only opens
@@ -289,7 +310,17 @@ Rectangle {
                                     onClicked: page.selectedId = modelData.id
                                 }
                             }
+                            // Guarded on the active view mode: a SwipeView
+                            // still constructs and emits currentIndexChanged
+                            // (with index 0) even while its parent is
+                            // `visible: false`, so without this the hidden
+                            // carousel silently yanked the selection back to
+                            // the first device every time the page loaded in
+                            // List or Grid mode — overriding whatever the user
+                            // had actually clicked.
                             onCurrentIndexChanged: {
+                                if (page.deviceViewMode !== "carousel")
+                                    return
                                 if (currentIndex >= 0 && currentIndex < page.devices.length)
                                     page.selectedId = page.devices[currentIndex].id
                             }
