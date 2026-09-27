@@ -423,7 +423,7 @@ Rectangle {
                     acceptedButtons: Qt.NoButton
                     hoverEnabled: true
                 }
-                ToolTip {
+                Tip {
                     visible: devHoverArea.containsMouse
                     text: devBox.displayText
                     delay: 400

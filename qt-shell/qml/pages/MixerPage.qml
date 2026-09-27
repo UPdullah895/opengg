@@ -308,7 +308,7 @@ Rectangle {
                     // Icon-only mode drops the visible label entirely, so
                     // hovering is the only way left to confirm which tab
                     // this is before clicking it.
-                    ToolTip {
+                    Tip {
                         visible: page.compactTabs && tabArea.containsMouse
                         text: (I18n.language, page.tabLabel(tabBtn.modelData.id))
                         delay: 400
@@ -340,7 +340,7 @@ Rectangle {
                     hoverEnabled: true
                     onClicked: AudioController.overdriveEnabled = !AudioController.overdriveEnabled
                 }
-                ToolTip {
+                Tip {
                     visible: overdriveArea.containsMouse
                     text: AudioController.overdriveEnabled
                         ? "Overdrive ON — faders go to 150%"
@@ -376,7 +376,7 @@ Rectangle {
                     hoverEnabled: true
                     onClicked: AudioController.setEarBlast("enabled", JSON.stringify(!earBlastBtn.eb.enabled))
                 }
-                ToolTip {
+                Tip {
                     visible: earBlastArea.containsMouse
                     text: earBlastBtn.eb.enabled
                         ? (I18n.language, I18n.t("dashboard.earBlastOn"))

@@ -31,6 +31,11 @@ ApplicationWindow {
             && (editorPage.theaterMode || editorPage.navHidden))
         || clipsPage.playerExpanded
 
+    /// Immersive AND the view has faded its chrome out after an idle moment.
+    readonly property bool immersiveChromeHidden:
+        (root.currentPage === "editor" && editorPage.theaterMode && editorPage.chromeHidden)
+        || clipsPage.playerChromeHidden
+
     // Settings → General → "Minimize to Tray" was persisted but nothing
     // ever read it — the close button always fully quit regardless of the
     // toggle. `s` mirrors SettingsController's JSON the same way every
@@ -191,9 +196,14 @@ ApplicationWindow {
             anchors.fill: parent
             spacing: 0
 
+            // In an immersive view the titlebar auto-hides along with the
+            // view's own chrome: leaving it pinned meant "maximise" still
+            // stopped short of the top of the window.
             Titlebar {
                 Layout.fillWidth: true
-                Layout.preferredHeight: Theme.titlebarH   // --titlebar-h
+                visible: !root.immersiveChromeHidden
+                Layout.preferredHeight: root.immersiveChromeHidden ? 0 : Theme.titlebarH
+                Behavior on Layout.preferredHeight { NumberAnimation { duration: 120 } }
             }
 
             RowLayout {

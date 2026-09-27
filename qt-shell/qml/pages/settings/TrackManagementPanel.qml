@@ -130,7 +130,7 @@ ColumnLayout {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: palette.visible ? palette.close() : palette.open()
+                            onClicked: palette.toggle()
                         }
 
                         // Presets, then a hue strip and a shade grid built
@@ -138,22 +138,11 @@ ColumnLayout {
                         // colour the theme happened not to ship. Every colour
                         // comes from Theme.hsv() rather than a literal, so
                         // check-colors.sh still holds.
-                        Popup {
+                        FlyoutPopup {
                             id: palette
-                            y: swatch.height + 4
-                            // Right-aligned to the swatch: the rows sit near
-                            // the left edge, and a wide popup anchored at x=0
-                            // would hang off the panel.
-                            x: -8
+                            anchorItem: swatch
                             width: 6 * 24 + 16
                             implicitHeight: pickerCol.implicitHeight + 16
-                            padding: 8
-                            background: Rectangle {
-                                radius: Theme.radius
-                                color: Theme.surface
-                                border.width: 1
-                                border.color: Theme.border
-                            }
 
                             /// Hue of the shade grid, 0..1. Seeded from the
                             /// track's current colour each time it opens so
@@ -334,26 +323,19 @@ ColumnLayout {
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: iconPop.visible ? iconPop.close() : iconPop.open()
+                            onClicked: iconPop.toggle()
                         }
 
                         // A popup over the button, like the colour swatch's
                         // — the strip that used to unfold underneath the row
                         // pushed every track below it down, so the list
                         // jumped around as you edited.
-                        Popup {
+                        FlyoutPopup {
                             id: iconPop
-                            y: iconBtn.height + 4
-                            x: (iconBtn.width - iconPop.width) / 2
+                            anchorItem: iconBtn
+                            centerOnAnchor: true
                             width: 3 * 34 + 16
                             implicitHeight: 2 * 32 + 16
-                            padding: 8
-                            background: Rectangle {
-                                radius: Theme.radius
-                                color: Theme.surface
-                                border.width: 1
-                                border.color: Theme.border
-                            }
                             contentItem: Grid {
                                 columns: 3
                                 spacing: 4

@@ -126,7 +126,53 @@ Rectangle {
     property bool theaterMode: false
     /// Collapses the app's nav rail while the editor is open, without going
     /// all the way into full view. Main.qml reads this alongside theaterMode.
-    property bool navHidden: false
+    ///
+    /// Defaults to HIDDEN: the editor is where horizontal space is scarcest
+    /// and the rail is not useful while trimming. The toggle writes the
+    /// user's choice to ui-settings, so opting back in sticks.
+    property bool navHidden: page.settings.editorNavHidden !== false
+    readonly property var settings: JSON.parse(SettingsController.settingsJson || "{}")
+
+    function setNavHidden(hidden) {
+        page.navHidden = hidden
+        SettingsController.setValue("editorNavHidden", JSON.stringify(hidden))
+    }
+
+    // ── Full-view chrome auto-hide ────────────────────────────────────────
+    /// In full view the top bar and transport fade out once the pointer has
+    /// been still for a moment, and come back on the next movement — the
+    /// bars used to sit over the picture permanently, which is most of the
+    /// point of full view lost.
+    property bool chromeHidden: false
+    /// Chrome stays put while the pointer is actually on it.
+    property bool chromeHovered: false
+
+    Timer {
+        id: idleTimer
+        interval: 2200
+        onTriggered: if (page.theaterMode && !page.chromeHovered) page.chromeHidden = true
+    }
+    HoverHandler {
+        // Any movement anywhere in the page wakes the chrome.
+        onPointChanged: {
+            page.chromeHidden = false
+            if (page.theaterMode) idleTimer.restart()
+        }
+    }
+    onTheaterModeChanged: {
+        page.chromeHidden = false
+        if (page.theaterMode) idleTimer.restart()
+        else idleTimer.stop()
+    }
+
+    // Clicking away from the name/game fields has to actually drop focus.
+    // It did not, so the text cursor stayed in the field and I, O and F
+    // went to the TextField as characters instead of reaching the editor's
+    // keymap. A TapHandler on the root only sees taps no child consumed,
+    // which is exactly "clicked an empty area".
+    TapHandler {
+        onTapped: page.forceActiveFocus()
+    }
     /// Current game tag, seeded from the clip row and edited in the top bar.
     property string gameTag: ""
     /// Export settings dialog open?
@@ -159,7 +205,7 @@ Rectangle {
         // editor: opening a different clip used to inherit the previous
         // one's full view and collapsed rail.
         page.theaterMode = false
-        page.navHidden = false
+        page.navHidden = page.settings.editorNavHidden !== false
         // false: the editor has no ClipVideoSurface yet (its picture still
         // comes from Qt Multimedia below) — see load()'s doc comment.
         page.mixerToken = ClipAudioMixer.load(page.clip.filepath, false)
@@ -419,13 +465,19 @@ Rectangle {
 
         // ── Top bar ───────────────────────────────────────────────────────
         Rectangle {
+            id: topBar
             // 44, not 56: the bar carries a back button, two fields and a few
             // pills, none of which need that much height, and it was eating
             // vertical space the picture wants.
             Layout.fillWidth: true
-            Layout.preferredHeight: 44
+            // Collapsed rather than merely transparent, so the picture
+            // actually reclaims the space in full view.
+            Layout.preferredHeight: page.theaterMode && page.chromeHidden ? 0 : 44
+            visible: Layout.preferredHeight > 0
             color: Theme.surface
             border.width: 0
+            Behavior on Layout.preferredHeight { NumberAnimation { duration: 120 } }
+            HoverHandler { onHoveredChanged: page.chromeHovered = hovered }
 
             Rectangle {
                 anchors.bottom: parent.bottom
@@ -484,11 +536,12 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: page.navHidden = !page.navHidden
+                        onClicked: page.setNavHidden(!page.navHidden)
                     }
-                    ToolTip.visible: navArea.containsMouse
-                    ToolTip.text: page.navHidden ? "Show sidebar" : "Hide sidebar"
-                    ToolTip.delay: 400
+                    Tip {
+                        visible: navArea.containsMouse
+                        text: page.navHidden ? "Show sidebar" : "Hide sidebar"
+                    }
                 }
 
                 // Name and game are editable here, as in the old editor's
@@ -815,9 +868,13 @@ Rectangle {
 
         // ── Transport ─────────────────────────────────────────────────────
         Rectangle {
+            id: transportBar
             Layout.fillWidth: true
-            Layout.preferredHeight: 44
+            Layout.preferredHeight: page.theaterMode && page.chromeHidden ? 0 : 44
+            visible: Layout.preferredHeight > 0
             color: Theme.surface
+            Behavior on Layout.preferredHeight { NumberAnimation { duration: 120 } }
+            HoverHandler { onHoveredChanged: page.chromeHovered = hovered }
 
             Rectangle { width: parent.width; height: 1; color: Theme.border }
 

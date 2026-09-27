@@ -66,6 +66,8 @@ fn main() {
         QmlFile::from("qml/components/HSlider.qml"),
         QmlFile::from("qml/components/SliderHandle.qml"),
         QmlFile::from("qml/components/VSlider.qml"),
+        QmlFile::from("qml/components/FlyoutPopup.qml"),
+        QmlFile::from("qml/components/Tip.qml"),
         QmlFile::from("qml/components/SelectField.qml"),
         QmlFile::from("qml/components/WheelScroller.qml"),
         QmlFile::from("qml/components/GraphicEQ.qml"),

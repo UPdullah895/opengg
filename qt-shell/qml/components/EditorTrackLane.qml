@@ -75,27 +75,20 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: volPop.visible ? volPop.close() : volPop.open()
+                onClicked: volPop.toggle()
             }
 
-            Popup {
+            // FlyoutPopup, so it opens ABOVE the speaker when there is no
+            // room below. The lanes sit at the very bottom of the editor, so
+            // a fader that always dropped downward ran off the window and
+            // could not be dragged at all.
+            FlyoutPopup {
                 id: volPop
-                y: monBtn.height + 4
-                // Centred on the button rather than pinned to a magic
-                // offset, now that the flyout is narrow.
-                x: (monBtn.width - volPop.width) / 2
+                anchorItem: monBtn
+                centerOnAnchor: true
                 width: 40
                 implicitHeight: volCol.implicitHeight + 12
                 padding: 6
-                // Click-away dismiss; the hover watch below covers "moved
-                // the mouse away" without needing a click.
-                closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
-                background: Rectangle {
-                    radius: Theme.radius
-                    color: Theme.surface
-                    border.width: 1
-                    border.color: Theme.border
-                }
 
                 // Leaving the button AND the popover closes it shortly after,
                 // so it behaves like a hover flyout without snapping shut the

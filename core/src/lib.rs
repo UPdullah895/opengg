@@ -15,6 +15,7 @@ pub mod button_hotspots;
 pub mod clips;
 pub mod daemon;
 pub mod device;
+pub mod dialogs;
 pub mod device_assets;
 pub mod device_display;
 pub mod ear_blast;

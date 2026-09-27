@@ -35,7 +35,7 @@ Rectangle {
         onClicked: btn.triggered()
     }
 
-    ToolTip {
+    Tip {
         visible: btn.tooltip.length > 0 && area.containsMouse
         text: btn.tooltip
         delay: 500

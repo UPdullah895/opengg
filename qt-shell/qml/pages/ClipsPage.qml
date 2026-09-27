@@ -501,12 +501,13 @@ Rectangle {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: gamePopup.visible ? gamePopup.close() : gamePopup.open()
+                    onClicked: gamePopup.toggle()
                 }
 
-                Popup {
+                FlyoutPopup {
                     id: gamePopup
-                    y: gameBox.height + 2
+                    anchorItem: gameBox
+                    gap: 2
                     width: Math.max(gameBox.width, 260)
                     // Computed from the parts rather than read off the
                     // Column's implicitHeight. `gameList` arrives after the
@@ -516,12 +517,6 @@ Rectangle {
                     // failed to open. 1px divider + 32px footer + 2 padding.
                     implicitHeight: gameBox.listH + 35
                     padding: 1
-                    background: Rectangle {
-                        radius: Theme.radius
-                        color: Theme.surface
-                        border.width: 1
-                        border.color: Theme.border
-                    }
 
                     contentItem: Column {
                         id: gameCol
@@ -953,13 +948,15 @@ Rectangle {
                     label: "Change Game"
                     icon: "gamepad"
                     active: bulkGamePop.visible
-                    onTriggered: bulkGamePop.visible ? bulkGamePop.close() : bulkGamePop.open()
+                    onTriggered: bulkGamePop.toggle()
 
-                    Popup {
+                    FlyoutPopup {
                         id: bulkGamePop
-                        // Drops UP: the bar sits at the foot of the page.
-                        y: -bulkGamePop.implicitHeight - 6
-                        x: (gameBtn.width - bulkGamePop.width) / 2
+                        // Drops DOWN, over the grid: the selection bar sits
+                        // near the top, and opening upward put the list over
+                        // the toolbar it was launched from.
+                        anchorItem: gameBtn
+                        centerOnAnchor: true
                         width: 240
                         // Derived from its parts, never from the content
                         // Column — a Column that sizes from children which
@@ -971,28 +968,30 @@ Rectangle {
                             Math.min(Math.max(bulkGamePop.rows.length, 1), 7) * 28
 
                         /// Library games (gameList[0] is the "All" sentinel)
-                        /// narrowed by the search box.
+                        /// narrowed by the search box, plus an explicit
+                        /// "add" row for a tag that does not exist yet —
+                        /// the box accepted a brand-new tag all along, but
+                        /// nothing on screen said so, so it read as a
+                        /// filter over a fixed list.
                         readonly property var rows: {
                             const all = ClipsController.gameList.slice(1)
-                            const q = gameSearch.text.trim().toLowerCase()
+                            const raw = gameSearch.text.trim()
+                            const q = raw.toLowerCase()
                             var out = []
+                            var exact = false
                             for (var i = 0; i < all.length; i++) {
                                 const g = String(all[i])
+                                if (g.toLowerCase() === q) exact = true
                                 if (q.length === 0 || g.toLowerCase().indexOf(q) >= 0)
-                                    out.push(g)
+                                    out.push({ label: g, isNew: false })
                             }
+                            if (raw.length > 0 && !exact)
+                                out.unshift({ label: raw, isNew: true })
                             return out
                         }
                         property string chosen: ""
 
                         onOpened: { gameSearch.text = ""; bulkGamePop.chosen = "" }
-
-                        background: Rectangle {
-                            radius: Theme.radius
-                            color: Theme.surface
-                            border.width: 1
-                            border.color: Theme.border
-                        }
 
                         contentItem: Column {
                             spacing: 6
@@ -1016,7 +1015,7 @@ Rectangle {
                                 // Typing a game nobody has used yet is a
                                 // legitimate retag, so Enter applies the raw
                                 // text when nothing in the list matches.
-                                onAccepted: bulkApply(gameSearch.text.trim())
+                                onAccepted: bulkGamePop.bulkApply(gameSearch.text.trim())
                             }
 
                             Item {
@@ -1030,29 +1029,39 @@ Rectangle {
                                     boundsBehavior: Flickable.StopAtBounds
 
                                     delegate: Rectangle {
-                                        required property string modelData
+                                        required property var modelData
                                         width: ListView.view.width
                                         height: 28
                                         radius: Theme.radius
-                                        color: bulkGamePop.chosen === modelData
+                                        color: bulkGamePop.chosen === modelData.label
                                                ? Theme.accentAlpha(20)
                                                : rowArea.containsMouse ? Theme.bgHover : "transparent"
-                                        Text {
-                                            anchors.left: parent.left
+                                        RowLayout {
+                                            anchors.fill: parent
                                             anchors.leftMargin: 8
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            width: parent.width - 16
-                                            text: parent.modelData
-                                            color: Theme.text
-                                            font.pixelSize: 12
-                                            elide: Text.ElideRight
+                                            anchors.rightMargin: 8
+                                            spacing: 6
+                                            Icon {
+                                                visible: modelData.isNew
+                                                name: "plus"; size: 11
+                                                color: Theme.accent
+                                            }
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: modelData.isNew
+                                                      ? "Add \u201C" + modelData.label + "\u201D"
+                                                      : modelData.label
+                                                color: modelData.isNew ? Theme.accent : Theme.text
+                                                font.pixelSize: 12
+                                                elide: Text.ElideRight
+                                            }
                                         }
                                         MouseArea {
                                             id: rowArea
                                             anchors.fill: parent
                                             hoverEnabled: true
                                             cursorShape: Qt.PointingHandCursor
-                                            onClicked: bulkGamePop.chosen = parent.modelData
+                                            onClicked: bulkGamePop.chosen = parent.modelData.label
                                         }
                                     }
                                 }
@@ -1078,7 +1087,7 @@ Rectangle {
                                     anchors.fill: parent
                                     enabled: parent.enabled
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: bulkApply(parent.target)
+                                    onClicked: bulkGamePop.bulkApply(parent.target)
                                 }
                             }
                         }
@@ -1099,24 +1108,16 @@ Rectangle {
                     label: "Rename"
                     icon: "pencil"
                     active: bulkRenamePop.visible
-                    onTriggered: bulkRenamePop.visible ? bulkRenamePop.close() : bulkRenamePop.open()
+                    onTriggered: bulkRenamePop.toggle()
 
-                    Popup {
+                    FlyoutPopup {
                         id: bulkRenamePop
-                        y: -bulkRenamePop.implicitHeight - 6
-                        x: (renameBtn.width - bulkRenamePop.width) / 2
+                        anchorItem: renameBtn
+                        centerOnAnchor: true
                         width: 260
                         implicitHeight: 106
-                        padding: 8
 
                         onOpened: patternField.text = ""
-
-                        background: Rectangle {
-                            radius: Theme.radius
-                            color: Theme.surface
-                            border.width: 1
-                            border.color: Theme.border
-                        }
 
                         contentItem: Column {
                             spacing: 6
@@ -1578,6 +1579,10 @@ Rectangle {
     /// nav rail on this, so "expand" really does fill the window.
     readonly property bool playerExpanded:
         page.playerClip !== null && clipPlayer.expanded
+    /// The expanded player has faded its own chrome out — Main.qml hides the
+    /// window titlebar in step, so nothing is left framing the picture.
+    readonly property bool playerChromeHidden:
+        page.playerExpanded && !clipPlayer.chromeVisible
 
     VideoPlayer {
         id: clipPlayer

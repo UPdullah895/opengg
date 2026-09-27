@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import Qt.labs.platform as Labs
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import com.opengg.app
 
@@ -41,27 +41,58 @@ ColumnLayout {
         return decodeURIComponent(url.toString().replace(/^(file:\/{2,3})/, "/").replace(/^\/\//, "/"))
     }
 
-    // Qt.labs.platform, NOT QtQuick.Dialogs: the Quick dialog draws Qt's own
-    // bare-bones file browser, with no places sidebar, no recent locations
-    // and none of the desktop's own conventions. The platform variant hands
-    // off to the XDG portal / the desktop's real folder picker.
-    Labs.FolderDialog {
-        id: clipDirDialog
-        title: "Add Clip Directory"
-        onAccepted: {
-            const p = root.urlToPath(folder)
-            const next = root.clipDirs.concat(root.clipDirs.includes(p) ? [] : [p])
-            SettingsController.setValue("clip_directories", JSON.stringify(next))
+    // Two routes to the same result.
+    //
+    // Preferred: the desktop's own picker, via kdialog/zenity in
+    // opengg_core::dialogs. Qt.labs.platform's dialog cannot be used —
+    // it needs Qt Widgets, and this shell runs on QGuiApplication, so it
+    // refuses to load and the Add Path button did nothing at all.
+    //
+    // Fallback: QtQuick.Dialogs below, Qt's own in-app browser. Plainer,
+    // but it always works, so a desktop with neither helper installed still
+    // gets a working button.
+    function addDir(tag) {
+        if (StorageController.nativePickerAvailable()) {
+            StorageController.pickFolder(
+                tag,
+                tag === "clips" ? "Add Clip Directory" : "Add Screenshot Directory",
+                (tag === "clips" ? root.clipDirs[0] : root.shotDirs[0]) || "")
+            return
         }
+        if (tag === "clips") clipDirDialog.open()
+        else shotDirDialog.open()
     }
-    Labs.FolderDialog {
-        id: shotDirDialog
-        title: "Add Screenshot Directory"
-        onAccepted: {
-            const p = root.urlToPath(folder)
-            const next = root.shotDirs.concat(root.shotDirs.includes(p) ? [] : [p])
+
+    /// Store a directory the user picked, by either route.
+    function acceptDir(tag, path) {
+        if (!path || path.length === 0)
+            return
+        if (tag === "clips") {
+            const next = root.clipDirs.concat(root.clipDirs.includes(path) ? [] : [path])
+            SettingsController.setValue("clip_directories", JSON.stringify(next))
+        } else {
+            const next = root.shotDirs.concat(root.shotDirs.includes(path) ? [] : [path])
             SettingsController.setValue("screenshotDirs", JSON.stringify(next))
         }
+    }
+
+    Connections {
+        target: StorageController
+        function onPickedJsonChanged() {
+            const r = JSON.parse(StorageController.pickedJson || "{}")
+            root.acceptDir(r.tag, r.path)
+        }
+    }
+
+    FolderDialog {
+        id: clipDirDialog
+        title: "Add Clip Directory"
+        onAccepted: root.acceptDir("clips", root.urlToPath(selectedFolder))
+    }
+    FolderDialog {
+        id: shotDirDialog
+        title: "Add Screenshot Directory"
+        onAccepted: root.acceptDir("shots", root.urlToPath(selectedFolder))
     }
 
     SettingsHeading { titleText: (I18n.language, I18n.t("settings.storage.title")) }
@@ -159,7 +190,7 @@ ColumnLayout {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: clipDirDialog.open()
+                        onClicked: root.addDir("clips")
                     }
                 }
             }
@@ -230,7 +261,7 @@ ColumnLayout {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: shotDirDialog.open()
+                        onClicked: root.addDir("shots")
                     }
                 }
             }
@@ -321,18 +352,53 @@ ColumnLayout {
                 font.pixelSize: 13
             }
 
+            // Two stat tiles, not two bare numbers floating on the card —
+            // the recessed panel behind each figure is what made them read
+            // as readouts in the first place.
             RowLayout {
                 visible: !StorageController.loading
-                spacing: 20
-                ColumnLayout {
-                    spacing: 2
-                    Text { text: (I18n.language, I18n.t("settings.storage.clips")); color: Theme.textDim; font.pixelSize: 11 }
-                    Text { text: root.storageInfo.clip_count || 0; color: Theme.accent; font.pixelSize: 18; font.weight: Font.Bold }
-                }
-                ColumnLayout {
-                    spacing: 2
-                    Text { text: (I18n.language, I18n.t("settings.storage.used")); color: Theme.textDim; font.pixelSize: 11 }
-                    Text { text: root.fmtBytes(root.storageInfo.used_bytes || 0); color: Theme.text; font.pixelSize: 18; font.weight: Font.Bold }
+                spacing: 12
+
+                Repeater {
+                    model: [
+                        { label: (I18n.language, I18n.t("settings.storage.clips")),
+                          value: String(root.storageInfo.clip_count || 0),
+                          accent: true },
+                        { label: (I18n.language, I18n.t("settings.storage.used")),
+                          value: root.fmtBytes(root.storageInfo.used_bytes || 0),
+                          accent: false }
+                    ]
+
+                    Rectangle {
+                        required property var modelData
+                        Layout.preferredWidth: Math.max(110, statCol.implicitWidth + 32)
+                        Layout.preferredHeight: statCol.implicitHeight + 20
+                        radius: Theme.radius
+                        color: Theme.bg
+                        border.width: 1
+                        border.color: Theme.border
+
+                        ColumnLayout {
+                            id: statCol
+                            anchors.centerIn: parent
+                            spacing: 2
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: parent.parent.modelData.label
+                                color: Theme.textMuted
+                                font.pixelSize: 10
+                                font.weight: Font.ExtraBold
+                                font.letterSpacing: 1.1
+                            }
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: parent.parent.modelData.value
+                                color: parent.parent.modelData.accent ? Theme.accent : Theme.text
+                                font.pixelSize: 18
+                                font.weight: Font.Bold
+                            }
+                        }
+                    }
                 }
             }
         }

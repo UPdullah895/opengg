@@ -61,8 +61,10 @@ ColumnLayout {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: I18n.openLocalesFolder()
                     }
-                    ToolTip.visible: openFolderArea.containsMouse
-                    ToolTip.text: I18n.t("settings.language.addLanguage")
+                    Tip {
+                        visible: openFolderArea.containsMouse
+                        text: I18n.t("settings.language.addLanguage")
+                    }
                 }
 
                 // Reload locale files from disk — picks up a translator's edits
@@ -81,8 +83,10 @@ ColumnLayout {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: I18n.reloadLocales()
                     }
-                    ToolTip.visible: reloadLangArea.containsMouse
-                    ToolTip.text: I18n.t("settings.language.reloadLanguages")
+                    Tip {
+                        visible: reloadLangArea.containsMouse
+                        text: I18n.t("settings.language.reloadLanguages")
+                    }
                 }
 
                 // RTL toggle — only shown for languages actually tagged RTL
@@ -115,8 +119,10 @@ ColumnLayout {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: I18n.setRtlEnabled(!I18n.rtlOverride)
                     }
-                    ToolTip.visible: rtlArea.containsMouse
-                    ToolTip.text: I18n.t("settings.language.rtlModeHint")
+                    Tip {
+                        visible: rtlArea.containsMouse
+                        text: I18n.t("settings.language.rtlModeHint")
+                    }
                 }
             }
 

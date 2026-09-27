@@ -189,11 +189,20 @@ Rectangle {
         id: idleTimer
         interval: 2600
         onTriggered: {
-            if (mp.playbackState === MediaPlayer.PlayingState
-                    && !speedMenu.open && !trackMenu.open && !seek.pressed)
+            if (speedMenu.open || trackMenu.open || seek.pressed)
+                return
+            // Expanded is a viewing mode, so the chrome gets out of the way
+            // whether or not the clip happens to be playing — it used to
+            // sit over a paused, maximised picture indefinitely. Windowed
+            // playback keeps the old rule: chrome stays while paused,
+            // because there it frames the panel rather than covering it.
+            if (root.expanded || mp.playbackState === MediaPlayer.PlayingState)
                 root.chromeVisible = false
         }
     }
+    // Entering or leaving expanded restarts the countdown, so maximising a
+    // paused clip settles into a clean picture on its own.
+    onExpandedChanged: root.poke()
 
     Keys.onPressed: (e) => {
         switch (e.key) {
