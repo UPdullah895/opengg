@@ -110,6 +110,12 @@ Rectangle {
         }
     }
 
+    /// A FLUSHING seek needs a moment before the pipeline reports its new
+    /// position. Sampling inside that window reads the OLD position, looks
+    /// like drift, and provokes another correction — a loop that replayed the
+    /// same stretch of audio. Every seek we issue restarts this.
+    Timer { id: seekSettle; interval: 250 }
+
     // Independent clocks drift; nudge the audio back to the video periodically.
     Timer {
         interval: 400
@@ -117,9 +123,13 @@ Rectangle {
                  && mp.playbackState === MediaPlayer.PlayingState
         repeat: true
         onTriggered: {
+            if (seekSettle.running)
+                return
             const apos = ClipAudioMixer.positionMs()
-            if (apos >= 0 && Math.abs(apos - mp.position) > 120)
+            if (apos >= 0 && Math.abs(apos - mp.position) > 120) {
                 ClipAudioMixer.seek(mp.position)
+                seekSettle.restart()
+            }
         }
     }
 
@@ -137,9 +147,22 @@ Rectangle {
         if (mp.playbackState === MediaPlayer.PlayingState) mp.pause()
         else mp.play()
     }
+    // Seek BOTH clocks to the same target.
+    //
+    // This used to assign `mp.position` and then pass `mp.position` straight
+    // back to the mixer. MediaPlayer.position is asynchronous: writing it
+    // starts a seek, and reading it on the very next line still returns the
+    // OLD position. So a skip sent the audio to where the video had just
+    // been, not where it was going. The drift timer then corrected it a beat
+    // later — audio stutters, then settles — which is exactly the symptom on
+    // a short fast-forward. Seek both to the value we computed instead.
     function seekTo(ms) {
-        mp.position = Math.max(0, Math.min(mp.duration, ms))
-        if (page.mixed) ClipAudioMixer.seek(mp.position)
+        const target = Math.max(0, Math.min(mp.duration, ms))
+        mp.position = target
+        if (page.mixed) {
+            ClipAudioMixer.seek(target)
+            seekSettle.restart()
+        }
     }
     function skip(ms) {
         page.seekTo(mp.position + ms)
@@ -180,6 +203,7 @@ Rectangle {
                 return
             if (mp.playbackState === MediaPlayer.PlayingState) {
                 ClipAudioMixer.seek(mp.position)
+                seekSettle.restart()
                 ClipAudioMixer.play()
             } else {
                 ClipAudioMixer.pause()
@@ -524,6 +548,12 @@ Rectangle {
                 Slider {
                     id: vol
                     Layout.preferredWidth: 84
+                    // Custom background/handle delegates set `height`, not
+                    // `implicitHeight`, so this Control had no implicit height
+                    // and the layout arranged it 0px tall — painted but never
+                    // hit-tested, which is why the master volume handle would
+                    // not move. See HSlider.qml for the same defect.
+                    Layout.preferredHeight: 22
                     Layout.alignment: Qt.AlignVCenter
                     from: 0; to: 1
                     // Seeded once, then owned locally — a binding here would be
@@ -548,13 +578,10 @@ Rectangle {
                             color: Theme.accent
                         }
                     }
-                    handle: Rectangle {
+                    handle: SliderHandle {
                         x: vol.leftPadding + vol.visualPosition * (vol.availableWidth - width)
                         y: vol.topPadding + vol.availableHeight / 2 - height / 2
-                        width: 12; height: 12; radius: 6
-                        color: Theme.text
-                        border.width: 2
-                        border.color: Theme.accent
+                        active: vol.pressed || vol.hovered
                     }
                 }
 

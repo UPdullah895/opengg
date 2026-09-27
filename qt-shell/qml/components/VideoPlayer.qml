@@ -72,6 +72,31 @@ Rectangle {
     /// in place, so the bindings in the track menu actually re-evaluate.
     property var trackMuted: ({})
 
+    // The user's own output level and mute, owned by this player rather than
+    // read back off `audioOut`.
+    //
+    // They USED to be read off audioOut, and that is why the preview played
+    // silently: `audioOut.muted` is forced true whenever the mixer owns the
+    // sound, and `ClipAudioMixer.load()` flips `active` synchronously, so the
+    // very next line — `setMasterVolume(audioOut.muted ? 0 : ...)` — always
+    // saw `muted == true` on a multi-track clip and pinned the mix's master
+    // gain to zero. Qt's output muted by design and the mix at 0 dB meant no
+    // sound at all. Keeping intent ("the user wants 80%, unmuted") apart from
+    // ownership ("Qt must stay quiet because the mixer has the audio") is the
+    // fix; ClipEditorPage.qml already models it this way.
+    /// Output level the user asked for, 0..1.
+    property real userVolume: 1.0
+    /// Whether the USER muted the output — never the ownership mute.
+    property bool userMuted: false
+
+    /// Push `userVolume`/`userMuted` to whoever currently owns the sound.
+    /// While mixed that is the mix's master gain; otherwise Qt's own output
+    /// picks it up through the bindings on `audioOut`.
+    function applyVolume() {
+        if (root.mixed)
+            ClipAudioMixer.setMasterVolume(root.userMuted ? 0 : root.userVolume)
+    }
+
     function toggleTrack(index) {
         var next = {}
         for (var k in root.trackMuted) next[k] = root.trackMuted[k]
@@ -88,20 +113,37 @@ Rectangle {
         else mp.play()
         root.poke()
     }
+    // Seek BOTH clocks to the same target.
+    //
+    // This used to assign `mp.position` and then pass `mp.position` straight
+    // back to the mixer. MediaPlayer.position is asynchronous: writing it
+    // starts a seek, and reading it on the very next line still returns the
+    // OLD position. So a skip sent the audio to where the video had just
+    // been, not where it was going. The drift timer then corrected it a beat
+    // later — audio stutters, then settles — which is exactly the symptom on
+    // a short fast-forward. Seek both to the value we computed instead.
     function seekTo(ms) {
-        mp.position = Math.max(0, Math.min(mp.duration, ms))
-        if (root.mixed) ClipAudioMixer.seek(mp.position)
+        const target = Math.max(0, Math.min(mp.duration, ms))
+        mp.position = target
+        if (root.mixed) {
+            ClipAudioMixer.seek(target)
+            seekSettle.restart()
+        }
     }
     function skip(ms) {
         root.seekTo(mp.position + ms)
         root.poke()
     }
     function setVolume(v) {
-        audioOut.volume = Math.max(0, Math.min(1, v))
-        if (audioOut.volume > 0) audioOut.muted = false
-        // While mixed, the slider is the mix's master gain — Qt's own output
-        // is silent and its volume would control nothing audible.
-        if (root.mixed) ClipAudioMixer.setMasterVolume(audioOut.muted ? 0 : audioOut.volume)
+        root.userVolume = Math.max(0, Math.min(1, v))
+        // Nudging the level up is an implicit unmute.
+        if (root.userVolume > 0) root.userMuted = false
+        root.applyVolume()
+        root.poke()
+    }
+    function toggleMute() {
+        root.userMuted = !root.userMuted
+        root.applyVolume()
         root.poke()
     }
 
@@ -119,11 +161,21 @@ Rectangle {
                  && mp.playbackState === MediaPlayer.PlayingState
         repeat: true
         onTriggered: {
+            if (seekSettle.running)
+                return
             const apos = ClipAudioMixer.positionMs()
-            if (apos >= 0 && Math.abs(apos - mp.position) > 120)
+            if (apos >= 0 && Math.abs(apos - mp.position) > 120) {
                 ClipAudioMixer.seek(mp.position)
+                seekSettle.restart()
+            }
         }
     }
+
+    /// A FLUSHING seek needs a moment before the pipeline reports its new
+    /// position. Sampling inside that window reads the OLD position, looks
+    /// like drift, and provokes another correction — a loop that replayed the
+    /// same stretch of audio. Every seek we issue restarts this.
+    Timer { id: seekSettle; interval: 250 }
 
     // ── Auto-hiding chrome ────────────────────────────────────────────────
     // Controls fade out after a few idle seconds during playback, and come
@@ -158,11 +210,11 @@ Rectangle {
         case Qt.Key_Left:
             root.skip(-5000); e.accepted = true; break
         case Qt.Key_Up:
-            root.setVolume(audioOut.volume + 0.1); e.accepted = true; break
+            root.setVolume(root.userVolume + 0.1); e.accepted = true; break
         case Qt.Key_Down:
-            root.setVolume(audioOut.volume - 0.1); e.accepted = true; break
+            root.setVolume(root.userVolume - 0.1); e.accepted = true; break
         case Qt.Key_M:
-            audioOut.muted = !audioOut.muted; root.poke(); e.accepted = true; break
+            root.toggleMute(); e.accepted = true; break
         }
     }
 
@@ -174,7 +226,10 @@ Rectangle {
             id: audioOut
             // Silence Qt's single-track decode when the mixer owns the sound,
             // otherwise track 1 would play twice — once here, once in the mix.
-            muted: root.mixed
+            // The user's own mute is a separate term, so the mute button no
+            // longer has to overwrite (and thereby sever) this binding.
+            muted: root.mixed || root.userMuted
+            volume: root.userVolume
         }
         onPlaybackRateChanged: if (root.mixed) ClipAudioMixer.setRate(mp.playbackRate)
         onMediaStatusChanged: {
@@ -196,6 +251,7 @@ Rectangle {
             if (root.mixed) {
                 if (mp.playbackState === MediaPlayer.PlayingState) {
                     ClipAudioMixer.seek(mp.position)
+                    seekSettle.restart()
                     ClipAudioMixer.play()
                 } else {
                     ClipAudioMixer.pause()
@@ -219,7 +275,7 @@ Rectangle {
             // true: this view has a ClipVideoSurface (objectName
             // "clipVideoItem") for the pipeline's video branch to attach to.
             root.mixerToken = ClipAudioMixer.load(path, true)
-            ClipAudioMixer.setMasterVolume(audioOut.muted ? 0 : audioOut.volume)
+            root.applyVolume()
             // Deliberately NOT starting the mix here: the pipeline would begin
             // instantly while Qt is still opening the file, so the audio ran
             // ahead of the picture. It follows mp's real playback state below.
@@ -481,13 +537,10 @@ Rectangle {
 
                         PlayerButton {
                             id: volIcon
-                            icon: audioOut.muted || audioOut.volume <= 0.001 ? "volume-x"
-                                : audioOut.volume < 0.5 ? "volume-1" : "volume-2"
-                            tooltip: audioOut.muted ? "Unmute" : "Mute"
-                            onTriggered: {
-                                audioOut.muted = !audioOut.muted
-                                root.poke()
-                            }
+                            icon: root.userMuted || root.userVolume <= 0.001 ? "volume-x"
+                                : root.userVolume < 0.5 ? "volume-1" : "volume-2"
+                            tooltip: root.userMuted ? "Unmute" : "Mute"
+                            onTriggered: root.toggleMute()
                         }
                         Slider {
                             id: vol
@@ -495,23 +548,29 @@ Rectangle {
                             anchors.leftMargin: 4
                             anchors.verticalCenter: parent.verticalCenter
                             width: 70
+                            // Without this the Slider is 0px tall — its
+                            // custom background/handle set `height`, not
+                            // `implicitHeight`, so the Control had no implicit
+                            // height of its own and never hit-tested. See the
+                            // same note in HSlider.qml.
+                            height: 22
                             visible: volHover.hovered
                             from: 0; to: 1
-                            // NOT `value: audioOut.volume` — QQC2 writes
+                            // NOT `value: root.userVolume` — QQC2 writes
                             // `value` directly on the first interactive drag,
                             // which severs a binding on it and leaves the
                             // handle stuck from then on. Seed it once and
                             // re-sync only when the volume changes elsewhere
                             // (mute toggle, keyboard Up/Down).
-                            Component.onCompleted: value = audioOut.muted ? 0 : audioOut.volume
+                            Component.onCompleted: value = root.userMuted ? 0 : root.userVolume
                             onMoved: root.setVolume(vol.value)
                             Connections {
-                                target: audioOut
-                                function onVolumeChanged() {
-                                    if (!vol.pressed) vol.value = audioOut.muted ? 0 : audioOut.volume
+                                target: root
+                                function onUserVolumeChanged() {
+                                    if (!vol.pressed) vol.value = root.userMuted ? 0 : root.userVolume
                                 }
-                                function onMutedChanged() {
-                                    if (!vol.pressed) vol.value = audioOut.muted ? 0 : audioOut.volume
+                                function onUserMutedChanged() {
+                                    if (!vol.pressed) vol.value = root.userMuted ? 0 : root.userVolume
                                 }
                             }
 
@@ -529,11 +588,10 @@ Rectangle {
                                     color: "#ffffff"
                                 }
                             }
-                            handle: Rectangle {
+                            handle: SliderHandle {
                                 x: vol.leftPadding + vol.visualPosition * (vol.availableWidth - width)
                                 y: vol.topPadding + vol.availableHeight / 2 - height / 2
-                                width: 11; height: 11; radius: 5.5
-                                color: "#ffffff"
+                                active: vol.pressed || vol.hovered
                             }
                         }
                     }

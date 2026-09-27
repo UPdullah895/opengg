@@ -332,9 +332,19 @@ impl MixerPipeline {
         let _ = self.pipeline.set_state(gst::State::Paused);
     }
 
+    /// Seek the mix to `position_ms`.
+    ///
+    /// ACCURATE, not KEY_UNIT. KEY_UNIT snaps to the nearest keyframe, which
+    /// on a multi-track capture lands the mix up to a second early and can
+    /// land each audio branch somewhere slightly different — the same content
+    /// then plays once per track, staggered, which is the "audio repeats"
+    /// the editor showed after a scrub. It also fed the drift-correction
+    /// timer: the mix never reached the position it was asked for, so the
+    /// timer re-seeked, snapped to the same keyframe, and looped for the rest
+    /// of the clip. `set_rate` below already seeks ACCURATE; this matches it.
     pub fn seek(&self, position_ms: i64) {
         let _ = self.pipeline.seek_simple(
-            gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
             gst::ClockTime::MSECOND * position_ms.max(0) as u64,
         );
     }
@@ -498,6 +508,49 @@ mod tests {
             (600..=2600).contains(&after_seek),
             "playback should still advance at ~1x after a seek, advanced {after_seek}ms"
         );
+    }
+
+    /// A seek must land where it was ASKED to land.
+    ///
+    /// Regression test for the editor's "audio desynchronises and repeats"
+    /// bug. `seek` used gst::SeekFlags::KEY_UNIT, which snaps to the nearest
+    /// keyframe rather than the requested timestamp. On a multi-track capture
+    /// that is doubly wrong: the landing point can be seconds early, and each
+    /// audio branch can snap somewhere slightly different, so the same
+    /// content is heard once per track, staggered.
+    ///
+    /// It also fed a loop. The pages' drift-correction timer re-seeks whenever
+    /// the mix is more than 120ms from the video; with KEY_UNIT it snapped
+    /// back to the same keyframe every time, replaying that stretch for the
+    /// rest of the clip.
+    #[test]
+    fn seek_lands_on_the_requested_position() {
+        let Some(clip) = find_multitrack_clip() else {
+            eprintln!("skipping: no multi-track clip available");
+            return;
+        };
+        let p = build_mixer_pipeline(&clip, false).expect("pipeline build");
+        p.set_master_volume(0.0); // silent test run
+        p.start_discovery();
+        p.wait_for_discovery(Duration::from_secs(10));
+        p.play();
+        std::thread::sleep(Duration::from_millis(700));
+
+        // Paused, so the position sampled below is the seek's landing point
+        // and not that point plus however long the sleep really took.
+        p.pause();
+        for target in [5_000i64, 12_000, 3_000] {
+            p.seek(target);
+            std::thread::sleep(Duration::from_millis(500));
+            let landed = p.position_ms();
+            let off = (landed - target).abs();
+            assert!(
+                off <= 250,
+                "seek to {target}ms landed at {landed}ms ({off}ms off) — the \
+                 pipeline is snapping to a keyframe instead of the timestamp"
+            );
+        }
+        p.shutdown();
     }
 
     fn find_multitrack_clip() -> Option<String> {

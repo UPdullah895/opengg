@@ -64,6 +64,7 @@ fn main() {
         QmlFile::from("qml/components/ToggleSwitch.qml"),
         QmlFile::from("qml/components/RecorderInstallHelper.qml"),
         QmlFile::from("qml/components/HSlider.qml"),
+        QmlFile::from("qml/components/SliderHandle.qml"),
         QmlFile::from("qml/components/SelectField.qml"),
         QmlFile::from("qml/components/WheelScroller.qml"),
         QmlFile::from("qml/components/GraphicEQ.qml"),

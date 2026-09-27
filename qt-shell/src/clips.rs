@@ -72,6 +72,11 @@ pub mod qobject {
         #[qproperty(i32, count)]
         #[qproperty(i32, total_count, cxx_name = "totalCount")]
         #[qproperty(QStringList, game_list, cxx_name = "gameList")]
+        /// Clip count per game name, as JSON `{"Minecraft": 11, ...}`. The
+        /// games filter shows these beside each checkbox, as the Vue toolbar
+        /// did. Counted over the whole library, so a number never changes as
+        /// you tick boxes.
+        #[qproperty(QString, game_counts_json, cxx_name = "gameCountsJson")]
         /// Number of favourited clips in the whole library — drives the
         /// toolbar's favourites-filter button badge.
         #[qproperty(i32, fav_count, cxx_name = "favCount")]
@@ -141,10 +146,31 @@ pub mod qobject {
         #[cxx_name = "setSearchText"]
         fn set_search_text(self: Pin<&mut Self>, text: &QString);
 
-        /// Restrict to one game; empty string = all games.
+        /// Restrict to one game; empty string = all games. Kept for the
+        /// single-select callers; the toolbar uses the multi-select pair below.
         #[qinvokable]
         #[cxx_name = "setGameFilter"]
         fn set_game_filter(self: Pin<&mut Self>, game: &QString);
+
+        /// Add/remove one game from the filter set. An empty set = all games.
+        #[qinvokable]
+        #[cxx_name = "toggleGameFilter"]
+        fn toggle_game_filter(self: Pin<&mut Self>, game: &QString);
+
+        /// True when `game` is currently in the filter set.
+        #[qinvokable]
+        #[cxx_name = "isGameFiltered"]
+        fn is_game_filtered(&self, game: &QString) -> bool;
+
+        /// Drop every game filter ("Clear all filters").
+        #[qinvokable]
+        #[cxx_name = "clearGameFilters"]
+        fn clear_game_filters(self: Pin<&mut Self>);
+
+        /// How many games are currently ticked.
+        #[qinvokable]
+        #[cxx_name = "gameFilterCount"]
+        fn game_filter_count(&self) -> i32;
 
         /// One of "newest" | "oldest" | "longest" | "shortest".
         #[qinvokable]
@@ -245,7 +271,8 @@ pub struct ClipsControllerRust {
     /// Indices into `all_clips` after filter+sort — what the model exposes.
     view: Vec<usize>,
     search_text: String,
-    game_filter: String,
+    /// Games the view is restricted to. Empty = no restriction.
+    game_filters: Vec<String>,
     sort_mode: String,
     favorites_only: bool,
     /// "" and "YMD" both mean YYYY/MM/DD — see set_date_format.
@@ -259,6 +286,7 @@ pub struct ClipsControllerRust {
     revision: i32,
     audio_track_names: QStringList,
     game_list: QStringList,
+    game_counts_json: QString,
     /// Filepaths currently queued/generating on the thumbnail worker thread.
     thumbs_in_flight: HashSet<String>,
 }
@@ -340,7 +368,7 @@ fn try_parse_search_date(search: &str, date_format: &str) -> Option<(i32, u32, u
 fn compute_view(
     clips: &[ClipInfo],
     search: &str,
-    game_filter: &str,
+    game_filters: &[String],
     sort_mode: &str,
     favorites_only: bool,
     date_format: &str,
@@ -354,9 +382,9 @@ fn compute_view(
             if favorites_only && !c.favorite {
                 return false;
             }
-            if !game_filter.is_empty() {
+            if !game_filters.is_empty() {
                 let g = if c.game.is_empty() { "Unknown" } else { c.game.as_str() };
-                if g != game_filter {
+                if !game_filters.iter().any(|f| f == g) {
                     return false;
                 }
             }
@@ -496,6 +524,23 @@ impl qobject::ClipsController {
             .chain(games.iter().map(|g| QString::from(g.as_str())))
             .collect();
         self.as_mut().set_game_list(list);
+
+        // Per-game totals for the filter menu's badges.
+        let mut counts: std::collections::BTreeMap<&str, i64> = std::collections::BTreeMap::new();
+        for c in self.all_clips.iter() {
+            let g = if c.game.is_empty() { "Unknown" } else { c.game.as_str() };
+            *counts.entry(g).or_insert(0) += 1;
+        }
+        let json = serde_json::to_string(&counts).unwrap_or_else(|_| "{}".into());
+        self.as_mut().set_game_counts_json(QString::from(&json));
+
+        // A game can disappear when its last clip is deleted; leaving it
+        // ticked would filter the view down to nothing with no visible cause.
+        let live: std::collections::HashSet<String> = games.into_iter().collect();
+        let stale = self.game_filters.iter().any(|f| !live.contains(f));
+        if stale {
+            self.as_mut().rust_mut().game_filters.retain(|f| live.contains(f));
+        }
     }
 
     /// Recompute `view` from the current search/game/sort state and reset
@@ -504,7 +549,7 @@ impl qobject::ClipsController {
         let indices = compute_view(
             &self.all_clips,
             &self.search_text,
-            &self.game_filter,
+            &self.game_filters,
             &self.sort_mode,
             self.favorites_only,
             &self.date_format,
@@ -545,8 +590,42 @@ impl qobject::ClipsController {
     }
 
     pub fn set_game_filter(mut self: Pin<&mut Self>, game: &QString) {
-        self.as_mut().rust_mut().game_filter = game.to_string();
+        let g = game.to_string();
+        self.as_mut().rust_mut().game_filters = if g.is_empty() { Vec::new() } else { vec![g] };
         self.apply_filter();
+    }
+
+    pub fn toggle_game_filter(mut self: Pin<&mut Self>, game: &QString) {
+        let g = game.to_string();
+        if g.is_empty() {
+            return;
+        }
+        {
+            let mut st = self.as_mut().rust_mut();
+            if let Some(pos) = st.game_filters.iter().position(|f| f == &g) {
+                st.game_filters.remove(pos);
+            } else {
+                st.game_filters.push(g);
+            }
+        }
+        self.apply_filter();
+    }
+
+    pub fn is_game_filtered(&self, game: &QString) -> bool {
+        let g = game.to_string();
+        self.game_filters.iter().any(|f| f == &g)
+    }
+
+    pub fn clear_game_filters(mut self: Pin<&mut Self>) {
+        if self.game_filters.is_empty() {
+            return;
+        }
+        self.as_mut().rust_mut().game_filters.clear();
+        self.apply_filter();
+    }
+
+    pub fn game_filter_count(&self) -> i32 {
+        self.game_filters.len() as i32
     }
 
     pub fn set_sort_mode(mut self: Pin<&mut Self>, mode: &QString) {
@@ -785,7 +864,7 @@ mod date_search_tests {
             clip_with_created("2026-07-20 09:45:00"),
             clip_with_created("2026-07-21 09:45:00"),
         ];
-        let view = compute_view(&clips, "2026/07/20", "", "newest", false, "YMD");
+        let view = compute_view(&clips, "2026/07/20", &[], "newest", false, "YMD");
         assert_eq!(view, vec![0]);
     }
 }

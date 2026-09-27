@@ -65,13 +65,11 @@ Item {
                 color: root.sliderColor
             }
         }
-        handle: Rectangle {
+        handle: SliderHandle {
             x: sl.leftPadding + sl.visualPosition * (sl.availableWidth - width)
             y: sl.topPadding + sl.availableHeight / 2 - height / 2
-            width: 16; height: 16; radius: 8
-            color: Theme.text
-            border.width: 2
-            border.color: root.sliderColor
+            accentColor: root.sliderColor
+            active: sl.pressed || sl.hovered
         }
     }
 

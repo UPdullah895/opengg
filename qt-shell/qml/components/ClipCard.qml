@@ -144,6 +144,13 @@ Rectangle {
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
                 cache: true
+                // Decode at display size, not the file's native 854x480.
+                // A native decode costs ~1.6 MB of RGBA per thumbnail, so a
+                // full library held tens of MB of pixels to draw thumbnails a
+                // third that size. Bucketed to 160px steps so a window resize
+                // re-decodes at most once per step instead of on every frame,
+                // and capped so we never ask for MORE than the file holds.
+                sourceSize.width: Math.min(854, Math.ceil(Math.max(1, thumb.width) / 160) * 160)
                 visible: !!card.thumbnail
                 source: card.thumbnail ? "file://" + card.thumbnail : ""
             }

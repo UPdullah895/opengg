@@ -230,13 +230,12 @@ ColumnLayout {
                                         height: Math.abs(curY - midY)
                                     }
                                 }
-                                handle: Rectangle {
+                                handle: SliderHandle {
                                     x: bandSlider.leftPadding + bandSlider.availableWidth / 2 - width / 2
                                     y: bandSlider.topPadding + bandSlider.visualPosition * (bandSlider.availableHeight - height)
-                                    width: 16; height: 16; radius: 8
-                                    color: Theme.text
-                                    border.width: 2
-                                    border.color: root.accentColor
+                                    vertical: true
+                                    accentColor: root.accentColor
+                                    active: bandSlider.pressed || bandSlider.hovered
                                 }
                             }
                             Text {

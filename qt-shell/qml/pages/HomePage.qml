@@ -218,8 +218,12 @@ Rectangle {
                 Text {
                     text: (I18n.language, I18n.t("dashboard.title"))
                     color: Theme.text
-                    font.pixelSize: 26
-                    font.weight: Font.Bold
+                    // 20px / ExtraBold, matching the retired Vue PageHeader
+                    // (.page-title: font-size 20px; font-weight 800). The Qt port
+                    // had these at 26px Bold, which is most of why every page
+                    // header reads bulkier than the old shell.
+                    font.pixelSize: 20
+                    font.weight: Font.ExtraBold
                 }
                 // Replays the guided tour, as in HomePage.vue's title row.
                 Rectangle {

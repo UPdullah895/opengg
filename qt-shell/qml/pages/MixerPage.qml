@@ -187,8 +187,12 @@ Rectangle {
                 // MixerPage.vue's heading is "Audio Mixer", not the nav label.
             text: (I18n.language, I18n.t("dashboard.audioMixer"))
                 color: Theme.text
-                font.pixelSize: 26
-                font.weight: Font.Bold
+                // 20px / ExtraBold, matching the retired Vue PageHeader
+                // (.page-title: font-size 20px; font-weight 800). The Qt port
+                // had these at 26px Bold, which is most of why every page
+                // header reads bulkier than the old shell.
+                font.pixelSize: 20
+                font.weight: Font.ExtraBold
                 Layout.fillWidth: true
             }
         }
@@ -617,14 +621,11 @@ Rectangle {
                                 GradientStop { position: 1.0; color: page.channelColors.Chat }
                             }
                         }
-                        Rectangle {
+                        SliderHandle {
                             id: chatMixHandle
-                            width: 18; height: 18; radius: 9
                             anchors.verticalCenter: parent.verticalCenter
                             x: chatMixSlider.fraction * (chatMixSlider.width - width)
-                            color: Theme.text
-                            border.width: 2
-                            border.color: Theme.accent
+                            active: chatMixSlider.dragging
                         }
                         MouseArea {
                             anchors.fill: parent

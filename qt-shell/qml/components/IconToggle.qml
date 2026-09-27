@@ -14,12 +14,9 @@ Rectangle {
     property string tooltip: ""
     /// Optional trailing text (the favourites button shows its count here).
     property string label: ""
-    /// Drops this button's own border and rounding so it can sit inside a
-    /// SegmentedToggle, which supplies the shared outline instead.
-    ///
-    /// Deliberately NOT per-corner radii (topLeftRadius and friends): those
-    /// need Qt 6.7, and the distro matrix builds on Debian stable, whose Qt
-    /// is older. A clipping rounded parent achieves the same look on any Qt.
+    /// Drops this button's own border and square-ends its fill so it can sit
+    /// inside a SegmentedToggle, which supplies the shared outline and
+    /// rounds the two END segments' outer corners via per-corner radii.
     property bool flat: false
 
     signal triggered()

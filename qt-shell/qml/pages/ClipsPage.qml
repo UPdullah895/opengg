@@ -112,7 +112,39 @@ Rectangle {
         for (var j = 0; j < order.length; j++)
             out.push({ date: order[j], label: page.groupLabel(order[j]), clips: buckets[order[j]] })
         page.dateGroups = out
+        page.rebuildRows()
     }
+
+    /// `dateGroups` flattened to one entry per ListView row: a date header, a
+    /// grid row of up to `clipsPerRow` cards, or a single list item. Built so
+    /// the grouped view can virtualise clips instead of only groups — see the
+    /// delegate's note.
+    property var dateRows: []
+
+    function rebuildRows() {
+        if (!page.dateGrouped) {
+            page.dateRows = []
+            return
+        }
+        var out = []
+        const per = Math.max(1, page.clipsPerRow)
+        for (var g = 0; g < page.dateGroups.length; g++) {
+            const grp = page.dateGroups[g]
+            out.push({ kind: "header", label: grp.label, count: grp.clips.length })
+            if (page.viewMode === "list") {
+                for (var i = 0; i < grp.clips.length; i++)
+                    out.push({ kind: "item", clip: grp.clips[i] })
+            } else {
+                for (var r = 0; r < grp.clips.length; r += per)
+                    out.push({ kind: "row", clips: grp.clips.slice(r, r + per) })
+            }
+        }
+        page.dateRows = out
+    }
+
+    // Row shape depends on both of these, so re-chunk when either changes.
+    onViewModeChanged: page.rebuildRows()
+    onClipsPerRowChanged: page.rebuildRows()
 
     onDateGroupedChanged: page.rebuildGroups()
     Connections {
@@ -134,11 +166,26 @@ Rectangle {
     }
 
     // ── View state ────────────────────────────────────────────────────────
+    // Persisted to ui-settings.json so the toolbar comes back the way it was
+    // left. These used to be plain local properties seeded with a literal,
+    // which is why "Show details" switched itself back on at every launch.
+    //
+    // One-way flow, exactly like `clipsPerRow` below: derived from `settings`,
+    // and the toolbar toggles write through SettingsController.setValue rather
+    // than assigning here. A read/write property would need a binding on
+    // `settings` that the first toggle would sever.
     /// "grid" | "list"
-    property string viewMode: "grid"
-    property bool dateGrouped: false
-    property bool showStats: true
+    readonly property string viewMode:
+        page.settings.clipsViewMode === "list" ? "list" : "grid"
+    readonly property bool dateGrouped: page.settings.clipsDateGrouped === true
+    /// Defaults to on, so absent-and-unset must read as true.
+    readonly property bool showStats: page.settings.clipsShowStats !== false
+    /// Session-only: a filter, not a view preference.
     property bool favoritesOnly: false
+
+    function persistView(key, value) {
+        SettingsController.setValue(key, JSON.stringify(value))
+    }
 
     readonly property int clipsPerRow: Math.max(2, Math.min(5,
         page.settings.clipsPerRow || Theme.clipsGridCols))
@@ -225,8 +272,12 @@ Rectangle {
             Text {
                 text: (I18n.language, I18n.t("nav.clips"))
                 color: Theme.text
-                font.pixelSize: 26
-                font.weight: Font.Bold
+                // 20px / ExtraBold, matching the retired Vue PageHeader
+                // (.page-title: font-size 20px; font-weight 800). The Qt port
+                // had these at 26px Bold, which is most of why every page
+                // header reads bulkier than the old shell.
+                font.pixelSize: 20
+                font.weight: Font.ExtraBold
             }
 
             Rectangle {
@@ -320,48 +371,93 @@ Rectangle {
                 }
             }
 
-            // Game filter
-            ComboBox {
+            // Game filter — MULTI-select, as the Vue toolbar was.
+            //
+            // A plain single-select ComboBox replaced it during the Qt port,
+            // which lost both the ability to combine games and the per-game
+            // clip counts. This is a button + Popup rather than a ComboBox:
+            // QQC2's ComboBox is built around one current index and fights a
+            // checkbox list.
+            Rectangle {
                 id: gameBox
                 implicitWidth: 170
                 implicitHeight: 32
-                model: ClipsController.gameList
-                currentIndex: 0
-                onActivated: ClipsController.setGameFilter(currentIndex === 0 ? "" : currentText)
-                // reset selection if the game list changes out from under us
-                Connections {
-                    target: ClipsController
-                    function onGameListChanged() {
-                        if (gameBox.currentIndex >= ClipsController.gameList.length)
-                            gameBox.currentIndex = 0
+                radius: Theme.radius
+                color: Theme.surface
+                border.width: 1
+                border.color: gamePopup.visible ? Theme.accent : Theme.border
+
+                readonly property int picked: (ClipsController.revision,
+                                               ClipsController.gameFilterCount())
+                readonly property var counts:
+                    JSON.parse(ClipsController.gameCountsJson || "{}")
+                /// Everything in `gameList` except its leading "All games".
+                readonly property var games: ClipsController.gameList.slice(1)
+                /// Height of the scrolling game list. Capped to a WHOLE
+                /// number of 30px rows so the list never ends on a half-drawn
+                /// one, which looked like a rendering fault rather than a
+                /// scroll hint.
+                readonly property int listH: Math.min(gameBox.games.length, 9) * 30
+
+                Row {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 10
+                    anchors.right: parent.right
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 6
+
+                    Icon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: "gamepad"; size: 13
+                        color: gameBox.picked > 0 ? Theme.accent : Theme.textDim
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: gameBox.width - 52
+                        text: gameBox.picked === 0
+                              ? (I18n.language, I18n.t("clips.gamesFilter.allGames"))
+                              : gameBox.picked === 1
+                                ? gameBox.selectedName()
+                                : gameBox.picked + " "
+                                  + (I18n.language, I18n.t("clips.gamesFilter.label"))
+                        color: Theme.text
+                        font.pixelSize: 13
+                        elide: Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
                     }
                 }
-                font.pixelSize: 13
-                background: Rectangle {
-                    radius: Theme.radius
-                    color: Theme.surface
-                    border.width: 1
-                    border.color: Theme.border
-                }
-                contentItem: Text {
-                    leftPadding: 10
-                    rightPadding: gameBox.indicator.width + 6
-                    text: gameBox.displayText
-                    color: Theme.text
-                    font: gameBox.font
-                    elide: Text.ElideRight
-                    verticalAlignment: Text.AlignVCenter
-                }
-                indicator: Icon {
+                Icon {
                     x: gameBox.width - width - 8
                     y: (gameBox.height - height) / 2
                     name: "chevron-down"; size: 12
                     color: Theme.textDim
                 }
-                popup: Popup {
+
+                function selectedName() {
+                    for (var i = 0; i < gameBox.games.length; i++)
+                        if (ClipsController.isGameFiltered(gameBox.games[i]))
+                            return gameBox.games[i]
+                    return ""
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: gamePopup.visible ? gamePopup.close() : gamePopup.open()
+                }
+
+                Popup {
+                    id: gamePopup
                     y: gameBox.height + 2
-                    width: gameBox.width
-                    implicitHeight: Math.min(contentItem.implicitHeight + 2, 320)
+                    width: Math.max(gameBox.width, 260)
+                    // Computed from the parts rather than read off the
+                    // Column's implicitHeight. `gameList` arrives after the
+                    // first layout, and the Column did not re-derive its
+                    // implicit height when the list grew from 0 to 280 —
+                    // the popup stayed 35px tall and looked like it had
+                    // failed to open. 1px divider + 32px footer + 2 padding.
+                    implicitHeight: gameBox.listH + 35
                     padding: 1
                     background: Rectangle {
                         radius: Theme.radius
@@ -369,26 +465,120 @@ Rectangle {
                         border.width: 1
                         border.color: Theme.border
                     }
-                    contentItem: ListView {
-                        clip: true
-                        implicitHeight: contentHeight
-                        model: gameBox.popup.visible ? gameBox.delegateModel : null
-                        ScrollBar.vertical: ScrollBar {}
-                    }
-                }
-                delegate: ItemDelegate {
-                    width: gameBox.width
-                    height: 30
-                    contentItem: Text {
-                        text: modelData
-                        color: Theme.text
-                        font.pixelSize: 13
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    highlighted: gameBox.highlightedIndex === index
-                    background: Rectangle {
-                        color: highlighted ? Theme.border : "transparent"
+
+                    contentItem: Column {
+                        id: gameCol
+                        // Explicit width from the Popup, NOT the other way
+                        // round: a Column derives its own width from its
+                        // children, so a child taking `parent.width` resolves
+                        // to 0 — which left the list 0px wide, with no
+                        // delegates, no contentHeight and a popup that opened
+                        // 35px tall and looked like it had failed to appear.
+                        width: gamePopup.availableWidth
+                        height: gameBox.listH + 33
+                        spacing: 0
+
+                        ListView {
+                            width: parent.width
+                            // From the model count, not contentHeight, which
+                            // is only known after a layout pass that cannot
+                            // happen while the width is still being resolved.
+                            height: gameBox.listH
+                            clip: true
+                            model: gamePopup.visible ? gameBox.games : []
+                            ScrollBar.vertical: ScrollBar {}
+
+                            delegate: Rectangle {
+                                id: gameRow
+                                required property var modelData
+                                width: ListView.view.width
+                                height: 30
+                                color: rowHover.containsMouse ? Theme.bgHover : "transparent"
+
+                                readonly property bool ticked:
+                                    (ClipsController.revision,
+                                     ClipsController.isGameFiltered(gameRow.modelData))
+
+                                Row {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    anchors.rightMargin: 10
+                                    spacing: 8
+
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 22
+                                        horizontalAlignment: Text.AlignRight
+                                        text: String(gameBox.counts[gameRow.modelData] || 0)
+                                        color: Theme.accent
+                                        font.pixelSize: 11
+                                        font.weight: Font.DemiBold
+                                    }
+                                    Rectangle {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 14; height: 14
+                                        radius: 3
+                                        color: gameRow.ticked ? Theme.accent : "transparent"
+                                        border.width: 1
+                                        border.color: gameRow.ticked ? Theme.accent : Theme.border
+                                        Icon {
+                                            anchors.centerIn: parent
+                                            visible: gameRow.ticked
+                                            name: "check"; size: 10
+                                            color: Theme.bg
+                                        }
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: parent.width - 60
+                                        text: gameRow.modelData
+                                        color: gameRow.ticked ? Theme.text : Theme.textDim
+                                        font.pixelSize: 13
+                                        elide: Text.ElideRight
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: rowHover
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    // Stays open: picking several games in one
+                                    // visit is the whole point of the control.
+                                    onClicked: ClipsController.toggleGameFilter(gameRow.modelData)
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: parent.width
+                            height: 1
+                            color: Theme.border
+                        }
+                        Rectangle {
+                            width: parent.width
+                            height: 32
+                            color: clearHover.containsMouse && gameBox.picked > 0
+                                   ? Theme.bgHover : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: (I18n.language, I18n.t("clips.gamesFilter.clear"))
+                                color: gameBox.picked > 0 ? Theme.accent : Theme.textMuted
+                                font.pixelSize: 12
+                            }
+                            MouseArea {
+                                id: clearHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                enabled: gameBox.picked > 0
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    ClipsController.clearGameFilters()
+                                    gamePopup.close()
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -498,6 +688,16 @@ Rectangle {
                 Slider {
                     id: sizeSlider
                     Layout.preferredWidth: 90
+                    // A Control sizes itself from its background's and
+                    // handle's *implicit* size. The delegates below set only
+                    // `width`/`height`, so this Slider computed an implicit
+                    // height of 0 and the layout arranged it 0px tall: it
+                    // still painted (children aren't clipped) but was
+                    // invisible to hit-testing, which is why the handle never
+                    // moved. Same defect HSlider.qml documents; fixed here by
+                    // declaring implicit sizes on the handle AND giving the
+                    // control a comfortable hit target.
+                    Layout.preferredHeight: 22
                     Layout.alignment: Qt.AlignVCenter
                     from: 2; to: 5; stepSize: 1
                     snapMode: Slider.SnapAlways
@@ -530,14 +730,11 @@ Rectangle {
                             color: Theme.accent
                         }
                     }
-                    handle: Rectangle {
+                    handle: SliderHandle {
                         x: sizeSlider.leftPadding
                            + sizeSlider.visualPosition * (sizeSlider.availableWidth - width)
                         y: sizeSlider.topPadding + sizeSlider.availableHeight / 2 - height / 2
-                        width: 14; height: 14; radius: 7
-                        color: Theme.text
-                        border.width: 2
-                        border.color: Theme.accent
+                        active: sizeSlider.pressed || sizeSlider.hovered
                     }
                 }
             }
@@ -546,13 +743,13 @@ Rectangle {
                 icon: "bar-chart"
                 active: page.showStats
                 tooltip: "Toggle clip details"
-                onTriggered: page.showStats = !page.showStats
+                onTriggered: page.persistView("clipsShowStats", !page.showStats)
             }
             IconToggle {
                 icon: "calendar"
                 active: page.dateGrouped
                 tooltip: "Group by date"
-                onTriggered: page.dateGrouped = !page.dateGrouped
+                onTriggered: page.persistView("clipsDateGrouped", !page.dateGrouped)
             }
             // A fused pair rather than two separate buttons, so the pair
             // reads as one view-mode control (per design reference).
@@ -562,14 +759,14 @@ Rectangle {
                     icon: "grid"
                     active: page.viewMode === "grid"
                     tooltip: "Grid view"
-                    onTriggered: page.viewMode = "grid"
+                    onTriggered: page.persistView("clipsViewMode", "grid")
                 }
                 IconToggle {
                     flat: true
                     icon: "list"
                     active: page.viewMode === "list"
                     tooltip: "List view"
-                    onTriggered: page.viewMode = "list"
+                    onTriggered: page.persistView("clipsViewMode", "list")
                 }
             }
         }
@@ -873,21 +1070,47 @@ Rectangle {
                 anchors.fill: parent
                 visible: ClipsController.count > 0 && page.dateGrouped
                 clip: true
-                cacheBuffer: 600
-                spacing: 18
-                model: page.dateGroups
+                // Roughly a row above and below the viewport, now that a
+                // "row" really is one row of cards rather than a whole group.
+                cacheBuffer: 300
+                spacing: 10
+                model: page.dateRows
 
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-                delegate: Column {
+                // ONE DELEGATE PER ROW, not per group.
+                //
+                // This used to be a delegate per date group, each nesting a
+                // Grid + Repeater over that group's clips. The ListView
+                // virtualised the groups, but nothing virtualised their
+                // CONTENTS: a single large bucket ("Today") instantiated every
+                // card in it at once and decoded every thumbnail with it.
+                // `dateRows` flattens the groups into headers and fixed-width
+                // rows so this one ListView virtualises the lot, and
+                // cacheBuffer genuinely means "about a row above and below".
+                delegate: Item {
+                    id: rowDelegate
                     required property var modelData
                     width: groupedView.width
-                    spacing: 8
 
+                    readonly property real cellW:
+                        (groupedView.width - (page.clipsPerRow - 1) * 12) / page.clipsPerRow
+
+                    height: modelData.kind === "header" ? 34
+                          : modelData.kind === "row" ? rowDelegate.cellW * 0.5625 + 80
+                          : 96
+
+                    // ── Date header ───────────────────────────────────────
                     Row {
+                        anchors.left: parent.left
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 4
                         spacing: 8
+                        visible: rowDelegate.modelData.kind === "header"
+
                         Text {
-                            text: modelData.label
+                            text: rowDelegate.modelData.kind === "header"
+                                  ? rowDelegate.modelData.label : ""
                             color: Theme.text
                             font.pixelSize: 14
                             font.weight: Font.Bold
@@ -903,35 +1126,30 @@ Rectangle {
                             Text {
                                 id: groupCount
                                 anchors.centerIn: parent
-                                text: String(modelData.clips.length)
+                                text: rowDelegate.modelData.kind === "header"
+                                      ? String(rowDelegate.modelData.count) : ""
                                 color: Theme.textDim
                                 font.pixelSize: 11
                             }
                         }
                     }
 
-                    // Grid and list bodies are both instantiated and gated by
-                    // `visible` rather than swapped through a Loader: a Loader's
-                    // component would have to reach the delegate's `modelData`
-                    // by unqualified lookup across a Repeater boundary, which
-                    // this toolchain resolves to blank silently (see the
-                    // ShortcutsPanel landmine in the migration notes).
-                    Grid {
+                    // ── Grid row: at most `clipsPerRow` cards ─────────────
+                    Row {
                         width: parent.width
-                        visible: page.viewMode === "grid"
-                        columns: page.clipsPerRow
                         spacing: 12
+                        visible: rowDelegate.modelData.kind === "row"
 
                         Repeater {
-                            model: parent.visible ? modelData.clips : []
+                            // Empty for every other kind, so a header or a
+                            // list item builds no cards at all.
+                            model: rowDelegate.modelData.kind === "row"
+                                   ? rowDelegate.modelData.clips : []
 
                             ClipCard {
                                 required property var modelData
-                                readonly property real cellW:
-                                    (groupedView.width - (page.clipsPerRow - 1) * 12)
-                                    / page.clipsPerRow
-                                width: cellW
-                                height: cellW * 0.5625 + 80
+                                width: rowDelegate.cellW
+                                height: rowDelegate.cellW * 0.5625 + 80
 
                                 filepath: modelData.filepath
                                 thumbnail: modelData.thumbnail
@@ -960,39 +1178,38 @@ Rectangle {
                         }
                     }
 
-                    Column {
-                        width: parent.width
-                        visible: page.viewMode === "list"
-                        spacing: 6
+                    // ── List row ──────────────────────────────────────────
+                    // A 0-or-1 Repeater rather than a `visible` instance, so
+                    // nothing is built for the other kinds. Note the row's
+                    // clip is read through `rowDelegate`: bare `modelData`
+                    // inside here is the Repeater's index, not the row.
+                    Repeater {
+                        model: rowDelegate.modelData.kind === "item" ? 1 : 0
 
-                        Repeater {
-                            model: parent.visible ? modelData.clips : []
+                        ClipListRow {
+                            readonly property var c: rowDelegate.modelData.clip
+                            width: groupedView.width
 
-                            ClipListRow {
-                                required property var modelData
-                                width: groupedView.width
+                            filepath: c.filepath
+                            thumbnail: c.thumbnail
+                            duration: c.duration
+                            title: c.title
+                            game: c.game
+                            filesize: c.filesize
+                            favorite: c.favorite
+                            created: c.created
+                            clipWidth: c.width
+                            clipHeight: c.height
 
-                                filepath: modelData.filepath
-                                thumbnail: modelData.thumbnail
-                                duration: modelData.duration
-                                title: modelData.title
-                                game: modelData.game
-                                filesize: modelData.filesize
-                                favorite: modelData.favorite
-                                created: modelData.created
-                                clipWidth: modelData.width
-                                clipHeight: modelData.height
+                            selected: page.isSelected(c.filepath)
+                            selectionMode: page.selectedCount > 0
 
-                                selected: page.isSelected(modelData.filepath)
-                                selectionMode: page.selectedCount > 0
-
-                                onOpened: page.activate(modelData.filepath, modelData.title, modelData.thumbnail, modelData.game)
-                                onSelectToggled: page.toggleSelect(modelData.filepath)
-                                onFavoriteToggled: ClipsController.setFavorite(modelData.filepath, !modelData.favorite)
-                                onMenuRequested: (gx, gy) => clipMenu.openAt(
-                                    { filepath: modelData.filepath, title: modelData.title,
-                                      favorite: modelData.favorite, game: modelData.game }, gx, gy)
-                            }
+                            onOpened: page.activate(c.filepath, c.title, c.thumbnail, c.game)
+                            onSelectToggled: page.toggleSelect(c.filepath)
+                            onFavoriteToggled: ClipsController.setFavorite(c.filepath, !c.favorite)
+                            onMenuRequested: (gx, gy) => clipMenu.openAt(
+                                { filepath: c.filepath, title: c.title,
+                                  favorite: c.favorite, game: c.game }, gx, gy)
                         }
                     }
                 }

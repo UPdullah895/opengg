@@ -138,6 +138,10 @@ Rectangle {
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
                 cache: true
+                // The thumb is a fixed 140x79; decoding the source at its
+                // native 854x480 would cost ~1.6 MB of RGBA to paint 140px.
+                // 160 covers it with room for the crop.
+                sourceSize.width: 160
                 visible: !!row.thumbnail
                 source: row.thumbnail ? "file://" + row.thumbnail : ""
             }

@@ -26,7 +26,7 @@ Rectangle {
         {
             id: "home",
             tkey: "nav.home",
-            d: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"
+            d: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 0 0 1 1h3m10-11l2 2m-2-2v10a1 1 0 0 1 -1 1h-3m-4 0a1 1 0 0 1 -1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-2z"
         },
         {
             id: "mixer",
@@ -36,7 +36,7 @@ Rectangle {
         {
             id: "clips",
             tkey: "nav.clips",
-            d: "M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M3 6h10a2 2 0 012 2v8a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2z"
+            d: "M15 10l4.553-2.276A1 1 0 0 1 21 8.618v6.764a1 1 0 0 1 -1.447.894L15 14M3 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2H3a2 2 0 0 1 -2-2V8a2 2 0 0 1 2-2z"
         },
         {
             id: "devices",
@@ -46,7 +46,7 @@ Rectangle {
         {
             id: "settings",
             tkey: "nav.settings",
-            d: "M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
+            d: "M12 6V4m0 2a2 2 0 1 0 0 4m0-4a2 2 0 1 1 0 4m-6 8a2 2 0 1 0 0-4m0 4a2 2 0 1 1 0-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 1 0 0-4m0 4a2 2 0 1 1 0-4m0 4v2m0-6V4"
         }
     ]
 
@@ -73,29 +73,50 @@ Rectangle {
             Rectangle {
                 id: navItem
                 Layout.fillWidth: true
-                Layout.preferredHeight: 48
+                // 18px icon + 10px padding each side + 1px border each side,
+                // matching the retired Vue rail (.nav-item: padding 10px 14px,
+                // svg 18px). The Qt port had grown these to 48px rows with
+                // 24px icons, which is what made the sidebar feel bulky.
+                Layout.preferredHeight: 40
                 radius: Theme.radius
                 property bool active: sidebar.currentPage === modelData.id
                 property bool hovered: navMouse.containsMouse
                 color: (active || hovered) ? Theme.accentAlpha(10) : "transparent"
-                border.width: active ? 1 : 0
-                border.color: Theme.accent
+                // Always 1px, transparent when idle. Toggling the WIDTH
+                // between 0 and 1 reflowed the row's contents by a pixel
+                // every time you changed page; the Vue rule kept a
+                // `1px solid transparent` border for exactly this reason.
+                border.width: 1
+                border.color: active ? Theme.accent : "transparent"
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: 12
-                    anchors.rightMargin: 12
+                    anchors.leftMargin: 14
+                    anchors.rightMargin: 14
                     spacing: 12
 
-                    // SVG stroke icon in a 24×24 shape
+                    // SVG stroke icon in an 18×18 shape (Vue: .nav-item svg).
+                    // The paths are authored on a 24×24 grid, so the Shape is
+                    // scaled rather than re-drawn.
                     Shape {
                         id: iconShape
-                        Layout.preferredWidth: 24
-                        Layout.preferredHeight: 24
+                        Layout.preferredWidth: 18
+                        Layout.preferredHeight: 18
+                        transform: Scale { xScale: 18 / 24; yScale: 18 / 24 }
                         Layout.alignment: Qt.AlignVCenter
+                        // The default (geometry) renderer tessellates strokes
+                        // on the CPU and falls apart on a scaled-down 24-grid
+                        // path — the Settings glyph in particular came out as
+                        // a jumble of disconnected strokes. CurveRenderer
+                        // rasterises the curves on the GPU and holds up at
+                        // this size. Qt 6.6+; the shell already needs 6.7.
+                        preferredRendererType: Shape.CurveRenderer
 
                         ShapePath {
                             strokeColor: navItem.active || navItem.hovered ? Theme.accent : Theme.textDim
+                            // Authored for a 24px grid; the 0.75 scale above
+                            // renders this as ~1.5px, which is what the Vue
+                            // rail's 18px SVGs produced.
                             strokeWidth: 2
                             fillColor: "transparent"
                             capStyle: ShapePath.RoundCap
@@ -113,7 +134,9 @@ Rectangle {
                         // when the language changes (invokables alone aren't tracked).
                         text: (I18n.language, I18n.t(modelData.tkey))
                         color: navItem.active ? Theme.text : (navItem.hovered ? Theme.accent : Theme.textDim)
-                        font.pixelSize: 14
+                        // Vue used 13.5px; fractional pixelSize hangs the QML
+                        // engine (see AGENTS.md landmine 1), so 13.
+                        font.pixelSize: 13
                         font.weight: Font.Medium
                         Layout.fillWidth: true
                     }
