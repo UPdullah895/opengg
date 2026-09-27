@@ -227,6 +227,19 @@ pub mod qobject {
         #[cxx_name = "setFavorites"]
         fn set_favorites(self: Pin<&mut Self>, filepaths: &QStringList, favorite: bool);
 
+        /// Bulk game re-tag. Preserves each clip's favourite flag, which
+        /// `set_clip_meta` would otherwise clear (see `current_favorite`).
+        #[qinvokable]
+        #[cxx_name = "setGames"]
+        fn set_games(self: Pin<&mut Self>, filepaths: &QStringList, game: &QString);
+
+        /// Bulk rename. `names` is positional against `filepaths`; the
+        /// pattern ({n}/{game}/{filename}) is expanded QML-side, where the
+        /// visible rows already carry the values it substitutes.
+        #[qinvokable]
+        #[cxx_name = "setCustomNames"]
+        fn set_custom_names(self: Pin<&mut Self>, filepaths: &QStringList, names: &QStringList);
+
         /// Bulk delete, same single-reload rationale as `setFavorites`.
         #[qinvokable]
         #[cxx_name = "deleteClips"]
@@ -716,6 +729,48 @@ impl qobject::ClipsController {
             };
             if let Err(e) = opengg_core::clips::set_clip_meta(update) {
                 eprintln!("set_favorites: {e}");
+            }
+        }
+        self.as_mut().reload();
+    }
+
+    pub fn set_games(mut self: Pin<&mut Self>, filepaths: &QStringList, game: &QString) {
+        let g = game.to_string();
+        for fp in filepaths.iter() {
+            let path = fp.to_string();
+            let update = ClipMetaUpdate {
+                game_tag: Some(g.clone()),
+                favorite: Some(Self::current_favorite(&path)),
+                ..Self::meta_update(path)
+            };
+            if let Err(e) = opengg_core::clips::set_clip_meta(update) {
+                eprintln!("set_games: {e}");
+            }
+        }
+        self.as_mut().reload();
+    }
+
+    pub fn set_custom_names(
+        mut self: Pin<&mut Self>,
+        filepaths: &QStringList,
+        names: &QStringList,
+    ) {
+        let new_names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+        for (i, fp) in filepaths.iter().enumerate() {
+            let Some(name) = new_names.get(i) else {
+                // A short `names` list means the caller built it wrong; skip
+                // rather than renaming the tail to something arbitrary.
+                eprintln!("set_custom_names: no name for index {i}");
+                break;
+            };
+            let path = fp.to_string();
+            let update = ClipMetaUpdate {
+                custom_name: Some(name.clone()),
+                favorite: Some(Self::current_favorite(&path)),
+                ..Self::meta_update(path)
+            };
+            if let Err(e) = opengg_core::clips::set_clip_meta(update) {
+                eprintln!("set_custom_names: {e}");
             }
         }
         self.as_mut().reload();

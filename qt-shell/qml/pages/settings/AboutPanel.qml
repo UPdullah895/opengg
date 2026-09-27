@@ -98,9 +98,13 @@ ColumnLayout {
                 color: Theme.accentAlpha(12)
                 border.width: 2
                 border.color: Theme.accent
+                // The OpenGG mark, not the generic gamepad glyph that stood
+                // in for it — this is the one place the product's own logo
+                // belongs.
                 Icon {
                     anchors.centerIn: parent
-                    name: "gamepad"; size: 34
+                    name: "logo"; size: 30
+                    color: Theme.accent
                 }
             }
             Text {

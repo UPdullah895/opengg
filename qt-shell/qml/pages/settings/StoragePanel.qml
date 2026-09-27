@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
+import Qt.labs.platform as Labs
 import QtQuick.Layouts
 import com.opengg.app
 
@@ -41,20 +41,24 @@ ColumnLayout {
         return decodeURIComponent(url.toString().replace(/^(file:\/{2,3})/, "/").replace(/^\/\//, "/"))
     }
 
-    FolderDialog {
+    // Qt.labs.platform, NOT QtQuick.Dialogs: the Quick dialog draws Qt's own
+    // bare-bones file browser, with no places sidebar, no recent locations
+    // and none of the desktop's own conventions. The platform variant hands
+    // off to the XDG portal / the desktop's real folder picker.
+    Labs.FolderDialog {
         id: clipDirDialog
         title: "Add Clip Directory"
         onAccepted: {
-            const p = root.urlToPath(selectedFolder)
+            const p = root.urlToPath(folder)
             const next = root.clipDirs.concat(root.clipDirs.includes(p) ? [] : [p])
             SettingsController.setValue("clip_directories", JSON.stringify(next))
         }
     }
-    FolderDialog {
+    Labs.FolderDialog {
         id: shotDirDialog
         title: "Add Screenshot Directory"
         onAccepted: {
-            const p = root.urlToPath(selectedFolder)
+            const p = root.urlToPath(folder)
             const next = root.shotDirs.concat(root.shotDirs.includes(p) ? [] : [p])
             SettingsController.setValue("screenshotDirs", JSON.stringify(next))
         }

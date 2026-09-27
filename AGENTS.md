@@ -80,6 +80,17 @@ qt-shell/tools/ui-shots.sh
 Run `cargo build` in `qt-shell/` first, or you will screenshot a stale binary
 and sign off on changes that were never compiled.
 
+The `clips:selection` and `clips:filtered` targets put the Clips page into
+states a headless run cannot click into — a multi-clip selection and an active
+search + favourites filter — so the bulk action bar and the clear-filters
+control are covered by the sweep instead of being signed off unseen.
+
+The harness CANNOT capture QQC2 `Popup`s: they render in their own overlay
+window, and the sweep grabs `captureRoot`. To check one, open it in a capture
+run and `console.log` its geometry — a zero-size popup is the recurring
+failure here (a `Column` that sizes from children which size from the Popup
+resolves to 0). Measure, don't assume it drew.
+
 The `editor` target opens the clip editor directly on the first clip in
 `~/Videos/OpenGG` (skipped if there is none). It works by passing the clip path
 through `--panel`, which `Main.qml` interprets as a filepath when `--page` is

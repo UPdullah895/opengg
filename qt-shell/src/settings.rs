@@ -33,6 +33,15 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "resetShortcuts"]
         fn reset_shortcuts(self: Pin<&mut Self>);
+
+        /// The built-in bindings as JSON, so the panel can grey out "Reset to
+        /// Defaults" when nothing has been changed. Returned rather than
+        /// compared in Rust because the panel already re-reads `settingsJson`
+        /// on every change — a bool invokable would have no change signal and
+        /// would latch at its startup value.
+        #[qinvokable]
+        #[cxx_name = "defaultShortcutsJson"]
+        fn default_shortcuts_json(self: &Self) -> QString;
     }
 }
 
@@ -103,6 +112,10 @@ impl qobject::SettingsController {
 
         save_envelope(&v);
         self.refresh();
+    }
+
+    pub fn default_shortcuts_json(&self) -> QString {
+        QString::from(&default_shortcuts().to_string())
     }
 
     pub fn reset_shortcuts(self: Pin<&mut Self>) {

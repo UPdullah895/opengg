@@ -81,9 +81,11 @@ Item {
             Popup {
                 id: volPop
                 y: monBtn.height + 4
-                x: -70
-                width: 150
-                implicitHeight: 32
+                // Centred on the button rather than pinned to a magic
+                // offset, now that the flyout is narrow.
+                x: (monBtn.width - volPop.width) / 2
+                width: 40
+                implicitHeight: volCol.implicitHeight + 12
                 padding: 6
                 // Click-away dismiss; the hover watch below covers "moved
                 // the mouse away" without needing a click.
@@ -116,12 +118,28 @@ Item {
                     }
                 }
 
-                contentItem: Row {
-                    spacing: 6
+                // Vertical, bottom-to-top: a fader reads as a level, and it
+                // keeps the flyout narrow enough to sit over the lane rather
+                // than stretching across it. The mute toggle sits at the foot
+                // of the fader, where the track bottoms out.
+                contentItem: Column {
+                    id: volCol
+                    spacing: 4
+
+                    VSlider {
+                        id: laneVol
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        trackHeight: 90
+                        from: 0; to: 100
+                        suffix: ""
+                        sliderColor: lane.accent
+                        value: Math.round(lane.volume * 100)
+                        onMoved: (v) => lane.volumeRequested(v / 100)
+                    }
                     Icon {
-                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.horizontalCenter: parent.horizontalCenter
                         name: lane.monitoring ? "volume-2" : "volume-x"
-                        size: 12
+                        size: 13
                         color: lane.monitoring ? lane.accent : Theme.textMuted
                         MouseArea {
                             anchors.fill: parent
@@ -129,16 +147,6 @@ Item {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: lane.monitorToggled()
                         }
-                    }
-                    HSlider {
-                        id: laneVol
-                        width: 112
-                        anchors.verticalCenter: parent.verticalCenter
-                        from: 0; to: 100
-                        suffix: ""
-                        sliderColor: lane.accent
-                        value: Math.round(lane.volume * 100)
-                        onMoved: (v) => lane.volumeRequested(v / 100)
                     }
                 }
             }

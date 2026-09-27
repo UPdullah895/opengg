@@ -50,7 +50,6 @@ ColumnLayout {
         video: "track-video", game: "track-game", chat: "headphones",
         mic: "track-mic", media: "track-media", overlay: "track-overlay"
     })
-    property string openIconPickerFor: ""
 
     SettingsHeading { titleText: (I18n.language, I18n.t("settings.timelineTracks.title")) }
 
@@ -134,50 +133,152 @@ ColumnLayout {
                             onClicked: palette.visible ? palette.close() : palette.open()
                         }
 
+                        // Presets, then a hue strip and a shade grid built
+                        // from it — ten fixed swatches could not express a
+                        // colour the theme happened not to ship. Every colour
+                        // comes from Theme.hsv() rather than a literal, so
+                        // check-colors.sh still holds.
                         Popup {
                             id: palette
                             y: swatch.height + 4
-                            width: 5 * 26 + 12
-                            implicitHeight: 2 * 26 + 12
-                            padding: 6
+                            // Right-aligned to the swatch: the rows sit near
+                            // the left edge, and a wide popup anchored at x=0
+                            // would hang off the panel.
+                            x: -8
+                            width: 6 * 24 + 16
+                            implicitHeight: pickerCol.implicitHeight + 16
+                            padding: 8
                             background: Rectangle {
                                 radius: Theme.radius
                                 color: Theme.surface
                                 border.width: 1
                                 border.color: Theme.border
                             }
-                            // Drawn from theme tokens rather than hex
-                            // literals, so a retheme moves the palette too
-                            // (and check-colors.sh stays happy).
-                            readonly property var swatches: [
-                                Theme.channelColor("Game"), Theme.channelColor("Chat"),
-                                Theme.channelColor("Media"), Theme.channelColor("Aux"),
-                                Theme.channelColor("Mic"),
-                                Theme.accent, Theme.success, Theme.purple,
-                                Theme.overdrive, Theme.textDim
-                            ]
-                            contentItem: Grid {
-                                columns: 5
-                                spacing: 4
-                                Repeater {
-                                    model: palette.swatches
-                                    Rectangle {
-                                        required property var modelData
-                                        width: 22; height: 22
-                                        radius: 4
-                                        color: modelData
-                                        border.width: 1
-                                        border.color: pickArea.containsMouse
-                                                      ? Theme.text : Theme.border
-                                        MouseArea {
-                                            id: pickArea
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                root.updateTrack(tRow.index,
-                                                    { color: String(parent.color) })
-                                                palette.close()
+
+                            /// Hue of the shade grid, 0..1. Seeded from the
+                            /// track's current colour each time it opens so
+                            /// the grid starts somewhere recognisable.
+                            property real hue: 0
+                            onOpened: palette.hue = Theme.toHsv(tRow.modelData.color).h
+
+                            function choose(c) {
+                                root.updateTrack(tRow.index, { color: String(c) })
+                                palette.close()
+                            }
+
+                            contentItem: Column {
+                                id: pickerCol
+                                spacing: 6
+
+                                Text {
+                                    text: "Presets"
+                                    color: Theme.textMuted
+                                    font.pixelSize: 10
+                                    font.weight: Font.ExtraBold
+                                    font.letterSpacing: 1.2
+                                }
+                                Grid {
+                                    columns: 6
+                                    spacing: 4
+                                    Repeater {
+                                        model: [
+                                            Theme.channelColor("Game"), Theme.channelColor("Chat"),
+                                            Theme.channelColor("Media"), Theme.channelColor("Aux"),
+                                            Theme.channelColor("Mic"), Theme.accent,
+                                            Theme.success, Theme.purple,
+                                            Theme.overdrive, Theme.textDim,
+                                            Theme.text, Theme.textMuted
+                                        ]
+                                        Rectangle {
+                                            required property var modelData
+                                            width: 20; height: 20
+                                            radius: 4
+                                            color: modelData
+                                            border.width: 1
+                                            border.color: presetArea.containsMouse
+                                                          ? Theme.text : Theme.border
+                                            MouseArea {
+                                                id: presetArea
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: palette.choose(parent.color)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: pickerCol.width; height: 1
+                                    color: Theme.border
+                                }
+
+                                Text {
+                                    text: "Hue"
+                                    color: Theme.textMuted
+                                    font.pixelSize: 10
+                                    font.weight: Font.ExtraBold
+                                    font.letterSpacing: 1.2
+                                }
+                                // A strip of discrete hue cells rather than a
+                                // gradient: QML gradients cannot be built
+                                // from tokens, and 30 cells already reads as
+                                // continuous at this size.
+                                Row {
+                                    id: hueStrip
+                                    readonly property int cells: 30
+                                    readonly property real cellW:
+                                        (pickerCol.width) / hueStrip.cells
+                                    Repeater {
+                                        model: hueStrip.cells
+                                        Rectangle {
+                                            required property int index
+                                            width: hueStrip.cellW
+                                            height: 16
+                                            color: Theme.hsv(index / hueStrip.cells, 0.85, 0.95)
+                                            // Marks which hue the grid below
+                                            // is currently showing.
+                                            Rectangle {
+                                                anchors.fill: parent
+                                                color: "transparent"
+                                                border.width: 2
+                                                border.color: Theme.text
+                                                visible: Math.round(palette.hue * hueStrip.cells)
+                                                         % hueStrip.cells === parent.index
+                                            }
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: palette.hue = parent.index / hueStrip.cells
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Saturation across, brightness down.
+                                Grid {
+                                    columns: 6
+                                    spacing: 4
+                                    Repeater {
+                                        model: 24
+                                        Rectangle {
+                                            required property int index
+                                            readonly property real sat:
+                                                0.25 + (index % 6) * 0.15
+                                            readonly property real val:
+                                                1.0 - Math.floor(index / 6) * 0.22
+                                            width: 20; height: 20
+                                            radius: 4
+                                            color: Theme.hsv(palette.hue, sat, val)
+                                            border.width: 1
+                                            border.color: shadeArea.containsMouse
+                                                          ? Theme.text : Theme.border
+                                            MouseArea {
+                                                id: shadeArea
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: palette.choose(parent.color)
                                             }
                                         }
                                     }
@@ -222,7 +323,7 @@ ColumnLayout {
                         id: iconBtn
                         width: 32; height: 28
                         radius: Theme.radius
-                        property bool pickerOpen: root.openIconPickerFor === tRow.modelData.id
+                        property bool pickerOpen: iconPop.visible
                         color: pickerOpen ? Theme.accentAlpha(15) : Theme.bg
                         border.width: 1
                         border.color: pickerOpen ? Theme.accent : Theme.border
@@ -233,7 +334,62 @@ ColumnLayout {
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.openIconPickerFor = iconBtn.pickerOpen ? "" : tRow.modelData.id
+                            onClicked: iconPop.visible ? iconPop.close() : iconPop.open()
+                        }
+
+                        // A popup over the button, like the colour swatch's
+                        // — the strip that used to unfold underneath the row
+                        // pushed every track below it down, so the list
+                        // jumped around as you edited.
+                        Popup {
+                            id: iconPop
+                            y: iconBtn.height + 4
+                            x: (iconBtn.width - iconPop.width) / 2
+                            width: 3 * 34 + 16
+                            implicitHeight: 2 * 32 + 16
+                            padding: 8
+                            background: Rectangle {
+                                radius: Theme.radius
+                                color: Theme.surface
+                                border.width: 1
+                                border.color: Theme.border
+                            }
+                            contentItem: Grid {
+                                columns: 3
+                                spacing: 4
+                                Repeater {
+                                    model: root.iconIds
+                                    Rectangle {
+                                        id: iconChoice
+                                        required property string modelData
+                                        width: 30; height: 28
+                                        radius: Theme.radius
+                                        readonly property bool isCurrent:
+                                            tRow.modelData.icon === iconChoice.modelData
+                                        color: isCurrent ? Theme.accentAlpha(20) : Theme.bg
+                                        border.width: 1
+                                        border.color: isCurrent ? Theme.accent
+                                                    : choiceArea.containsMouse ? Theme.text
+                                                    : Theme.border
+                                        Icon {
+                                            anchors.centerIn: parent
+                                            name: root.trackIcons[iconChoice.modelData]
+                                            size: 15
+                                        }
+                                        MouseArea {
+                                            id: choiceArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                root.updateTrack(tRow.index,
+                                                                 { icon: iconChoice.modelData })
+                                                iconPop.close()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -257,42 +413,6 @@ ColumnLayout {
                     }
                 }
 
-                // Inline icon-choice strip — a plain Row toggled by
-                // openIconPickerFor, not a Popup/ComboBox (see the landmine
-                // note above). Lets you pick a specific icon instead of
-                // cycling blind through six options one click at a time.
-                Row {
-                    visible: root.openIconPickerFor === tCol2.modelData.id
-                    Layout.leftMargin: 68
-                    spacing: 6
-
-                    Repeater {
-                        model: root.iconIds
-                        Rectangle {
-                            id: iconChoice
-                            required property string modelData
-                            width: 30; height: 28
-                            radius: Theme.radius
-                            property bool isCurrent: tCol2.modelData.icon === modelData
-                            color: isCurrent ? Theme.accentAlpha(20) : Theme.bg
-                            border.width: 1
-                            border.color: isCurrent ? Theme.accent : Theme.border
-                            Icon {
-                                anchors.centerIn: parent
-                                name: root.trackIcons[iconChoice.modelData]
-                                size: 15
-                            }
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    root.updateTrack(tCol2.index, { icon: iconChoice.modelData })
-                                    root.openIconPickerFor = ""
-                                }
-                            }
-                        }
-                    }
-                }
                 }
             }
 

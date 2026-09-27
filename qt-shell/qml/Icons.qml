@@ -50,6 +50,19 @@ QtObject {
         "edit": { d: "M 11 4H 4a 2 2 0 0 0 -2 2 v 14a 2 2 0 0 0 2 2 h 14a 2 2 0 0 0 2 -2 v -7M 18.5 2.5a 2.121 2.121 0 0 1 3 3 L 12 15l -4 1 1 -4 9.5 -9.5z", sw: 2 },
         // ClipCard.vue trimmed badge (filled)
         "scissors": { d: "M 9.64 7.64a 2.5 2.5 0 1 1 -3.54 -3.54 2.5 2.5 0 0 1 3.54 3.54 Zm 0 8.72a 2.5 2.5 0 1 1 -3.54 3.54 2.5 2.5 0 0 1 3.54 -3.54 ZM 14.59 12l 6.2 6.2 -1.41 1.41L 12 12.41l -7.38 7.2 -1.4 -1.42L 9.41 12 3.22 5.8l 1.4 -1.41L 12 11.59l 7.38 -7.2 1.41 1.42z", sw: 0, filled: true },
+        // ClipsPage.vue context menu — the plain pencil, distinct from the
+        // square-pen "edit" above. Restored after the menu was rebuilt with
+        // near-miss substitutes.
+        "pencil": { d: "M 12 20h 9M 16.5 3.5a 2.121 2.121 0 0 1 3 3 L 7 19l -4 1 1 -4L 16.5 3.5z", sw: 1.75 },
+        // ClipsPage.vue context menu "Copy Path" — two offset sheets.
+        "copy": { d: "M 11 9L 20 9A 2 2 0 0 1 22 11 L 22 20A 2 2 0 0 1 20 22 L 11 22A 2 2 0 0 1 9 20 L 9 11A 2 2 0 0 1 11 9 ZM 5 15H 4a 2 2 0 0 1 -2 -2 V 4a 2 2 0 0 1 2 -2 h 9a 2 2 0 0 1 2 2 v 1", sw: 1.75 },
+        // ClipsPage.vue context menu "Edit" — dashed frame with a tick, i.e.
+        // "open in the editor", not the scissors that stood in for it.
+        "frame-check": { d: "M 6 20h -2a 2 2 0 0 1 -2 -2 v -2m 0 -4V 8m 0 -4V 4a 2 2 0 0 1 2 -2 h 2m 4 0h 4m 4 0h 2a 2 2 0 0 1 2 2 v 2m 0 4v 4m 0 4v 2a 2 2 0 0 1 -2 2 h -2m -4 0h -4M 9 11l 2 2 4 -4", sw: 1.75 },
+        // Editor nav-rail collapse toggle: a framed panel with its left column.
+        "panel-left": { d: "M 5 3L 19 3A 2 2 0 0 1 21 5 L 21 19A 2 2 0 0 1 19 21 L 5 21A 2 2 0 0 1 3 19 L 3 5A 2 2 0 0 1 5 3 ZM 9 3v 18", sw: 2 },
+        // Clears every active clips filter at once.
+        "filter-x": { d: "M 22 3L 2 3L 10 12.46L 10 19L 14 21L 14 12.46L 22 3ZM 17 17L 23 23M 23 17L 17 23", sw: 2 },
         "refresh-cw": { d: "M 23 4L 23 10L 17 10M 20.49 15a 9 9 0 1 1 -2.12 -9.36 L 23 10", sw: 2 },
         "rotate-ccw": { d: "M 1 4L 1 10L 7 10M 3.51 15a 9 9 0 1 0 2.13 -9.36 L 1 10", sw: 2 },
         "plus": { d: "M 12 5v 14M 5 12h 14", sw: 2 },

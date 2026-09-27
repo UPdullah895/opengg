@@ -154,6 +154,35 @@ Rectangle {
         function onRevisionChanged() { page.rebuildGroups() }
     }
 
+    /// Any of search / games / favourites-only is narrowing the library.
+    /// Drives the "clear filters" button's visibility.
+    /// `revision` is listed first purely to make this re-evaluate: the game
+    /// count is an invokable with no change signal, so a binding on it alone
+    /// would latch at its startup value (same idiom as gameBox.picked).
+    readonly property bool anyFilterActive:
+        searchField.text.length > 0
+        || (ClipsController.revision, ClipsController.gameFilterCount()) > 0
+        || page.favoritesOnly
+
+    function clearAllFilters() {
+        searchField.text = ""          // onTextChanged pushes it to the controller
+        ClipsController.clearGameFilters()
+        page.favoritesOnly = false
+        ClipsController.setFavoritesOnly(false)
+    }
+
+    /// Visible rows keyed by filepath. Batch rename needs each clip's game
+    /// to expand {game}, and `visibleJson` is the only place QML can read a
+    /// row's fields (the list model exposes roles, not objects). Built once
+    /// per use — a per-clip lookup would re-parse the whole library.
+    function visibleByPath() {
+        const rows = JSON.parse(ClipsController.visibleJson() || "[]")
+        var out = ({})
+        for (var i = 0; i < rows.length; i++)
+            out[rows[i].filepath] = rows[i]
+        return out
+    }
+
     /// True when every selected clip is already favourited — the bulk button
     /// then un-favourites instead, matching the single-clip heart's behaviour.
     readonly property bool allSelectedFavorited: {
@@ -216,6 +245,34 @@ Rectangle {
         ClipsController.startWatcher()
         ClipsController.setDateFormat(page.settings.dateFormat || "YMD")
     }
+
+    // Dev-only capture hooks. The selection bar and the "filters active"
+    // toolbar only exist in states a headless run cannot click its way into,
+    // so `--page clips --panel selection|filtered` puts the page there. Same
+    // trick as the editor's `--panel <clip path>`; never runs otherwise.
+    Connections {
+        target: ClipsController
+        enabled: ScreenshotController.active
+        function onRevisionChanged() {
+            if (page.shotStateApplied)
+                return
+            const rows = JSON.parse(ClipsController.visibleJson() || "[]")
+            if (rows.length === 0)
+                return
+            page.shotStateApplied = true
+            if (ScreenshotController.panel === "selection") {
+                var next = ({})
+                for (var i = 0; i < Math.min(3, rows.length); i++)
+                    next[rows[i].filepath] = true
+                page.selected = next
+            } else if (ScreenshotController.panel === "filtered") {
+                searchField.text = "re"
+                page.favoritesOnly = true
+                ClipsController.setFavoritesOnly(true)
+            }
+        }
+    }
+    property bool shotStateApplied: false
 
     // ── formatting helpers ────────────────────────────────────────────────
     function fmtDuration(sec) {
@@ -665,6 +722,16 @@ Rectangle {
                 }
             }
 
+            // Resets every filter at once. Clearing search, games and
+            // favourites one control at a time was the only way to get back
+            // to the full library.
+            IconToggle {
+                icon: "filter-x"
+                visible: page.anyFilterActive
+                tooltip: "Clear all filters"
+                onTriggered: page.clearAllFilters()
+            }
+
             // Everything past here is right-aligned view control, matching
             // ClipsToolbar.vue's ctrl-left / ctrl-right split.
             Item { Layout.fillWidth: true }
@@ -676,10 +743,23 @@ Rectangle {
             // `width`, and a QQC2 Slider given a bare `width` inside one ends
             // up contributing zero — the same "use the Layout attached
             // properties, not width/height" rule the Mixer tab bar needed.
-            RowLayout {
-                spacing: 6
+            // The icon and slider used to sit in a bordered pill, like every
+            // other control on this bar; rebuilding the row dropped it and
+            // left them floating against the page.
+            Rectangle {
                 Layout.alignment: Qt.AlignVCenter
+                Layout.preferredWidth: sizeRow.implicitWidth + 20
+                Layout.preferredHeight: 32
                 visible: page.viewMode === "grid"
+                radius: Theme.radius
+                color: Theme.bg
+                border.width: 1
+                border.color: Theme.border
+
+            RowLayout {
+                id: sizeRow
+                anchors.centerIn: parent
+                spacing: 6
 
                 Icon {
                     Layout.alignment: Qt.AlignVCenter
@@ -737,6 +817,7 @@ Rectangle {
                         active: sizeSlider.pressed || sizeSlider.hovered
                     }
                 }
+            }
             }
 
             IconToggle {
@@ -864,6 +945,255 @@ Rectangle {
                         page.clearSelection()
                     }
                 }
+                // ── Change Game drop-up ──────────────────────────────
+                // Retagging a batch used to be a per-clip trip through the
+                // editor; this is the old bulk bar's tool, restored.
+                ClipsBarButton {
+                    id: gameBtn
+                    label: "Change Game"
+                    icon: "gamepad"
+                    active: bulkGamePop.visible
+                    onTriggered: bulkGamePop.visible ? bulkGamePop.close() : bulkGamePop.open()
+
+                    Popup {
+                        id: bulkGamePop
+                        // Drops UP: the bar sits at the foot of the page.
+                        y: -bulkGamePop.implicitHeight - 6
+                        x: (gameBtn.width - bulkGamePop.width) / 2
+                        width: 240
+                        // Derived from its parts, never from the content
+                        // Column — a Column that sizes from children which
+                        // size from the Popup resolves to zero (the games
+                        // filter shipped invisible that way once already).
+                        implicitHeight: bulkGamePop.listH + 84
+                        padding: 8
+                        readonly property int listH:
+                            Math.min(Math.max(bulkGamePop.rows.length, 1), 7) * 28
+
+                        /// Library games (gameList[0] is the "All" sentinel)
+                        /// narrowed by the search box.
+                        readonly property var rows: {
+                            const all = ClipsController.gameList.slice(1)
+                            const q = gameSearch.text.trim().toLowerCase()
+                            var out = []
+                            for (var i = 0; i < all.length; i++) {
+                                const g = String(all[i])
+                                if (q.length === 0 || g.toLowerCase().indexOf(q) >= 0)
+                                    out.push(g)
+                            }
+                            return out
+                        }
+                        property string chosen: ""
+
+                        onOpened: { gameSearch.text = ""; bulkGamePop.chosen = "" }
+
+                        background: Rectangle {
+                            radius: Theme.radius
+                            color: Theme.surface
+                            border.width: 1
+                            border.color: Theme.border
+                        }
+
+                        contentItem: Column {
+                            spacing: 6
+
+                            TextField {
+                                id: gameSearch
+                                width: bulkGamePop.availableWidth
+                                height: 28
+                                placeholderText: "Search games…"
+                                placeholderTextColor: Theme.textMuted
+                                color: Theme.text
+                                font.pixelSize: 12
+                                leftPadding: 8
+                                verticalAlignment: TextInput.AlignVCenter
+                                background: Rectangle {
+                                    radius: Theme.radius
+                                    color: Theme.bg
+                                    border.width: 1
+                                    border.color: gameSearch.activeFocus ? Theme.accent : Theme.border
+                                }
+                                // Typing a game nobody has used yet is a
+                                // legitimate retag, so Enter applies the raw
+                                // text when nothing in the list matches.
+                                onAccepted: bulkApply(gameSearch.text.trim())
+                            }
+
+                            Item {
+                                width: bulkGamePop.availableWidth
+                                height: bulkGamePop.listH
+
+                                ListView {
+                                    anchors.fill: parent
+                                    clip: true
+                                    model: bulkGamePop.rows
+                                    boundsBehavior: Flickable.StopAtBounds
+
+                                    delegate: Rectangle {
+                                        required property string modelData
+                                        width: ListView.view.width
+                                        height: 28
+                                        radius: Theme.radius
+                                        color: bulkGamePop.chosen === modelData
+                                               ? Theme.accentAlpha(20)
+                                               : rowArea.containsMouse ? Theme.bgHover : "transparent"
+                                        Text {
+                                            anchors.left: parent.left
+                                            anchors.leftMargin: 8
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: parent.width - 16
+                                            text: parent.modelData
+                                            color: Theme.text
+                                            font.pixelSize: 12
+                                            elide: Text.ElideRight
+                                        }
+                                        MouseArea {
+                                            id: rowArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: bulkGamePop.chosen = parent.modelData
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: bulkGamePop.availableWidth
+                                height: 28
+                                radius: Theme.radius
+                                readonly property string target:
+                                    bulkGamePop.chosen || gameSearch.text.trim()
+                                enabled: target.length > 0
+                                opacity: enabled ? 1 : 0.4
+                                color: Theme.accent
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "Apply"
+                                    color: Theme.text
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    enabled: parent.enabled
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: bulkApply(parent.target)
+                                }
+                            }
+                        }
+
+                        function bulkApply(game) {
+                            if (!game || game.length === 0)
+                                return
+                            ClipsController.setGames(page.selectedList(), game)
+                            bulkGamePop.close()
+                            page.clearSelection()
+                        }
+                    }
+                }
+
+                // ── Batch rename drop-up ─────────────────────────────────
+                ClipsBarButton {
+                    id: renameBtn
+                    label: "Rename"
+                    icon: "pencil"
+                    active: bulkRenamePop.visible
+                    onTriggered: bulkRenamePop.visible ? bulkRenamePop.close() : bulkRenamePop.open()
+
+                    Popup {
+                        id: bulkRenamePop
+                        y: -bulkRenamePop.implicitHeight - 6
+                        x: (renameBtn.width - bulkRenamePop.width) / 2
+                        width: 260
+                        implicitHeight: 106
+                        padding: 8
+
+                        onOpened: patternField.text = ""
+
+                        background: Rectangle {
+                            radius: Theme.radius
+                            color: Theme.surface
+                            border.width: 1
+                            border.color: Theme.border
+                        }
+
+                        contentItem: Column {
+                            spacing: 6
+
+                            TextField {
+                                id: patternField
+                                width: bulkRenamePop.availableWidth
+                                height: 28
+                                placeholderText: "e.g. {game} run {n}"
+                                placeholderTextColor: Theme.textMuted
+                                color: Theme.text
+                                font.pixelSize: 12
+                                leftPadding: 8
+                                verticalAlignment: TextInput.AlignVCenter
+                                background: Rectangle {
+                                    radius: Theme.radius
+                                    color: Theme.bg
+                                    border.width: 1
+                                    border.color: patternField.activeFocus ? Theme.accent : Theme.border
+                                }
+                                onAccepted: bulkRenamePop.apply()
+                            }
+                            Text {
+                                width: bulkRenamePop.availableWidth
+                                text: "{n} number · {game} game · {filename} file name"
+                                color: Theme.textMuted
+                                font.pixelSize: 10
+                                wrapMode: Text.WordWrap
+                            }
+                            Rectangle {
+                                width: bulkRenamePop.availableWidth
+                                height: 28
+                                radius: Theme.radius
+                                enabled: patternField.text.trim().length > 0
+                                opacity: enabled ? 1 : 0.4
+                                color: Theme.accent
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "Apply"
+                                    color: Theme.text
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    enabled: parent.enabled
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: bulkRenamePop.apply()
+                                }
+                            }
+                        }
+
+                        /// Expand the pattern per clip, in selection order.
+                        /// Done here rather than in Rust because the visible
+                        /// rows already carry game and filename.
+                        function apply() {
+                            const pattern = patternField.text.trim()
+                            if (pattern.length === 0)
+                                return
+                            const paths = page.selectedList()
+                            const rows = page.visibleByPath()
+                            var names = []
+                            for (var i = 0; i < paths.length; i++) {
+                                const c = rows[paths[i]]
+                                const base = paths[i].split("/").pop().replace(/\.[^.]+$/, "")
+                                names.push(pattern
+                                    .replace(/\{n\}/g, String(i + 1))
+                                    .replace(/\{game\}/g, (c && c.game) || "Unknown")
+                                    .replace(/\{filename\}/g, base))
+                            }
+                            ClipsController.setCustomNames(paths, names)
+                            bulkRenamePop.close()
+                            page.clearSelection()
+                        }
+                    }
+                }
+
                 ClipsBarButton {
                     label: "Delete"
                     icon: "trash"

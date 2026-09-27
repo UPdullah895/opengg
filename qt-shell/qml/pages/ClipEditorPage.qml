@@ -124,6 +124,9 @@ Rectangle {
     }
     /// Hides the info panel and timeline so the picture fills the page.
     property bool theaterMode: false
+    /// Collapses the app's nav rail while the editor is open, without going
+    /// all the way into full view. Main.qml reads this alongside theaterMode.
+    property bool navHidden: false
     /// Current game tag, seeded from the clip row and edited in the top bar.
     property string gameTag: ""
     /// Export settings dialog open?
@@ -149,8 +152,14 @@ Rectangle {
         EditorController.loadClip(page.clip.filepath)
         page.trimStart = EditorController.trimStart
         page.trimEnd = EditorController.trimEnd
+        page.resetTrimHistory(page.trimStart, page.trimEnd)
         page.gameTag = page.clip.game || ""
         page.trackMuted = ({})
+        // View state belongs to the clip you were watching, not to the
+        // editor: opening a different clip used to inherit the previous
+        // one's full view and collapsed rail.
+        page.theaterMode = false
+        page.navHidden = false
         // false: the editor has no ClipVideoSurface yet (its picture still
         // comes from Qt Multimedia below) — see load()'s doc comment.
         page.mixerToken = ClipAudioMixer.load(page.clip.filepath, false)
@@ -164,6 +173,10 @@ Rectangle {
         if (visible) {
             page.forceActiveFocus()
         } else {
+            // Leaving with the cursor still in the game field left its
+            // suggestion list floating over whatever page came next — a
+            // Popup is its own overlay and does not hide with the page.
+            page.forceActiveFocus()
             mp.stop()
             // Release the audio device; a live pipeline would keep playing
             // over the rest of the app after navigating away. Token-scoped so
@@ -233,8 +246,62 @@ Rectangle {
         page.seekTo(mp.position + ms)
     }
     function resetTrim() {
-        page.trimStart = 0
-        page.trimEnd = page.duration
+        page.commitTrim(0, page.duration)
+    }
+
+    // ── Trim undo/redo ────────────────────────────────────────────────────
+    // Ctrl+Z used to jump straight back to the full clip, which threw the
+    // previous trim away with no way back — so there was nothing for a redo
+    // to return to. History is an explicit stack of committed trim windows
+    // with a cursor, so both directions work.
+    property var trimHistory: []
+    property int trimCursor: -1
+    readonly property bool canUndoTrim: page.trimCursor > 0
+    readonly property bool canRedoTrim: page.trimCursor >= 0
+                                        && page.trimCursor < page.trimHistory.length - 1
+
+    /// Seed the stack with the clip's loaded trim. Everything after is an edit.
+    function resetTrimHistory(start, end) {
+        page.trimHistory = [{ s: start, e: end }]
+        page.trimCursor = 0
+    }
+
+    /// Apply a trim AND record it. Anything the cursor had stepped back past
+    /// is dropped, the usual rule for editing after an undo.
+    function commitTrim(start, end) {
+        page.trimStart = start
+        page.trimEnd = end
+        const head = page.trimHistory[page.trimCursor]
+        if (head && Math.abs(head.s - start) < 0.001 && Math.abs(head.e - end) < 0.001)
+            return
+        const next = page.trimHistory.slice(0, page.trimCursor + 1)
+        next.push({ s: start, e: end })
+        // A long drag session would otherwise grow without bound.
+        while (next.length > 50) next.shift()
+        page.trimHistory = next
+        page.trimCursor = next.length - 1
+    }
+
+    /// Record wherever the trim currently sits — for drags, which write
+    /// trimStart/trimEnd directly on every mouse move and only settle on
+    /// release.
+    function commitCurrentTrim() { page.commitTrim(page.trimStart, page.trimEnd) }
+
+    function undoTrim() {
+        if (!page.canUndoTrim)
+            return
+        page.trimCursor -= 1
+        const h = page.trimHistory[page.trimCursor]
+        page.trimStart = h.s
+        page.trimEnd = h.e
+    }
+    function redoTrim() {
+        if (!page.canRedoTrim)
+            return
+        page.trimCursor += 1
+        const h = page.trimHistory[page.trimCursor]
+        page.trimStart = h.s
+        page.trimEnd = h.e
     }
 
     // Standard editor keymap. Space/arrows/Ctrl+Z were the whole set before;
@@ -264,9 +331,11 @@ Rectangle {
         case Qt.Key_Period:
             page.skip(1000 / Math.max(1, page.info.fps || 30)); e.accepted = true; break
         case Qt.Key_I:
-            page.trimStart = Math.min(mp.position / 1000, page.trimEnd); e.accepted = true; break
+            page.commitTrim(Math.min(mp.position / 1000, page.trimEnd), page.trimEnd)
+            e.accepted = true; break
         case Qt.Key_O:
-            page.trimEnd = Math.max(mp.position / 1000, page.trimStart); e.accepted = true; break
+            page.commitTrim(page.trimStart, Math.max(mp.position / 1000, page.trimStart))
+            e.accepted = true; break
         case Qt.Key_M:
             page.masterMuted = !page.masterMuted
             if (page.mixed) page.applyVolume()
@@ -283,7 +352,15 @@ Rectangle {
             else page.closed()
             e.accepted = true; break
         case Qt.Key_Z:
-            if (e.modifiers & Qt.ControlModifier) { page.resetTrim(); e.accepted = true }
+            if (e.modifiers & Qt.ControlModifier) {
+                // Ctrl+Shift+Z redoes, matching the Ctrl+Y below.
+                if (shift) page.redoTrim()
+                else page.undoTrim()
+                e.accepted = true
+            }
+            break
+        case Qt.Key_Y:
+            if (e.modifiers & Qt.ControlModifier) { page.redoTrim(); e.accepted = true }
             break
         case Qt.Key_1: case Qt.Key_2: case Qt.Key_3:
         case Qt.Key_4: case Qt.Key_5: {
@@ -383,6 +460,35 @@ Rectangle {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: page.closed()
                     }
+                }
+
+                // Collapse the app's nav rail without going to full view —
+                // the editor is where horizontal space is scarcest, and the
+                // rail is not useful while you are trimming.
+                Rectangle {
+                    Layout.preferredWidth: 28
+                    Layout.preferredHeight: 28
+                    radius: Theme.radius
+                    color: page.navHidden ? Theme.accentAlpha(15)
+                         : navArea.containsMouse ? Theme.bgHover : "transparent"
+                    border.width: 1
+                    border.color: page.navHidden ? Theme.accent : Theme.border
+                    Icon {
+                        anchors.centerIn: parent
+                        name: "panel-left"
+                        size: 14
+                        color: page.navHidden ? Theme.accent : Theme.text
+                    }
+                    MouseArea {
+                        id: navArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: page.navHidden = !page.navHidden
+                    }
+                    ToolTip.visible: navArea.containsMouse
+                    ToolTip.text: page.navHidden ? "Show sidebar" : "Hide sidebar"
+                    ToolTip.delay: 400
                 }
 
                 // Name and game are editable here, as in the old editor's
@@ -664,17 +770,16 @@ Rectangle {
                         color: Theme.border
                     }
 
+                    // Playback and trim only. The full keymap (J/L, frame
+                    // step, 1–5, undo/redo) still works and is listed in
+                    // Settings → Shortcuts; repeating all of it here turned
+                    // the panel into a wall of text nobody reads.
                     Repeater {
                         model: [
-                            { k: "Space / K", v: "Play / Pause" },
-                            { k: "J / L",     v: "Back 2s / faster" },
-                            { k: "← →",       v: "Skip ±5s (⇧ ±1s)" },
-                            { k: ", .",       v: "Frame step" },
-                            { k: "I / O",     v: "Set trim in / out" },
-                            { k: "M",         v: "Mute" },
-                            { k: "1–5",       v: "Mute audio track" },
-                            { k: "F",         v: "Full view" },
-                            { k: "Ctrl+Z",    v: "Reset trim" }
+                            { k: "Space", v: "Play / Pause" },
+                            { k: "← →",   v: "Skip ±5s" },
+                            { k: "I / O", v: "Set trim in / out" },
+                            { k: "F",     v: "Full view" }
                         ]
 
                         RowLayout {
@@ -979,20 +1084,25 @@ Rectangle {
                 }
 
                 TrimHandle {
+                    id: startHandle
                     x: timelinePane.timeToX(page.trimStart) - width / 2
                     height: parent.height
                     onMovedTo: (px) => {
                         page.trimStart = Math.min(timelinePane.xToTime(px),
                                                   page.trimEnd - 0.1)
                     }
+                    // One history entry per drag, not one per mouse move.
+                    onDraggingChanged: if (!dragging) page.commitCurrentTrim()
                 }
                 TrimHandle {
+                    id: endHandle
                     x: timelinePane.timeToX(page.trimEnd) - width / 2
                     height: parent.height
                     onMovedTo: (px) => {
                         page.trimEnd = Math.max(timelinePane.xToTime(px),
                                                 page.trimStart + 0.1)
                     }
+                    onDraggingChanged: if (!dragging) page.commitCurrentTrim()
                 }
             }
         }

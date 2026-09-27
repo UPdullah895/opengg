@@ -18,6 +18,28 @@ ColumnLayout {
         function onSettingsJsonChanged() { root.s = JSON.parse(SettingsController.settingsJson || "{}") }
     }
 
+    /// Built-in bindings, for the Reset button's enabled state.
+    readonly property var defaults:
+        JSON.parse(SettingsController.defaultShortcutsJson() || "{}")
+
+    /// True when at least one binding differs from the built-in default.
+    readonly property bool customised: {
+        const cur = root.s.shortcuts || ({})
+        for (var k in root.defaults)
+            if ((cur[k] || "") !== (root.defaults[k] || "")) return true
+        return false
+    }
+
+    /// Actions nothing listens for yet. The bindings are stored and
+    /// editable, but the daemon's global-hotkey loop is still a stub
+    /// (daemon/src/replay/hotkey.rs) and the shell has no dispatcher, so
+    /// pressing these does nothing. Flagged rather than hidden: the
+    /// settings are real, the wiring is not.
+    readonly property var inactive: [
+        "saveReplay", "toggleRecording", "screenshot", "toggleEarBlast",
+        "splitClip", "exportClip", "toggleMic", "undo", "redo",
+    ]
+
     readonly property var actions: [
         "saveReplay", "toggleRecording", "screenshot", "toggleEarBlast",
         "splitClip", "exportClip", "toggleMic", "undo", "redo",
@@ -99,8 +121,13 @@ ColumnLayout {
                 InfoIcon { tooltipText: I18n.t("settings.shortcuts.hint") }
                 Item { Layout.fillWidth: true }
                 Rectangle {
+                    id: resetBtn
                     width: 130; height: 28
                     radius: Theme.radius
+                    // Nothing to reset when every binding is already the
+                    // default — the button used to look live regardless.
+                    enabled: root.customised
+                    opacity: enabled ? 1 : 0.4
                     color: Theme.bg
                     border.width: 1
                     border.color: Theme.border
@@ -112,6 +139,7 @@ ColumnLayout {
                     }
                     MouseArea {
                         anchors.fill: parent
+                        enabled: resetBtn.enabled
                         cursorShape: Qt.PointingHandCursor
                         onClicked: SettingsController.resetShortcuts()
                     }
@@ -155,6 +183,23 @@ ColumnLayout {
                             font.pixelSize: 13
                         }
                         InfoIcon { tooltipText: I18n.t("settings.shortcuts.hints." + actionCol.modelData) }
+                        Rectangle {
+                            visible: root.inactive.indexOf(actionCol.modelData) >= 0
+                            width: badgeText.implicitWidth + 12
+                            height: 16
+                            radius: 8
+                            color: Theme.tint(Theme.overdrive, 18)
+                            border.width: 1
+                            border.color: Theme.tint(Theme.overdrive, 45)
+                            Text {
+                                id: badgeText
+                                anchors.centerIn: parent
+                                text: "not wired up"
+                                color: Theme.overdrive
+                                font.pixelSize: 9
+                                font.weight: Font.DemiBold
+                            }
+                        }
                         Item { Layout.fillWidth: true }
 
                         Rectangle {

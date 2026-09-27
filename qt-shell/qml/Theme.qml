@@ -93,12 +93,39 @@ QtObject {
     // Linear blend of two tokens, `t` in 0..1. Lives here because
     // check-colors.sh bans Qt.rgba() everywhere else — ChatMix uses it to
     // colour its handle by where it sits on the Game→purple→Chat gradient.
+    // Qt.color() is NOT optional here. Several call sites pass colours that
+    // are plain strings — channelColors holds string literals, not colour
+    // objects — and reading .r/.g/.b off a string yields undefined, so this
+    // returned Qt.rgba(NaN, …): an invalid colour that paints as fully
+    // transparent. That is what made the ChatMix handle vanish.
     function mix(a, b, t) {
         const k = Math.max(0, Math.min(1, t))
-        return Qt.rgba(a.r + (b.r - a.r) * k,
-                       a.g + (b.g - a.g) * k,
-                       a.b + (b.b - a.b) * k,
-                       a.a + (b.a - a.a) * k)
+        const x = Qt.color(a)
+        const y = Qt.color(b)
+        return Qt.rgba(x.r + (y.r - x.r) * k,
+                       x.g + (y.g - x.g) * k,
+                       x.b + (y.b - x.b) * k,
+                       x.a + (y.a - x.a) * k)
+    }
+
+    // Colour from hue/saturation/value, each 0..1 — the track colour picker
+    // builds its hue strip and shade grid from this. Here, not there, for
+    // the same reason mix() is: colour construction from raw components is
+    // Theme's job, and check-colors.sh only permits it in this file.
+    function hsv(h, s, v) {
+        return Qt.hsva(Math.max(0, Math.min(1, h)),
+                       Math.max(0, Math.min(1, s)),
+                       Math.max(0, Math.min(1, v)), 1)
+    }
+
+    // Split a colour back into {h, s, v} so a picker can open on the value
+    // the track already has. Qt reports hue -1 for greys, which would send a
+    // picker to an arbitrary corner; report 0 instead.
+    function toHsv(c) {
+        const col = Qt.color(c)
+        return { h: col.hsvHue < 0 ? 0 : col.hsvHue,
+                 s: col.hsvSaturation,
+                 v: col.hsvValue }
     }
 
     // Modal backdrop. The Vue UI uses plain black at varying alpha

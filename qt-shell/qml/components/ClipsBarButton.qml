@@ -11,13 +11,16 @@ Rectangle {
     property string icon: ""
     /// Renders in the danger colour and highlights red on hover.
     property bool danger: false
+    /// Held-open look, for buttons that toggle a drop-up.
+    property bool active: false
 
     signal triggered()
 
     implicitWidth: row.implicitWidth + 20
     implicitHeight: 30
     radius: Theme.radius
-    color: area.containsMouse
+    color: btn.active ? Theme.accentAlpha(28)
+         : area.containsMouse
            ? (btn.danger ? Theme.tint(Theme.danger, 16) : Theme.accentAlpha(18))
            : "transparent"
     border.width: 1

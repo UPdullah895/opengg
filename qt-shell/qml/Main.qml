@@ -27,7 +27,8 @@ ApplicationWindow {
     /// Video is filling the view — the editor's full view or an expanded
     /// preview. Hides the nav rail so nothing eats into the picture.
     readonly property bool immersive:
-        (root.currentPage === "editor" && editorPage.theaterMode)
+        (root.currentPage === "editor"
+            && (editorPage.theaterMode || editorPage.navHidden))
         || clipsPage.playerExpanded
 
     // Settings → General → "Minimize to Tray" was persisted but nothing

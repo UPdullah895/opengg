@@ -74,16 +74,16 @@ Item {
             Repeater {
                 model: [
                     { key: "preview",  icon: "play",          label: I18n.t("clips.contextMenu.preview") },
-                    { key: "editor",   icon: "scissors",      label: I18n.t("clips.contextMenu.edit") },
+                    { key: "editor",   icon: "frame-check",   label: I18n.t("clips.contextMenu.edit") },
                     { sep: true },
                     { key: "select",   icon: "check-square",  label: I18n.t("clips.contextMenu.select") },
                     { key: "favorite", icon: "heart",
                       label: menu.clip && menu.clip.favorite ? I18n.t("clips.contextMenu.unfavorite")
                                                              : I18n.t("clips.contextMenu.favorite") },
                     { sep: true },
-                    { key: "rename",   icon: "edit",          label: I18n.t("clips.contextMenu.rename") },
+                    { key: "rename",   icon: "pencil",        label: I18n.t("clips.contextMenu.rename") },
                     { key: "location", icon: "folder",        label: I18n.t("clips.contextMenu.showInFolder") },
-                    { key: "copyPath", icon: "package",       label: I18n.t("clips.contextMenu.copyPath") },
+                    { key: "copyPath", icon: "copy",          label: I18n.t("clips.contextMenu.copyPath") },
                     { sep: true },
                     { key: "delete",   icon: "trash",         label: I18n.t("clips.contextMenu.delete"), danger: true }
                 ]
