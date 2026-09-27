@@ -24,6 +24,12 @@ ApplicationWindow {
     // Current navigation page
     property string currentPage: "home"
 
+    /// Video is filling the view — the editor's full view or an expanded
+    /// preview. Hides the nav rail so nothing eats into the picture.
+    readonly property bool immersive:
+        (root.currentPage === "editor" && editorPage.theaterMode)
+        || clipsPage.playerExpanded
+
     // Settings → General → "Minimize to Tray" was persisted but nothing
     // ever read it — the close button always fully quit regardless of the
     // toggle. `s` mirrors SettingsController's JSON the same way every
@@ -92,6 +98,13 @@ ApplicationWindow {
             AudioController.hydrate()
         if (ScreenshotController.active && ScreenshotController.page.length > 0)
             root.currentPage = ScreenshotController.page
+        // The editor is only reachable by clicking a clip, which left it
+        // outside the capture harness entirely. For `--page editor`, `--panel`
+        // carries the clip path to open instead of a sub-panel name.
+        if (ScreenshotController.active && ScreenshotController.page === "editor"
+                && ScreenshotController.panel.length > 0)
+            editorPage.clip = { filepath: ScreenshotController.panel,
+                                title: ScreenshotController.panel }
         // --with-tour opens the overlay directly. This used to hang off
         // SettingsController's change signal, which never arrives in a capture
         // run — so every `--with-tour` screenshot silently produced a plain
@@ -187,8 +200,13 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
+                // The editor's full view and the preview's expand used to
+                // leave the nav rail on screen, so "maximise" stopped ~200px
+                // short of the window edge. Collapse it for both.
                 Sidebar {
                     Layout.fillHeight: true
+                    visible: !root.immersive
+                    Layout.preferredWidth: root.immersive ? 0 : Theme.sidebarW
                     // The editor is reached from Clips and has no nav entry of
                     // its own, so keep Clips lit while it's open rather than
                     // leaving nothing selected.

@@ -41,11 +41,28 @@ TARGETS=(
     devices:list-many devices:grid-many devices:carousel-many
     devices:headset-many
     tour
+    editor
 )
+
+# The clip editor is only reachable by clicking a clip, so the harness opens
+# it directly with a real file — the first one in the library. Without a clip
+# there is nothing to render, so that target is skipped rather than failed.
+first_clip() {
+    find "${HOME}/Videos/OpenGG" -maxdepth 1 -type f \
+        \( -name '*.mp4' -o -name '*.mkv' \) 2>/dev/null | sort | head -1
+}
 
 shot() {
     local target="$1" page panel name args=()
-    if [[ "$target" == tour ]]; then
+    if [[ "$target" == editor ]]; then
+        local clip; clip=$(first_clip)
+        if [[ -z "$clip" ]]; then
+            printf '  skip %-28s no clip in ~/Videos/OpenGG\n' editor
+            return 0
+        fi
+        # --panel doubles as the clip path for the editor (see Main.qml).
+        page=editor; panel="$clip"; name=editor
+    elif [[ "$target" == tour ]]; then
         # The tour overlay is suppressed in normal capture runs (it would cover
         # whatever page we asked for), so it needs an explicit opt-in.
         page=home; panel=""; name=tour; args+=(--with-tour)

@@ -1244,7 +1244,13 @@ Rectangle {
     }
 
     // ── Player overlay ────────────────────────────────────────────────────
+    /// True while the preview is expanded to fill the view — Main hides the
+    /// nav rail on this, so "expand" really does fill the window.
+    readonly property bool playerExpanded:
+        page.playerClip !== null && clipPlayer.expanded
+
     VideoPlayer {
+        id: clipPlayer
         anchors.fill: parent
         visible: page.playerClip !== null
         source: page.playerClip ? "file://" + page.playerClip.filepath : ""

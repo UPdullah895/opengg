@@ -38,6 +38,11 @@ pub mod qobject {
         #[qproperty(QString, media_info_json, cxx_name = "mediaInfoJson")]
         /// Path of the most recent `grabFrame` result (empty until one lands).
         #[qproperty(QString, screenshot_path, cxx_name = "screenshotPath")]
+        /// Waveform peaks per audio stream, as a JSON object keyed by stream
+        /// index: `{"1": [0.0, 0.3, ...], "2": [...]}`. Each array is 0.0..=1.0
+        /// and fills in asynchronously as `requestWaveform` calls land, so the
+        /// editor's lanes draw a baseline first and gain their waveform after.
+        #[qproperty(QString, waveforms_json, cxx_name = "waveformsJson")]
         type EditorController = super::EditorControllerRust;
 
         /// Probe the clip's duration and load its saved trim window (if any,
@@ -61,6 +66,14 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "grabFrame"]
         fn grab_frame(self: Pin<&mut Self>, filepath: QString, time_sec: f64);
+
+        /// Decode `stream_index`'s audio into `num_peaks` peaks and merge them
+        /// into `waveformsJson`. Threaded (ffmpeg) and disk-cached in core, so
+        /// a repeat call for a clip already seen returns on the next tick.
+        /// Requests already in flight or already satisfied are dropped.
+        #[qinvokable]
+        #[cxx_name = "requestWaveform"]
+        fn request_waveform(self: Pin<&mut Self>, filepath: QString, stream_index: u32, num_peaks: u32);
 
         /// Set the clip's game tag, preserving its other metadata.
         #[qinvokable]
@@ -104,6 +117,7 @@ pub mod qobject {
 }
 
 use core::pin::Pin;
+use cxx_qt::CxxQtType;
 use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 
@@ -119,6 +133,11 @@ pub struct EditorControllerRust {
     export_result: QString,
     media_info_json: QString,
     screenshot_path: QString,
+    waveforms_json: QString,
+    /// `<filepath>|<stream>|<peaks>` keys already dispatched, so a lane that
+    /// re-evaluates its binding cannot spawn a second ffmpeg for the same
+    /// track. Cleared by `loadClip`.
+    waveforms_inflight: std::collections::HashSet<String>,
 }
 
 impl qobject::EditorController {
@@ -147,6 +166,10 @@ impl qobject::EditorController {
         // the Qt thread — `duration` above already came from the cheap probe,
         // letting the timeline lay out before this lands.
         self.as_mut().set_media_info_json(QString::default());
+        // Peaks belong to the outgoing clip; keeping them would draw the old
+        // clip's waveform under the new one's lanes until ffmpeg caught up.
+        self.as_mut().set_waveforms_json(QString::default());
+        self.as_mut().rust_mut().waveforms_inflight.clear();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
             let json = opengg_core::media::analyze_media_sync(&fp)
@@ -197,6 +220,51 @@ impl qobject::EditorController {
             };
             let _ = qt_thread.queue(move |mut c| {
                 c.as_mut().set_screenshot_path(QString::from(&path));
+            });
+        });
+    }
+
+    pub fn request_waveform(
+        mut self: Pin<&mut Self>,
+        filepath: QString,
+        stream_index: u32,
+        num_peaks: u32,
+    ) {
+        let fp = filepath.to_string();
+        if fp.is_empty() {
+            return;
+        }
+        let key = format!("{fp}|{stream_index}|{num_peaks}");
+        if !self.as_mut().rust_mut().waveforms_inflight.insert(key) {
+            return;
+        }
+
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let peaks = match opengg_core::media::generate_waveform_sync(
+                &fp,
+                stream_index,
+                num_peaks,
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("EditorController::request_waveform({stream_index}): {e}");
+                    return;
+                }
+            };
+            let _ = qt_thread.queue(move |mut c| {
+                // Merge rather than replace: each stream's decode finishes on
+                // its own, and a straight assignment would leave only the last
+                // track with a waveform.
+                let mut map: serde_json::Map<String, serde_json::Value> =
+                    serde_json::from_str(&c.waveforms_json().to_string()).unwrap_or_default();
+                map.insert(
+                    stream_index.to_string(),
+                    serde_json::json!(peaks),
+                );
+                if let Ok(json) = serde_json::to_string(&map) {
+                    c.as_mut().set_waveforms_json(QString::from(&json));
+                }
             });
         });
     }

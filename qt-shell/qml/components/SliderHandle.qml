@@ -27,9 +27,13 @@ Rectangle {
     implicitHeight: handle.vertical ? 14 : 22
 
     radius: 4
-    color: handle.active ? Theme.bgHover : Theme.bgInput
+    // The handle wears its own slider's colour rather than a neutral grey:
+    // these tracks are colour-coded (per-channel faders, the Game→Chat
+    // ChatMix gradient, per-band EQ), and a grey cap read as unrelated
+    // chrome sitting on top of them.
+    color: handle.accentColor
     border.width: 1
-    border.color: handle.active ? handle.accentColor : Theme.border
+    border.color: handle.active ? Theme.text : Theme.scrim(30)
 
     // Two grip lines, across the drag axis so they read as ridges to push.
     Row {
@@ -41,7 +45,9 @@ Rectangle {
             Rectangle {
                 width: 1
                 height: 9
-                color: handle.active ? handle.accentColor : Theme.textDim
+                // Dark on the coloured body, not tinted: a light grip on a
+                // mid-tone accent had almost no contrast.
+                color: Theme.scrim(handle.active ? 75 : 55)
             }
         }
     }
@@ -54,7 +60,7 @@ Rectangle {
             Rectangle {
                 width: 9
                 height: 1
-                color: handle.active ? handle.accentColor : Theme.textDim
+                color: Theme.scrim(handle.active ? 75 : 55)
             }
         }
     }

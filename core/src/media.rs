@@ -182,43 +182,110 @@ pub async fn generate_waveform(
     let peaks_count = num_peaks.clamp(100, 2000);
 
     // Extract raw PCM audio from the specified stream
-    let output = run_command_output_async("ffmpeg", &[
-        "-i", &filepath,
-        "-map", &format!("0:{stream_index}"),
-        "-ac", "1",
-        "-f", "s16le",
-        "-ar", "8000",
-        "-",
-    ]).await?;
+    let args = waveform_ffmpeg_args(&filepath, stream_index);
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = run_command_output_async("ffmpeg", &argv).await?;
 
-    if !output.status.success() || output.stdout.is_empty() {
+    if !output.status.success() {
         return Ok(vec![0.0; peaks_count as usize]);
     }
 
-    // Parse raw s16le samples
-    let samples: Vec<i16> = output
-        .stdout
-        .chunks_exact(2)
-        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect();
+    Ok(peaks_from_s16le(&output.stdout, peaks_count as usize))
+}
+
+/// ffmpeg's argv for decoding one audio stream to mono 8 kHz s16le on stdout.
+/// Shared so the async and blocking waveform paths cannot drift apart —
+/// a different sample rate between them would produce two differently-shaped
+/// peak arrays for the same clip and silently poison the on-disk cache.
+fn waveform_ffmpeg_args(filepath: &str, stream_index: u32) -> [String; 11] {
+    [
+        "-i".into(),
+        filepath.into(),
+        "-map".into(),
+        format!("0:{stream_index}"),
+        "-ac".into(),
+        "1".into(),
+        "-f".into(),
+        "s16le".into(),
+        "-ar".into(),
+        "8000".into(),
+        "-".into(),
+    ]
+}
+
+/// Downsample raw mono s16le PCM to `peaks_count` absolute-maximum peaks in
+/// 0.0..=1.0. Returns a flat (all-zero) array for empty input so a silent or
+/// undecodable track still draws a baseline rather than nothing.
+fn peaks_from_s16le(pcm: &[u8], peaks_count: usize) -> Vec<f32> {
+    let (pairs, _) = pcm.as_chunks::<2>();
+    let samples: Vec<i16> = pairs.iter().copied().map(i16::from_le_bytes).collect();
 
     if samples.is_empty() {
-        return Ok(vec![0.0; peaks_count as usize]);
+        return vec![0.0; peaks_count];
     }
 
-    // Downsample to requested peak count
-    let chunk_size = (samples.len() / peaks_count as usize).max(1);
-    let peaks: Vec<f32> = (0..peaks_count as usize)
+    let chunk_size = (samples.len() / peaks_count).max(1);
+    (0..peaks_count)
         .map(|i| {
-            let start = i * chunk_size;
+            let start = (i * chunk_size).min(samples.len());
             let end = (start + chunk_size).min(samples.len());
+            if start >= end {
+                return 0.0;
+            }
             let max_abs = samples[start..end]
                 .iter()
                 .map(|s| s.unsigned_abs() as f32)
                 .fold(0.0f32, f32::max);
             (max_abs / 32768.0).min(1.0)
         })
-        .collect();
+        .collect()
+}
+
+/// Blocking waveform peaks for one audio stream, cached on disk.
+///
+/// Synchronous per the blocking-in-core rule (plan §2.2/§2.3) — the qt-shell
+/// editor calls this from its own worker thread, the same way it calls
+/// `generate_thumbnail`. Decoding a multi-minute clip's audio costs seconds,
+/// so results are memoised under [`waveform_dir`] keyed by clip hash, stream
+/// index and peak count; re-opening a clip in the editor is then a file read.
+pub fn generate_waveform_sync(
+    filepath: &str,
+    stream_index: u32,
+    num_peaks: u32,
+) -> Result<Vec<f32>, String> {
+    let peaks_count = num_peaks.clamp(100, 2000) as usize;
+
+    let dir = crate::paths::waveform_dir();
+    let cache = dir.join(format!(
+        "{:x}_{stream_index}_{peaks_count}.json",
+        hash_str(filepath)
+    ));
+    if let Ok(raw) = std::fs::read_to_string(&cache) {
+        if let Ok(peaks) = serde_json::from_str::<Vec<f32>>(&raw) {
+            if peaks.len() == peaks_count {
+                return Ok(peaks);
+            }
+        }
+    }
+
+    let args = waveform_ffmpeg_args(filepath, stream_index);
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = crate::subprocess::command("ffmpeg")
+        .args(&argv)
+        .output()
+        .map_err(|e| format!("ffmpeg:{e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
+    }
+
+    let peaks = peaks_from_s16le(&output.stdout, peaks_count);
+
+    // A cache miss must never fail the call — the peaks are already computed.
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(json) = serde_json::to_string(&peaks) {
+        let _ = std::fs::write(&cache, json);
+    }
 
     Ok(peaks)
 }
@@ -1058,7 +1125,7 @@ mod export_tests {
         assert!(size > 0, "exported file is empty");
     }
 
-    fn first_clip() -> Option<String> {
+    pub(super) fn first_clip() -> Option<String> {
         let home = std::env::var_os("HOME")?;
         let dir = std::path::PathBuf::from(home).join("Videos/OpenGG");
         std::fs::read_dir(dir)
@@ -1067,5 +1134,61 @@ mod export_tests {
             .map(|e| e.path())
             .find(|p| p.extension().is_some_and(|x| x == "mp4"))
             .map(|p| p.to_string_lossy().to_string())
+    }
+}
+
+#[cfg(test)]
+mod waveform_tests {
+    use super::*;
+
+    /// A quiet half followed by a loud half must show up as a quiet half and a
+    /// loud half in the peaks — the editor's lanes are unreadable if the
+    /// downsampler flattens dynamics or misaligns chunk boundaries.
+    #[test]
+    fn peaks_track_amplitude_over_time() {
+        let mut pcm = Vec::new();
+        for i in 0..8000 {
+            let v: i16 = if i < 4000 { 3276 } else { 32767 };
+            pcm.extend_from_slice(&v.to_le_bytes());
+        }
+
+        let peaks = peaks_from_s16le(&pcm, 100);
+        assert_eq!(peaks.len(), 100);
+        assert!((peaks[10] - 0.1).abs() < 0.02, "quiet half: {}", peaks[10]);
+        assert!(peaks[90] > 0.98, "loud half: {}", peaks[90]);
+    }
+
+    /// Exercises the real ffmpeg decode and the on-disk cache against a real
+    /// clip, so a broken argv or a cache key that never hits can't ship
+    /// looking fine. Skipped when no clip is available.
+    #[test]
+    fn real_clip_waveform_is_decoded_and_cached() {
+        let Some(src) = super::export_tests::first_clip() else {
+            eprintln!("no clip in ~/Videos/OpenGG — skipping");
+            return;
+        };
+        let Ok(info) = analyze_media_sync(&src) else { return };
+        let Some(audio) = info.streams.iter().find(|s| s.codec_type == "audio") else {
+            eprintln!("{src} has no audio stream — skipping");
+            return;
+        };
+
+        let peaks = generate_waveform_sync(&src, audio.index, 600).expect("decode");
+        assert_eq!(peaks.len(), 600);
+        assert!(peaks.iter().all(|p| (0.0..=1.0).contains(p)));
+
+        let cache = crate::paths::waveform_dir()
+            .join(format!("{:x}_{}_600.json", hash_str(&src), audio.index));
+        assert!(cache.exists(), "no cache written at {}", cache.display());
+        assert_eq!(generate_waveform_sync(&src, audio.index, 600).unwrap(), peaks);
+    }
+
+    /// An undecodable or silent track still has to produce a full-length
+    /// baseline; a short array would leave the lane half-drawn.
+    #[test]
+    fn empty_pcm_yields_a_flat_full_length_array() {
+        let peaks = peaks_from_s16le(&[], 256);
+        assert_eq!(peaks.len(), 256);
+        assert!(peaks.iter().all(|p| *p == 0.0));
     }
 }

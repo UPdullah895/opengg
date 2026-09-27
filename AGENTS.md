@@ -33,20 +33,7 @@ qt-shell/        ← Native Qt6/QML UI (binary: opengg-qt)
 
 ### IPC & Access Control
 
-```
-┌─ qt-shell (presentation layer)
-│  └─ D-Bus invoke ──→ daemon
-│                    └─ uses opengg-core for:
-│                       • PipeWire routing (pactl calls)
-│                       • SQLite clip database
-│                       • File I/O (clips, config, thumbnails)
-│
-├─ daemon (background service)
-│  └─ opengg-core (library)
-│     ├── audio/ — channel volumes, app→sink routing, EQ state
-│     ├── replay/ — clip scanning, metadata, FFmpeg integration
-│     └── device/ — ratbagd, OpenRGB, game profiles
-```
+See the IPC map in [`CLAUDE.md`](CLAUDE.md) for the channel-by-channel picture.
 
 **Rule**: The Qt shell is **presentation glue only**. All business logic (daemon state queries, settings mutations, file operations) flows through `opengg-core` → daemon D-Bus interface. Never import `daemon/` types into `qt-shell/` or vice versa — use D-Bus bindings only.
 
@@ -89,6 +76,18 @@ qt-shell/tools/ui-shots.sh
 # Must complete with NO QML warnings in stderr
 ```
 
+**The script does NOT build** — it runs `target/debug/opengg-qt` as it finds it.
+Run `cargo build` in `qt-shell/` first, or you will screenshot a stale binary
+and sign off on changes that were never compiled.
+
+The `editor` target opens the clip editor directly on the first clip in
+`~/Videos/OpenGG` (skipped if there is none). It works by passing the clip path
+through `--panel`, which `Main.qml` interprets as a filepath when `--page` is
+`editor` — the editor has no nav entry, so this is the only way the harness can
+reach it. It is worth keeping green: the editor page went an entire round with a
+missing `import QtQuick.Controls` in `EditorTrackLane.qml`, which made the whole
+page fail to load, and nothing in the sweep could see it.
+
 **Critical**: Qt logs go to journald, not stderr. On a clean build, stderr appears empty even with real warnings present. Always capture logs:
 
 ```bash
@@ -108,7 +107,7 @@ Then **actually look at the generated PNG screenshots** — never sign off UI wo
 Before committing, verify the complete flow end-to-end:
 
 ```bash
-make lint       # Runs clippy on daemon + qt-shell + vue-tsc + check-colors.sh
+make lint       # Runs clippy on daemon + qt-shell + check-colors.sh
 make check      # Fast: just cargo check (no linting)
 make build      # Full release build (may take 5+ minutes)
 ```
@@ -142,19 +141,18 @@ Text {
 Every new QML file **must** be registered in `qt-shell/build.rs`. Missing registration causes **silent undefined behavior** — bindings evaluate to `undefined`, imports fail, singletons don't initialize.
 
 ```rust
-// qt-shell/build.rs (example, do not copy — read the actual file)
-cc::build()
-    .register_qml_module(
-        "com.opengg.app",
-        "qml",
-    )
-    .qml_file_paths(&["src/qml/App.qml", "src/qml/pages/MixerPage.qml", ...])
-    .compile("opengg_qml");
+// qt-shell/build.rs (abridged — read the actual file)
+let qml_files: Vec<QmlFile> = vec![
+    QmlFile::from("qml/Theme.qml").singleton(true),
+    QmlFile::from("qml/pages/MixerPage.qml"),
+    // ...
+];
+CxxQtBuilder::new_qml_module(QmlModule::new("com.opengg.app").qml_files(qml_files))
 ```
 
 **Rule**: After adding a new `.qml` file:
-1. Add it to the `.qml_file_paths(&[...])` array in `build.rs`
-2. For singletons (shared application state), add `.singleton(true)` to the registration
+1. Add a `QmlFile::from("qml/...")` entry to the `qml_files` vec in `build.rs`
+2. For singletons (files with `pragma Singleton`), use `QmlFile::from(...).singleton(true)`
 3. Recompile: `cd qt-shell && cargo build`
 4. Test: launch the app and verify the new component renders without `undefined` errors
 
@@ -273,32 +271,15 @@ Rectangle {
 
 **Why**: `mapToItem()` is an imperative method, not a property. Bindings don't re-evaluate when item geometry changes.
 
-### 8. Rust Invokable — QML Cannot See Nested Property Reads
+### 8. Structured Data Crosses as JSON-String Properties
 
-If a Rust invokable returns a struct with nested properties, QML can only see the top-level fields. Nested property changes don't trigger reactive updates:
-
-```rust
-// Rust invokable
-#[qml_element]
-pub struct AudioState {
-    pub channels: Vec<Channel>,  // QML sees this
-}
-
-pub struct Channel {
-    pub volume: f32,  // QML CANNOT see this directly
-}
-```
+Controllers expose structured state as `QString` qproperties holding JSON (e.g. `#[qproperty(QString, settings_json, cxx_name = "settingsJson")]`), and QML parses them:
 
 ```qml
-// QML receives AudioState but cannot bind to channels[0].volume
-let state = invoke('getAudioState')
-state.volume  // OK
-state.channels[0].volume  // always undefined in bindings
-
-// FIX: Rust must emit a signal on nested property change
+property var s: JSON.parse(SettingsController.settingsJson || "{}")
 ```
 
-**Workaround**: Rust must explicitly emit a signal or Q_PROPERTY when nested state changes, or QML must re-query the entire state via a fresh invokable call.
+QML only re-evaluates when the whole property changes, so a nested change on the Rust side must re-serialize and re-set the entire JSON property — mutating a field in place is invisible to QML.
 
 ### 9. QML Debugging Technique: Offscreen Screenshots
 
@@ -334,14 +315,14 @@ Rectangle { color: "red" }
 // ✓ CORRECT
 Rectangle { color: Theme.accent }
 Rectangle { color: Theme.bgCard }
-Rectangle { color: Theme.textPrimary }
+Rectangle { color: Theme.text }
 ```
 
 The `check-colors.sh` linter enforces this and will block commits with hardcoded colors.
 
 ### 2. Icons from `Icons.qml` Registry
 
-All icons are registered in `qml/Icons.qml` and extracted at build time from SVG files. Never embed SVG inline or use emoji as icons:
+All icons are SVG path data in the `Icons.defs` map in `qml/Icons.qml`, drawn by `components/Icon.qml`. Never load SVG files or use emoji as icons (emoji render in the system emoji font with wrong weight and metrics, and some codepoints render as tofu boxes):
 
 ```qml
 // ✗ WRONG
@@ -349,18 +330,11 @@ Image { source: "file:///path/to/icon.svg" }
 Text { text: "🎵" }  // emoji as icon
 
 // ✓ CORRECT
-Image { source: Icons.playIcon }      // pre-registered SVG path
-Image { source: Icons.channelVolume }
+Icon { name: "volume-x" }
+Icon { name: "trash"; size: 14; color: Theme.danger }
 ```
 
-**Before adding a new icon**:
-1. Place the SVG file in `qt-shell/assets/icons/`
-2. Register it in `qml/Icons.qml`:
-   ```qml
-   // Icons.qml (singleton)
-   readonly property string newIcon: "..." // SVG path data extracted at build
-   ```
-3. Rebuild: `cd qt-shell && cargo build`
+**Adding a new icon**: add an entry to `Icons.defs` — `"name": { d: "<path data>", sw: <stroke width> }`. Only a `d` string works (QML's `PathSvg`), so convert `line`/`rect`/`circle` primitives to path data first.
 
 ### 3. Per-Channel Identity Colors
 
@@ -456,7 +430,7 @@ The `./dev.sh` or `make ui` commands launch the Qt app on your development machi
 
 ### 2. Do NOT Use Git Worktrees
 
-A previous migration discovered that worktree isolation has a bug in this codebase where the Rust build resolves the wrong base branch. **Never use `git worktree` in this repo.**
+Don't use `git worktree` in this repo: builds from a worktree have resolved the wrong base branch.
 
 Instead, commit your changes and test on the current branch.
 
@@ -540,4 +514,4 @@ See [`docs/AI-CHANGELOG.md`](docs/AI-CHANGELOG.md) for examples.
 
 ---
 
-**Remember**: This guide captures real bugs and constraints. Follow every rule strictly. If you encounter a new landmine or discover a constraint not listed here, add it to this document and file an entry in `docs/AI-CHANGELOG.md` so the next agent learns from it.
+If you hit a landmine or constraint not listed here, add it to this document and note it in your `docs/AI-CHANGELOG.md` entry.

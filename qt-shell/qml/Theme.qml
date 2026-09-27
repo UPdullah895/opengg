@@ -90,6 +90,17 @@ QtObject {
         return Qt.alpha(color, pct / 100)
     }
 
+    // Linear blend of two tokens, `t` in 0..1. Lives here because
+    // check-colors.sh bans Qt.rgba() everywhere else — ChatMix uses it to
+    // colour its handle by where it sits on the Game→purple→Chat gradient.
+    function mix(a, b, t) {
+        const k = Math.max(0, Math.min(1, t))
+        return Qt.rgba(a.r + (b.r - a.r) * k,
+                       a.g + (b.g - a.g) * k,
+                       a.b + (b.b - a.b) * k,
+                       a.a + (b.a - a.a) * k)
+    }
+
     // Modal backdrop. The Vue UI uses plain black at varying alpha
     // (rgba(0,0,0,.4) … rgba(0,0,0,.85)) rather than a tinted scrim, so pass
     // the percentage the specific modal wants.

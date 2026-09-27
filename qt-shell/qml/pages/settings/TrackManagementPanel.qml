@@ -114,12 +114,76 @@ ColumnLayout {
                         }
                     }
 
+                    // Clickable swatch. Typing a hex was the only way to
+                    // recolour a track, which is impractical for something
+                    // you pick by eye; the field stays for exact values.
                     Rectangle {
+                        id: swatch
                         width: 22; height: 22
                         radius: 4
                         color: tRow.modelData.color
                         border.width: 1
-                        border.color: Theme.border
+                        border.color: swatchArea.containsMouse || palette.visible
+                                      ? Theme.text : Theme.border
+
+                        MouseArea {
+                            id: swatchArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: palette.visible ? palette.close() : palette.open()
+                        }
+
+                        Popup {
+                            id: palette
+                            y: swatch.height + 4
+                            width: 5 * 26 + 12
+                            implicitHeight: 2 * 26 + 12
+                            padding: 6
+                            background: Rectangle {
+                                radius: Theme.radius
+                                color: Theme.surface
+                                border.width: 1
+                                border.color: Theme.border
+                            }
+                            // Drawn from theme tokens rather than hex
+                            // literals, so a retheme moves the palette too
+                            // (and check-colors.sh stays happy).
+                            readonly property var swatches: [
+                                Theme.channelColor("Game"), Theme.channelColor("Chat"),
+                                Theme.channelColor("Media"), Theme.channelColor("Aux"),
+                                Theme.channelColor("Mic"),
+                                Theme.accent, Theme.success, Theme.purple,
+                                Theme.overdrive, Theme.textDim
+                            ]
+                            contentItem: Grid {
+                                columns: 5
+                                spacing: 4
+                                Repeater {
+                                    model: palette.swatches
+                                    Rectangle {
+                                        required property var modelData
+                                        width: 22; height: 22
+                                        radius: 4
+                                        color: modelData
+                                        border.width: 1
+                                        border.color: pickArea.containsMouse
+                                                      ? Theme.text : Theme.border
+                                        MouseArea {
+                                            id: pickArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                root.updateTrack(tRow.index,
+                                                    { color: String(parent.color) })
+                                                palette.close()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     TextField {

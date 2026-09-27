@@ -14,11 +14,22 @@ Rectangle {
     /// Emitted with the trimmed value when the edit is accepted.
     signal committed(string value)
 
+    /// True while the text cursor is in the field — the game tag's
+    /// suggestion list hangs off this.
+    readonly property bool editing: input.activeFocus
+    /// Lets a suggestion list write a value straight in and commit it.
+    function setValue(v) {
+        input.text = v
+        field.commit()
+        input.focus = false
+    }
+
     /// Set externally; remembered so Esc can restore it and so a commit only
     /// fires when the value actually changed.
     property string committedValue: ""
 
-    implicitHeight: 32
+    // 28 to match the editor's shorter top bar.
+    implicitHeight: 28
     radius: Theme.radius
     color: Theme.bg
     border.width: 1
@@ -41,7 +52,7 @@ Rectangle {
         rightPadding: 10
         verticalAlignment: TextInput.AlignVCenter
         color: Theme.text
-        font.pixelSize: 13
+        font.pixelSize: 12
         placeholderText: field.placeholder
         placeholderTextColor: Theme.textMuted
         background: Item {}

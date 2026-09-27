@@ -1,10 +1,11 @@
 import QtQuick
+import QtQuick.Controls
 import com.opengg.app
 
 // One row of the clip editor's timeline: a fixed-width label gutter followed
-// by the track's coloured lane. The lane is a flat tinted bar rather than a
-// rendered waveform — core::media can produce peak data, but plumbing a
-// per-track waveform through is a separate slice; the lane already conveys
+// by the track's coloured lane. Audio lanes draw their real waveform on top of
+// the tinted bar once `peaks` arrives (EditorController.requestWaveform decodes
+// it off-thread); until then, and for the video lane, the bar alone conveys
 // track identity, extent and monitoring state.
 Item {
     id: lane
@@ -18,7 +19,16 @@ Item {
     property bool monitorable: false
     property bool monitoring: false
 
+    /// Per-track gain, 0..1. Only meaningful when `monitorable`.
+    property real volume: 1.0
+
+    /// Amplitude peaks in 0..1, one per time slice, or empty for no waveform.
+    property var peaks: []
+
     signal monitorToggled()
+    /// User dragged this track's gain. Named *Requested rather than
+    /// volumeChanged: a `volume` property already owns that signal name.
+    signal volumeRequested(real value)
 
     implicitHeight: 30
 
@@ -43,14 +53,20 @@ Item {
             font.weight: Font.DemiBold
             elide: Text.ElideRight
         }
+        // Speaker: opens a gain slider rather than hard-muting on click.
+        // Muting outright on a single click made the button a trap — there
+        // was no way to simply turn a track down.
         Rectangle {
+            id: monBtn
             anchors.verticalCenter: parent.verticalCenter
             visible: lane.monitorable
             width: 20; height: 20; radius: 4
-            color: monArea.containsMouse ? Theme.bgHover : "transparent"
+            color: monArea.containsMouse || volPop.visible
+                   ? Theme.bgHover : "transparent"
             Icon {
                 anchors.centerIn: parent
-                name: lane.monitoring ? "volume-2" : "volume-x"
+                name: !lane.monitoring || lane.volume <= 0.001 ? "volume-x"
+                    : lane.volume < 0.5 ? "volume-1" : "volume-2"
                 size: 12
                 color: lane.monitoring ? lane.accent : Theme.textMuted
             }
@@ -59,7 +75,72 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: lane.monitorToggled()
+                onClicked: volPop.visible ? volPop.close() : volPop.open()
+            }
+
+            Popup {
+                id: volPop
+                y: monBtn.height + 4
+                x: -70
+                width: 150
+                implicitHeight: 32
+                padding: 6
+                // Click-away dismiss; the hover watch below covers "moved
+                // the mouse away" without needing a click.
+                closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
+                background: Rectangle {
+                    radius: Theme.radius
+                    color: Theme.surface
+                    border.width: 1
+                    border.color: Theme.border
+                }
+
+                // Leaving the button AND the popover closes it shortly after,
+                // so it behaves like a hover flyout without snapping shut the
+                // instant the pointer crosses the gap between the two.
+                HoverHandler { id: popHover }
+                Timer {
+                    id: leaveTimer
+                    interval: 700
+                    onTriggered: if (!popHover.hovered && !monArea.containsMouse
+                                     && !laneVol.pressed) volPop.close()
+                }
+                Connections {
+                    target: popHover
+                    function onHoveredChanged() { if (!popHover.hovered) leaveTimer.restart() }
+                }
+                Connections {
+                    target: monArea
+                    function onContainsMouseChanged() {
+                        if (!monArea.containsMouse) leaveTimer.restart()
+                    }
+                }
+
+                contentItem: Row {
+                    spacing: 6
+                    Icon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: lane.monitoring ? "volume-2" : "volume-x"
+                        size: 12
+                        color: lane.monitoring ? lane.accent : Theme.textMuted
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.margins: -4
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: lane.monitorToggled()
+                        }
+                    }
+                    HSlider {
+                        id: laneVol
+                        width: 112
+                        anchors.verticalCenter: parent.verticalCenter
+                        from: 0; to: 100
+                        suffix: ""
+                        sliderColor: lane.accent
+                        value: Math.round(lane.volume * 100)
+                        onMoved: (v) => lane.volumeRequested(v / 100)
+                    }
+                }
             }
         }
     }
@@ -74,5 +155,54 @@ Item {
         color: Theme.tint(lane.accent, lane.monitorable && !lane.monitoring ? 10 : 28)
         border.width: 1
         border.color: Theme.tint(lane.accent, 55)
+
+        Canvas {
+            id: wave
+            anchors.fill: parent
+            anchors.margins: 2
+            visible: lane.peaks && lane.peaks.length > 0
+            // Muted tracks keep their waveform but recede, matching how the
+            // bar itself dims — the shape is still useful for seeking.
+            opacity: lane.monitorable && !lane.monitoring ? 0.45 : 1.0
+
+            onPaint: {
+                const ctx = wave.getContext("2d")
+                ctx.reset()
+                const src = lane.peaks || []
+                if (src.length === 0 || wave.width <= 0 || wave.height <= 0)
+                    return
+
+                // One column per pixel at most: with 400+ peaks in a ~700px
+                // lane the extra peaks would just overdraw each other, so
+                // buckets are collapsed to their maximum instead.
+                const cols = Math.max(1, Math.min(src.length, Math.floor(wave.width)))
+                const per = src.length / cols
+                const colW = wave.width / cols
+                const mid = wave.height / 2
+
+                ctx.fillStyle = lane.accent
+                for (let c = 0; c < cols; c++) {
+                    let peak = 0
+                    const end = Math.min(src.length, Math.round((c + 1) * per))
+                    for (let i = Math.round(c * per); i < end; i++)
+                        peak = Math.max(peak, src[i])
+                    // A 1px floor keeps silence visible as a centre line
+                    // rather than a gap in the track.
+                    const h = Math.max(1, peak * wave.height)
+                    ctx.fillRect(c * colW, mid - h / 2, Math.max(1, colW), h)
+                }
+            }
+
+            onWidthChanged: wave.requestPaint()
+            onHeightChanged: wave.requestPaint()
+        }
+
+        // `peaks` is a plain var, so the Canvas has to be told to repaint when
+        // its contents are swapped in — a binding alone would not redraw.
+        Connections {
+            target: lane
+            function onPeaksChanged() { wave.requestPaint() }
+            function onAccentChanged() { wave.requestPaint() }
+        }
     }
 }

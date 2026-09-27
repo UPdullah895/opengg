@@ -19,7 +19,9 @@ ColumnLayout {
     Text {
         text: heading.titleText
         color: Theme.text
-        font.pixelSize: 22
+        // 18px/700, per the Vue .sec-title. 22px Bold out-sized even the
+        // page titles once those came back down to 20px.
+        font.pixelSize: 18
         font.weight: Font.Bold
     }
 

@@ -626,6 +626,13 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             x: chatMixSlider.fraction * (chatMixSlider.width - width)
                             active: chatMixSlider.dragging
+                            // Reads the gradient underneath it: Game at the
+                            // left end, purple at centre, Chat at the right.
+                            accentColor: chatMixSlider.fraction < 0.5
+                                ? Theme.mix(page.channelColors.Game, Theme.purple,
+                                            chatMixSlider.fraction * 2)
+                                : Theme.mix(Theme.purple, page.channelColors.Chat,
+                                            (chatMixSlider.fraction - 0.5) * 2)
                         }
                         MouseArea {
                             anchors.fill: parent

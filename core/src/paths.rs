@@ -89,3 +89,12 @@ pub fn get_all_clip_dirs(primary: &str) -> Vec<PathBuf> {
     }
     vec![resolve_clips_dir(primary)]
 }
+
+/// Waveform peak cache: `~/.local/share/opengg/waveforms`. Holds the JSON
+/// peak arrays the clip editor draws in its audio lanes, keyed by clip hash +
+/// stream index + peak count, so re-opening a clip never re-decodes its audio.
+pub fn waveform_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("opengg/waveforms")
+}

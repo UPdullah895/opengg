@@ -26,8 +26,53 @@ Rectangle {
 
     readonly property string filepath: page.clip ? page.clip.filepath : ""
     readonly property var info: JSON.parse(EditorController.mediaInfoJson || "{}")
+    /// Waveform peaks keyed by ffmpeg stream index, mirrored from the
+    /// controller. Each audio lane requests its own; they land one at a time.
+    property var waveforms: ({})
+    Connections {
+        target: EditorController
+        function onWaveformsJsonChanged() {
+            page.waveforms = JSON.parse(EditorController.waveformsJson || "{}")
+        }
+    }
+
     readonly property var audioStreams: (page.info.streams || [])
         .filter(function (s) { return s.codec_type === "audio" })
+
+    // ── Timeline track definitions (Settings → Timeline Tracks) ───────────
+    // The lanes below used to label themselves from the ffprobe stream title
+    // and colour themselves by guessing a channel from it, so a capture whose
+    // streams are named after their PipeWire sources showed three lanes all
+    // called "Devices…" in the wrong colours — ignoring the names and colours
+    // the user had configured. Read `trackDefs` and use it as the source of
+    // truth, falling back to the stream title only when a slot is unset.
+    property var trackDefs: (JSON.parse(SettingsController.settingsJson || "{}").trackDefs) || []
+    Connections {
+        target: SettingsController
+        function onSettingsJsonChanged() {
+            page.trackDefs = (JSON.parse(SettingsController.settingsJson || "{}").trackDefs) || []
+        }
+    }
+
+    /// The trackDefs entry for slot `id` ("V1", "A1", "A2", …), or null.
+    function trackDef(id) {
+        for (var i = 0; i < page.trackDefs.length; i++)
+            if (page.trackDefs[i].id === id)
+                return page.trackDefs[i]
+        return null
+    }
+    /// Map a trackDefs icon key onto this shell's icon registry.
+    function trackIcon(key, fallback) {
+        switch (key) {
+        case "video":   return "track-video"
+        case "game":    return "track-game"
+        case "chat":    return "headphones"
+        case "mic":     return "track-mic"
+        case "media":   return "track-media"
+        case "overlay": return "track-overlay"
+        }
+        return fallback
+    }
 
     property real trimStart: 0
     property real trimEnd: 0
@@ -44,6 +89,26 @@ Rectangle {
     property var mixerToken: null
     /// Per-track mute flags. Reassigned wholesale so bindings re-evaluate.
     property var trackMuted: ({})
+    /// Per-track gain 0..1, independent of mute. Reassigned wholesale too.
+    property var trackVolume: ({})
+
+    function trackGain(index) {
+        const v = page.trackVolume[index]
+        return v === undefined ? 1.0 : v
+    }
+    function setTrackGain(index, v) {
+        var next = {}
+        for (var k in page.trackVolume) next[k] = page.trackVolume[k]
+        next[index] = Math.max(0, Math.min(1, v))
+        page.trackVolume = next
+        // Turning a muted track up is an implicit unmute.
+        if (next[index] > 0 && page.trackMuted[index] === true) {
+            page.toggleTrack(index)
+            return
+        }
+        if (page.mixed && page.trackMuted[index] !== true)
+            ClipAudioMixer.setTrackVolume(index, next[index])
+    }
     /// Master mute. Applies to the mix when mixed, to Qt's output otherwise.
     property bool masterMuted: false
     /// Output level, owned by the page rather than read back off audioOut:
@@ -71,7 +136,7 @@ Rectangle {
         for (var k in page.trackMuted) next[k] = page.trackMuted[k]
         next[index] = !next[index]
         page.trackMuted = next
-        ClipAudioMixer.setTrackVolume(index, next[index] ? 0.0 : 1.0)
+        ClipAudioMixer.setTrackVolume(index, next[index] ? 0.0 : page.trackGain(index))
     }
 
     onClipChanged: {
@@ -172,13 +237,61 @@ Rectangle {
         page.trimEnd = page.duration
     }
 
+    // Standard editor keymap. Space/arrows/Ctrl+Z were the whole set before;
+    // J/K/L, I/O, comma/period and M are what anyone coming from another
+    // editor reaches for first.
     Keys.onPressed: (e) => {
-        if (e.key === Qt.Key_Space)       { page.togglePlay(); e.accepted = true }
-        else if (e.key === Qt.Key_Right)  { page.skip(5000);   e.accepted = true }
-        else if (e.key === Qt.Key_Left)   { page.skip(-5000);  e.accepted = true }
-        else if (e.key === Qt.Key_Escape) { page.closed();     e.accepted = true }
-        else if (e.key === Qt.Key_Z && (e.modifiers & Qt.ControlModifier)) {
-            page.resetTrim(); e.accepted = true
+        const shift = (e.modifiers & Qt.ShiftModifier) !== 0
+        switch (e.key) {
+        case Qt.Key_Space:
+        case Qt.Key_K:
+            page.togglePlay(); e.accepted = true; break
+        case Qt.Key_L:
+            // Tap to play, tap again to speed up (1x → 1.5x → 2x).
+            if (mp.playbackState !== MediaPlayer.PlayingState) mp.play()
+            else mp.playbackRate = mp.playbackRate >= 2 ? 2
+                                 : mp.playbackRate >= 1.5 ? 2 : 1.5
+            e.accepted = true; break
+        case Qt.Key_J:
+            // No negative-rate playback on this pipeline; step back instead.
+            page.skip(-2000); e.accepted = true; break
+        case Qt.Key_Right:
+            page.skip(shift ? 1000 : 5000); e.accepted = true; break
+        case Qt.Key_Left:
+            page.skip(shift ? -1000 : -5000); e.accepted = true; break
+        case Qt.Key_Comma:
+            page.skip(-1000 / Math.max(1, page.info.fps || 30)); e.accepted = true; break
+        case Qt.Key_Period:
+            page.skip(1000 / Math.max(1, page.info.fps || 30)); e.accepted = true; break
+        case Qt.Key_I:
+            page.trimStart = Math.min(mp.position / 1000, page.trimEnd); e.accepted = true; break
+        case Qt.Key_O:
+            page.trimEnd = Math.max(mp.position / 1000, page.trimStart); e.accepted = true; break
+        case Qt.Key_M:
+            page.masterMuted = !page.masterMuted
+            if (page.mixed) page.applyVolume()
+            else audioOut.muted = page.masterMuted
+            e.accepted = true; break
+        case Qt.Key_F:
+            page.theaterMode = !page.theaterMode; e.accepted = true; break
+        case Qt.Key_Home:
+            page.seekTo(0); e.accepted = true; break
+        case Qt.Key_End:
+            page.seekTo(mp.duration); e.accepted = true; break
+        case Qt.Key_Escape:
+            if (page.theaterMode) page.theaterMode = false
+            else page.closed()
+            e.accepted = true; break
+        case Qt.Key_Z:
+            if (e.modifiers & Qt.ControlModifier) { page.resetTrim(); e.accepted = true }
+            break
+        case Qt.Key_1: case Qt.Key_2: case Qt.Key_3:
+        case Qt.Key_4: case Qt.Key_5: {
+            // Number keys mute/unmute the matching audio track.
+            const t = e.key - Qt.Key_1
+            if (t < page.audioStreams.length) { page.toggleTrack(t); e.accepted = true }
+            break
+        }
         }
     }
 
@@ -229,8 +342,11 @@ Rectangle {
 
         // ── Top bar ───────────────────────────────────────────────────────
         Rectangle {
+            // 44, not 56: the bar carries a back button, two fields and a few
+            // pills, none of which need that much height, and it was eating
+            // vertical space the picture wants.
             Layout.fillWidth: true
-            Layout.preferredHeight: 56
+            Layout.preferredHeight: 44
             color: Theme.surface
             border.width: 0
 
@@ -247,8 +363,8 @@ Rectangle {
                 spacing: 10
 
                 Rectangle {
-                    Layout.preferredWidth: 32
-                    Layout.preferredHeight: 32
+                    Layout.preferredWidth: 28
+                    Layout.preferredHeight: 28
                     radius: Theme.radius
                     color: backArea.containsMouse ? Theme.bgHover : "transparent"
                     border.width: 1
@@ -295,6 +411,89 @@ Rectangle {
                             ClipsController.refresh()
                         }
                     }
+
+                    // Suggestions from the games already in the library. The
+                    // field used to accept free text with no check against
+                    // existing tags, so a typo silently created a new game
+                    // rather than matching one you already had.
+                    Popup {
+                        id: gameSuggest
+                        y: gameField.height + 2
+                        width: Math.max(gameField.width, 200)
+                        implicitHeight: gameSuggest.rows.length * 26 + 2
+                        padding: 1
+                        visible: gameField.editing && gameSuggest.rows.length > 0
+                        closePolicy: Popup.NoAutoClose
+
+                        /// Known games matching what has been typed, plus an
+                        /// "add" row when the text is genuinely new.
+                        readonly property string typed: gameField.text.trim()
+                        readonly property var rows: {
+                            const all = ClipsController.gameList.slice(1)
+                            const t = gameSuggest.typed.toLowerCase()
+                            var out = []
+                            var exact = false
+                            for (var i = 0; i < all.length; i++) {
+                                const g = String(all[i])
+                                if (g.toLowerCase() === t) exact = true
+                                if (t.length === 0 || g.toLowerCase().indexOf(t) >= 0)
+                                    out.push({ label: g, isNew: false })
+                            }
+                            out = out.slice(0, 6)
+                            if (t.length > 0 && !exact)
+                                out.unshift({ label: t, isNew: true })
+                            return out
+                        }
+
+                        background: Rectangle {
+                            radius: Theme.radius
+                            color: Theme.surface
+                            border.width: 1
+                            border.color: Theme.border
+                        }
+                        contentItem: Column {
+                            spacing: 0
+                            Repeater {
+                                model: gameSuggest.rows
+                                Rectangle {
+                                    required property var modelData
+                                    width: gameSuggest.width - 2
+                                    height: 26
+                                    color: sugArea.containsMouse
+                                           ? Theme.bgHover : "transparent"
+                                    Row {
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 10
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        spacing: 6
+                                        Icon {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            name: modelData.isNew ? "plus" : "gamepad"
+                                            size: 11
+                                            color: modelData.isNew
+                                                   ? Theme.accent : Theme.textDim
+                                        }
+                                        Text {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: modelData.isNew
+                                                  ? ("Add \"" + modelData.label + "\"")
+                                                  : modelData.label
+                                            color: modelData.isNew
+                                                   ? Theme.accent : Theme.text
+                                            font.pixelSize: 12
+                                        }
+                                    }
+                                    MouseArea {
+                                        id: sugArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: gameField.setValue(modelData.label)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Item { Layout.fillWidth: true }
@@ -325,8 +524,8 @@ Rectangle {
 
                 // Export
                 Rectangle {
-                    Layout.preferredWidth: 118
-                    Layout.preferredHeight: 32
+                    Layout.preferredWidth: 108
+                    Layout.preferredHeight: 28
                     radius: Theme.radius
                     color: EditorController.exportRunning ? Theme.bgHover : Theme.accent
                     Text {
@@ -467,9 +666,15 @@ Rectangle {
 
                     Repeater {
                         model: [
-                            { k: "Space",  v: "Play / Pause" },
-                            { k: "← →",    v: "Skip ±5s" },
-                            { k: "Ctrl+Z", v: "Reset trim" }
+                            { k: "Space / K", v: "Play / Pause" },
+                            { k: "J / L",     v: "Back 2s / faster" },
+                            { k: "← →",       v: "Skip ±5s (⇧ ±1s)" },
+                            { k: ", .",       v: "Frame step" },
+                            { k: "I / O",     v: "Set trim in / out" },
+                            { k: "M",         v: "Mute" },
+                            { k: "1–5",       v: "Mute audio track" },
+                            { k: "F",         v: "Full view" },
+                            { k: "Ctrl+Z",    v: "Reset trim" }
                         ]
 
                         RowLayout {
@@ -532,7 +737,54 @@ Rectangle {
                     font.pixelSize: 12
                 }
 
-                Item { Layout.fillWidth: true }
+                // Scrub bar. In full view the timeline is hidden, which left
+                // no way at all to seek — only the ±5s buttons. Shown there,
+                // and folded away when the timeline is back on screen.
+                Slider {
+                    id: seekBar
+                    visible: page.theaterMode
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 22
+                    Layout.leftMargin: 10
+                    Layout.rightMargin: 10
+                    from: 0
+                    to: Math.max(1, mp.duration)
+
+                    // Seeded, not bound: QQC2 severs a value binding on the
+                    // first drag (AGENTS.md landmine 5).
+                    Component.onCompleted: value = mp.position
+                    onMoved: page.seekTo(seekBar.value)
+                    Connections {
+                        target: mp
+                        function onPositionChanged() {
+                            if (!seekBar.pressed)
+                                seekBar.value = mp.position
+                        }
+                    }
+
+                    background: Rectangle {
+                        x: seekBar.leftPadding
+                        y: seekBar.topPadding + seekBar.availableHeight / 2 - height / 2
+                        width: seekBar.availableWidth
+                        height: 4
+                        radius: 2
+                        color: Theme.border
+                        Rectangle {
+                            width: seekBar.visualPosition * parent.width
+                            height: parent.height
+                            radius: 2
+                            color: Theme.accent
+                        }
+                    }
+                    handle: SliderHandle {
+                        x: seekBar.leftPadding
+                           + seekBar.visualPosition * (seekBar.availableWidth - width)
+                        y: seekBar.topPadding + seekBar.availableHeight / 2 - height / 2
+                        active: seekBar.pressed || seekBar.hovered
+                    }
+                }
+
+                Item { Layout.fillWidth: !page.theaterMode }
 
                 EditorButton {
                     icon: masterMuted ? "volume-x" : "volume-2"
@@ -642,13 +894,14 @@ Rectangle {
                 anchors.topMargin: 10
                 spacing: 4
 
-                // Video lane
+                // Video lane — named and coloured from the V1 slot.
                 EditorTrackLane {
+                    readonly property var def: page.trackDef("V1")
                     Layout.fillWidth: true
                     gutter: timelinePane.gutter
-                    label: "Video"
-                    accent: Theme.accent
-                    icon: "track-video"
+                    label: def && def.name ? def.name : "Video"
+                    accent: def && def.color ? def.color : Theme.accent
+                    icon: page.trackIcon(def ? def.icon : "", "track-video")
                     monitorable: false
                 }
 
@@ -659,16 +912,30 @@ Rectangle {
                     EditorTrackLane {
                         required property var modelData
                         required property int index
+                        // Audio streams map onto the A1..An slots in order.
+                        readonly property var def: page.trackDef("A" + (index + 1))
                         Layout.fillWidth: true
                         gutter: timelinePane.gutter
-                        label: modelData.title || ("Audio " + (index + 1))
-                        accent: Theme.channelColor(modelData.title)
-                        icon: "music"
+                        label: def && def.name ? def.name
+                             : (modelData.title || ("Audio " + (index + 1)))
+                        accent: def && def.color ? def.color
+                              : Theme.channelColor(modelData.title)
+                        icon: page.trackIcon(def ? def.icon : "", "music")
                         // Every track plays at once; this mutes one of them
                         // rather than switching which single track is audible.
                         monitorable: page.mixed
                         monitoring: page.trackMuted[index] !== true
+                        volume: page.trackGain(index)
+                        peaks: page.waveforms[modelData.index] || []
                         onMonitorToggled: page.toggleTrack(index)
+                        onVolumeRequested: (v) => page.setTrackGain(index, v)
+
+                        // 600 peaks is roughly two per pixel at a typical
+                        // timeline width — enough detail to survive the
+                        // window being widened without re-decoding. Repeat
+                        // requests are dropped controller-side.
+                        Component.onCompleted: if (page.filepath)
+                            EditorController.requestWaveform(page.filepath, modelData.index, 600)
                     }
                 }
             }

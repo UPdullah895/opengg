@@ -258,12 +258,22 @@ ColumnLayout {
                     font.weight: Font.DemiBold
                     Layout.fillWidth: true
                 }
+                // Clearing the cache deletes EVERY thumbnail, so the clips
+                // grid goes blank until each card regenerates its own. This
+                // used to happen with no confirmation, no refreshed figures
+                // and no regeneration kick, which read as "the button does
+                // nothing" while the whole library's artwork vanished.
                 Rectangle {
+                    id: clearBtn
                     width: 150; height: 28
                     radius: Theme.radius
-                    color: Theme.bg
+                    color: clearArea.containsMouse ? Theme.bgHover : Theme.bg
                     border.width: 1
                     border.color: Theme.border
+
+                    /// Files removed by the last click; -1 before any click.
+                    property int lastRemoved: -1
+
                     Text {
                         anchors.centerIn: parent
                         text: (I18n.language, I18n.t("settings.clipSettings.clearCache"))
@@ -271,10 +281,30 @@ ColumnLayout {
                         font.pixelSize: 11
                     }
                     MouseArea {
+                        id: clearArea
                         anchors.fill: parent
+                        hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: StorageController.clearThumbnailCache()
+                        onClicked: {
+                            clearBtn.lastRemoved = StorageController.clearThumbnailCache()
+                            // Re-read the library so every visible card sees an
+                            // empty thumbnail and kicks off regeneration, and
+                            // re-read the disk figures the card above shows.
+                            ClipsController.refresh()
+                            StorageController.refresh(JSON.stringify(
+                                root.clipDirs.length ? root.clipDirs : ["~/Videos/OpenGG"]))
+                            clearedTimer.restart()
+                        }
                     }
+                    Timer { id: clearedTimer; interval: 4000 }
+                }
+                Text {
+                    Layout.alignment: Qt.AlignVCenter
+                    visible: clearedTimer.running && clearBtn.lastRemoved >= 0
+                    text: clearBtn.lastRemoved + " "
+                          + (I18n.language, I18n.t("settings.storage.thumbsRemoved"))
+                    color: Theme.textDim
+                    font.pixelSize: 11
                 }
             }
 

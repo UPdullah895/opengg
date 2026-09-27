@@ -102,9 +102,15 @@ Rectangle {
                                 visible: modelData.labelKey.length > 0
                                 text: modelData.labelKey.length > 0
                                     ? (I18n.language, I18n.t("settings.groups." + modelData.labelKey)) : ""
-                                color: Theme.textDim
+                                // These are just group labels, not things to
+                                // look at. The Vue rail used --text-muted at
+                                // weight 800 with 1.2px tracking; the port had
+                                // drifted to the much brighter --text-sec at
+                                // weight 900, which made them shout.
+                                color: Theme.textMuted
                                 font.pixelSize: 10
-                                font.weight: Font.Black
+                                font.weight: Font.ExtraBold
+                                font.letterSpacing: 1.2
                                 Layout.leftMargin: 16
                                 Layout.topMargin: 12
                                 Layout.bottomMargin: 5
