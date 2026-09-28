@@ -26,4 +26,4 @@ opengg-core = { path = "../core" }
 gstreamer = "0.25.3"
 
 [build-dependencies]
-cxx-qt-build = "0.9"
+cxx-qt-build = "0.10"
