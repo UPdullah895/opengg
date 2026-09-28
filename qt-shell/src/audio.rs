@@ -26,6 +26,12 @@ pub mod qobject {
         #[qproperty(QString, apps_json, cxx_name = "appsJson")]
         #[qproperty(bool, connected)]
         #[qproperty(bool, virtual_audio_ready, cxx_name = "virtualAudioReady")]
+        /// Why the last create/remove of the virtual sinks failed, or empty.
+        /// These used to discard their `Result` entirely, so a user whose
+        /// daemon was unreachable pressed "Create Virtual Audio", got no
+        /// channels and no message, and had nothing to report but "it did
+        /// nothing".
+        #[qproperty(QString, virtual_audio_error, cxx_name = "virtualAudioError")]
         #[qproperty(bool, checking_virtual_audio, cxx_name = "checkingVirtualAudio")]
         // Live per-channel VU levels as a JSON object (`{"Master": -12.3, ...}`,
         // dB, -60..0). Only populated while `vuRunning` — see startVuStream.
@@ -164,6 +170,7 @@ pub struct AudioControllerRust {
     apps_json: QString,
     connected: bool,
     virtual_audio_ready: bool,
+    virtual_audio_error: QString,
     checking_virtual_audio: bool,
     vu_levels_json: QString,
     vu_running: bool,
@@ -337,13 +344,25 @@ impl qobject::AudioController {
     }
 
     pub fn create_virtual_audio(mut self: Pin<&mut Self>) {
-        let _ = opengg_core::audio::create_virtual_audio();
+        match opengg_core::audio::create_virtual_audio() {
+            Ok(()) => self.as_mut().set_virtual_audio_error(QString::default()),
+            Err(e) => {
+                eprintln!("AudioController::create_virtual_audio: {e}");
+                self.as_mut().set_virtual_audio_error(QString::from(&e));
+            }
+        }
         self.as_mut().refresh_virtual_audio_status();
+        // Re-query the channel list. Creating the sinks changes exactly what
+        // `get_channels` reports, and without this the Mixer kept showing the
+        // list from before — so a successful creation still looked like the
+        // button had done nothing.
+        self.as_mut().refresh();
     }
 
     pub fn remove_virtual_audio(mut self: Pin<&mut Self>) {
         let _ = opengg_core::audio::remove_virtual_audio();
         self.as_mut().refresh_virtual_audio_status();
+        self.as_mut().refresh();
     }
 
     pub fn start_vu_stream(mut self: Pin<&mut Self>) {

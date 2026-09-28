@@ -296,6 +296,32 @@ ColumnLayout {
                     }
                 }
             }
+
+            /// Why creating the sinks failed. Previously this path threw its
+            /// error away, so pressing Create on a machine where it could not
+            /// work left the mixer showing only Master with nothing said
+            /// about it — impossible for a user to report or act on.
+            Rectangle {
+                visible: AudioController.virtualAudioError.length > 0
+                Layout.fillWidth: true
+                radius: Theme.radius
+                color: Theme.tint(Theme.danger, 12)
+                border.width: 1
+                border.color: Theme.tint(Theme.danger, 45)
+                implicitHeight: vaErr.implicitHeight + 20
+                Text {
+                    id: vaErr
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: 11
+                    text: "Could not create the virtual audio channels — "
+                          + AudioController.virtualAudioError
+                          + ". The daemon normally does this; check it is running with "
+                          + "systemctl --user status openggd."
+                }
+            }
         }
 
         // ── Inline confirm overlay, scoped to this card (deliberately not a
