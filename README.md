@@ -2,187 +2,102 @@
   <img src="packaging/icons/128x128.png" alt="OpenGG" width="120" />
 </p>
 
-**v0.2.0** · Open-source Linux gaming hub — unified audio mixer, device/RGB manager, and instant replay. A modular alternative to SteelSeries GG (Sonar + Engine + Moments).
+<h1 align="center">OpenGG</h1>
+
+<p align="center">
+  <b>v0.2.1</b> · An open-source Linux gaming hub — audio mixer, device &amp; RGB manager, instant replay.<br/>
+  A modular alternative to SteelSeries GG (Sonar + Engine + Moments).
+</p>
 
 ---
 
-## Installation
+## Screenshots
 
-### Arch Linux / CachyOS (recommended)
+| Dashboard | Audio Mixer |
+|---|---|
+| ![Dashboard](docs/screenshots/home.png) | ![Mixer](docs/screenshots/mixer.png) |
+
+| Clips | Clip Editor |
+|---|---|
+| ![Clips](docs/screenshots/clips.png) | ![Editor](docs/screenshots/editor.png) |
+
+| Devices | Settings |
+|---|---|
+| ![Devices](docs/screenshots/devices.png) | ![Settings](docs/screenshots/settings.png) |
+
+## Install
+
+**Arch / CachyOS** — installs the binary plus udev rules, D-Bus policy and systemd units:
 
 ```bash
 yay -S opengg-bin
 ```
 
-The `opengg-bin` AUR package installs the pre-built binary and sets up all required udev rules, D-Bus policy, and systemd units automatically.
+**From source:**
 
-### Build from source
-
-See [Quick Start](#quick-start) below.
+```bash
+git clone https://github.com/UPdullah895/opengg.git
+cd opengg
+./dev.sh setup    # data dirs + the `input` group (asks for your password once)
+./dev.sh          # daemon + UI, unified logs
+```
 
 ## Modules
 
-- **Audio Hub** — 5-channel PipeWire mixer (Game / Chat / Media / Aux / Mic), per-app routing, parametric EQ, and RNNoise mic denoising.
-- **Device & RGB Manager** — Mouse/keyboard configuration via ratbagd, unified RGB control via OpenRGB SDK, and auto-profile switching on game launch.
-- **Clipping & Replay** — GPU-accelerated replay buffer via gpu-screen-recorder, global hotkey saves, clip gallery with thumbnails, and FFmpeg-based trim/export.
-
-## Architecture
-
-**UI**: Qt6/QML + cxx-qt (`qt-shell/`) — native performance, zero-latency rendering, full themability.
-
-**Shared Logic**: `opengg-core` crate provides all daemon/PipeWire/SQLite/media access.
-
-**Daemon**: `openggd` — background process managing audio routing, device profiles, and replay buffer via D-Bus.
-
-**Process Model**: Each crate (`daemon/`, `core/`, `qt-shell/`) is built independently — there is no shared Cargo workspace. The Qt binary links to `opengg-core` and communicates with `openggd` via D-Bus.
+- **Audio Hub** — 5-channel PipeWire mixer (Game / Chat / Media / Aux / Mic), per-app routing, 10-band EQ, ChatMix.
+- **Device & RGB** — mouse DPI, polling rate and button mapping via ratbagd; headset controls; RGB via the OpenRGB SDK.
+- **Clipping & Replay** — gpu-screen-recorder replay buffer, global hotkeys, clip gallery, multi-track editor with FFmpeg export.
 
 ## Requirements
 
-### Build Tools
-
-| Tool | Notes |
-|------|-------|
-| **Rust + Cargo** (stable) | [rustup.rs](https://rustup.rs) |
-| **Node.js 18+** | Optional — only needed to scaffold/build third-party extensions via `make new-extension` |
-| **npm** | Optional — same as above; bundled with Node.js |
-
-### System Dependencies
-
-| Package | Purpose | Install (Arch / CachyOS) |
-|---------|---------|--------------------------|
-| **Qt 6 Libraries** | Qt6/QML runtime | `sudo pacman -S qt6-base qt6-declarative qt6-multimedia` |
-| **PipeWire** | Audio virtual sinks and routing | `sudo pacman -S pipewire pipewire-pulse` |
-| **WirePlumber** | PipeWire session manager | `sudo pacman -S wireplumber` |
-| **GStreamer + gst-plugin-qml6** | Unified clip playback | `sudo pacman -S gstreamer gst-plugin-qml6` |
-| **gpu-screen-recorder** | Low-latency replay (NVENC / VAAPI) | `yay -S gpu-screen-recorder` |
-| **FFmpeg** | Clip trimming and export | `sudo pacman -S ffmpeg` |
-| **xdg-desktop-portal** | Screen capture portal | `sudo pacman -S xdg-desktop-portal` |
-
-> **GPU Recording:** gpu-screen-recorder requires NVIDIA (NVENC) or AMD/Intel (VAAPI). For NVIDIA, also install `cuda`. For AMD, ensure `mesa-vdpau` / `libva-mesa-driver` are installed.
-
-## Quick Start
+Rust (stable) to build. At runtime:
 
 ```bash
-# 1. Clone
-git clone https://github.com/UPdullah895/opengg.git
-cd opengg
-
-# 2. First-time setup (udev rules, groups, D-Bus policy, data dirs)
-./dev.sh setup
-
-# 3. Run everything (daemon + Qt6 frontend with unified logs)
-./dev.sh
+sudo pacman -S qt6-base qt6-declarative qt6-multimedia \
+               pipewire pipewire-pulse wireplumber \
+               gstreamer gst-plugin-qml6 ffmpeg xdg-desktop-portal
+yay -S gpu-screen-recorder
 ```
 
-## Development Commands
+`gpu-screen-recorder` needs NVENC (NVIDIA) or VAAPI (AMD / Intel).
+
+## Development
 
 | Command | What it does |
-|---------|--------------|
-| `./dev.sh` | Full stack — daemon + Qt6 frontend |
-| `./dev.sh daemon` | Daemon only |
-| `./dev.sh ui` | Qt6/QML frontend only (debug build + run) |
-| `./dev.sh build` | Release build (daemon + Qt6 frontend) |
-| `./dev.sh setup` | First-time: udev rules, groups, D-Bus policy, data dirs |
-| `make dev` | Same as `./dev.sh` |
-| `make ui` | Same as `./dev.sh ui` |
-| `make build` | Release build |
-| `make clean` | Remove build artifacts |
-| `make install` | Install daemon to `~/.local/bin` and Qt binary as `~/.local/bin/opengg` |
-| `make lint` | cargo clippy (daemon + qt-shell) + check-colors.sh |
+|---|---|
+| `./dev.sh` | Daemon + UI with unified logs |
+| `./dev.sh daemon` / `./dev.sh ui` | One half only |
+| `./dev.sh build` | Release build |
+| `make install` | Install to `~/.local/bin` + locales to `~/.local/share/opengg` |
+| `make lint` | clippy + `check-colors.sh` |
 
-## Project Structure
+The three crates — `daemon/`, `core/`, `qt-shell/` — are built independently; there is no Cargo workspace. The Qt shell links `opengg-core` and reaches `openggd` over D-Bus.
 
-```
-opengg/
-├── dev.sh                  # Unified dev orchestration
-├── Makefile                # Convenience wrappers
-├── daemon/                 # Rust background daemon (openggd)
-│   └── src/
-│       ├── main.rs         # Entry, D-Bus, process watcher
-│       ├── audio/          # PipeWire, routing, EQ, NR
-│       ├── device/         # ratbagd, OpenRGB, game profiles
-│       ├── replay/         # gpu-screen-recorder, clips, SQLite
-│       ├── config/         # TOML config (~/.config/opengg/)
-│       └── ipc/            # D-Bus interface definitions
-├── qt-shell/               # Qt6/QML native UI (cxx-qt)
-│   ├── src/                # cxx-qt controllers (audio.rs, clips.rs,
-│   │   │                   #   editor.rs, recording.rs, mixer_pipeline.rs, …)
-│   │   └── main.rs         # App setup + module registration
-│   ├── qml/
-│   │   ├── Main.qml        # Root: pages, navigation
-│   │   ├── Theme.qml       # Design tokens (mirrors theme.json)
-│   │   ├── Icons.qml       # SVG icon path registry
-│   │   ├── pages/          # MixerPage, ClipsPage, ClipEditorPage, …
-│   │   └── components/     # Reusable QML elements
-│   ├── tools/              # check-colors.sh, ui-shots.sh (CI guards)
-│   └── build.rs            # QML file + controller registration
-├── core/                   # Shared opengg-core crate
-│   └── src/                # audio.rs, clips/, media.rs, settings/,
-│                           #   gsr.rs, daemon.rs, device.rs, vu.rs, …
-├── packaging/              # udev rules, systemd, D-Bus, polkit, icons
-└── opengg-launch.sh        # Launcher: finds and runs the release binary
-```
+Working on the UI? Read [`AGENTS.md`](AGENTS.md) first — it carries the QML landmines and the mandatory pre-commit checks. See also [`CONTRIBUTING.md`](CONTRIBUTING.md), [`docs/EXTENSION_DEV.md`](docs/EXTENSION_DEV.md) and [`docs/TRANSLATING.md`](docs/TRANSLATING.md).
 
-## Extensions
-
-Drop an extension folder into `~/.local/share/opengg/extensions/`. Each folder must contain a `manifest.json`. Enable/disable in **Settings → Extensions** — no restart required.
-
-## Data Locations
+## Data locations
 
 | Data | Path |
-|------|------|
+|---|---|
 | Daemon config | `~/.config/opengg/daemon.toml` |
-| UI settings | `~/.config/opengg/ui-settings.json` |
-| Theme | `~/.config/opengg/theme.json` |
-| Clip database | `~/.local/share/opengg/clips.db` |
+| UI settings / theme | `~/.config/opengg/ui-settings.json`, `theme.json` |
+| Clips DB + thumbnails | `~/.local/share/opengg/` |
 | Default clips dir | `~/Videos/OpenGG/` |
-| Thumbnails | `~/.local/share/opengg/thumbnails/` |
+| Extensions | `~/.local/share/opengg/extensions/` |
+| Language packs | `~/.local/share/opengg/locales/` |
 | Crash log | `~/.local/share/opengg/opengg_crash.log` |
 
 ## Troubleshooting
 
-### "Clip playback stalls"
+**Clip playback stalls** — install `gst-plugin-qml6` (runtime only).
 
-The unified GStreamer pipeline (qml6glsink) requires `gst-plugin-qml6` to be installed:
+**Global hotkeys do nothing** — they read `/dev/input` directly, which needs the `input` group. `./dev.sh setup` adds you; log out and back in.
 
-```bash
-sudo pacman -S gst-plugin-qml6
-```
+**No virtual sinks / routing fails** — check you are in the `audio` group and that `systemctl --user status pipewire wireplumber` are running. **Settings → Danger Zone → Remove Virtual Audio** resets routing.
 
-This is a runtime dependency only — not needed at build time.
+## Security model
 
-### PipeWire permission issues
-
-If audio routing fails or virtual sinks don't appear:
-
-1. Confirm your user is in the `audio` group:
-   ```bash
-   groups | grep audio
-   # If missing:
-   sudo usermod -aG audio $USER && newgrp audio
-   ```
-2. Verify PipeWire is running: `systemctl --user status pipewire`
-3. If WirePlumber is not managing sessions, start it:
-   ```bash
-   systemctl --user enable --now wireplumber
-   ```
-4. If virtual sinks were corrupted, use **Settings → Danger Zone → Remove Virtual Audio** to reset routing, then relaunch OpenGG.
-
-### gpu-screen-recorder not found
-
-```bash
-yay -S gpu-screen-recorder
-which gpu-screen-recorder   # should print a path
-```
-
-For VAAPI (AMD / Intel), also verify: `vainfo`
-
-## Security Model
-
-- **Zero sudo at runtime** — daemon runs as an unprivileged user
-- **Group-based access**: `audio` (PipeWire), `input` (hotkeys/devices), `video` (GPU recording)
-- **polkit** for one-time privileged setup (udev rules, group membership)
-- **D-Bus auto-activation** — daemon starts on demand, no manual launch needed
+No sudo at runtime — the daemon is unprivileged and gets what it needs from the `audio`, `input` and `video` groups. It auto-activates over D-Bus rather than being launched by hand.
 
 ## License
 

@@ -76,8 +76,11 @@ install: build install-service
 	@mkdir -p $(HOME)/.local/bin
 	install -m 755 $(DAEMON)/target/release/openggd $(HOME)/.local/bin/openggd
 	install -m 755 $(QT_SHELL)/target/release/opengg-qt $(HOME)/.local/bin/opengg
+	@mkdir -p $(HOME)/.local/share/opengg/locales
+	install -m 644 $(QT_SHELL)/locales/*.json $(HOME)/.local/share/opengg/locales/
 	@echo "✓ Installed openggd to ~/.local/bin/"
 	@echo "✓ Installed opengg-qt as ~/.local/bin/opengg"
+	@echo "✓ Installed locales to ~/.local/share/opengg/locales/"
 
 # ── systemd user service ─────────────────────────────────────────
 # Install + enable the per-user daemon so the virtual audio engine auto-starts at

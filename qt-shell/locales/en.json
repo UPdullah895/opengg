@@ -123,6 +123,15 @@
     },
     "changelog": [
       {
+        "version": "V0.2.1",
+        "date": "2026-09-28",
+        "items": [
+          "Fixed v0.2.0 showing raw text like \"nav.home\" and \"dashboard.title\" everywhere instead of real labels — installed builds could not find their translations, and the packaged release did not include them at all",
+          "The changelog you are reading now appears again; it was blank in v0.2.0 for the same reason",
+          "Language packs dropped into ~/.local/share/opengg/locales now override the built-in ones, and Settings → Language opens that folder rather than a read-only system path"
+        ]
+      },
+      {
         "version": "V0.2.0",
         "date": "2026-09-28",
         "items": [
