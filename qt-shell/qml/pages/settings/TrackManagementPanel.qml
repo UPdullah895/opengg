@@ -28,14 +28,24 @@ ColumnLayout {
         root.writeTracks(next)
     }
 
+    // The editor draws its picture and overlay lanes from these; see
+    // REQUIRED_TRACK_IDS in core/src/settings/mod.rs, which also restores
+    // them on load.
+    readonly property var requiredIds: ["O1", "V1"]
+
     function addTrack() {
-        const idx = root.trackDefs.length
-        const next = root.trackDefs.concat([{ id: "A" + idx, name: "Audio " + idx, color: Theme.textDim, icon: "game", visible: true }])
+        // Lowest free A<n>. Numbering by list length handed out ids that
+        // were already taken ("A5" twice once any track had been removed),
+        // and the editor finds audio lane n by id "A<n>".
+        let n = 1
+        while (root.trackDefs.some(d => d.id === "A" + n)) n++
+        const next = root.trackDefs.concat([{ id: "A" + n, name: "Audio " + n, color: Theme.textDim, icon: "game", visible: true }])
         root.writeTracks(next)
     }
 
     function removeTrack(index) {
-        if (root.trackDefs.length <= 1) return
+        const def = root.trackDefs[index]
+        if (!def || root.requiredIds.indexOf(def.id) !== -1) return
         root.writeTracks(root.trackDefs.filter((_, i) => i !== index))
     }
 
@@ -122,7 +132,7 @@ ColumnLayout {
                         radius: 4
                         color: tRow.modelData.color
                         border.width: 1
-                        border.color: swatchArea.containsMouse || palette.visible
+                        border.color: swatchArea.containsMouse || colorFlyout.visible
                                       ? Theme.text : Theme.border
 
                         MouseArea {
@@ -130,7 +140,7 @@ ColumnLayout {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: palette.toggle()
+                            onClicked: colorFlyout.toggle()
                         }
 
                         // Presets, then a hue strip and a shade grid built
@@ -138,8 +148,15 @@ ColumnLayout {
                         // colour the theme happened not to ship. Every colour
                         // comes from Theme.hsv() rather than a literal, so
                         // check-colors.sh still holds.
+                        //
+                        // Deliberately NOT `id: palette`: every Qt 6 Item has
+                        // a `palette` property, and inside the cell delegates
+                        // below it shadowed the id — each click threw
+                        // "choose is not a function" and the hue strip wrote
+                        // into the cell's own QQuickPalette, so no colour
+                        // could ever be picked.
                         FlyoutPopup {
-                            id: palette
+                            id: colorFlyout
                             anchorItem: swatch
                             width: 6 * 24 + 16
                             implicitHeight: pickerCol.implicitHeight + 16
@@ -148,11 +165,14 @@ ColumnLayout {
                             /// track's current colour each time it opens so
                             /// the grid starts somewhere recognisable.
                             property real hue: 0
-                            onOpened: palette.hue = Theme.toHsv(tRow.modelData.color).h
+                            /// The track's colour, for marking the matching
+                            /// cell so the picker shows what is selected.
+                            readonly property color current: tRow.modelData.color
+                            onOpened: colorFlyout.hue = Theme.toHsv(tRow.modelData.color).h
 
                             function choose(c) {
                                 root.updateTrack(tRow.index, { color: String(c) })
-                                palette.close()
+                                colorFlyout.close()
                             }
 
                             contentItem: Column {
@@ -183,15 +203,16 @@ ColumnLayout {
                                             width: 20; height: 20
                                             radius: 4
                                             color: modelData
-                                            border.width: 1
+                                            border.width: Qt.colorEqual(color, colorFlyout.current) ? 2 : 1
                                             border.color: presetArea.containsMouse
+                                                          || Qt.colorEqual(color, colorFlyout.current)
                                                           ? Theme.text : Theme.border
                                             MouseArea {
                                                 id: presetArea
                                                 anchors.fill: parent
                                                 hoverEnabled: true
                                                 cursorShape: Qt.PointingHandCursor
-                                                onClicked: palette.choose(parent.color)
+                                                onClicked: colorFlyout.choose(parent.color)
                                             }
                                         }
                                     }
@@ -232,13 +253,13 @@ ColumnLayout {
                                                 color: "transparent"
                                                 border.width: 2
                                                 border.color: Theme.text
-                                                visible: Math.round(palette.hue * hueStrip.cells)
+                                                visible: Math.round(colorFlyout.hue * hueStrip.cells)
                                                          % hueStrip.cells === parent.index
                                             }
                                             MouseArea {
                                                 anchors.fill: parent
                                                 cursorShape: Qt.PointingHandCursor
-                                                onClicked: palette.hue = parent.index / hueStrip.cells
+                                                onClicked: colorFlyout.hue = parent.index / hueStrip.cells
                                             }
                                         }
                                     }
@@ -258,16 +279,17 @@ ColumnLayout {
                                                 1.0 - Math.floor(index / 6) * 0.22
                                             width: 20; height: 20
                                             radius: 4
-                                            color: Theme.hsv(palette.hue, sat, val)
-                                            border.width: 1
+                                            color: Theme.hsv(colorFlyout.hue, sat, val)
+                                            border.width: Qt.colorEqual(color, colorFlyout.current) ? 2 : 1
                                             border.color: shadeArea.containsMouse
+                                                          || Qt.colorEqual(color, colorFlyout.current)
                                                           ? Theme.text : Theme.border
                                             MouseArea {
                                                 id: shadeArea
                                                 anchors.fill: parent
                                                 hoverEnabled: true
                                                 cursorShape: Qt.PointingHandCursor
-                                                onClicked: palette.choose(parent.color)
+                                                onClicked: colorFlyout.choose(parent.color)
                                             }
                                         }
                                     }
@@ -378,7 +400,7 @@ ColumnLayout {
                     Rectangle {
                         width: 28; height: 28
                         radius: Theme.radius
-                        property bool protectedTrack: tRow.modelData.id === "V1" || tRow.modelData.id === "O1"
+                        property bool protectedTrack: root.requiredIds.indexOf(tRow.modelData.id) !== -1
                         color: "transparent"
                         opacity: protectedTrack ? 0.35 : 1.0
                         Icon {

@@ -439,6 +439,51 @@ fn is_resolution_like(s: &str) -> bool {
 }
 
 /// Index of the first track def with `id == id`.
+/// Timeline tracks the editor cannot work without: `O1` (Overlays) and `V1`
+/// (Video). The editor draws its picture lane from `V1` and its overlay lane
+/// from `O1`, so the settings panel refuses to delete them.
+pub const REQUIRED_TRACK_IDS: [&str; 2] = ["O1", "V1"];
+
+/// Put back any required timeline track missing from `envelope`
+/// (`{ "settings": { "trackDefs": [...] } }`), and seed the full default set
+/// when there is no `trackDefs` array at all. Returns true if it changed
+/// anything.
+///
+/// This runs on every load rather than as a numbered migration because the
+/// Qt shell never ran the migrations, and the panel used to allow deleting
+/// both tracks, so there are settings files in the wild without them. It is
+/// idempotent, and leaves the user's own tracks, order and colours alone.
+pub fn ensure_required_tracks(envelope: &mut Value) -> bool {
+    let Some(settings) = settings_mut(envelope) else {
+        return false;
+    };
+    if !settings.get("trackDefs").is_some_and(Value::is_array) {
+        let defaults: Vec<Value> = ["O1", "V1", "A1", "A2", "A3", "A4", "A5"]
+            .iter()
+            .filter_map(|id| default_track_def(id))
+            .collect();
+        settings.insert("trackDefs".into(), Value::Array(defaults));
+        return true;
+    }
+    let defs = settings
+        .get_mut("trackDefs")
+        .and_then(Value::as_array_mut)
+        .expect("checked above");
+
+    let mut changed = false;
+    if index_of_id(defs, "O1").is_none() {
+        let pos = index_of_id(defs, "V1").unwrap_or(0);
+        defs.insert(pos, default_track_def("O1").expect("O1 default"));
+        changed = true;
+    }
+    if index_of_id(defs, "V1").is_none() {
+        let pos = index_of_id(defs, "O1").map_or(0, |i| i + 1);
+        defs.insert(pos, default_track_def("V1").expect("V1 default"));
+        changed = true;
+    }
+    changed
+}
+
 fn index_of_id(defs: &[Value], id: &str) -> Option<usize> {
     defs.iter()
         .position(|d| d.get("id").and_then(Value::as_str) == Some(id))
@@ -447,6 +492,45 @@ fn index_of_id(defs: &[Value], id: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_required_tracks_restores_deleted_video_and_overlay() {
+        let mut v = json!({ "settings": { "trackDefs": [
+            { "id": "A5", "name": "Audio 5", "color": "#94a3b8", "icon": "game", "visible": true }
+        ] } });
+        assert!(ensure_required_tracks(&mut v));
+        let ids: Vec<&str> = v["settings"]["trackDefs"]
+            .as_array().unwrap().iter()
+            .map(|d| d["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["O1", "V1", "A5"]);
+        // The user's own track is untouched.
+        assert_eq!(v["settings"]["trackDefs"][2]["color"], "#94a3b8");
+        // Idempotent.
+        assert!(!ensure_required_tracks(&mut v));
+    }
+
+    #[test]
+    fn ensure_required_tracks_keeps_existing_order_and_colours() {
+        let mut v = json!({ "settings": { "trackDefs": [
+            { "id": "A1", "name": "Audio 1", "color": "#123456", "icon": "game", "visible": true },
+            { "id": "V1", "name": "Picture", "color": "#abcdef", "icon": "video", "visible": false }
+        ] } });
+        assert!(ensure_required_tracks(&mut v));
+        let defs = v["settings"]["trackDefs"].as_array().unwrap();
+        let ids: Vec<&str> = defs.iter().map(|d| d["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["A1", "O1", "V1"]);
+        assert_eq!(defs[2]["color"], "#abcdef");
+        assert_eq!(defs[2]["name"], "Picture");
+    }
+
+    #[test]
+    fn ensure_required_tracks_seeds_defaults_when_absent() {
+        let mut v = json!({ "settings": {} });
+        assert!(ensure_required_tracks(&mut v));
+        assert_eq!(v["settings"]["trackDefs"].as_array().unwrap().len(), 7);
+        let mut none = json!(null);
+        assert!(!ensure_required_tracks(&mut none));
+    }
 
     // ── runMigrations (mirrors stores/persistence.test.ts) ──
 

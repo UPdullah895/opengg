@@ -79,6 +79,7 @@ fn load_envelope() -> Value {
     if !v["settings"].is_object() {
         v["settings"] = json!({});
     }
+    opengg_core::settings::ensure_required_tracks(&mut v);
     v
 }
 
@@ -109,6 +110,9 @@ impl qobject::SettingsController {
         } else {
             v["settings"][key] = parsed;
         }
+        // The panel already refuses to delete Video/Overlays; this keeps a
+        // stale or scripted write from saving a file without them.
+        opengg_core::settings::ensure_required_tracks(&mut v);
 
         save_envelope(&v);
         self.refresh();
