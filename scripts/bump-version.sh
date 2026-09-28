@@ -19,8 +19,17 @@ NEW_VERSION="${NEW_VERSION#v}"
 echo "Bumping OpenGG to version $NEW_VERSION"
 
 # ── Rust crates ──
+# core/ was added after this script was written and was silently left behind
+# at the old version for two releases. All three crates ship, so all three
+# are bumped.
 sed -i "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" "$ROOT/daemon/Cargo.toml"
 sed -i "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" "$ROOT/qt-shell/Cargo.toml"
+sed -i "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" "$ROOT/core/Cargo.toml"
+
+# ── README version badge ──
+# The line reads "**v0.1.5** · Open-source Linux gaming hub …" — anchored to
+# the leading "**v" so it cannot touch any other bold text in the file.
+sed -i "s/^\*\*v[0-9][0-9.]*\*\* ·/**v$NEW_VERSION** ·/" "$ROOT/README.md"
 
 # ── Extension template ──
 sed -i "s/\"version\":\s*\"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$ROOT/extension-template/manifest.json"

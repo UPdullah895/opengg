@@ -2,7 +2,7 @@
   <img src="packaging/icons/128x128.png" alt="OpenGG" width="120" />
 </p>
 
-**v0.1.5** · Open-source Linux gaming hub — unified audio mixer, device/RGB manager, and instant replay. A modular alternative to SteelSeries GG (Sonar + Engine + Moments).
+**v0.2.0** · Open-source Linux gaming hub — unified audio mixer, device/RGB manager, and instant replay. A modular alternative to SteelSeries GG (Sonar + Engine + Moments).
 
 ---
 

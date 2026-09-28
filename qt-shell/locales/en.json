@@ -123,6 +123,72 @@
     },
     "changelog": [
       {
+        "version": "V0.2.0",
+        "date": "2026-09-28",
+        "items": [
+          "Global shortcuts now work — Save Replay and Toggle Recording fire from anywhere, on X11 and Wayland, whether or not the OpenGG window has focus",
+          "The equaliser actually processes audio: a 10-band PipeWire filter chain that needs no extra plugins, replacing a host that could never have run",
+          "Headset controls reach the device again — sidetone, ANC, inactive time and the rest had all been addressing a device that did not exist",
+          "Per-app routing and per-channel output devices survive a restart instead of resetting every launch",
+          "Clip editor: waveforms, colour-coded trim handles, vertical track faders, working Redo, and a hideable sidebar",
+          "Clips: bulk game tagging with custom tags, a Clear Filters button, and the restored multi-select toolbar",
+          "Video fills the screen properly — the top and bottom bars fade out when the mouse goes idle",
+          "Storage now opens your desktop's own folder picker instead of a bare in-app dialog",
+          "Tooltips follow the theme, menus close when you click them again, and the ChatMix slider is no longer invisible",
+          "RGB and device-profile controls now report honestly that they are unsupported rather than silently doing nothing",
+          "Security: patched a TLS advisory (RUSTSEC-2026-0285) and put every shipped crate under an audit"
+        ]
+      },
+      {
+        "version": "V0.1.9",
+        "date": "2026-09-09",
+        "items": [
+          "Device manager rebuilt around DPI and polling-rate controls that write to the mouse and read back what it accepted",
+          "Button mapping — assign actions to mouse buttons on a photo of your own device, with an editor for placing the hotspots",
+          "Grid, List and Carousel views for your device collection, with bundled device images",
+          "One mouse is one entry: wired and wireless connections of the same device no longer appear twice",
+          "Live connection badges and a master-detail layout, with values that resync when the device changes underneath you",
+          "DPI and polling-rate writes are validated against the stages the device actually supports"
+        ]
+      },
+      {
+        "version": "V0.1.8",
+        "date": "2026-08-23",
+        "items": [
+          "Settings redesign: colour picker, working Clip Preferences, full-width cards and consistent dividers throughout",
+          "Arabic parity — filled the remaining translation gaps and fixed right-alignment in both RTL and LTR modes",
+          "Added a language toggle and fixed a theme reset, a stuck Ear Blast duck and minimize-to-tray",
+          "The daemon shuts down cleanly on SIGTERM, so its audio sinks no longer leak on logout",
+          "Removed the archived Tauri and Vue frontend — Qt6/QML is now the only UI"
+        ]
+      },
+      {
+        "version": "V0.1.7",
+        "date": "2026-08-03",
+        "items": [
+          "Clip video now renders through a GStreamer pipeline, replacing the Qt Multimedia overlay",
+          "Every audio track in a clip plays at once through a real mixer, so multi-track recordings sound like the recording",
+          "A dedicated clip editor page replaces the old trim modal, with an export settings dialog",
+          "Clips: multi-select, view modes, a stats bar and a fixed right-click menu",
+          "Fixed runaway playback after seeking, video repeat-stutter and the player's volume slider",
+          "CI builds and tests the Qt shell"
+        ]
+      },
+      {
+        "version": "V0.1.6",
+        "date": "2026-08-01",
+        "items": [
+          "OpenGG's interface has been rebuilt from scratch in Qt6/QML — faster to start, native on the desktop, and no longer a web view",
+          "Shared business logic moved into a single opengg-core library behind the UI and the daemon",
+          "Live Mixer with VU meters, per-channel EQ and DSP tabs, ChatMix, Overdrive faders and drag-and-drop app routing",
+          "Clips library with search, sort, game filter, favourites, rename, delete and background thumbnails",
+          "Full Settings: General, Language, Notifications, Shortcuts, Storage, Track Management, Capture & Sound, Audio Engine, Extensions, Store and About",
+          "Ear Blast Protection enforcement, clip-saved desktop notifications and an automatic clip-folder watcher",
+          "An interactive guided tour for new installs, and a real SVG icon set replacing 29 emoji",
+          "Arabic and English throughout, with RTL layout mirroring"
+        ]
+      },
+      {
         "version": "V0.1.5",
         "date": "2026-06-19",
         "items": [

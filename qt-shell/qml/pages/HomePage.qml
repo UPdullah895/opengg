@@ -81,6 +81,22 @@ Rectangle {
     }
     property bool showAllUpdates: false
 
+    /// `dashboard.moreUpdates` is a vue-i18n plural form
+    /// ("none | one | many") carried over from the Vue app. `I18n.t` has no
+    /// plural support and returns it verbatim, so the QML was bypassing the
+    /// catalog entirely and hardcoding English — the one untranslated string
+    /// left on this page. Selection is inline rather than a general `tn()`
+    /// helper because this is the catalog's only real plural: the sole other
+    /// string containing " | " (settings.captureGsr.estUsage) uses the pipe
+    /// as a literal separator, and a blind helper would mangle it.
+    function moreUpdatesLabel(n) {
+        const forms = I18n.t("dashboard.moreUpdates").split("|").map(function (f) {
+            return f.trim()
+        })
+        const pick = forms[Math.min(n, forms.length - 1)] || ""
+        return pick.replace("{n}", n)
+    }
+
     // ── Popover state ────────────────────────────────────────────────────
     // Tracked by key, NOT by a captured Item reference: `cards` is a `var`
     // array re-literal'd on every dependency change (recorder status, clip
@@ -418,7 +434,7 @@ Rectangle {
                 visible: page.updates.length > 1
                 text: page.showAllUpdates
                       ? (I18n.language, I18n.t("dashboard.showLess"))
-                      : (page.updates.length - 1) + " more updates"
+                      : (I18n.language, page.moreUpdatesLabel(page.updates.length - 1))
                 color: Theme.accent
                 font.pixelSize: 12
                 font.weight: Font.Bold
