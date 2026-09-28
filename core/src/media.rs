@@ -315,8 +315,16 @@ pub fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Result<Str
     // 480p thumbnails: ~853x480 at q:v 3 (~90KB each). Matches SteelSeries quality.
     let r = Command::new("ffmpeg")
         .args([
+            // One decode thread per process. Several of these run in
+            // parallel (see the pool in `qt-shell/src/clips.rs`), and letting
+            // each one fan out across every core is what makes thumbnailing
+            // a fresh library feel like the machine has stalled.
+            "-threads", "1",
             "-ss", &format!("{seek:.2}"),
             "-i", &filepath,
+            // Nothing here needs the audio or subtitle streams; decoding them
+            // to throw them away is pure cost.
+            "-an", "-sn",
             "-vframes", "1",
             "-vf", "scale=-2:480",
             "-q:v", "3",
