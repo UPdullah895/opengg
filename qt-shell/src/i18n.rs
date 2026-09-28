@@ -206,7 +206,10 @@ impl qobject::I18n {
     }
 
     pub fn open_locales_folder(&self) {
-        let dir = locales_dir();
+        // The user's own directory, not wherever the catalogs happened to
+        // load from: /usr/share is not writable, so opening it would show a
+        // translator a folder they cannot add anything to.
+        let dir = user_locales_dir();
         let _ = std::fs::create_dir_all(&dir);
         let _ = opengg_core::system::open_path(&dir);
     }
@@ -265,63 +268,104 @@ type Catalogs = (
     HashMap<String, bool>,
 );
 
-/// Dev default: the crate's bundled locales. Override with OPENGG_LOCALES_DIR
-/// (an installed share path in production). This is deliberately the single
-/// directory both `load_catalogs` reads from and `open_locales_folder`
-/// opens — a language pack dropped in by a translator is already in the
-/// right place, no separate "user locales" merge layer needed.
-fn locales_dir() -> PathBuf {
-    std::env::var("OPENGG_LOCALES_DIR")
+/// Every directory catalogs are read from, lowest priority first: a locale
+/// file in a later directory replaces the same language from an earlier one.
+///
+/// Resolution happens at RUNTIME. This used to be a single
+/// `concat!(env!("CARGO_MANIFEST_DIR"), "/locales")` fallback, baked in when
+/// the binary was compiled — so a packaged build went looking for its
+/// translations under the *build machine's* source tree. On a release runner
+/// that path is `/__w/opengg/opengg/qt-shell/locales`, which exists on no
+/// user's disk, and the release workflow did not ship the locale files
+/// either. v0.2.0 therefore rendered every string in the UI as its raw key
+/// ("nav.home", "dashboard.title"). Dev builds hid it completely, because
+/// there the baked path is the real source tree.
+fn locale_dirs() -> Vec<PathBuf> {
+    // An explicit override replaces the search outright — that is what a
+    // packager pointing at an unusual prefix needs it to do.
+    if let Some(dir) = std::env::var_os("OPENGG_LOCALES_DIR") {
+        return vec![PathBuf::from(dir)];
+    }
+
+    let mut dirs = Vec::new();
+
+    // Installed next to the binary: /usr/bin/opengg → /usr/share/opengg,
+    // ~/.local/bin/opengg → ~/.local/share/opengg. Derived from the exe path
+    // rather than hardcoded, so an unpacked tarball works from anywhere.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(prefix) = exe.parent().and_then(Path::parent) {
+            dirs.push(prefix.join("share/opengg/locales"));
+        }
+    }
+
+    // The source tree, so `cargo run` still works from a checkout.
+    dirs.push(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/locales")));
+
+    // Drop-in packs last, so a translator's own file wins over the installed
+    // copy of the same language.
+    dirs.push(user_locales_dir());
+
+    dirs
+}
+
+/// Where a translator's own language packs live, and the directory
+/// `open_locales_folder` opens. Always user-writable — the installed
+/// directory usually is not, so it cannot serve that purpose.
+fn user_locales_dir() -> PathBuf {
+    let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/locales")))
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
+        });
+    base.join("opengg/locales")
 }
 
 fn load_catalogs() -> Catalogs {
-    let dir = locales_dir();
-
     let mut catalogs = HashMap::new();
     let mut trees = HashMap::new();
     let mut names = HashMap::new();
     let mut rtl_dirs = HashMap::new();
 
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
+    for dir in locale_dirs() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                    continue;
+                }
+                let code = match path.file_stem().and_then(|s| s.to_str()) {
+                    Some(c) => c.to_string(),
+                    None => continue,
+                };
+                let text = match std::fs::read_to_string(&path) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let val: serde_json::Value = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                let mut flat = HashMap::new();
+                flatten(&val, String::new(), &mut flat);
+
+                let name = val
+                    .get("_meta")
+                    .and_then(|m| m.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&code)
+                    .to_string();
+                let is_rtl = val
+                    .get("_meta")
+                    .and_then(|m| m.get("dir"))
+                    .and_then(|v| v.as_str())
+                    == Some("rtl");
+
+                names.insert(code.clone(), name);
+                rtl_dirs.insert(code.clone(), is_rtl);
+                trees.insert(code.clone(), val);
+                catalogs.insert(code, flat);
             }
-            let code = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(c) => c.to_string(),
-                None => continue,
-            };
-            let text = match std::fs::read_to_string(&path) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            let val: serde_json::Value = match serde_json::from_str(&text) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            let mut flat = HashMap::new();
-            flatten(&val, String::new(), &mut flat);
-
-            let name = val
-                .get("_meta")
-                .and_then(|m| m.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(&code)
-                .to_string();
-            let is_rtl = val
-                .get("_meta")
-                .and_then(|m| m.get("dir"))
-                .and_then(|v| v.as_str())
-                == Some("rtl");
-
-            names.insert(code.clone(), name);
-            rtl_dirs.insert(code.clone(), is_rtl);
-            trees.insert(code.clone(), val);
-            catalogs.insert(code, flat);
         }
     }
 

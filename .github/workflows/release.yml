@@ -68,6 +68,13 @@ jobs:
           mkdir -p "$ROOT/usr/share/applications"
           cp packaging/opengg.desktop "$ROOT/usr/share/applications/"
 
+          # The UI reads its translations from here at runtime. Omitting them
+          # does not fail the build or the launch — the app just renders every
+          # string as its raw key ("nav.home", "dashboard.title"), which is how
+          # v0.2.0 shipped.
+          mkdir -p "$ROOT/usr/share/opengg/locales"
+          cp qt-shell/locales/*.json "$ROOT/usr/share/opengg/locales/"
+
           mkdir -p "$ROOT/usr/share/icons/hicolor/256x256/apps"
           cp packaging/icons/256x256.png "$ROOT/usr/share/icons/hicolor/256x256/apps/opengg.png"
 

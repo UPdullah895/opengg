@@ -1,6 +1,6 @@
 [package]
 name = "opengg-core"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT"
 description = "OpenGG shared business logic (Tauri-free): clips DB, media, settings, storage, extensions, recording, VU. Consumed by both the Tauri host and the Qt/QML shell."
