@@ -36,4 +36,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # Blocking D-Bus client for daemon communication (project decision: blocking API in core).
 # Note: do NOT add "tokio" feature — core uses blocking API only; src-tauri's tokio-featured
 # zbus will unify at the workspace level when cargo resolves transitive deps.
-zbus = "4"
+zbus = "5"
