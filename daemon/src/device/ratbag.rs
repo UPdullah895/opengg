@@ -522,7 +522,7 @@ fn parse_member(s: &str) -> Option<(u16, u16)> {
 }
 
 fn format_member(vid: u16, pid: u16) -> String {
-    format!("{vid:04x}:{pid:04x}")
+    super::types::format_vid_pid(vid, pid)
 }
 
 /// Parse the body of a `"ratbag:"` id (after stripping that prefix) into its

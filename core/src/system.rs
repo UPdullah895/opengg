@@ -142,7 +142,11 @@ pub fn get_dependency_status() -> Vec<DependencyStatus> {
         ("ffprobe", "mediaInfo"),
         ("pactl", "audioMixer"),
         ("pw-link", "audioRouting"),
-        ("jalv", "equalizer"),
+        // The EQ runs on PipeWire's own filter-chain now, so `pw-cli` is
+        // what it actually needs. `jalv` was listed here for an LV2 host
+        // that never worked and, worse, was reported "available" on
+        // machines with no LV2 plugins at all — jalv alone is useless.
+        ("pw-cli", "equalizer"),
         ("headsetcontrol", "headset"),
         ("xdotool", "windowTools"),
     ];

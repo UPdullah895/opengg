@@ -21,12 +21,7 @@ use crate::subprocess::{command, is_available};
 /// matches the rest of a Plasma session, which is this project's primary
 /// target.
 pub fn native_picker() -> Option<&'static str> {
-    for bin in ["kdialog", "zenity"] {
-        if is_available(bin) {
-            return Some(bin);
-        }
-    }
-    None
+    ["kdialog", "zenity"].into_iter().find(|bin| is_available(bin))
 }
 
 /// Ask the desktop for a directory. Blocks until the user picks one or

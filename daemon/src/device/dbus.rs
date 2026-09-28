@@ -6,15 +6,19 @@ use zbus::interface;
 
 use super::{
     headset::HeadsetManager,
+    profiles::ProfileManager,
     ratbag::RatbagManager,
 };
 
 pub struct DeviceInterface {
     ratbag: Arc<Mutex<Option<RatbagManager>>>,
+    /// Where game profiles live. Read on demand rather than cached: the
+    /// directory is tiny and a user may drop a profile in while we run.
+    profiles_dir: std::path::PathBuf,
 }
 
 impl DeviceInterface {
-    pub async fn new() -> Self {
+    pub async fn new(profiles_dir: std::path::PathBuf) -> Self {
         let ratbag = match RatbagManager::new().await {
             Ok(m) => {
                 tracing::info!("ratbagd D-Bus connection established");
@@ -27,6 +31,7 @@ impl DeviceInterface {
         };
         Self {
             ratbag: Arc::new(Mutex::new(ratbag)),
+            profiles_dir,
         }
     }
 
@@ -48,15 +53,11 @@ impl DeviceInterface {
     }
 }
 
-/// Parse a `"{prefix}{vid}:{pid}"` device ID (e.g. `"headset:046d:0a5c"` or
-/// `"ratbag:046d:c08b"`) and return (vid, pid). Returns None if the string
-/// does not match the expected format.
+/// Parse a `"{prefix}{vid:04x}:{pid:04x}"` device ID (e.g.
+/// `"headset:046d:0a5c"`). Delegates to `types::parse_device_id` so the
+/// parser can never drift from the builder again — see the note there.
 fn parse_vid_pid_id(device_id: &str, prefix: &str) -> Option<(u16, u16)> {
-    let body = device_id.strip_prefix(prefix)?;
-    let (vid_str, pid_str) = body.split_once(':')?;
-    let vid = u16::from_str_radix(vid_str, 16).ok()?;
-    let pid = u16::from_str_radix(pid_str, 16).ok()?;
-    Some((vid, pid))
+    super::types::parse_device_id(device_id, prefix)
 }
 
 /// Parse a headset device ID of the form "headset:{vid}:{pid}" and return (vid, pid).
@@ -286,17 +287,46 @@ impl DeviceInterface {
         }
     }
 
+    /// Unified RGB is not implemented, and says so.
+    ///
+    /// This used to log "not yet implemented" and return `Ok(())`, so every
+    /// caller was told the colour had been applied. `openrgb.rs` does hold a
+    /// working SDK client, but it can set an LED or a mode and cannot yet
+    /// enumerate a controller's LED count (that needs
+    /// RequestControllerData, which is unparsed), so there is nothing
+    /// honest to call here. Failing loudly is strictly better than a
+    /// success that did nothing.
     async fn set_rgb(&self, zone: &str, color: &str, mode: &str) -> zbus::fdo::Result<()> {
-        tracing::info!("SetRGB: {zone} → {color} ({mode}) [not yet implemented]");
-        Ok(())
+        tracing::warn!("SetRgb({zone}, {color}, {mode}): not implemented");
+        Err(zbus::fdo::Error::NotSupported(
+            "unified RGB is not implemented yet: the OpenRGB client cannot enumerate \
+             controller LED counts (RequestControllerData is unparsed)"
+                .into(),
+        ))
     }
 
+    /// Applying a profile is not implemented, and says so — same reasoning
+    /// as `set_rgb`. `GetProfiles` below is real, so a client can still
+    /// list what exists.
     async fn set_profile(&self, profile_name: &str) -> zbus::fdo::Result<()> {
-        tracing::info!("SetProfile: {profile_name} [not yet implemented]");
-        Ok(())
+        tracing::warn!("SetProfile({profile_name}): not implemented");
+        Err(zbus::fdo::Error::NotSupported(
+            "applying a game profile is not implemented yet (it would need to drive \
+             audio routing, mouse DPI and RGB together)"
+                .into(),
+        ))
     }
 
+    /// The profiles actually on disk. Previously hardcoded to `"[]"`, which
+    /// made the profiles directory look permanently empty no matter what
+    /// the user put in it.
     async fn get_profiles(&self) -> String {
-        "[]".into()
+        match ProfileManager::new(&self.profiles_dir) {
+            Ok(mgr) => serde_json::to_string(mgr.list()).unwrap_or_else(|_| "[]".into()),
+            Err(e) => {
+                tracing::warn!("GetProfiles: {e}");
+                "[]".into()
+            }
+        }
     }
 }

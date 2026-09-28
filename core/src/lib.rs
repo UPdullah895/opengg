@@ -19,6 +19,7 @@ pub mod dialogs;
 pub mod device_assets;
 pub mod device_display;
 pub mod ear_blast;
+pub mod eq;
 pub mod extensions;
 pub mod gsr;
 pub mod media;

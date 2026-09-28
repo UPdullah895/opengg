@@ -1,6 +1,9 @@
 # Rust
 target/
-Cargo.lock
+# Cargo.lock is committed on purpose: daemon/ and qt-shell/ ship binaries, and
+# core/ is only ever consumed by those two. Without the lockfiles, `cargo audit`
+# in CI resolves a dependency set nobody actually builds, so a green scan says
+# nothing about the versions users run.
 
 # Node
 node_modules/

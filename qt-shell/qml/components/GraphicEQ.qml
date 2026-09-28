@@ -45,12 +45,21 @@ ColumnLayout {
     function applyToEngine() {
         if (root.eqEnabled) EqController.applyEq(root.channel, JSON.stringify(root.bands))
     }
+    /// True when this machine cannot host the EQ at all; the reason is
+    /// shown in the card rather than letting the toggle look functional.
+    readonly property string eqUnavailable: EqController.unavailableReason
+
     function setEnabled(v) {
-        root.eqEnabled = v
         if (v) {
-            EqController.startEngine(root.channel)
-            root.applyToEngine()
+            // Honour the engine's answer instead of assuming it started.
+            // The old code set eqEnabled unconditionally, which is how a
+            // dead engine still presented as an active EQ.
+            const ok = EqController.startEngine(root.channel)
+            root.eqEnabled = ok
+            if (ok)
+                root.applyToEngine()
         } else {
+            root.eqEnabled = false
             EqController.stopEngine(root.channel)
         }
     }
@@ -99,6 +108,35 @@ ColumnLayout {
             anchors.fill: parent
             anchors.margins: 14
             spacing: 14
+
+            // Why the EQ is off, when it is not the user's choice. Without
+            // this the only symptom of a missing engine was an EQ that
+            // changed nothing.
+            Rectangle {
+                Layout.fillWidth: true
+                visible: root.eqUnavailable.length > 0 || EqController.lastError.length > 0
+                implicitHeight: eqMsg.implicitHeight + 16
+                radius: Theme.radius
+                color: Theme.tint(Theme.overdrive, 12)
+                border.width: 1
+                border.color: Theme.tint(Theme.overdrive, 40)
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 8
+                    Icon { name: "alert-triangle"; size: 13; color: Theme.overdrive }
+                    Text {
+                        id: eqMsg
+                        Layout.fillWidth: true
+                        text: root.eqUnavailable.length > 0
+                              ? "Equaliser unavailable: " + root.eqUnavailable
+                              : EqController.lastError
+                        color: Theme.overdrive
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
 
             RowLayout {
                 Layout.fillWidth: true

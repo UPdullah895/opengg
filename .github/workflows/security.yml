@@ -52,6 +52,26 @@ jobs:
         run: cargo audit
         working-directory: ./qt-shell
 
+  # opengg-core is the only crate the shell and the daemon both depend on, so
+  # an advisory here reaches every shipped binary. It has its own lockfile
+  # (the three crates are deliberately not a workspace), which the daemon and
+  # qt-shell jobs above do not cover.
+  cargo-audit-core:
+    name: Cargo Audit (Core)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: cargo audit
+        working-directory: ./core
+
   cargo-deny-daemon:
     name: Cargo Deny (Daemon)
     runs-on: ubuntu-latest
@@ -74,6 +94,18 @@ jobs:
         with:
           log-level: warn
           manifest-path: ./qt-shell/Cargo.toml
+          command: check advisories bans
+
+  cargo-deny-core:
+    name: Cargo Deny (Core)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2.0.20
+        with:
+          log-level: warn
+          manifest-path: ./core/Cargo.toml
           command: check advisories bans
 
   # The `npm Audit (Frontend)` job that used to live here scanned the archived

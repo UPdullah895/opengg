@@ -146,9 +146,13 @@ impl HeadsetManager {
                 });
 
                 DeviceInfo {
-                    // Use "headset:{vid}:{pid}" so the ID encodes the VID:PID directly,
-                    // matching what headsetcontrol expects for --device selection.
-                    id: format!("headset:{}:{}", vid, pid),
+                    // Built through the shared helper, never a local
+                    // format string: this line used to be `{}` (decimal)
+                    // while dbus.rs parsed it as hex, which addressed every
+                    // headset command to a device that does not exist and
+                    // silently broke all ten of them. See the round-trip
+                    // test beside `format_device_id` in types.rs.
+                    id: super::types::format_device_id("headset:", vid, pid),
                     name: d.product.clone(),
                     model: d.product,
                     device_type: DeviceType::Headset,
