@@ -22,7 +22,7 @@ walkdir = "2"
 # Filesystem watcher for the clip library (clip_added/removed auto-refresh).
 notify = "6"
 # Clip metadata / trim-state / ffprobe-cache database (matches src-tauri).
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 # Async task spawning for ffmpeg/ffprobe calls (moved from src-tauri).
 # "process" is required by the (currently unused, dead_code-allowed) async
 # runners in subprocess.rs (run_async / tokio_command) moved verbatim from src-tauri.
