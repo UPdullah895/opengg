@@ -179,8 +179,8 @@ ColumnLayout {
                           + (HotkeyController.error
                              || "the daemon has not confirmed a keyboard listener")
                           + ". Reading keys system-wide needs membership of "
-                          + "the 'input' group: run  sudo usermod -aG input $USER "
-                          + " in a terminal, then log out and back in."
+                          + "the 'input' group — run  ./dev.sh setup  to join it, "
+                          + "then log out and back in."
                 }
             }
 

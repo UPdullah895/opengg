@@ -5,9 +5,10 @@
 //! X11 vs Wayland — neither offers an unprivileged global-grab API that works
 //! everywhere, but the kernel input subsystem is the same on both.
 //!
-//! Requires membership of the `input` group: `sudo usermod -aG input $USER`,
-//! then log out and back in. (`dev.sh setup` does *not* do this, despite what
-//! the README implies — it creates directories and checks the toolchain.)
+//! Requires membership of the `input` group. `./dev.sh setup` adds you (the
+//! project's one privileged step); by hand it is
+//! `sudo usermod -aG input $USER`. Either way it takes effect at the next
+//! login — a new terminal is not enough.
 //!
 //! # What this module does *not* do
 //!
@@ -274,8 +275,7 @@ pub fn start_listener(
     if keyboards.is_empty() {
         tracing::warn!(
             "No readable keyboard devices in /dev/input — global hotkeys are off. \
-             Add yourself to the 'input' group (sudo usermod -aG input $USER) \
-             and log back in."
+             Run `./dev.sh setup` to join the 'input' group, then log back in."
         );
         return Ok((action_rx, no_devices));
     }

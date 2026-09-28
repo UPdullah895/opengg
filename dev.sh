@@ -7,7 +7,7 @@
 #   ./dev.sh daemon   Run daemon only
 #   ./dev.sh ui       Run frontend only
 #   ./dev.sh build    Build everything for release
-#   ./dev.sh setup    First-time setup (install deps, create dirs)
+#   ./dev.sh setup    First-time setup (create dirs, group membership)
 #
 set -euo pipefail
 
@@ -88,6 +88,48 @@ check_deps() {
 }
 
 # ── Setup ────────────────────────────────────────────────────────
+# ── Group membership ─────────────────────────────────────────────
+# Global hotkeys read /dev/input/eventN directly (see
+# daemon/src/replay/hotkey.rs) — the only unprivileged way to see a keypress
+# while another window has focus, on X11 and Wayland alike. That needs the
+# `input` group.
+#
+# This is the one privileged step in the project and it runs exactly once,
+# here. Nothing at runtime uses sudo: the daemon stays unprivileged and gets
+# everything it needs from group membership.
+ensure_input_group() {
+    if ! getent group input >/dev/null 2>&1; then
+        logw "No 'input' group on this system — global hotkeys will not work"
+        return 0
+    fi
+
+    if id -nG "$USER" | tr ' ' '\n' | grep -qx input; then
+        logs "Already in the 'input' group"
+        return 0
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        logw "Not in the 'input' group and sudo is unavailable."
+        logw "Global hotkeys need it — add yourself with:"
+        echo -e "       ${CYAN}usermod -aG input $USER${RESET}  (as root)"
+        return 0
+    fi
+
+    log "Adding ${BOLD}$USER${RESET} to the 'input' group (needed for global hotkeys)."
+    log "${DIM}This is the only step that asks for your password.${RESET}"
+    # Never abort setup over this: the rest of the project works without
+    # hotkeys, and the user may reasonably decline the prompt.
+    if sudo usermod -aG input "$USER"; then
+        logs "Added to the 'input' group"
+        logw "Log out and back in for it to take effect (a new terminal is not enough)."
+        logw "To test without logging out: ${CYAN}newgrp input${RESET}, then run the daemon from that shell."
+    else
+        logw "Could not add you to the 'input' group — global hotkeys will not fire."
+        logw "Run it yourself later with:"
+        echo -e "       ${CYAN}sudo usermod -aG input $USER${RESET}"
+    fi
+}
+
 do_setup() {
     log "${BOLD}Running first-time setup...${RESET}"
     echo ""
@@ -107,6 +149,9 @@ do_setup() {
     mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/opengg/extensions"
     mkdir -p "$HOME/Videos/OpenGG"
     logs "Data directories created"
+
+    # Group membership for global hotkeys (may prompt for a password).
+    ensure_input_group
 
     # Install bundled example extensions (folder layout: manifest.json + bin/…)
     EXT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/opengg/extensions"
