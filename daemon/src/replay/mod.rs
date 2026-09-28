@@ -1,6 +1,6 @@
 pub mod recorder;
 mod clips;
-mod hotkey;
+pub mod hotkey;
 mod dbus;
 
 pub use dbus::ReplayInterface;

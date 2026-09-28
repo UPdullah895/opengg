@@ -72,6 +72,7 @@ fn main() {
         QmlFile::from("qml/components/WheelScroller.qml"),
         QmlFile::from("qml/components/GraphicEQ.qml"),
         QmlFile::from("qml/components/DspControls.qml"),
+        QmlFile::from("qml/components/GlobalHotkeys.qml"),
     ];
 
     CxxQtBuilder::new_qml_module(QmlModule::new("com.opengg.app").qml_files(qml_files))
@@ -84,6 +85,7 @@ fn main() {
             "src/clips.rs",
             "src/editor.rs",
             "src/extensions.rs",
+            "src/hotkeys.rs",
             "src/eq.rs",
             "src/recording.rs",
             "src/screenshot.rs",

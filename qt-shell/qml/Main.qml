@@ -46,6 +46,13 @@ ApplicationWindow {
         target: SettingsController
         function onSettingsJsonChanged() { root.s = JSON.parse(SettingsController.settingsJson || "{}") }
     }
+    /// System-wide shortcuts. Kept at the root because they must work
+    /// regardless of which page is showing — or whether the window is
+    /// visible at all.
+    GlobalHotkeys {
+        shortcuts: root.s.shortcuts || ({})
+    }
+
     // Set right before a real quit (tray menu's Quit, or Ctrl+Q-style exits
     // if added later) so onClosing lets it through instead of hiding.
     property bool reallyQuit: false

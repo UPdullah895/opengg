@@ -31,14 +31,24 @@ ColumnLayout {
     }
 
     /// Actions nothing listens for yet. The bindings are stored and
-    /// editable, but the daemon's global-hotkey loop is still a stub
-    /// (daemon/src/replay/hotkey.rs) and the shell has no dispatcher, so
-    /// pressing these does nothing. Flagged rather than hidden: the
-    /// settings are real, the wiring is not.
+    /// editable, but nothing dispatches them, so pressing these does
+    /// nothing. Flagged rather than hidden: the settings are real, the
+    /// wiring is not.
+    ///
+    /// `saveReplay` and `toggleRecording` left this list once the daemon's
+    /// evdev listener became real (daemon/src/replay/hotkey.rs) and
+    /// `GlobalHotkeys.qml` started acting on its signals. `screenshot` is
+    /// carried end to end but still has nothing to run — no part of this
+    /// project takes a desktop screenshot. The rest are editor-local
+    /// shortcuts with no dispatcher.
     readonly property var inactive: [
-        "saveReplay", "toggleRecording", "screenshot", "toggleEarBlast",
+        "screenshot", "toggleEarBlast",
         "splitClip", "exportClip", "toggleMic", "undo", "redo",
     ]
+
+    /// The daemon's global listener, for the two bindings that depend on it.
+    readonly property bool globalActive: HotkeyController.active
+    readonly property var global: ["saveReplay", "toggleRecording"]
 
     readonly property var actions: [
         "saveReplay", "toggleRecording", "screenshot", "toggleEarBlast",
@@ -146,6 +156,34 @@ ColumnLayout {
                 }
             }
 
+            /// Why the global bindings are inert, when they are. Without
+            /// this the two badges below say the keys do not work but not
+            /// what to do about it, and the cause is almost always one
+            /// fixable thing: the user is not in the `input` group.
+            Rectangle {
+                visible: !root.globalActive
+                Layout.fillWidth: true
+                radius: Theme.radius
+                color: Theme.tint(Theme.overdrive, 12)
+                border.width: 1
+                border.color: Theme.tint(Theme.overdrive, 40)
+                implicitHeight: offNote.implicitHeight + 20
+                Text {
+                    id: offNote
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: 11
+                    text: "Global shortcuts are not running — "
+                          + (HotkeyController.error
+                             || "the daemon has not confirmed a keyboard listener")
+                          + ". Reading keys system-wide needs membership of "
+                          + "the 'input' group: run  sudo usermod -aG input $USER "
+                          + " in a terminal, then log out and back in."
+                }
+            }
+
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
 
             Repeater {
@@ -183,6 +221,28 @@ ColumnLayout {
                             font.pixelSize: 13
                         }
                         InfoIcon { tooltipText: I18n.t("settings.shortcuts.hints." + actionCol.modelData) }
+                        /// A global binding the daemon is not listening
+                        /// for. Distinct from "not wired up": the wiring
+                        /// exists, this machine just cannot read the
+                        /// keyboard — almost always a missing `input` group.
+                        Rectangle {
+                            visible: !root.globalActive
+                                     && root.global.indexOf(actionCol.modelData) >= 0
+                            width: offText.implicitWidth + 12
+                            height: 16
+                            radius: 8
+                            color: Theme.tint(Theme.overdrive, 18)
+                            border.width: 1
+                            border.color: Theme.tint(Theme.overdrive, 45)
+                            Text {
+                                id: offText
+                                anchors.centerIn: parent
+                                text: "listener off"
+                                color: Theme.overdrive
+                                font.pixelSize: 9
+                                font.weight: Font.DemiBold
+                            }
+                        }
                         Rectangle {
                             visible: root.inactive.indexOf(actionCol.modelData) >= 0
                             width: badgeText.implicitWidth + 12

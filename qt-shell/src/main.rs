@@ -6,6 +6,7 @@ mod device;
 mod editor;
 mod eq;
 mod extensions;
+mod hotkeys;
 mod i18n;
 mod recording;
 mod screenshot;

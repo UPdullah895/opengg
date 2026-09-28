@@ -22,6 +22,7 @@ pub mod ear_blast;
 pub mod eq;
 pub mod extensions;
 pub mod gsr;
+pub mod hotkeys;
 pub mod media;
 pub mod notify;
 pub mod paths;
