@@ -72,14 +72,14 @@ body:
     id: implementation_sketch
     attributes:
       label: Implementation Sketch (Optional)
-      description: How would you implement this on the daemon or Tauri side?
+      description: How would you implement this on the daemon or Qt shell side?
       placeholder: |
         Daemon side (`daemon/src/audio/mixer.rs`):
         - Add `create_custom_channel(name: String, color: String)` to D-Bus interface
         - Store in `~/.config/opengg/daemon.toml` under `[audio.custom_channels]`
 
-        Tauri side (`frontend/src-tauri/src/commands.rs`):
-        - Add `create_custom_channel` command that invokes the daemon via D-Bus
+        Qt shell side (`qt-shell/src/audio.rs`):
+        - Add a `createCustomChannel` qinvokable that calls `opengg_core::audio` (or the daemon over D-Bus, if the daemon owns this state)
     validations:
       required: false
 

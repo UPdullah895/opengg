@@ -1,0 +1,29 @@
+[package]
+name = "opengg-qt"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "opengg-qt"
+path = "src/main.rs"
+
+[dependencies]
+cxx = "1"
+cxx-qt = "0.9"
+cxx-qt-lib = { version = "0.9", features = ["full"] }
+# preserve_order keeps the shared ui-settings.json key order stable on rewrite;
+# also used to serialize clip lists for the QML side.
+serde_json = { version = "1", features = ["preserve_order"] }
+# Shared business logic: daemon D-Bus client, pactl, clips DB, media, paths, etc.
+# (plan §2.2/§2.3). All daemon/pactl/SQLite access goes through opengg_core;
+# qt-shell no longer depends on zbus directly.
+opengg-core = { path = "../core" }
+# Multi-track clip audio. Qt Multimedia decodes exactly one audio stream at a
+# time, so playing a capture's Game+Chat+Mic tracks together needs a real
+# mixing pipeline (decodebin -> per-track volume -> audiomixer). Ported from
+# the video PoC, which validated this design.
+gstreamer = "0.25.3"
+
+[build-dependencies]
+cxx-qt-build = "0.9"

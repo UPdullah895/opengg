@@ -69,6 +69,13 @@ impl AudioHub {
             .expect("teardown panicked")
     }
 
+    pub async fn create_virtual_audio(&self) -> Result<()> {
+        let sink_mgr = Arc::clone(&self.sink_mgr);
+        tokio::task::spawn_blocking(move || sink_mgr.ensure_created())
+            .await
+            .expect("sink creation panicked")
+    }
+
     fn start_stream_watcher(&self) {
         let streams = Arc::clone(&self.streams);
         tokio::spawn(async move {

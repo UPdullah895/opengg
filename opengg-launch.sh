@@ -7,7 +7,7 @@ LOG_FILE="$HOME/.local/share/opengg/opengg.log"
 # Search for a release binary in multiple locations (priority order)
 find_release_bin() {
     local candidates=(
-        "$SCRIPT_DIR/frontend/src-tauri/target/release/opengg"
+        "$SCRIPT_DIR/qt-shell/target/release/opengg-qt"
         "$HOME/.local/bin/opengg"
         "/usr/bin/opengg"
     )

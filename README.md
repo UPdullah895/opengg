@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="frontend/src-tauri/icons/128x128.png" alt="OpenGG" width="120" />
+  <img src="packaging/icons/128x128.png" alt="OpenGG" width="120" />
 </p>
 
-**v0.1.5** · Open-source Linux gaming hub — unified audio mixer, device/RGB manager, and instant replay. A modular alternative to SteelSeries GG (Sonar + Engine + Moments).
+**v0.2.0** · Open-source Linux gaming hub — unified audio mixer, device/RGB manager, and instant replay. A modular alternative to SteelSeries GG (Sonar + Engine + Moments).
 
 ---
 
@@ -26,6 +26,16 @@ See [Quick Start](#quick-start) below.
 - **Device & RGB Manager** — Mouse/keyboard configuration via ratbagd, unified RGB control via OpenRGB SDK, and auto-profile switching on game launch.
 - **Clipping & Replay** — GPU-accelerated replay buffer via gpu-screen-recorder, global hotkey saves, clip gallery with thumbnails, and FFmpeg-based trim/export.
 
+## Architecture
+
+**UI**: Qt6/QML + cxx-qt (`qt-shell/`) — native performance, zero-latency rendering, full themability.
+
+**Shared Logic**: `opengg-core` crate provides all daemon/PipeWire/SQLite/media access.
+
+**Daemon**: `openggd` — background process managing audio routing, device profiles, and replay buffer via D-Bus.
+
+**Process Model**: Each crate (`daemon/`, `core/`, `qt-shell/`) is built independently — there is no shared Cargo workspace. The Qt binary links to `opengg-core` and communicates with `openggd` via D-Bus.
+
 ## Requirements
 
 ### Build Tools
@@ -33,20 +43,20 @@ See [Quick Start](#quick-start) below.
 | Tool | Notes |
 |------|-------|
 | **Rust + Cargo** (stable) | [rustup.rs](https://rustup.rs) |
-| **Node.js 18+** | `sudo pacman -S nodejs` |
-| **npm** | Bundled with Node.js |
-| **Tauri CLI v2** | Installed via `npm install` |
+| **Node.js 18+** | Optional — only needed to scaffold/build third-party extensions via `make new-extension` |
+| **npm** | Optional — same as above; bundled with Node.js |
 
 ### System Dependencies
 
 | Package | Purpose | Install (Arch / CachyOS) |
 |---------|---------|--------------------------|
+| **Qt 6 Libraries** | Qt6/QML runtime | `sudo pacman -S qt6-base qt6-declarative qt6-multimedia` |
 | **PipeWire** | Audio virtual sinks and routing | `sudo pacman -S pipewire pipewire-pulse` |
 | **WirePlumber** | PipeWire session manager | `sudo pacman -S wireplumber` |
+| **GStreamer + gst-plugin-qml6** | Unified clip playback | `sudo pacman -S gstreamer gst-plugin-qml6` |
 | **gpu-screen-recorder** | Low-latency replay (NVENC / VAAPI) | `yay -S gpu-screen-recorder` |
 | **FFmpeg** | Clip trimming and export | `sudo pacman -S ffmpeg` |
 | **xdg-desktop-portal** | Screen capture portal | `sudo pacman -S xdg-desktop-portal` |
-| **libwebkit2gtk** | Tauri WebView | `sudo pacman -S webkit2gtk-4.1` |
 
 > **GPU Recording:** gpu-screen-recorder requires NVIDIA (NVENC) or AMD/Intel (VAAPI). For NVIDIA, also install `cuda`. For AMD, ensure `mesa-vdpau` / `libva-mesa-driver` are installed.
 
@@ -60,10 +70,7 @@ cd opengg
 # 2. First-time setup (udev rules, groups, D-Bus policy, data dirs)
 ./dev.sh setup
 
-# 3. Install npm dependencies
-cd frontend && npm install && cd ..
-
-# 4. Run everything (daemon + Tauri frontend with unified logs)
+# 3. Run everything (daemon + Qt6 frontend with unified logs)
 ./dev.sh
 ```
 
@@ -71,30 +78,17 @@ cd frontend && npm install && cd ..
 
 | Command | What it does |
 |---------|--------------|
-| `./dev.sh` | Full stack — daemon + Tauri frontend |
+| `./dev.sh` | Full stack — daemon + Qt6 frontend |
 | `./dev.sh daemon` | Daemon only |
-| `./dev.sh ui` | Frontend only (hot-reload) |
-| `./dev.sh build` | Release build (deb / rpm) |
-| `./dev.sh setup` | First-time: udev rules, groups, D-Bus policy |
+| `./dev.sh ui` | Qt6/QML frontend only (debug build + run) |
+| `./dev.sh build` | Release build (daemon + Qt6 frontend) |
+| `./dev.sh setup` | First-time: udev rules, groups, D-Bus policy, data dirs |
 | `make dev` | Same as `./dev.sh` |
+| `make ui` | Same as `./dev.sh ui` |
 | `make build` | Release build |
-| `make clean` | Remove all build artifacts |
-| `make install` | Install daemon binary to `~/.local/bin` |
-
-### Frontend-only (no Tauri shell)
-
-```bash
-cd frontend
-npm run dev          # Vite at http://localhost:1420
-npm run build        # vue-tsc + vite build
-npx vue-tsc --noEmit # Fast type-check
-```
-
-### Tauri Rust-only check
-
-```bash
-cd frontend/src-tauri && cargo check
-```
+| `make clean` | Remove build artifacts |
+| `make install` | Install daemon to `~/.local/bin` and Qt binary as `~/.local/bin/opengg` |
+| `make lint` | cargo clippy (daemon + qt-shell) + check-colors.sh |
 
 ## Project Structure
 
@@ -110,20 +104,23 @@ opengg/
 │       ├── replay/         # gpu-screen-recorder, clips, SQLite
 │       ├── config/         # TOML config (~/.config/opengg/)
 │       └── ipc/            # D-Bus interface definitions
-├── frontend/
-│   ├── src/
-│   │   ├── App.vue         # Root: nav, theme, onboarding
-│   │   ├── pages/          # Home, Mixer, Clips, Devices, Settings
-│   │   ├── components/     # ClipCard, ChannelStrip, GraphicEQ, …
-│   │   ├── stores/         # Pinia: audio, replay, persistence, dsp
-│   │   └── locales/        # en.json, ar.json (full RTL)
-│   └── src-tauri/
-│       └── src/
-│           ├── main.rs     # Tauri: tray, shortcuts, file watcher
-│           ├── commands.rs # All invoke() handlers
-│           └── media_server.rs  # Local warp server for assets
-├── extension-template/     # Scaffold for third-party extensions
-└── packaging/              # udev rules, systemd, D-Bus, polkit
+├── qt-shell/               # Qt6/QML native UI (cxx-qt)
+│   ├── src/                # cxx-qt controllers (audio.rs, clips.rs,
+│   │   │                   #   editor.rs, recording.rs, mixer_pipeline.rs, …)
+│   │   └── main.rs         # App setup + module registration
+│   ├── qml/
+│   │   ├── Main.qml        # Root: pages, navigation
+│   │   ├── Theme.qml       # Design tokens (mirrors theme.json)
+│   │   ├── Icons.qml       # SVG icon path registry
+│   │   ├── pages/          # MixerPage, ClipsPage, ClipEditorPage, …
+│   │   └── components/     # Reusable QML elements
+│   ├── tools/              # check-colors.sh, ui-shots.sh (CI guards)
+│   └── build.rs            # QML file + controller registration
+├── core/                   # Shared opengg-core crate
+│   └── src/                # audio.rs, clips/, media.rs, settings/,
+│                           #   gsr.rs, daemon.rs, device.rs, vu.rs, …
+├── packaging/              # udev rules, systemd, D-Bus, polkit, icons
+└── opengg-launch.sh        # Launcher: finds and runs the release binary
 ```
 
 ## Extensions
@@ -137,21 +134,22 @@ Drop an extension folder into `~/.local/share/opengg/extensions/`. Each folder m
 | Daemon config | `~/.config/opengg/daemon.toml` |
 | UI settings | `~/.config/opengg/ui-settings.json` |
 | Theme | `~/.config/opengg/theme.json` |
+| Clip database | `~/.local/share/opengg/clips.db` |
 | Default clips dir | `~/Videos/OpenGG/` |
 | Thumbnails | `~/.local/share/opengg/thumbnails/` |
 | Crash log | `~/.local/share/opengg/opengg_crash.log` |
 
 ## Troubleshooting
 
-### "Localhost Connection" error on launch
+### "Clip playback stalls"
 
-The frontend connects to a local warp server for media files. If connection refused:
+The unified GStreamer pipeline (qml6glsink) requires `gst-plugin-qml6` to be installed:
 
-1. Check no process occupies the media port: `ss -tlnp | grep 990`
-2. Kill stale opengg processes: `pkill -9 opengg`
-3. Restart: `./dev.sh ui`
+```bash
+sudo pacman -S gst-plugin-qml6
+```
 
-In dev mode (`npm run dev` without Tauri), backend invoke calls fail silently — this is expected; use `./dev.sh ui` for the full Tauri shell.
+This is a runtime dependency only — not needed at build time.
 
 ### PipeWire permission issues
 

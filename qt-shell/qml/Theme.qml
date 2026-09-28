@@ -1,0 +1,152 @@
+pragma Singleton
+import QtQuick
+import com.opengg.app
+
+// Thin read-only mirror of ThemeController (the mutable/persisted source —
+// see qt-shell/src/theme.rs), kept as a stable `Theme.xxx` surface so every
+// existing call site is unaffected by the switch to a live theme.json-backed
+// controller.
+//
+// Token names map 1:1 onto the CSS custom properties in App.vue's :root, with
+// the two legacy aliases noted below. NOTHING in qml/ should contain a bare hex
+// color literal: if a value you need isn't here, add the token in theme.rs
+// rather than inlining it. That rule exists because the reverse produced 84
+// hardcoded literals across this shell, 24 of them semantically wrong.
+QtObject {
+    // ── Colors ────────────────────────────────────────────────────────────
+    // Accent color for highlights and active states  (--accent)
+    readonly property string accent: ThemeController.accent
+
+    // Primary window background  (--bg-surface)
+    // NOTE: named `bg`, not `surface` — the alias predates full token parity
+    // and is load-bearing across every page. `Theme.surface` is --bg-card.
+    readonly property string bg: ThemeController.bg
+
+    // Card/panel background  (--bg-card)
+    readonly property string surface: ThemeController.surface
+
+    // Recessed/inset background, below the card layer  (--bg-deep)
+    readonly property string bgDeep: ThemeController.bgDeep
+
+    // Hover state background  (--bg-hover)
+    readonly property string bgHover: ThemeController.bgHover
+
+    // Text input background  (--bg-input)
+    readonly property string bgInput: ThemeController.bgInput
+
+    // Border color for dividers and edges  (--border)
+    readonly property string border: ThemeController.border
+
+    // Primary text  (--text)
+    readonly property string text: ThemeController.text
+
+    // Secondary text  (--text-sec)
+    readonly property string textDim: ThemeController.textDim
+
+    // Tertiary/muted text — dimmer than textDim  (--text-muted)
+    // The Vue UI uses --text-sec and --text-muted about equally (134 vs 128
+    // uses); collapsing both onto textDim is what flattened this shell's text
+    // hierarchy, so pick deliberately between them.
+    readonly property string textMuted: ThemeController.textMuted
+
+    // Destructive actions  (--danger). Not #ef4444.
+    readonly property string danger: ThemeController.danger
+
+    // Success/ready states  (--success). Not #22c55e.
+    readonly property string success: ThemeController.success
+
+    // Secondary highlight  (--purple)
+    readonly property string purple: ThemeController.purple
+
+    // Fader tint past 100%. The Vue UI hardcodes this at ChannelStrip.vue:253
+    // rather than using a CSS var; tokenised so this shell has no bare literal.
+    readonly property string overdrive: ThemeController.overdrive
+
+    // Trimmed-clip duration badge (ClipCard.vue:135, hardcoded there too).
+    readonly property string trimmed: ThemeController.trimmed
+
+    // ── Layout ────────────────────────────────────────────────────────────
+    readonly property int radius: ThemeController.radius          // --radius
+    readonly property int radiusLg: ThemeController.radiusLg      // --radius-lg
+    readonly property int clipsGridCols: ThemeController.clipsGridCols
+    readonly property int titlebarH: ThemeController.titlebarH
+    readonly property int sidebarW: ThemeController.sidebarW
+
+    readonly property bool darkMode: ThemeController.darkMode
+
+    // ── Derived helpers ───────────────────────────────────────────────────
+    // Translucent accent, mirroring the Vue UI's
+    //   color-mix(in srgb, var(--accent) N%, transparent)
+    // which it uses in 101 places. ALWAYS use this instead of a literal
+    // Qt.rgba(0.914, 0.271, 0.376, a): that hardcodes the *default* accent, so
+    // tinted highlights silently stop following the user's chosen accent color.
+    function accentAlpha(pct) {
+        return Qt.alpha(Theme.accent, pct / 100)
+    }
+
+    // Translucent version of any token — the general form of accentAlpha, for
+    // danger/success tints (Vue: color-mix(in srgb, var(--danger) 8%, transparent)).
+    function tint(color, pct) {
+        return Qt.alpha(color, pct / 100)
+    }
+
+    // Linear blend of two tokens, `t` in 0..1. Lives here because
+    // check-colors.sh bans Qt.rgba() everywhere else — ChatMix uses it to
+    // colour its handle by where it sits on the Game→purple→Chat gradient.
+    // Qt.color() is NOT optional here. Several call sites pass colours that
+    // are plain strings — channelColors holds string literals, not colour
+    // objects — and reading .r/.g/.b off a string yields undefined, so this
+    // returned Qt.rgba(NaN, …): an invalid colour that paints as fully
+    // transparent. That is what made the ChatMix handle vanish.
+    function mix(a, b, t) {
+        const k = Math.max(0, Math.min(1, t))
+        const x = Qt.color(a)
+        const y = Qt.color(b)
+        return Qt.rgba(x.r + (y.r - x.r) * k,
+                       x.g + (y.g - x.g) * k,
+                       x.b + (y.b - x.b) * k,
+                       x.a + (y.a - x.a) * k)
+    }
+
+    // Colour from hue/saturation/value, each 0..1 — the track colour picker
+    // builds its hue strip and shade grid from this. Here, not there, for
+    // the same reason mix() is: colour construction from raw components is
+    // Theme's job, and check-colors.sh only permits it in this file.
+    function hsv(h, s, v) {
+        return Qt.hsva(Math.max(0, Math.min(1, h)),
+                       Math.max(0, Math.min(1, s)),
+                       Math.max(0, Math.min(1, v)), 1)
+    }
+
+    // Split a colour back into {h, s, v} so a picker can open on the value
+    // the track already has. Qt reports hue -1 for greys, which would send a
+    // picker to an arbitrary corner; report 0 instead.
+    function toHsv(c) {
+        const col = Qt.color(c)
+        return { h: col.hsvHue < 0 ? 0 : col.hsvHue,
+                 s: col.hsvSaturation,
+                 v: col.hsvValue }
+    }
+
+    // Modal backdrop. The Vue UI uses plain black at varying alpha
+    // (rgba(0,0,0,.4) … rgba(0,0,0,.85)) rather than a tinted scrim, so pass
+    // the percentage the specific modal wants.
+    function scrim(pct) {
+        return Qt.rgba(0, 0, 0, pct / 100)
+    }
+
+    // Per-channel identity colours, hardcoded in MixerPage.vue:62-63 too (they
+    // are not theme tokens — Game is always red, Chat always blue, regardless
+    // of the user's accent). Lives here so anything keyed by channel name —
+    // the mixer strips, the editor's audio-track lanes — agrees on them.
+    readonly property var channelColors: ({
+        Master: "#94A3B8", Game: "#E94560", Chat: "#3B82F6",
+        Media: "#10B981", Aux: "#A855F7", Mic: "#F59E0B",
+    })
+
+    /// Colour for a channel name, falling back to the accent for anything
+    /// unrecognised (a clip's audio track can carry any label).
+    function channelColor(name) {
+        return Theme.channelColors[name] || Theme.accent
+    }
+}

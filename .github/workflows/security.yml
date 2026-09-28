@@ -29,8 +29,12 @@ jobs:
         run: cargo audit
         working-directory: ./daemon
 
-  cargo-audit-tauri:
-    name: Cargo Audit (Tauri)
+  # Audits the Qt6/QML shell. The Tauri backend and Vue frontend that used
+  # to live under frontend/ have been removed entirely — they were archived
+  # and no longer built or shipped, so scanning their dependency trees only
+  # produced noise: advisories against code that never ran.
+  cargo-audit-qt-shell:
+    name: Cargo Audit (Qt Shell)
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
@@ -38,12 +42,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: frontend/src-tauri
+          workspaces: qt-shell
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      # Audits Cargo.lock only — no Qt/GStreamer headers needed, so this
+      # stays on ubuntu-latest rather than the Arch container CI uses to
+      # actually compile the shell.
+      - name: Run cargo audit
+        run: cargo audit
+        working-directory: ./qt-shell
+
+  # opengg-core is the only crate the shell and the daemon both depend on, so
+  # an advisory here reaches every shipped binary. It has its own lockfile
+  # (the three crates are deliberately not a workspace), which the daemon and
+  # qt-shell jobs above do not cover.
+  cargo-audit-core:
+    name: Cargo Audit (Core)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
         run: cargo audit
-        working-directory: ./frontend/src-tauri
+        working-directory: ./core
 
   cargo-deny-daemon:
     name: Cargo Deny (Daemon)
@@ -57,8 +84,8 @@ jobs:
           manifest-path: ./daemon/Cargo.toml
           command: check advisories bans
 
-  cargo-deny-tauri:
-    name: Cargo Deny (Tauri)
+  cargo-deny-qt-shell:
+    name: Cargo Deny (Qt Shell)
     runs-on: ubuntu-latest
     continue-on-error: false
     steps:
@@ -66,24 +93,22 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2.0.20
         with:
           log-level: warn
-          manifest-path: ./frontend/src-tauri/Cargo.toml
+          manifest-path: ./qt-shell/Cargo.toml
           command: check advisories bans
 
-  npm-audit:
-    name: npm Audit (Frontend)
+  cargo-deny-core:
+    name: Cargo Deny (Core)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./frontend
-    # Set continue-on-error: true so moderate/low don't block PRs.
-    # The audit-level: high flag surfaces high+ vulnerabilities.
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2.0.20
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: ./frontend/package-lock.json
-      - name: Run npm audit
-        run: npm audit --audit-level=high
+          log-level: warn
+          manifest-path: ./core/Cargo.toml
+          command: check advisories bans
+
+  # The `npm Audit (Frontend)` job that used to live here scanned the archived
+  # Vue app under frontend/. It is no longer built, packaged, or launched, so
+  # the job was reporting vulnerabilities in dependencies that never ship —
+  # permanently red for no actionable reason. The Qt shell has no npm tree.

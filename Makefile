@@ -1,36 +1,36 @@
 # OpenGG — Makefile
 #
 # Usage:
-#   make dev        → Full-stack dev mode (daemon + frontend)
+#   make dev        → Full-stack dev mode (daemon + Qt6/QML frontend)
 #   make daemon     → Build & run daemon only
-#   make ui         → Run Tauri frontend only
-#   make build      → Release build (daemon + frontend)
+#   make ui         → Run Qt6/QML frontend only
+#   make build      → Release build (daemon + Qt6/QML frontend)
 #   make setup      → First-time dependency install
 #   make clean      → Remove all build artifacts
-#   make install    → Install daemon binary to ~/.local/bin
+#   make install    → Install daemon + Qt6 binary to ~/.local/bin
 
 SHELL := /bin/bash
 
 ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
-FRONTEND := $(ROOT)/frontend
+QT_SHELL := $(ROOT)/qt-shell
 
-.PHONY: dev daemon ui build setup clean install install-service install-desktop lint check help new-extension validate-extension
+.PHONY: dev daemon ui build setup clean install install-service install-desktop lint check help new-extension validate-extension ui-shots lint-qml
 
 # ── Default ──────────────────────────────────────────────────────
 help:
 	@echo ""
 	@echo "  OpenGG Development Commands"
 	@echo "  ─────────────────────────────"
-	@echo "  make dev       Full-stack dev (daemon + frontend)"
+	@echo "  make dev       Full-stack dev (daemon + Qt6 frontend)"
 	@echo "  make daemon    Build & run daemon (debug)"
-	@echo "  make ui        Run Tauri frontend dev server"
-	@echo "  make build     Release build"
+	@echo "  make ui        Build & run Qt6/QML frontend"
+	@echo "  make build     Release build (daemon + Qt6 frontend)"
 	@echo "  make setup     Install all dependencies"
 	@echo "  make clean     Remove build artifacts"
 	@echo "  make install   Install daemon to ~/.local/bin"
 	@echo "  make check     Type-check everything"
-	@echo "  make lint      Clippy + vue-tsc"
+	@echo "  make lint      Clippy + check-colors.sh"
 	@echo "  make new-extension NAME=<id>          Scaffold a new extension"
 	@echo "  make validate-extension DIR=<path>   Validate extension manifest & files"
 	@echo ""
@@ -53,12 +53,9 @@ daemon-release:
 ui:
 	@chmod +x dev.sh && ./dev.sh ui
 
-ui-deps:
-	cd $(FRONTEND) && npm install
-
 # ── Release build ────────────────────────────────────────────────
 build: daemon-release
-	cd $(FRONTEND) && npm install && npx tauri build
+	cd $(QT_SHELL) && cargo build --release
 
 # ── Scaffold a new extension ─────────────────────────────────────
 new-extension:
@@ -75,10 +72,12 @@ setup:
 	@chmod +x dev.sh && ./dev.sh setup
 
 # ── Install ──────────────────────────────────────────────────────
-install: daemon-release install-service
+install: build install-service
 	@mkdir -p $(HOME)/.local/bin
-	cp $(DAEMON)/target/release/openggd $(HOME)/.local/bin/
+	install -m 755 $(DAEMON)/target/release/openggd $(HOME)/.local/bin/openggd
+	install -m 755 $(QT_SHELL)/target/release/opengg-qt $(HOME)/.local/bin/opengg
 	@echo "✓ Installed openggd to ~/.local/bin/"
+	@echo "✓ Installed opengg-qt as ~/.local/bin/opengg"
 
 # ── systemd user service ─────────────────────────────────────────
 # Install + enable the per-user daemon so the virtual audio engine auto-starts at
@@ -104,15 +103,27 @@ install-desktop:
 # ── Code Quality ─────────────────────────────────────────────────
 check:
 	cd $(DAEMON) && cargo check
-	cd $(FRONTEND)/src-tauri && cargo check
+	cd $(QT_SHELL) && cargo check
 
 lint:
 	cd $(DAEMON) && cargo clippy -- -W clippy::all
-	cd $(FRONTEND) && npx vue-tsc --noEmit
+	cd $(QT_SHELL) && cargo clippy -- -W clippy::all
+	$(MAKE) lint-qml
+
+# Guards qt-shell/qml against bare colour literals, frozen Qt.rgba tints and
+# emoji-as-icons — the three defect classes from the UI-fidelity plan.
+lint-qml:
+	$(ROOT)/qt-shell/tools/check-colors.sh
+
+# ── UI screenshots (qt-shell, headless) ──────────────────────────
+# Renders every page + settings panel to PNG under QT_QPA_PLATFORM=offscreen.
+# Never opens a window on your desktop. Use ONLY=<page> to capture just one.
+ui-shots:
+	cd $(ROOT)/qt-shell && cargo build
+	$(ROOT)/qt-shell/tools/ui-shots.sh
 
 # ── Clean ────────────────────────────────────────────────────────
 clean:
 	cd $(DAEMON) && cargo clean
-	cd $(FRONTEND)/src-tauri && cargo clean
-	rm -rf $(FRONTEND)/node_modules $(FRONTEND)/dist
+	cd $(QT_SHELL) && cargo clean
 	@echo "✓ Cleaned all build artifacts"

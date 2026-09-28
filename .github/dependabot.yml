@@ -15,26 +15,26 @@ updates:
           - minor
           - patch
 
-  # Tauri crate dependencies
+  # Qt6/QML shell crate dependencies
   - package-ecosystem: cargo
-    directory: /frontend/src-tauri
+    directory: /qt-shell
     schedule:
       interval: weekly
     commit-message:
-      prefix: "deps(tauri):"
+      prefix: "deps(qt-shell):"
     groups:
       minor-and-patch:
         update-types:
           - minor
           - patch
 
-  # Frontend npm dependencies
-  - package-ecosystem: npm
-    directory: /frontend
+  # opengg-core crate dependencies
+  - package-ecosystem: cargo
+    directory: /core
     schedule:
       interval: weekly
     commit-message:
-      prefix: "deps(frontend):"
+      prefix: "deps(core):"
     groups:
       minor-and-patch:
         update-types:

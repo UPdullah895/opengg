@@ -7,58 +7,41 @@ on:
 
 jobs:
   release:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    # Same container CI uses to build the Qt6/QML shell: it needs Qt 6.7+
+    # (per-corner radii, etc.) which ubuntu-latest's Qt packages don't have.
+    container: archlinux:latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system deps
+      - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libpulse-dev
+          pacman -Syu --noconfirm \
+            base-devel curl pkgconf cmake ninja clang github-cli \
+            qt6-base qt6-declarative qt6-multimedia qt6-shadertools \
+            gstreamer gst-plugins-base gst-plugins-base-libs \
+            gst-plugins-good gst-plugins-bad gst-plugin-qml6 \
+            ttf-dejavu
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+      - name: Install Rust via rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            frontend/src-tauri -> target
             daemon -> target
+            qt-shell -> target
 
-      - name: Install frontend deps
-        run: cd frontend && npm ci
-
-      - name: Build daemon
+      - name: Build daemon (release)
         run: cd daemon && cargo build --release
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: frontend
-          tagName: ${{ github.ref_name }}
-          releaseName: OpenGG ${{ github.ref_name }}
-          releaseBody: |
-            See the [README](https://github.com/UPdullah895/opengg#readme) for installation instructions.
-          releaseDraft: false
-          prerelease: false
+      - name: Build Qt6/QML frontend (release)
+        run: cd qt-shell && cargo build --release
 
       - name: Package release tarball
         run: |
@@ -67,7 +50,7 @@ jobs:
           TARBALL="${ROOT}.tar.gz"
 
           mkdir -p "$ROOT/usr/bin"
-          cp frontend/src-tauri/target/release/opengg "$ROOT/usr/bin/opengg"
+          cp qt-shell/target/release/opengg-qt "$ROOT/usr/bin/opengg"
           cp daemon/target/release/openggd "$ROOT/usr/bin/openggd"
 
           mkdir -p "$ROOT/usr/lib/udev/rules.d"
@@ -82,7 +65,23 @@ jobs:
           mkdir -p "$ROOT/usr/share/polkit-1/actions"
           cp packaging/org.opengg.setup.policy "$ROOT/usr/share/polkit-1/actions/"
 
+          mkdir -p "$ROOT/usr/share/applications"
+          cp packaging/opengg.desktop "$ROOT/usr/share/applications/"
+
+          mkdir -p "$ROOT/usr/share/icons/hicolor/256x256/apps"
+          cp packaging/icons/256x256.png "$ROOT/usr/share/icons/hicolor/256x256/apps/opengg.png"
+
           tar -czf "$TARBALL" "$ROOT"
-          gh release upload "$GITHUB_REF_NAME" "$TARBALL" --clobber
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release and upload tarball
+        uses: softprops/action-gh-release@v2
+        with:
+          name: OpenGG ${{ github.ref_name }}
+          body: |
+            See the [README](https://github.com/UPdullah895/opengg#readme) for installation instructions.
+          draft: false
+          prerelease: false
+          files: ${{ env.TARBALL }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

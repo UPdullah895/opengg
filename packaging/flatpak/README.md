@@ -4,12 +4,12 @@ This directory contains the Flatpak manifest and metadata for OpenGG.
 
 ## Overview
 
-OpenGG is a Linux gaming hub built with Tauri 2 (frontend + WebKitGTK) and a Rust background daemon. The Flatpak package bundles both components and integrates with the host system's D-Bus, PipeWire/PulseAudio, and other services.
+OpenGG is a Linux gaming hub built with a Qt6/QML frontend and a Rust background daemon. The Flatpak package bundles both components and integrates with the host system's D-Bus, PipeWire/PulseAudio, and other services.
 
 ### Architecture
 - **Daemon**: `openggd` — unprivileged Rust service owning `org.opengg.Daemon` on the session D-Bus
-- **Frontend**: `opengg` — Tauri 2 app (WebKitGTK webview) with file picker and tray support
-- **IPC**: D-Bus session bus for daemon ↔ app communication
+- **Frontend**: `opengg` — Qt6/QML app (built via cxx-qt, binary name `opengg-qt`), video playback via GStreamer's `qml6glsink` into the Qt Quick OpenGL scene graph
+- **IPC**: cxx-qt controllers call `opengg-core` directly in-process; `opengg-core` talks to the daemon over the D-Bus session bus
 - **Audio**: PipeWire/PulseAudio subprocess calls (`pactl`, `pw-link`)
 - **Screen Capture**: `gpu-screen-recorder` subprocess with optional sandbox portal integration
 
@@ -17,36 +17,37 @@ OpenGG is a Linux gaming hub built with Tauri 2 (frontend + WebKitGTK) and a Rus
 
 ### System Requirements
 - `flatpak-builder` ≥ 1.2.0
-- GNOME Platform and SDK 46+ (see **Runtime Version Choice** below)
+- KDE Platform and SDK 6.7+ (see **Runtime Version Choice** below)
 - Rust support via `org.freedesktop.Sdk.Extension.rust-stable`
 - `python3` (for generating vendored source manifests)
 
 ### Installation (Fedora example)
 ```bash
-sudo dnf install flatpak flatpak-builder gnome-runtime-46 gnome-sdk-46
+sudo dnf install flatpak flatpak-builder
+flatpak install flathub org.kde.Platform//6.7 org.kde.Sdk//6.7
 ```
 
 ### Installation (Ubuntu/Debian example)
 ```bash
-sudo apt install flatpak flatpak-builder gnome-shell
-# Add GNOME runtime
+sudo apt install flatpak flatpak-builder
 flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install flathub org.gnome.Platform/x86_64/46 org.gnome.Sdk/x86_64/46
+flatpak install flathub org.kde.Platform/x86_64/6.7 org.kde.Sdk/x86_64/6.7
 ```
 
-## Runtime Version Choice: GNOME 46
+## Runtime Version Choice: KDE 6.7
 
-**Why GNOME 46?**
-- Ships **WebKit2GTK 4.1** (required by Tauri 2 Linux)
-- Stable and widely available (released Mar 2024)
+**Why KDE 6.7?**
+- Ships **Qt 6.7+**, which qt-shell's QML requires (per-corner `radius` properties and other 6.7+ APIs — see the note in `.github/workflows/ci.yml` about why CI builds qt-shell on Arch rather than Ubuntu, whose Qt packages lag behind)
+- The KDE runtime is the natural fit for a Qt Quick app, the same way the old manifest used the GNOME runtime for its WebKitGTK dependency
 - Contains updated PipeWire/PulseAudio bindings
-- Alternative: GNOME 47/48 for cutting-edge webkit, but 46 balances stability and feature completeness
 
-If building on a system with only GNOME 48 available, change `runtime-version: '46'` to `'48'` in `org.opengg.OpenGG.yml`.
+If a newer KDE runtime ships a Qt version qt-shell needs, bump `runtime-version: '6.7'` in `org.opengg.OpenGG.yml` accordingly.
+
+**Not yet resolved (see Stub Items below):** the KDE runtime is not guaranteed to bundle GStreamer's `gst-plugin-qml6`, which qt-shell's video playback depends on — this may need its own module.
 
 ## Generating Vendored Sources
 
-Flatpak uses offline builds for security and reproducibility. Cargo and npm dependencies must be vendored before building.
+Flatpak uses offline builds for security and reproducibility. Cargo dependencies must be vendored before building.
 
 ### Prerequisites for Source Generation
 ```bash
@@ -64,22 +65,12 @@ python3 flatpak-cargo-generator.py \
   -o ../../../packaging/flatpak/cargo-sources.json
 ```
 
-For the Tauri frontend (more complex due to build-dependencies):
+For the Qt6/QML shell (this also vendors `opengg-core`, since qt-shell depends on it via a path dependency and both are locked in the same `Cargo.lock`):
 ```bash
 cd ~/flatpak-builder-tools/cargo
 python3 flatpak-cargo-generator.py \
-  ../../../frontend/src-tauri/Cargo.lock \
-  -o ../../../packaging/flatpak/tauri-cargo-sources.json
-```
-
-### Generate npm Sources
-
-For the Vue 3 + Tauri frontend:
-```bash
-cd ~/flatpak-builder-tools/npm
-python3 flatpak-npm-generator.py \
-  ../../../frontend/package-lock.json \
-  -o ../../../packaging/flatpak/npm-sources.json
+  ../../../qt-shell/Cargo.lock \
+  -o ../../../packaging/flatpak/qt-shell-cargo-sources.json
 ```
 
 The generated JSON files will be sourced by the manifest's module entries. Store these in version control or regenerate as part of your release pipeline.
@@ -117,20 +108,20 @@ Each permission in `finish-args` is justified below:
 
 | Argument | Justification |
 |----------|---|
-| `--socket=wayland` | Tauri WebKitGTK webview requires Wayland protocol for rendering |
+| `--socket=wayland` | Qt Quick scene graph (and qml6glsink video rendering) needs the Wayland protocol |
 | `--socket=x11` | X11 socket for legacy/hybrid sessions and Xwayland |
 | `--share=ipc` | IPC namespace sharing for X11 and Wayland protocols |
 | `--socket=pulseaudio` | PipeWire/PulseAudio socket for audio device enumeration and `pactl` subprocess calls |
 | `--filesystem=xdg-videos` | Read/write access to ~/Videos for default clip storage directory |
 | `--filesystem=xdg-config/opengg:create` | User config directory (~/.config/opengg/daemon.toml, ui-settings.json, theme.json) |
 | `--filesystem=xdg-data/opengg:create` | User data directory (~/.local/share/opengg) for clip database, thumbnails, crash logs |
-| `--device=dri` | GPU device access for webview rendering and FFmpeg hardware acceleration |
+| `--device=dri` | GPU device access for the Qt Quick OpenGL scene graph and FFmpeg hardware acceleration |
 | `--own-name=org.opengg.Daemon` | Own the D-Bus service name for the background daemon |
 | `--system-talk-name=org.freedesktop.ratbag1` | Mouse/keyboard configuration via ratbagd (system D-Bus) |
 | `--talk-name=org.freedesktop.portal.Flatpak` | Desktop portal integration (XDG portals) |
 | `--talk-name=org.freedesktop.portal.Desktop` | Portal access for file dialogs, screen casting, etc. |
 | `--system-talk-name=org.freedesktop.systemd1` | Optional: future daemon/service control (currently unused) |
-| `--share=network` | Localhost TCP socket for OpenRGB (6742) and internal warp media server |
+| `--share=network` | Localhost TCP socket for OpenRGB (6742) and internal media server |
 | `--talk-name=org.freedesktop.Notifications` | Desktop notifications via notification service |
 
 ### Note on Portals
@@ -173,10 +164,9 @@ Run gpu-screen-recorder on the host system using `flatpak-spawn`:
 - Tightly couples sandbox app to host package availability
 
 **Implementation:**
-In the Tauri commands layer (`frontend/src-tauri/src/commands.rs`), detect the Flatpak environment and dispatch:
+`opengg-core` (`core/src/gsr.rs`) already spawns `gpu-screen-recorder` as a plain subprocess; under Flatpak this call needs to detect the sandbox and re-dispatch through `flatpak-spawn --host`:
 
 ```rust
-#[cfg(feature = "flatpak")]
 let is_flatpak = std::fs::metadata("/.flatpak-info").is_ok();
 
 if is_flatpak {
@@ -185,14 +175,14 @@ if is_flatpak {
         .args(&["--host", "gpu-screen-recorder", ...])
         .output()?;
 } else {
-    // Direct invocation (non-Flatpak)
+    // Direct invocation (non-Flatpak) — the current, only implemented path
     let output = std::process::Command::new("gpu-screen-recorder")
         .args(&[...])
         .output()?;
 }
 ```
 
-**Decision:** This scaffolding documents both paths. **For production, prioritize Option A** (portal) and file an issue to track gpu-screen-recorder portal support. As interim, Option B works today if users have `gpu-screen-recorder` installed on the host.
+**Decision:** This scaffolding documents both paths; neither Flatpak dispatch branch is implemented in `core/src/gsr.rs` yet. **For production, prioritize Option A** (portal) and file an issue to track gpu-screen-recorder portal support. As interim, Option B works today if users have `gpu-screen-recorder` installed on the host.
 
 ### Not Bundling gpu-screen-recorder (Recommended)
 
@@ -230,6 +220,7 @@ Raw udev device management (reading `/dev/input/*`, `/sys/class/hidraw/*` direct
 |---------|--------|-------|
 | Audio mixer | ✓ Full | PipeWire/PulseAudio via `pactl` (D-Bus client) |
 | Clip recording | ⚠ Portal/Host | gpu-screen-recorder via portal or flatpak-spawn |
+| Clip video playback | ⚠ Untested in sandbox | `qml6glsink`'s GL scene-graph requirement (see `qt-shell/src/mixer_pipeline.rs`) has not been verified inside a Flatpak sandbox |
 | Mouse/keyboard | ✓ Full | ratbagd over system D-Bus |
 | RGB control | ✓ Full | OpenRGB over localhost TCP |
 | Headset control | ✗ Limited | Raw HID not available; requires host workaround |
@@ -275,12 +266,12 @@ This displays the resolved manifest without building (requires `flatpak-builder`
 The following items are **stubbed** and require completion:
 
 1. **`cargo-sources.json`** (daemon) — Generate via flatpak-cargo-generator from `daemon/Cargo.lock`
-2. **`tauri-cargo-sources.json`** (frontend) — Generate via flatpak-cargo-generator from `frontend/src-tauri/Cargo.lock`
-3. **`npm-sources.json`** (frontend) — Generate via flatpak-npm-generator from `frontend/package-lock.json`
-4. **Tauri desktop entry postinstall** — Verify the manifest's `post-install` step correctly stages the desktop file
-5. **D-Bus service file** — Uncomment and verify the commented D-Bus service installation in the daemon module
-6. **gpu-screen-recorder module** — Decide on bundling vs. host-delegated approach and document final decision
-7. **Test on real Flatpak environment** — Requires a machine with `flatpak-builder` and GNOME SDK
+2. **`qt-shell-cargo-sources.json`** (qt-shell + opengg-core) — Generate via flatpak-cargo-generator from `qt-shell/Cargo.lock`
+3. **GStreamer Qt6 sink availability** — Confirm whether the `org.kde.Platform` runtime ships `gst-plugin-qml6`; if not, add a module for it (qt-shell's clip video playback depends on it — see `qt-shell/src/main.rs`)
+4. **D-Bus service file** — Uncomment and verify the commented D-Bus service installation in the daemon module
+5. **gpu-screen-recorder module** — Decide on bundling vs. host-delegated approach and document final decision
+6. **Test on real Flatpak environment** — Requires a machine with `flatpak-builder` and the KDE SDK
+7. **Verify qml6glsink inside the sandbox** — `qml6glsink` needs a live GL scene graph (see `AGENTS.md`'s QML landmines and `qt-shell/src/mixer_pipeline.rs`); this has never been confirmed to work under Flatpak's DRI/GL passthrough
 8. **Flathub submission** — Screenshots, release notes, and review checklist
 
 ## Integration with Release Pipeline
@@ -308,12 +299,12 @@ The following items are **stubbed** and require completion:
 - [flatpak-builder-tools](https://github.com/flatpak/flatpak-builder-tools)
 - [AppStream Metainfo Standard](https://www.freedesktop.org/wiki/Specifications/AppStream/Metadata/)
 - [gpu-screen-recorder Portal Support](https://github.com/dec05eba/gpu-screen-recorder/issues)
-- [GNOME Runtime Releases](https://wiki.gnome.org/ReleasePlanning)
+- [KDE Runtime Releases](https://community.kde.org/Guidelines_and_HOWTOs/Flatpak)
 
 ## Contributing
 
 When updating this Flatpak package:
-1. Regenerate vendored source manifests for any Cargo.lock or package-lock.json changes
+1. Regenerate vendored source manifests for any Cargo.lock changes
 2. Test builds locally with `flatpak-builder --show-manifest` before committing
 3. Update this README with any new permissions, modules, or limitations
-4. Keep the manifest version-synced with OpenGG releases (see `frontend/package.json` and `daemon/Cargo.toml`)
+4. Keep the manifest version-synced with OpenGG releases (see `daemon/Cargo.toml` and `qt-shell/Cargo.toml`)

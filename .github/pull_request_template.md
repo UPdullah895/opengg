@@ -23,23 +23,20 @@ How have you tested this change? Please describe:
 
 - [ ] I tested locally with `make dev`
 - [ ] I ran `make lint` and all checks pass
-- [ ] I ran `npm run check:locales` (if modifying locales)
-- [ ] I ran `npm test` (if applicable)
+- [ ] I manually verified locale key parity between `en.json` and `ar.json` (if modifying locales — no automated checker yet, see `docs/TRANSLATING.md`)
+- [ ] I ran `qt-shell/tools/ui-shots.sh` with zero QML warnings (if UI changes)
 - [ ] I tested both dark and light themes (if UI changes)
 
 ## Checklist
 
-- [ ] `make lint` passes (cargo clippy + vue-tsc)
-- [ ] Both daemon and Tauri crates pass `cargo clippy -- -D warnings`
-- [ ] `npm run check:locales` passes (if you modified locale files)
-- [ ] No hardcoded colors (uses CSS custom properties from `docs/DESIGN_TOKENS.md`)
-- [ ] No hardcoded user-facing strings (all text uses i18n `t()` in both `en.json` and `ar.json`)
-- [ ] All components use `<style scoped>` (no global CSS)
-- [ ] If I added new Tauri commands:
-  - [ ] Registered in `frontend/src-tauri/src/commands.rs` with `#[command]`
-  - [ ] Listed in `frontend/src-tauri/src/main.rs` in the `invoke_handler!` macro
+- [ ] `make lint` passes (cargo clippy + check-colors.sh)
+- [ ] daemon, core, and qt-shell all pass `cargo clippy -- -D warnings`
+- [ ] Locale key parity verified between `en.json` and `ar.json` (if you modified locale files)
+- [ ] No hardcoded colors or emoji icons (uses `Theme` tokens and `Icons.qml` — see `AGENTS.md`'s Theme & Icon Rules)
+- [ ] No hardcoded user-facing strings (all text uses `I18n.t()` in both `en.json` and `ar.json`)
+- [ ] If I added new QML files: registered in `qt-shell/build.rs`
 - [ ] If I modified daemon code: considered the constraints in [CLAUDE.md](https://github.com/UPdullah895/opengg/blob/main/CLAUDE.md) (PipeWire restart, subprocess cleanup, IPC validation)
-- [ ] If I modified frontend state: followed the reactivity rules in [frontend/CLAUDE.md](https://github.com/UPdullah895/opengg/blob/main/frontend/CLAUDE.md)
+- [ ] If I modified QML: followed the landmines in [AGENTS.md](https://github.com/UPdullah895/opengg/blob/main/AGENTS.md) (integer pixelSize, layout container traps, one-time QQC2 bindings, etc.)
 - [ ] Screenshots included (if UI changes)
 
 ## Screenshots (if applicable)

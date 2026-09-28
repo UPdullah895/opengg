@@ -1,6 +1,8 @@
+pub mod connection;
 pub mod ratbag;
 pub mod types;
 pub mod headset;
+mod identity_overrides;
 mod openrgb;
 pub mod profiles;
 mod process_watch;

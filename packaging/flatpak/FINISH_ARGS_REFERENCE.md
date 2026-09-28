@@ -5,7 +5,7 @@ This document details every `finish-args` permission in the Flatpak manifest wit
 ## Display & Graphics
 
 ### `--socket=wayland`
-**Justification:** Tauri's WebKitGTK 4.1 webview requires the Wayland protocol for rendering on modern Linux desktops.
+**Justification:** The Qt Quick OpenGL scene graph — and `qml6glsink`'s GStreamer video rendering into it (`qt-shell/src/mixer_pipeline.rs`) — requires the Wayland protocol for rendering on modern Linux desktops.
 
 ### `--socket=x11`
 **Justification:** X11 socket for legacy X11-only desktops and Xwayland (X11 apps on Wayland compositors).
@@ -15,7 +15,7 @@ This document details every `finish-args` permission in the Flatpak manifest wit
 
 ### `--device=dri`
 **Justification:** GPU device access for:
-- Tauri webview rendering (GPU-accelerated rasterization)
+- Qt Quick scene graph rendering and `qml6glsink` video playback (GPU-accelerated)
 - FFmpeg hardware video codec support (H.264/H.265 encoding/decoding)
 - Vulkan/OpenGL if used by future GPU-screen-recorder portal integration
 
@@ -36,7 +36,7 @@ This document details every `finish-args` permission in the Flatpak manifest wit
 ### `--filesystem=xdg-config/opengg:create`
 **Justification:** User configuration directory `~/.config/opengg/` for:
 - `daemon.toml` — daemon settings (audio, device, replay config)
-- `ui-settings.json` — frontend preferences (mixer routing, DSP presets, theme)
+- `ui-settings.json` — Qt shell preferences (mixer routing, DSP presets, theme)
 - `theme.json` — custom color scheme
 - `:create` flag ensures the directory is created if missing
 
@@ -51,7 +51,7 @@ This document details every `finish-args` permission in the Flatpak manifest wit
 
 ### `--own-name=org.opengg.Daemon`
 **Justification:** The unprivileged daemon process owns the `org.opengg.Daemon` service name on the session bus. This allows:
-- The Tauri frontend to invoke daemon methods via D-Bus
+- The Qt shell (via `opengg-core`) to invoke daemon methods over D-Bus
 - External tools to control OpenGG audio/device settings
 - Auto-activation of the daemon on first D-Bus method call (defined in `org.opengg.Daemon.service`)
 
@@ -86,8 +86,9 @@ This document details every `finish-args` permission in the Flatpak manifest wit
 ### `--share=network`
 **Justification:** Network socket access for:
 - **OpenRGB** — TCP connection to `localhost:6742` for RGB device control
-- **Internal warp media server** — `localhost:<ephemeral port>` HTTP server for video file serving (bypasses WebKitGTK asset:// bugs)
 - **Future updates** — if auto-update checking is enabled
+
+(The Qt shell plays clip video directly via `qml6glsink`/GStreamer from local file paths — there is no local HTTP media server to account for here, unlike the old Tauri app's warp server.)
 
 **Security note:** Sandboxed, only accessible from the localhost address; no outbound internet access to arbitrary hosts without explicit user action.
 
@@ -112,7 +113,7 @@ The following do **not** require explicit `--talk-name` declarations because the
 
 | Argument | Type | Scope | Rationale |
 |----------|------|-------|-----------|
-| wayland, x11, ipc | Display | Mandatory | Tauri webview rendering |
+| wayland, x11, ipc | Display | Mandatory | Qt Quick scene graph + qml6glsink video rendering |
 | pulseaudio | Audio | Mandatory | Audio device access, PipeWire integration |
 | xdg-videos, xdg-config/opengg, xdg-data/opengg | FS | Mandatory | Config, clips, cache, database |
 | dri | Device | Mandatory | GPU rendering & encoding |
@@ -140,7 +141,7 @@ flatpak run org.opengg.OpenGG
 
 # Monitor network connections
 netstat -tupan | grep opengg
-# Should only show localhost:6742 and ephemeral media server ports
+# Should only show localhost:6742 (OpenRGB)
 ```
 
 ## Potential Future Permissions
