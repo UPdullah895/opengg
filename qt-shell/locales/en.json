@@ -158,6 +158,22 @@
     },
     "changelog": [
       {
+        "version": "V0.2.2",
+        "date": "2026-09-29",
+        "items": [
+          "Recording now works with the Flatpak gpu-screen-recorder, which was reported as missing even after setup",
+          "Game tags, favourites and trims save on fresh installs; clips are grouped by their folder's game name",
+          "Settings → Storage can point gpu-screen-recorder's own app at your clip folder instead of a new folder per game in ~/Videos",
+          "The editor remembers trim, volume and track levels per clip, and no longer stutters on pause/play",
+          "Full view hides the top bar and title bar immediately; the editor sidebar and timeline are resizable",
+          "Noise gate, compressor and noise reduction now actually process audio, and the Mic channel carries the filtered voice",
+          "Timeline tracks have a simple mode with presets and an advanced mode with reset to defaults",
+          "Every manual command has a Copy button, and error messages can be copied",
+          "Example extensions are no longer installed for everyone",
+          "Arabic: the timeline and playback controls no longer mirror, and the remaining English text is translated"
+        ]
+      },
+      {
         "version": "V0.2.1",
         "date": "2026-09-28",
         "items": [
