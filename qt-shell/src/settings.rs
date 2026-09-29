@@ -42,6 +42,11 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "defaultShortcutsJson"]
         fn default_shortcuts_json(self: &Self) -> QString;
+
+        /// Put the timeline tracks back to the built-in defaults.
+        #[qinvokable]
+        #[cxx_name = "resetTrackDefs"]
+        fn reset_track_defs(self: Pin<&mut Self>);
     }
 }
 
@@ -120,6 +125,13 @@ impl qobject::SettingsController {
 
     pub fn default_shortcuts_json(&self) -> QString {
         QString::from(&default_shortcuts().to_string())
+    }
+
+    pub fn reset_track_defs(self: Pin<&mut Self>) {
+        let mut v = load_envelope();
+        v["settings"]["trackDefs"] = opengg_core::settings::default_track_defs();
+        save_envelope(&v);
+        self.refresh();
     }
 
     pub fn reset_shortcuts(self: Pin<&mut Self>) {

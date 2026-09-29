@@ -20,6 +20,15 @@ Rectangle {
     id: page
     color: Theme.bg
 
+    // Media editors stay left-to-right in an RTL language: time runs left to
+    // right on the timeline, the transport and trim handles keep their usual
+    // places, and the scrub bar fills the same way. Mirroring the whole page
+    // put the track labels on the right while the trim overlay still
+    // measured from the left, so the handles sat off their marks. Text
+    // itself is still shaped and translated as usual.
+    LayoutMirroring.enabled: false
+    LayoutMirroring.childrenInherit: true
+
     /// {filepath, title} of the clip being edited, or null.
     property var clip: null
     signal closed()
@@ -61,6 +70,21 @@ Rectangle {
                 return page.trackDefs[i]
         return null
     }
+    /// A track name for display: the built-in role names ("Game", "Mic", …)
+    /// and the empty Overlays/Video defaults are shown translated; anything
+    /// the user typed is shown as-is. Track data keeps the English role name
+    /// so it stays stable across language switches.
+    function trackLabel(def) {
+        const n = (def && def.name) || ""
+        if (n.length === 0 || n === "Overlays" || n === "Video") {
+            if (def && def.id === "O1") return I18n.t("editor.overlayTrack")
+            if (def && def.id === "V1") return I18n.t("editor.videoTrack")
+        }
+        const k = "mixer.channels." + n.toLowerCase()
+        const t = I18n.t(k)
+        return t !== k ? t : (n || (def ? def.id : ""))
+    }
+
     /// Map a trackDefs icon key onto this shell's icon registry.
     function trackIcon(key, fallback) {
         switch (key) {
@@ -122,6 +146,42 @@ Rectangle {
         else
             audioOut.volume = page.masterVolume
     }
+
+    // ── Saved editor state ────────────────────────────────────────────────
+    // The trim window, volume and per-track gains are saved per clip as they
+    // change, and restored when the clip is reopened. Previously the trim
+    // was only written on export, so leaving the editor first reset it to
+    // the whole clip, and the volume always came back at maximum.
+    //
+    // A clip with no saved volume starts at the last volume used in the
+    // editor rather than at 100%.
+    property bool stateLoaded: false
+    /// The file the current trim/volume belong to. Kept separately from
+    /// `clip`, which has already moved on by the time onClipChanged runs.
+    property string stateFilepath: ""
+    function saveState() {
+        if (!page.stateLoaded || page.stateFilepath.length === 0)
+            return
+        EditorController.saveState(page.stateFilepath, page.trimStart, page.trimEnd,
+                                   page.masterVolume, JSON.stringify(page.trackVolume))
+    }
+    Timer { id: saveDebounce; interval: 500; onTriggered: page.saveState() }
+    onTrimStartChanged: if (page.stateLoaded) saveDebounce.restart()
+    onTrimEndChanged: if (page.stateLoaded) saveDebounce.restart()
+    onTrackVolumeChanged: if (page.stateLoaded) saveDebounce.restart()
+    onMasterVolumeChanged: {
+        if (!page.stateLoaded)
+            return
+        saveDebounce.restart()
+        SettingsController.setValue("editorVolume", JSON.stringify(page.masterVolume))
+    }
+    /// Write any pending change now — before the clip or page goes away.
+    function flushState() {
+        if (saveDebounce.running) {
+            saveDebounce.stop()
+            page.saveState()
+        }
+    }
     /// Hides the info panel and timeline so the picture fills the page.
     property bool theaterMode: false
     /// Collapses the app's nav rail while the editor is open, without going
@@ -132,6 +192,28 @@ Rectangle {
     /// user's choice to ui-settings, so opting back in sticks.
     property bool navHidden: page.settings.editorNavHidden !== false
     readonly property var settings: JSON.parse(SettingsController.settingsJson || "{}")
+
+    // ── Resizable panes ───────────────────────────────────────────────────
+    // The info sidebar's width and the timeline's height are dragged by the
+    // user and remembered in ui-settings. A timeline height of 0 means "fit
+    // the lanes", which is also the default.
+    readonly property int sidebarMinW: 180
+    readonly property real sidebarMaxW: Math.max(page.sidebarMinW, Math.min(480, page.width * 0.4))
+    property real sidebarW: Math.max(page.sidebarMinW,
+                                     Math.min(page.sidebarMaxW, page.settings.editorSidebarW || 232))
+    property real timelineUserH: page.settings.editorTimelineH || 0
+    readonly property int laneCount: 1 + page.audioStreams.length
+    readonly property int laneMinH: 30
+    /// Lanes + the pane's margins, at the minimum lane height.
+    readonly property real timelineMinH: 30 + page.laneCount * page.laneMinH
+                                         + (page.laneCount - 1) * 4
+    readonly property real timelineMaxH: Math.max(page.timelineMinH, page.height * 0.65)
+    readonly property real timelineH: page.timelineUserH > 0
+        ? Math.max(page.timelineMinH, Math.min(page.timelineMaxH, page.timelineUserH))
+        : Math.min(196, page.timelineMinH + 20)
+    /// Each lane shares whatever height the timeline has been given.
+    readonly property real laneH: Math.max(page.laneMinH, Math.min(140,
+        (page.timelineH - 30 - (page.laneCount - 1) * 4) / Math.max(1, page.laneCount)))
 
     function setNavHidden(hidden) {
         page.navHidden = hidden
@@ -152,9 +234,19 @@ Rectangle {
         interval: 2200
         onTriggered: if (page.theaterMode && !page.chromeHovered) page.chromeHidden = true
     }
+    /// Last pointer position seen, so only a REAL move wakes the chrome.
+    property point lastPointer: Qt.point(-1, -1)
     HoverHandler {
-        // Any movement anywhere in the page wakes the chrome.
+        // Qt re-delivers a hover event whenever items move under a still
+        // cursor — including the bars collapsing — so waking on every event
+        // brought the chrome straight back and it never hid while the
+        // pointer was inside the window. Compare positions instead.
         onPointChanged: {
+            const p = point.position
+            if (Math.abs(p.x - page.lastPointer.x) < 3
+                    && Math.abs(p.y - page.lastPointer.y) < 3)
+                return
+            page.lastPointer = Qt.point(p.x, p.y)
             page.chromeHidden = false
             if (page.theaterMode) idleTimer.restart()
         }
@@ -189,18 +281,29 @@ Rectangle {
     }
 
     onClipChanged: {
+        // Save the outgoing clip first; its values are still in place here.
+        page.flushState()
         if (!page.clip)
             return
         // Read straight off `clip` rather than through the `filepath` binding:
         // QML does not guarantee a dependent binding has re-evaluated by the
         // time the property's own onChanged handler runs, and loading with a
         // stale empty path left the whole INFO panel showing dashes.
+        page.stateLoaded = false
+        page.stateFilepath = page.clip.filepath
         EditorController.loadClip(page.clip.filepath)
         page.trimStart = EditorController.trimStart
         page.trimEnd = EditorController.trimEnd
         page.resetTrimHistory(page.trimStart, page.trimEnd)
         page.gameTag = page.clip.game || ""
         page.trackMuted = ({})
+        const saved = JSON.parse(EditorController.savedStateJson || "{}")
+        page.trackVolume = saved.trackGains || ({})
+        const lastVol = page.settings.editorVolume
+        page.masterVolume = saved.volume !== undefined && saved.volume !== null
+                            ? saved.volume
+                            : (typeof lastVol === "number" ? lastVol : 1.0)
+        page.masterMuted = false
         // View state belongs to the clip you were watching, not to the
         // editor: opening a different clip used to inherit the previous
         // one's full view and collapsed rail.
@@ -210,6 +313,10 @@ Rectangle {
         // comes from Qt Multimedia below) — see load()'s doc comment.
         page.mixerToken = ClipAudioMixer.load(page.clip.filepath, false)
         page.applyVolume()
+        // Restored gains apply to the new mix once it is loaded.
+        for (var k in page.trackVolume)
+            if (page.mixed) ClipAudioMixer.setTrackVolume(Number(k), page.trackVolume[k])
+        page.stateLoaded = true
         // The mix is started by onPlaybackStateChanged, not here — starting it
         // alongside mp.play() ran the audio ahead of the first frame.
         mp.play()
@@ -223,6 +330,7 @@ Rectangle {
             // suggestion list floating over whatever page came next — a
             // Popup is its own overlay and does not hide with the page.
             page.forceActiveFocus()
+            page.flushState()
             mp.stop()
             // Release the audio device; a live pipeline would keep playing
             // over the rest of the app after navigating away. Token-scoped so
@@ -238,7 +346,7 @@ Rectangle {
     /// position. Sampling inside that window reads the OLD position, looks
     /// like drift, and provokes another correction — a loop that replayed the
     /// same stretch of audio. Every seek we issue restarts this.
-    Timer { id: seekSettle; interval: 250 }
+    Timer { id: seekSettle; interval: 600 }
 
     // Independent clocks drift; nudge the audio back to the video periodically.
     Timer {
@@ -434,11 +542,23 @@ Rectangle {
         onPlaybackRateChanged: if (page.mixed) ClipAudioMixer.setRate(mp.playbackRate)
         // The mix follows the video's ACTUAL state; mp.play() returns long
         // before the first frame is on screen.
+        //
+        // Resuming used to FLUSH-seek the mix to the video's position every
+        // time, even when the two were already together: the flush empties
+        // the audio buffers, so every un-pause started with a short dropout,
+        // and any small disagreement between the two clocks' readings came
+        // out as a skip or a repeated sliver of sound. The mix now simply
+        // resumes from where it paused, and only seeks when it is really
+        // out of step (first play, or after a seek while paused).
         onPlaybackStateChanged: {
             if (!page.mixed)
                 return
             if (mp.playbackState === MediaPlayer.PlayingState) {
-                ClipAudioMixer.seek(mp.position)
+                const apos = ClipAudioMixer.positionMs()
+                if (apos < 0 || Math.abs(apos - mp.position) > 150)
+                    ClipAudioMixer.seek(mp.position)
+                // Positions read just after a resume are still settling;
+                // give the drift check a moment before it may correct.
                 seekSettle.restart()
                 ClipAudioMixer.play()
             } else {
@@ -472,7 +592,9 @@ Rectangle {
             Layout.fillWidth: true
             // Collapsed rather than merely transparent, so the picture
             // actually reclaims the space in full view.
-            Layout.preferredHeight: page.theaterMode && page.chromeHidden ? 0 : 44
+            // Full view hides it outright, not after an idle delay: only the
+            // playback controls stay, so the picture gets the whole window.
+            Layout.preferredHeight: page.theaterMode ? 0 : 44
             visible: Layout.preferredHeight > 0
             color: Theme.surface
             border.width: 0
@@ -540,7 +662,8 @@ Rectangle {
                     }
                     Tip {
                         visible: navArea.containsMouse
-                        text: page.navHidden ? "Show sidebar" : "Hide sidebar"
+                        text: page.navHidden ? (I18n.language, I18n.t("editor.showSidebar"))
+                                             : (I18n.language, I18n.t("editor.hideSidebar"))
                     }
                 }
 
@@ -549,7 +672,7 @@ Rectangle {
                 EditorField {
                     id: nameField
                     Layout.preferredWidth: 220
-                    placeholder: "Clip name"
+                    placeholder: (I18n.language, I18n.t("editor.clipName"))
                     text: page.clip ? page.clip.title : ""
                     onCommitted: (v) => {
                         if (v.length > 0 && page.clip) {
@@ -561,7 +684,7 @@ Rectangle {
                 EditorField {
                     id: gameField
                     Layout.preferredWidth: 170
-                    placeholder: "Game…"
+                    placeholder: (I18n.language, I18n.t("editor.gamePlaceholder"))
                     text: page.gameTag
                     onCommitted: (v) => {
                         if (page.clip) {
@@ -635,7 +758,7 @@ Rectangle {
                                         Text {
                                             anchors.verticalCenter: parent.verticalCenter
                                             text: modelData.isNew
-                                                  ? ("Add \"" + modelData.label + "\"")
+                                                  ? I18n.t("editor.addGame").replace("{name}", modelData.label)
                                                   : modelData.label
                                             color: modelData.isNew
                                                    ? Theme.accent : Theme.text
@@ -691,7 +814,7 @@ Rectangle {
                         anchors.centerIn: parent
                         text: EditorController.exportRunning
                               ? Math.round(EditorController.exportProgress) + "%"
-                              : "Export Clip"
+                              : (I18n.language, I18n.t("editor.exportClip"))
                         color: EditorController.exportRunning ? Theme.text : "#ffffff"
                         font.pixelSize: 13
                         font.weight: Font.DemiBold
@@ -752,10 +875,39 @@ Rectangle {
 
             // Info sidebar
             Rectangle {
+                id: infoSidebar
                 visible: !page.theaterMode
-                Layout.preferredWidth: page.theaterMode ? 0 : 232
+                Layout.preferredWidth: page.theaterMode ? 0 : page.sidebarW
                 Layout.fillHeight: true
                 color: Theme.surface
+
+                // Splitter on the sidebar's inner edge.
+                MouseArea {
+                    id: sideSplit
+                    z: 5
+                    anchors.left: parent.left
+                    anchors.leftMargin: -3
+                    width: 7
+                    height: parent.height
+                    hoverEnabled: true
+                    preventStealing: true
+                    cursorShape: Qt.SplitHCursor
+                    onPositionChanged: (m) => {
+                        if (!pressed)
+                            return
+                        const x = mapToItem(page, m.x, 0).x
+                        page.sidebarW = Math.max(page.sidebarMinW,
+                                                 Math.min(page.sidebarMaxW, page.width - x))
+                    }
+                    onReleased: SettingsController.setValue("editorSidebarW",
+                                                            JSON.stringify(Math.round(page.sidebarW)))
+                    Rectangle {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 2; height: parent.height
+                        color: Theme.accent
+                        visible: sideSplit.containsMouse || sideSplit.pressed
+                    }
+                }
 
                 Rectangle {
                     anchors.left: parent.left
@@ -786,14 +938,14 @@ Rectangle {
 
                     Repeater {
                         model: [
-                            { k: "Duration",   v: page.duration > 0 ? page.duration.toFixed(1) + "s" : "—" },
-                            { k: "Resolution", v: page.info.width ? page.info.width + "×" + page.info.height : "—" },
-                            { k: "FPS",        v: page.info.fps ? page.info.fps.toFixed(1) : "—" },
-                            { k: "Codec",      v: page.info.video_codec || "—" },
-                            { k: "Audio",      v: page.audioStreams.length
-                                                  ? page.audioStreams.length + " tracks" : "—" },
-                            { k: "Trim",       v: page.fmt(page.trimStart) + " → " + page.fmt(page.trimEnd) },
-                            { k: "Output",     v: Math.max(0, page.trimEnd - page.trimStart).toFixed(1) + "s" }
+                            { k: I18n.t("editor.info.duration"),   v: page.duration > 0 ? page.duration.toFixed(1) + "s" : "—" },
+                            { k: I18n.t("editor.info.resolution"), v: page.info.width ? page.info.width + "×" + page.info.height : "—" },
+                            { k: I18n.t("editor.info.fps"),        v: page.info.fps ? page.info.fps.toFixed(1) : "—" },
+                            { k: I18n.t("editor.info.codec"),      v: page.info.video_codec || "—" },
+                            { k: I18n.t("editor.info.audio"),      v: page.audioStreams.length
+                                                  ? I18n.t("editor.info.tracks").replace("{n}", page.audioStreams.length) : "—" },
+                            { k: I18n.t("editor.info.trim"),       v: "\u2066" + page.fmt(page.trimStart) + " → " + page.fmt(page.trimEnd) + "\u2069" },
+                            { k: I18n.t("editor.info.output"),     v: Math.max(0, page.trimEnd - page.trimStart).toFixed(1) + "s" }
                         ]
 
                         RowLayout {
@@ -828,12 +980,12 @@ Rectangle {
                     // Settings → Shortcuts; repeating all of it here turned
                     // the panel into a wall of text nobody reads.
                     Repeater {
-                        model: [
-                            { k: "Space", v: "Play / Pause" },
-                            { k: "← →",   v: "Skip ±5s" },
-                            { k: "I / O", v: "Set trim in / out" },
-                            { k: "F",     v: "Full view" }
-                        ]
+                        model: (I18n.language, [
+                            { k: "Space", v: I18n.t("editor.keys.playPause") },
+                            { k: "← →",   v: I18n.t("editor.keys.skip") },
+                            { k: "I / O", v: I18n.t("editor.keys.trim") },
+                            { k: "F",     v: I18n.t("editor.keys.fullView") }
+                        ])
 
                         RowLayout {
                             required property var modelData
@@ -884,13 +1036,13 @@ Rectangle {
                 anchors.rightMargin: 14
                 spacing: 4
 
-                EditorButton { icon: "rewind";       tooltip: "Back 5s";   onTriggered: page.skip(-5000) }
+                EditorButton { icon: "rewind";       tooltip: (I18n.language, I18n.t("editor.back5")); onTriggered: page.skip(-5000) }
                 EditorButton {
                     icon: mp.playbackState === MediaPlayer.PlayingState ? "pause" : "play"
-                    tooltip: "Play / Pause"
+                    tooltip: (I18n.language, I18n.t("editor.keys.playPause"))
                     onTriggered: page.togglePlay()
                 }
-                EditorButton { icon: "fast-forward"; tooltip: "Forward 5s"; onTriggered: page.skip(5000) }
+                EditorButton { icon: "fast-forward"; tooltip: (I18n.language, I18n.t("editor.forward5")); onTriggered: page.skip(5000) }
 
                 Text {
                     Layout.leftMargin: 8
@@ -950,7 +1102,8 @@ Rectangle {
 
                 EditorButton {
                     icon: masterMuted ? "volume-x" : "volume-2"
-                    tooltip: masterMuted ? "Unmute" : "Mute"
+                    tooltip: masterMuted ? (I18n.language, I18n.t("editor.unmute"))
+                                         : (I18n.language, I18n.t("editor.mute"))
                     onTriggered: {
                         page.masterMuted = !page.masterMuted
                         if (page.mixed)
@@ -973,6 +1126,13 @@ Rectangle {
                     // Seeded once, then owned locally — a binding here would be
                     // severed by QQC2's own writes on the first drag anyway.
                     Component.onCompleted: value = page.masterVolume
+                    // A clip's restored volume arrives after the slider exists.
+                    Connections {
+                        target: page
+                        function onMasterVolumeChanged() {
+                            if (!vol.pressed) vol.value = page.masterVolume
+                        }
+                    }
                     onMoved: {
                         page.masterVolume = vol.value
                         if (vol.value > 0) page.masterMuted = false
@@ -1001,7 +1161,7 @@ Rectangle {
 
                 EditorButton {
                     icon: "camera"
-                    tooltip: "Save this frame as an image"
+                    tooltip: (I18n.language, I18n.t("editor.saveFrame"))
                     onTriggered: {
                         if (page.clip)
                             EditorController.grabFrame(page.clip.filepath, mp.position / 1000)
@@ -1009,12 +1169,13 @@ Rectangle {
                 }
                 EditorButton {
                     icon: page.theaterMode ? "minimize" : "maximize"
-                    tooltip: page.theaterMode ? "Exit full view" : "Full view"
+                    tooltip: page.theaterMode ? (I18n.language, I18n.t("editor.exitFullView"))
+                                              : (I18n.language, I18n.t("editor.keys.fullView"))
                     onTriggered: page.theaterMode = !page.theaterMode
                 }
                 EditorButton {
                     icon: "rotate-ccw"
-                    tooltip: "Reset trim"
+                    tooltip: (I18n.language, I18n.t("editor.resetTrim"))
                     onTriggered: page.resetTrim()
                 }
             }
@@ -1025,11 +1186,44 @@ Rectangle {
             id: timelinePane
             visible: !page.theaterMode
             Layout.fillWidth: true
-            Layout.preferredHeight: page.theaterMode
-                                    ? 0 : Math.min(196, 34 + lanes.implicitHeight + 16)
+            Layout.preferredHeight: page.theaterMode ? 0 : page.timelineH
             color: Theme.bgDeep
 
             Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+            // Splitter on the timeline's top edge: taller lanes get more
+            // waveform detail, a shorter timeline gives the picture more room.
+            MouseArea {
+                id: timeSplit
+                z: 5
+                anchors.top: parent.top
+                anchors.topMargin: -3
+                width: parent.width
+                height: 7
+                hoverEnabled: true
+                preventStealing: true
+                cursorShape: Qt.SplitVCursor
+                onPositionChanged: (m) => {
+                    if (!pressed)
+                        return
+                    const y = mapToItem(page, 0, m.y).y
+                    page.timelineUserH = Math.max(page.timelineMinH,
+                                                  Math.min(page.timelineMaxH, page.height - y))
+                }
+                onReleased: SettingsController.setValue("editorTimelineH",
+                                                        JSON.stringify(Math.round(page.timelineUserH)))
+                onDoubleClicked: {
+                    // Back to "fit the lanes".
+                    page.timelineUserH = 0
+                    SettingsController.setValue("editorTimelineH", "0")
+                }
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width; height: 2
+                    color: Theme.accent
+                    visible: timeSplit.containsMouse || timeSplit.pressed
+                }
+            }
 
             // Fixed-width label gutter, so every lane's track area starts at
             // the same x and the playhead/trim overlay can span them all.
@@ -1060,8 +1254,9 @@ Rectangle {
                 EditorTrackLane {
                     readonly property var def: page.trackDef("V1")
                     Layout.fillWidth: true
+                    Layout.preferredHeight: page.laneH
                     gutter: timelinePane.gutter
-                    label: def && def.name ? def.name : "Video"
+                    label: (I18n.language, page.trackLabel(def || { id: "V1" }))
                     accent: def && def.color ? def.color : Theme.accent
                     icon: page.trackIcon(def ? def.icon : "", "track-video")
                     monitorable: false
@@ -1077,9 +1272,10 @@ Rectangle {
                         // Audio streams map onto the A1..An slots in order.
                         readonly property var def: page.trackDef("A" + (index + 1))
                         Layout.fillWidth: true
+                        Layout.preferredHeight: page.laneH
                         gutter: timelinePane.gutter
-                        label: def && def.name ? def.name
-                             : (modelData.title || ("Audio " + (index + 1)))
+                        label: def && def.name ? (I18n.language, page.trackLabel(def))
+                             : (modelData.title || I18n.t("editor.audioTrack").replace("{n}", index + 1))
                         accent: def && def.color ? def.color
                               : Theme.channelColor(modelData.title)
                         icon: page.trackIcon(def ? def.icon : "", "music")
@@ -1167,6 +1363,9 @@ Rectangle {
 
     // ── Export settings dialog ────────────────────────────────────────────
     ExportDialog {
+        // A form, not a media control: it follows the language's direction
+        // even though the rest of the editor stays left-to-right.
+        LayoutMirroring.enabled: I18n.rtl
         clip: page.exportOpen ? page.clip : null
         trimStart: page.trimStart
         trimEnd: page.trimEnd

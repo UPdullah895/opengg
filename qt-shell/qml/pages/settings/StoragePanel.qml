@@ -19,6 +19,15 @@ ColumnLayout {
     property var shotDirs: root.s.screenshotDirs || []
     property var storageInfo: JSON.parse(StorageController.storageJson || "{}")
 
+    /// Where GPU Screen Recorder's own overlay saves replays, or null. Bumped
+    /// by `gsrUiRev` after the panel rewrites that setting.
+    property int gsrUiRev: 0
+    readonly property var gsrUi: (root.gsrUiRev, JSON.parse(
+        StorageController.gsrUiReplayJson(JSON.stringify(
+            root.clipDirs.length ? root.clipDirs : ["~/Videos/OpenGG"])) || "null"))
+    property bool gsrUiMoved: false
+    readonly property string primaryClipDir: root.clipDirs[0] || "~/Videos/OpenGG"
+
     Connections {
         target: SettingsController
         function onSettingsJsonChanged() {
@@ -55,7 +64,8 @@ ColumnLayout {
         if (StorageController.nativePickerAvailable()) {
             StorageController.pickFolder(
                 tag,
-                tag === "clips" ? "Add Clip Directory" : "Add Screenshot Directory",
+                tag === "clips" ? I18n.t("settings.storage.addClipDialog")
+                               : I18n.t("settings.storage.addShotDialog"),
                 (tag === "clips" ? root.clipDirs[0] : root.shotDirs[0]) || "")
             return
         }
@@ -86,12 +96,12 @@ ColumnLayout {
 
     FolderDialog {
         id: clipDirDialog
-        title: "Add Clip Directory"
+        title: (I18n.language, I18n.t("settings.storage.addClipDialog"))
         onAccepted: root.acceptDir("clips", root.urlToPath(selectedFolder))
     }
     FolderDialog {
         id: shotDirDialog
-        title: "Add Screenshot Directory"
+        title: (I18n.language, I18n.t("settings.storage.addShotDialog"))
         onAccepted: root.acceptDir("shots", root.urlToPath(selectedFolder))
     }
 
@@ -262,6 +272,124 @@ ColumnLayout {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
                         onClicked: root.addDir("shots")
+                    }
+                }
+            }
+        }
+    }
+
+    // ── GPU Screen Recorder overlay card ──
+    // Shown when gsr-ui (the recorder's own hotkey overlay) saves replays
+    // outside the library. Its default is ~/Videos plus a new folder per
+    // game, which is why users had to add every game folder by hand.
+    // Both buttons only act on a click; nothing here edits gsr-ui's config
+    // on its own.
+    Rectangle {
+        visible: root.gsrUiMoved || (root.gsrUi !== null && !root.gsrUi.watched)
+        Layout.fillWidth: true
+        radius: Theme.radius
+        color: Theme.surface
+        border.width: 1
+        border.color: Theme.tint(Theme.accent, 40)
+        implicitHeight: gsrUiCol.implicitHeight + 40
+
+        ColumnLayout {
+            id: gsrUiCol
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 10
+
+            RowLayout {
+                spacing: 8
+                Icon { name: "alert-triangle"; size: 15; color: Theme.accent }
+                Text {
+                    text: (I18n.language, I18n.t("settings.storage.gsrUi.title"))
+                    color: Theme.text
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                visible: !root.gsrUiMoved
+                wrapMode: Text.WordWrap
+                color: Theme.textDim
+                font.pixelSize: 12
+                text: root.gsrUi
+                      ? (I18n.language, I18n.t(root.gsrUi.gameFolders
+                                               ? "settings.storage.gsrUi.bodyGameFolders"
+                                               : "settings.storage.gsrUi.body")
+                                        .replace("{dir}", root.gsrUi.dir))
+                      : ""
+            }
+            Text {
+                Layout.fillWidth: true
+                visible: root.gsrUiMoved
+                wrapMode: Text.WordWrap
+                color: Theme.success
+                font.pixelSize: 12
+                text: (I18n.language, I18n.t("settings.storage.gsrUi.restartHint"))
+            }
+            ErrorText {
+                id: gsrUiError
+                Layout.fillWidth: true
+            }
+            Flow {
+                Layout.fillWidth: true
+                visible: !root.gsrUiMoved
+                spacing: 8
+                Rectangle {
+                    width: useLibText.implicitWidth + 24; height: 30
+                    radius: Theme.radius
+                    color: Theme.accent
+                    opacity: useLibArea.containsMouse ? 0.85 : 1
+                    Text {
+                        id: useLibText
+                        anchors.centerIn: parent
+                        text: (I18n.language, I18n.t("settings.storage.gsrUi.useLibrary")
+                                                  .replace("{dir}", root.primaryClipDir))
+                        color: Theme.text
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                    }
+                    MouseArea {
+                        id: useLibArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            const err = StorageController.setGsrUiReplayDir(
+                                root.gsrUi.configPath, root.primaryClipDir)
+                            gsrUiError.text = err
+                            if (err.length === 0) {
+                                root.gsrUiMoved = true
+                                root.gsrUiRev++
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    width: addText.implicitWidth + 24; height: 30
+                    radius: Theme.radius
+                    color: addArea.containsMouse ? Theme.bgHover : Theme.bg
+                    border.width: 1
+                    border.color: Theme.border
+                    Text {
+                        id: addText
+                        anchors.centerIn: parent
+                        text: root.gsrUi
+                              ? (I18n.language, I18n.t("settings.storage.gsrUi.addFolder")
+                                                  .replace("{dir}", root.gsrUi.dir))
+                              : ""
+                        color: Theme.text
+                        font.pixelSize: 12
+                    }
+                    MouseArea {
+                        id: addArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.acceptDir("clips", root.gsrUi.dir)
                     }
                 }
             }

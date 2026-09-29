@@ -22,7 +22,8 @@
     "copy": "Copy",
     "beta": "Beta",
     "info": "Info",
-    "notAvailableInQt": "Not yet available in the Qt UI — use the Tauri app for this section."
+    "notAvailableInQt": "Not yet available in the Qt UI — use the Tauri app for this section.",
+    "apply": "Apply"
   },
   "editor": {
     "masterVolume": "Volume — affects all tracks (preview & export)",
@@ -43,7 +44,41 @@
     "cancelExport": "Cancel Export",
     "targetSize": "Target Size",
     "original": "Original",
-    "frameSaved": "Frame saved"
+    "frameSaved": "Frame saved",
+    "info": {
+      "duration": "Duration",
+      "resolution": "Resolution",
+      "fps": "FPS",
+      "codec": "Codec",
+      "audio": "Audio",
+      "tracks": "{n} tracks",
+      "trim": "Trim",
+      "output": "Output"
+    },
+    "keys": {
+      "playPause": "Play / Pause",
+      "skip": "Skip ±5s",
+      "trim": "Set trim in / out",
+      "fullView": "Full view"
+    },
+    "back5": "Back 5s",
+    "forward5": "Forward 5s",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "saveFrame": "Save this frame as an image",
+    "exitFullView": "Exit full view",
+    "resetTrim": "Reset trim",
+    "showSidebar": "Show sidebar",
+    "hideSidebar": "Hide sidebar",
+    "back": "Back",
+    "clipName": "Clip name",
+    "gamePlaceholder": "Game…",
+    "addGame": "Add “{name}”",
+    "videoTrack": "Video",
+    "audioTrack": "Audio {n}",
+    "resizeSidebar": "Drag to resize",
+    "resizeTimeline": "Drag to resize the timeline",
+    "overlayTrack": "Overlays"
   },
   "sidebar": {
     "tip": "Tip: You can customize your shortcuts from the settings page."
@@ -425,7 +460,11 @@
         "undo": "Undo the last trim change in the editor",
         "redo": "Redo the last undone trim change"
       },
-      "resetToDefaults": "Reset to Defaults"
+      "resetToDefaults": "Reset to Defaults",
+      "listenerOff": "Global shortcuts are not running. Reading keys system-wide needs membership of the “input” group. Run this, then log out and back in:",
+      "noListener": "The daemon has not confirmed a keyboard listener.",
+      "badgeListenerOff": "listener off",
+      "badgeNotWired": "not wired up"
     },
     "earBlast": {
       "title": "Ear Blast Protection",
@@ -483,7 +522,17 @@
       "steamReadyTitle": "Steam library connected — {count} games",
       "steamReadyBody": "Your Steam library is available in game pickers and listed here with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images.",
       "steamTooltip": "Import your Steam library to OpenGG's game pickers and keep it visible here in Storage. After you allow access, OpenGG reads local Steam data and may request Steam Store metadata for names and artwork.",
-      "thumbsRemoved": "thumbnails removed — regenerating"
+      "thumbsRemoved": "thumbnails removed — regenerating",
+      "gsrUi": {
+        "title": "GPU Screen Recorder overlay",
+        "body": "Its replays are saved to {dir}, which is not in your library, so its clips do not show up here.",
+        "bodyGameFolders": "Its replays are saved to {dir} with a new folder for every game, which is not in your library, so each game had to be added by hand.",
+        "useLibrary": "Save replays to {dir}",
+        "addFolder": "Add {dir} to library",
+        "restartHint": "Done. Restart GPU Screen Recorder's overlay for it to take effect. Game folders inside the library are picked up automatically."
+      },
+      "addClipDialog": "Add Clip Directory",
+      "addShotDialog": "Add Screenshot Directory"
     },
     "extensions": {
       "title": "Extensions",
@@ -555,7 +604,16 @@
       "livePreview": "Live Preview",
       "livePreviewHint": "Exactly how the editor timeline headers will look. Updates as you type.",
       "addAudioTrack": "+ Add Audio Track",
-      "visibilityTooltip": "Toggle track visibility in Live Preview"
+      "visibilityTooltip": "Toggle track visibility in Live Preview",
+      "simple": "Simple",
+      "advanced": "Advanced",
+      "simpleHint": "Pick the layout that matches how you record. Tracks keep fixed names; click a colour to change it.",
+      "presetAuto": "Match my recording setup",
+      "customLayout": "Your current layout was customised in Advanced mode. Pick a preset to replace it, or switch to Advanced to keep editing it.",
+      "fallbackHint": "A clip with more audio tracks than this layout shows the extra ones under the names they were recorded with.",
+      "resetDefaults": "Reset to defaults",
+      "presets": "PRESETS",
+      "hue": "HUE"
     },
     "captureGsr": {
       "title": "GPU Screen Recorder",
@@ -593,7 +651,8 @@
       "crashRestarting": "Recording crashed — restarting…",
       "errorGeneric": "Recording error: {message}",
       "errorMissingAudio": "Audio source not found: {source}",
-      "estUsage": "Est. RAM: ~{ram} MB  |  File: ~{file} MB"
+      "estUsage": "Est. RAM: ~{ram} MB  |  File: ~{file} MB",
+      "focusedOption": "Fullscreen Application"
     },
     "notificationsPage": {
       "title": "Notifications",
@@ -687,6 +746,11 @@
       "notFound": "gpu-screen-recorder is not installed — recording is disabled.",
       "recheck": "Recheck",
       "rechecking": "Checking…"
+    },
+    "audioEngine": {
+      "createFailed": "Could not create the virtual audio channels. The daemon normally does this; check that it is running:",
+      "startDaemon": "If it is not running, start it and keep it running at login:",
+      "create": "Create"
     }
   },
   "clips": {
@@ -727,11 +791,14 @@
       "renamePlaceholder": "Pattern e.g. Highlight_{n}",
       "clear": "Clear",
       "delete": "Delete",
-      "selected": "{count} selected"
+      "selected": "{count} selected",
+      "selectAll": "Select all",
+      "patternPlaceholder": "e.g. {game} run {n}"
     },
     "dateGroup": {
       "today": "Today",
-      "yesterday": "Yesterday"
+      "yesterday": "Yesterday",
+      "unknown": "Unknown date"
     },
     "toast": {
       "clipDeleted": "Clip deleted",
@@ -797,7 +864,16 @@
       "failed": "Steam library import failed",
       "imported": "Imported {count} Steam games",
       "readyTitle": "{count} Steam games ready to import"
-    }
+    },
+    "addGame": "Add “{name}”",
+    "scanning": "Scanning…",
+    "refresh": "Refresh",
+    "favoritesOnly": "Show favorites only",
+    "toggleDetails": "Toggle clip details",
+    "count": "{n} clips",
+    "countOne": "1 clip",
+    "countOf": "{n} of {total}",
+    "selectedOne": "1 clip selected"
   },
   "notification": {
     "clipSaved": "Clip Saved",
@@ -818,7 +894,9 @@
     "restartSuccess": "Recording restarted successfully",
     "restartFailed": "Failed to restart recording: {error}",
     "buffer": "Buffer",
-    "target": "Target"
+    "target": "Target",
+    "recording": "Recording",
+    "idle": "Idle"
   },
   "devices": {
     "title": "Devices",
@@ -872,7 +950,77 @@
       "videoGroup": "video group membership (screen capture)",
       "udevRules": "udev rules (device detection)",
       "runSetup": "Run this command in a terminal:"
-    }
+    },
+    "panel": {
+      "selectTitle": "Select a device",
+      "selectHint": "Choose a device from the list to see its settings.",
+      "status": "Status",
+      "na": "n/a",
+      "chatMixValue": "Chat mix ",
+      "chatMix": "Chat Mix",
+      "gameChat": "Game / Chat",
+      "headsetControls": "Headset Controls",
+      "micVolume": "Mic Volume",
+      "micMuteLed": "Mic Mute LED",
+      "autoShutoff": "Auto Shut-off",
+      "setTimeout": "Set timeout…",
+      "btWhenOn": "Bluetooth When On",
+      "equalizer": "Equalizer",
+      "preset": "Preset",
+      "applyPreset": "Apply preset…",
+      "sensor": "Sensor",
+      "buttons": "Buttons",
+      "configureButtons": "Configure Buttons",
+      "advanced": "Advanced",
+      "model": "Model",
+      "fullName": "Full name",
+      "deviceId": "Device id",
+      "minutes": "{n} minutes",
+      "writeOnlyNote": "This headset doesn't report these back, so they show the last value sent from here — not the current state of the hardware.",
+      "buttonCount": "{n} buttons"
+    },
+    "buttonMap": {
+      "none": "None",
+      "click": "Click {n}",
+      "macro": "Macro (not editable here)",
+      "unknown": "Unknown",
+      "title": "Configure Buttons — {name}",
+      "photoIntro": "Add a photo of your own mouse to place button hotspots on it. This photo stays on this computer only — it is never uploaded or shared anywhere.",
+      "dragPhoto": "Drag a photo of your mouse here",
+      "browseHint": "or use Browse to pick one. It stays on this computer.",
+      "presetOffer": "We have approximate button positions for {name}. These were measured on a different photo, so they may not line up exactly — you can drag them afterward.",
+      "usePreset": "Use as starting point",
+      "dismiss": "Dismiss",
+      "placed": "{placed} / {total} buttons placed",
+      "dropNew": "Drop a new photo",
+      "replacesCurrent": "Replaces the current one.",
+      "replace": "Replace…",
+      "button": "Button {n}",
+      "currently": "Currently: {action}",
+      "noneDisabled": "None (disabled)",
+      "mouseButton": "Mouse Button",
+      "special": "Special",
+      "keyboardKey": "Keyboard Key",
+      "placeHint": "Click empty space on the photo to place a hotspot for your next unassigned button, or click an existing hotspot to change what it does.",
+      "dragAny": "Drag a photo here",
+      "browse": "Browse…",
+      "choosePhoto": "Choose a photo",
+      "notImage": "That file isn't an image",
+      "formats": "PNG, JPEG, WebP or BMP only."
+    },
+    "viewCarousel": "Carousel view",
+    "types": {
+      "mouse": "mouse",
+      "headset": "headset",
+      "keyboard": "keyboard"
+    },
+    "connection": {
+      "wired": "Wired",
+      "wireless": "Wireless",
+      "bluetooth": "Bluetooth"
+    },
+    "daemonConnected": "daemon connected",
+    "daemonOffline": "daemon offline"
   },
   "tour": {
     "controls": {
@@ -993,7 +1141,18 @@
     "autoDetect": "Auto-detect threshold",
     "compressor": "Compressor",
     "compressorDesc": "Evens out loud and quiet parts of the signal",
-    "level": "Level"
+    "level": "Level",
+    "measuring": "Listening… stay quiet",
+    "needsNoiseReduction": "Noise reduction needs the RNNoise LADSPA plugin. Install it, then recheck:",
+    "needsCompressor": "The compressor needs the SWH LADSPA plugins. Install them, then recheck:",
+    "presets": {
+      "default": "Default",
+      "broadcast": "Broadcast",
+      "podcaster": "Podcaster",
+      "nrFocus": "Noise-Reduction Focus",
+      "custom": "Custom"
+    },
+    "recheck": "Recheck"
   },
   "eq": {
     "title": "Graphic EQ",
@@ -1021,8 +1180,10 @@
       "chat": "Chat",
       "media": "Media",
       "aux": "Aux",
-      "mic": "Mic"
-    }
+      "mic": "Mic",
+      "desktop": "Desktop"
+    },
+    "eqUnavailable": "Equaliser unavailable:"
   },
   "videoPlayer": {
     "fullscreen": "Fullscreen",
@@ -1057,5 +1218,11 @@
     "title": "Choose your language",
     "subtitle": "You can change this later in Settings.",
     "continue": "Continue"
+  },
+  "player": {
+    "back5": "Back 5s",
+    "forward5": "Forward 5s",
+    "audioTracks": "Audio tracks",
+    "speed": "Playback speed"
   }
 }

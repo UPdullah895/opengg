@@ -219,10 +219,11 @@ fn settings_mut(s: &mut Value) -> Option<&mut serde_json::Map<String, Value>> {
     s.get_mut("settings").and_then(Value::as_object_mut)
 }
 
-/// Default track definitions (from `DEFAULTS.settings.trackDefs` in
-/// `persistence.ts`) — needed by migrations 5 and 6.
-fn default_track_def(id: &str) -> Option<Value> {
-    let defs = json!([
+/// The default timeline tracks, in order (from `DEFAULTS.settings.trackDefs`
+/// in `persistence.ts`). Also what Settings → Timeline Tracks' "Reset to
+/// defaults" restores.
+pub fn default_track_defs() -> Value {
+    json!([
         { "id": "O1", "name": "Overlays", "color": "#f97316", "icon": "overlay", "visible": true },
         { "id": "V1", "name": "Video",    "color": "#E94560", "icon": "video",   "visible": true },
         { "id": "A1", "name": "Audio 1",  "color": "#10b981", "icon": "game",    "visible": true },
@@ -230,7 +231,12 @@ fn default_track_def(id: &str) -> Option<Value> {
         { "id": "A3", "name": "Audio 3",  "color": "#f59e0b", "icon": "mic",     "visible": true },
         { "id": "A4", "name": "Audio 4",  "color": "#8b5cf6", "icon": "media",   "visible": true },
         { "id": "A5", "name": "Audio 5",  "color": "#ec4899", "icon": "media",   "visible": true }
-    ]);
+    ])
+}
+
+/// One default track definition by id — needed by migrations 5 and 6.
+fn default_track_def(id: &str) -> Option<Value> {
+    let defs = default_track_defs();
     defs.as_array()
         .unwrap()
         .iter()
@@ -458,11 +464,7 @@ pub fn ensure_required_tracks(envelope: &mut Value) -> bool {
         return false;
     };
     if !settings.get("trackDefs").is_some_and(Value::is_array) {
-        let defaults: Vec<Value> = ["O1", "V1", "A1", "A2", "A3", "A4", "A5"]
-            .iter()
-            .filter_map(|id| default_track_def(id))
-            .collect();
-        settings.insert("trackDefs".into(), Value::Array(defaults));
+        settings.insert("trackDefs".into(), default_track_defs());
         return true;
     }
     let defs = settings

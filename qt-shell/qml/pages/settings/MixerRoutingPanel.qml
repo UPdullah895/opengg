@@ -270,7 +270,7 @@ ColumnLayout {
                         anchors.centerIn: parent
                         text: AudioController.checkingVirtualAudio
                             ? I18n.t("settings.dangerZone.creating")
-                            : "Create"
+                            : (I18n.language, I18n.t("settings.audioEngine.create"))
                         color: "#fff"
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -308,18 +308,29 @@ ColumnLayout {
                 color: Theme.tint(Theme.danger, 12)
                 border.width: 1
                 border.color: Theme.tint(Theme.danger, 45)
-                implicitHeight: vaErr.implicitHeight + 20
-                Text {
-                    id: vaErr
+                implicitHeight: vaCol.implicitHeight + 20
+                ColumnLayout {
+                    id: vaCol
                     anchors.fill: parent
                     anchors.margins: 10
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: 11
-                    text: "Could not create the virtual audio channels — "
-                          + AudioController.virtualAudioError
-                          + ". The daemon normally does this; check it is running with "
-                          + "systemctl --user status openggd."
+                    spacing: 6
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        color: Theme.textDim
+                        font.pixelSize: 11
+                        text: (I18n.language, I18n.t("settings.audioEngine.createFailed"))
+                    }
+                    ErrorText { Layout.fillWidth: true; text: AudioController.virtualAudioError }
+                    CommandLine { Layout.fillWidth: true; text: "systemctl --user status openggd" }
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        color: Theme.textDim
+                        font.pixelSize: 11
+                        text: (I18n.language, I18n.t("settings.audioEngine.startDaemon"))
+                    }
+                    CommandLine { Layout.fillWidth: true; text: "systemctl --user enable --now openggd" }
                 }
             }
         }

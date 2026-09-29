@@ -23,6 +23,11 @@ import com.opengg.app
 // down its jalv engine or lose its band values.
 ColumnLayout {
     id: root
+
+    // A frequency axis runs low to high left-to-right in every language;
+    // mirroring it put 16 kHz on the left in Arabic.
+    LayoutMirroring.enabled: false
+    LayoutMirroring.childrenInherit: true
     spacing: 16
 
     property string channel: ""
@@ -125,15 +130,13 @@ ColumnLayout {
                     anchors.margins: 8
                     spacing: 8
                     Icon { name: "alert-triangle"; size: 13; color: Theme.overdrive }
-                    Text {
+                    ErrorText {
                         id: eqMsg
                         Layout.fillWidth: true
                         text: root.eqUnavailable.length > 0
-                              ? "Equaliser unavailable: " + root.eqUnavailable
+                              ? (I18n.language, I18n.t("mixer.eqUnavailable")) + " " + root.eqUnavailable
                               : EqController.lastError
                         color: Theme.overdrive
-                        font.pixelSize: 11
-                        wrapMode: Text.WordWrap
                     }
                 }
             }

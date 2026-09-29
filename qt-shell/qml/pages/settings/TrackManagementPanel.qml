@@ -49,6 +49,82 @@ ColumnLayout {
         root.writeTracks(root.trackDefs.filter((_, i) => i !== index))
     }
 
+    // ── Simple / advanced ─────────────────────────────────────────────────
+    // Simple (the default) is a fixed layout from a preset matching a common
+    // recording setup; only colours change. Advanced is the full editor:
+    // rename, re-icon, add and remove tracks, reset to defaults. Simple
+    // never rewrites the track list until a preset is picked, so switching
+    // modes to look does not lose advanced edits.
+    readonly property bool advanced: root.s.trackMode === "advanced"
+    function setMode(mode) { SettingsController.setValue("trackMode", JSON.stringify(mode)) }
+
+    /// A track name for display: the built-in role names ("Game", "Mic", …)
+    /// and the empty Overlays/Video defaults are shown translated; anything
+    /// the user typed is shown as-is. Track data keeps the English role name
+    /// so it stays stable across language switches.
+    function trackLabel(def) {
+        const n = (def && def.name) || ""
+        if (n.length === 0 || n === "Overlays" || n === "Video") {
+            if (def && def.id === "O1") return I18n.t("editor.overlayTrack")
+            if (def && def.id === "V1") return I18n.t("editor.videoTrack")
+        }
+        const k = "mixer.channels." + n.toLowerCase()
+        const t = I18n.t(k)
+        return t !== k ? t : (n || (def ? def.id : ""))
+    }
+
+    /// Audio roles a preset can contain: default icon and identity colour.
+    function role(name) {
+        const icons = { Game: "game", Chat: "chat", Mic: "mic", Media: "media", Aux: "media", Desktop: "game" }
+        return { name: name, icon: icons[name] || "game",
+                 color: String(Theme.channelColor(name === "Desktop" ? "Game" : name)) }
+    }
+    /// The role a capture source records, from OpenGG's recorder setup.
+    function roleForSource(src) {
+        const m = /^OpenGG_(\w+)/.exec(src || "")
+        if (m) return m[1]
+        if (/^(alsa_input|default_input)/.test(src || "")) return "Mic"
+        return "Desktop"
+    }
+    /// Roles recorded by the replay buffer as configured in Capture & Sound.
+    readonly property var recordedRoles: (root.s.captureTracks || [])
+        .map(t => root.roleForSource(t.source))
+    function presets() {
+        var out = []
+        if (root.recordedRoles.length > 0)
+            out.push({ id: "auto", label: I18n.t("settings.timelineTracks.presetAuto"), roles: root.recordedRoles })
+        const named = (roles) => roles.map(r => root.trackLabel({ name: r })).join(" · ")
+        out.push({ id: "gcm",  roles: ["Game", "Chat", "Mic"] })
+        out.push({ id: "gm",   roles: ["Game", "Mic"] })
+        out.push({ id: "g",    roles: ["Game"] })
+        out.push({ id: "gcmm", roles: ["Game", "Chat", "Media", "Mic"] })
+        out.forEach(p => { if (!p.label) p.label = named(p.roles) })
+        return out
+    }
+    /// The preset the current track list matches, or "" for a custom list.
+    readonly property string activePreset: {
+        I18n.language
+        const audio = root.trackDefs.filter(d => /^A\d+$/.test(d.id)).map(d => d.name)
+        const all = root.presets()
+        for (var i = 0; i < all.length; i++)
+            if (JSON.stringify(all[i].roles) === JSON.stringify(audio)) return all[i].id
+        return ""
+    }
+    /// Rewrite the audio tracks from a preset, keeping the colour of any
+    /// role the user already recoloured, and Overlays/Video untouched.
+    function applyPreset(p) {
+        const keep = root.trackDefs.filter(d => !/^A\d+$/.test(d.id))
+        const oldColor = {}
+        root.trackDefs.forEach(d => { if (/^A\d+$/.test(d.id)) oldColor[d.name] = d.color })
+        const audio = p.roles.map((r, i) => {
+            const base = root.role(r)
+            return { id: "A" + (i + 1), name: base.name, icon: base.icon,
+                     color: oldColor[r] || base.color, visible: true }
+        })
+        root.writeTracks(keep.concat(audio))
+        SettingsController.setValue("trackPreset", JSON.stringify(p.id))
+    }
+
     // IconPicker.qml as a separate component file was found to hang the app at
     // startup for unknown reasons (Popup- and ComboBox-based versions both hung,
     // even with a bare empty Popup). The picker below is a plain inline Row
@@ -86,9 +162,103 @@ ColumnLayout {
                     font.weight: Font.DemiBold
                 }
                 InfoIcon { tooltipText: I18n.t("settings.timelineTracks.trackListHint") }
+                Item { Layout.fillWidth: true }
+                ChoiceChip {
+                    text: (I18n.language, I18n.t("settings.timelineTracks.simple"))
+                    selected: !root.advanced
+                    onTriggered: root.setMode("simple")
+                }
+                ChoiceChip {
+                    text: (I18n.language, I18n.t("settings.timelineTracks.advanced"))
+                    selected: root.advanced
+                    onTriggered: root.setMode("advanced")
+                }
             }
 
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
+
+            // ── Simple mode ──────────────────────────────────────────────
+            ColumnLayout {
+                visible: !root.advanced
+                Layout.fillWidth: true
+                spacing: 10
+
+                Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDim
+                    font.pixelSize: 12
+                    text: (I18n.language, I18n.t("settings.timelineTracks.simpleHint"))
+                }
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Repeater {
+                        model: (I18n.language, root.presets())
+                        ChoiceChip {
+                            required property var modelData
+                            text: modelData.label
+                            selected: root.activePreset === modelData.id
+                            onTriggered: root.applyPreset(modelData)
+                        }
+                    }
+                }
+                Text {
+                    visible: root.activePreset === ""
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.textMuted
+                    font.pixelSize: 11
+                    text: (I18n.language, I18n.t("settings.timelineTracks.customLayout"))
+                }
+
+                Repeater {
+                    model: root.trackDefs
+                    RowLayout {
+                        id: sRow
+                        required property var modelData
+                        required property int index
+                        Layout.fillWidth: true
+                        spacing: 10
+                        TrackColorSwatch {
+                            current: sRow.modelData.color
+                            onPicked: (c) => root.updateTrack(sRow.index, { color: c })
+                        }
+                        Icon {
+                            name: root.trackIcons[sRow.modelData.icon] || "track-game"
+                            size: 15
+                            color: sRow.modelData.color
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: (I18n.language, root.trackLabel(sRow.modelData))
+                            color: Theme.text
+                            font.pixelSize: 13
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            text: sRow.modelData.id
+                            color: Theme.textMuted
+                            font.pixelSize: 11
+                            font.family: "monospace"
+                        }
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.textMuted
+                    font.pixelSize: 11
+                    text: (I18n.language, I18n.t("settings.timelineTracks.fallbackHint"))
+                }
+            }
+
+            // ── Advanced mode ────────────────────────────────────────────
+            ColumnLayout {
+                visible: root.advanced
+                Layout.fillWidth: true
+                spacing: 12
 
             Repeater {
                 model: root.trackDefs
@@ -123,179 +293,11 @@ ColumnLayout {
                         }
                     }
 
-                    // Clickable swatch. Typing a hex was the only way to
-                    // recolour a track, which is impractical for something
-                    // you pick by eye; the field stays for exact values.
-                    Rectangle {
-                        id: swatch
-                        width: 22; height: 22
-                        radius: 4
-                        color: tRow.modelData.color
-                        border.width: 1
-                        border.color: swatchArea.containsMouse || colorFlyout.visible
-                                      ? Theme.text : Theme.border
-
-                        MouseArea {
-                            id: swatchArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: colorFlyout.toggle()
-                        }
-
-                        // Presets, then a hue strip and a shade grid built
-                        // from it — ten fixed swatches could not express a
-                        // colour the theme happened not to ship. Every colour
-                        // comes from Theme.hsv() rather than a literal, so
-                        // check-colors.sh still holds.
-                        //
-                        // Deliberately NOT `id: palette`: every Qt 6 Item has
-                        // a `palette` property, and inside the cell delegates
-                        // below it shadowed the id — each click threw
-                        // "choose is not a function" and the hue strip wrote
-                        // into the cell's own QQuickPalette, so no colour
-                        // could ever be picked.
-                        FlyoutPopup {
-                            id: colorFlyout
-                            anchorItem: swatch
-                            width: 6 * 24 + 16
-                            implicitHeight: pickerCol.implicitHeight + 16
-
-                            /// Hue of the shade grid, 0..1. Seeded from the
-                            /// track's current colour each time it opens so
-                            /// the grid starts somewhere recognisable.
-                            property real hue: 0
-                            /// The track's colour, for marking the matching
-                            /// cell so the picker shows what is selected.
-                            readonly property color current: tRow.modelData.color
-                            onOpened: colorFlyout.hue = Theme.toHsv(tRow.modelData.color).h
-
-                            function choose(c) {
-                                root.updateTrack(tRow.index, { color: String(c) })
-                                colorFlyout.close()
-                            }
-
-                            contentItem: Column {
-                                id: pickerCol
-                                spacing: 6
-
-                                Text {
-                                    text: "Presets"
-                                    color: Theme.textMuted
-                                    font.pixelSize: 10
-                                    font.weight: Font.ExtraBold
-                                    font.letterSpacing: 1.2
-                                }
-                                Grid {
-                                    columns: 6
-                                    spacing: 4
-                                    Repeater {
-                                        model: [
-                                            Theme.channelColor("Game"), Theme.channelColor("Chat"),
-                                            Theme.channelColor("Media"), Theme.channelColor("Aux"),
-                                            Theme.channelColor("Mic"), Theme.accent,
-                                            Theme.success, Theme.purple,
-                                            Theme.overdrive, Theme.textDim,
-                                            Theme.text, Theme.textMuted
-                                        ]
-                                        Rectangle {
-                                            required property var modelData
-                                            width: 20; height: 20
-                                            radius: 4
-                                            color: modelData
-                                            border.width: Qt.colorEqual(color, colorFlyout.current) ? 2 : 1
-                                            border.color: presetArea.containsMouse
-                                                          || Qt.colorEqual(color, colorFlyout.current)
-                                                          ? Theme.text : Theme.border
-                                            MouseArea {
-                                                id: presetArea
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: colorFlyout.choose(parent.color)
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Rectangle {
-                                    width: pickerCol.width; height: 1
-                                    color: Theme.border
-                                }
-
-                                Text {
-                                    text: "Hue"
-                                    color: Theme.textMuted
-                                    font.pixelSize: 10
-                                    font.weight: Font.ExtraBold
-                                    font.letterSpacing: 1.2
-                                }
-                                // A strip of discrete hue cells rather than a
-                                // gradient: QML gradients cannot be built
-                                // from tokens, and 30 cells already reads as
-                                // continuous at this size.
-                                Row {
-                                    id: hueStrip
-                                    readonly property int cells: 30
-                                    readonly property real cellW:
-                                        (pickerCol.width) / hueStrip.cells
-                                    Repeater {
-                                        model: hueStrip.cells
-                                        Rectangle {
-                                            required property int index
-                                            width: hueStrip.cellW
-                                            height: 16
-                                            color: Theme.hsv(index / hueStrip.cells, 0.85, 0.95)
-                                            // Marks which hue the grid below
-                                            // is currently showing.
-                                            Rectangle {
-                                                anchors.fill: parent
-                                                color: "transparent"
-                                                border.width: 2
-                                                border.color: Theme.text
-                                                visible: Math.round(colorFlyout.hue * hueStrip.cells)
-                                                         % hueStrip.cells === parent.index
-                                            }
-                                            MouseArea {
-                                                anchors.fill: parent
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: colorFlyout.hue = parent.index / hueStrip.cells
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Saturation across, brightness down.
-                                Grid {
-                                    columns: 6
-                                    spacing: 4
-                                    Repeater {
-                                        model: 24
-                                        Rectangle {
-                                            required property int index
-                                            readonly property real sat:
-                                                0.25 + (index % 6) * 0.15
-                                            readonly property real val:
-                                                1.0 - Math.floor(index / 6) * 0.22
-                                            width: 20; height: 20
-                                            radius: 4
-                                            color: Theme.hsv(colorFlyout.hue, sat, val)
-                                            border.width: Qt.colorEqual(color, colorFlyout.current) ? 2 : 1
-                                            border.color: shadeArea.containsMouse
-                                                          || Qt.colorEqual(color, colorFlyout.current)
-                                                          ? Theme.text : Theme.border
-                                            MouseArea {
-                                                id: shadeArea
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: colorFlyout.choose(parent.color)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    // Clickable swatch; the hex field next to it stays for
+                    // exact values.
+                    TrackColorSwatch {
+                        current: tRow.modelData.color
+                        onPicked: (c) => root.updateTrack(tRow.index, { color: c })
                     }
 
                     TextField {
@@ -438,6 +440,29 @@ ColumnLayout {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.addTrack()
                 }
+            }
+
+            Rectangle {
+                width: resetText.implicitWidth + 24; height: 30
+                radius: Theme.radius
+                color: resetArea.containsMouse ? Theme.bgHover : Theme.bg
+                border.width: 1
+                border.color: Theme.border
+                Text {
+                    id: resetText
+                    anchors.centerIn: parent
+                    text: (I18n.language, I18n.t("settings.timelineTracks.resetDefaults"))
+                    color: Theme.textDim
+                    font.pixelSize: 12
+                }
+                MouseArea {
+                    id: resetArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: SettingsController.resetTrackDefs()
+                }
+            }
             }
         }
     }

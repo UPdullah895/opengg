@@ -17,10 +17,8 @@ Rectangle {
 
     property string connection: ""
 
-    readonly property string label: badge.connection === "wired" ? "Wired"
-                                  : badge.connection === "wireless" ? "Wireless"
-                                  : badge.connection === "bluetooth" ? "Bluetooth"
-                                  : ""
+    readonly property string label: (I18n.language, ["wired", "wireless", "bluetooth"].indexOf(badge.connection) >= 0)
+                                  ? I18n.t("devices.connection." + badge.connection) : ""
 
     visible: badge.label !== ""
     implicitWidth: labelText.implicitWidth + 16
