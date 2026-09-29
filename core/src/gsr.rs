@@ -162,7 +162,9 @@ pub fn start_gsr_replay(
     // X11 behavior preserved: all targets pass through unchanged
     let target = map_gsr_target_for_wayland(&target);
 
-    let mut cmd = std::process::Command::new("gpu-screen-recorder");
+    let mut cmd = gsr_command().ok_or(
+        "gpu-screen-recorder is not installed (checked $PATH and the Flatpak)",
+    )?;
     cmd.args([
         "-w", &target, "-f", &fps_str, "-r", &secs_str, "-c", "mp4", "-o", &expanded,
     ]);
@@ -362,12 +364,11 @@ pub fn save_gsr_replay(restart_on_save: bool) -> Result<SaveReplayResult, String
         let lock = gsr_process().lock().unwrap();
         match &*lock {
             Some(gsr_state) => {
-                let pid = gsr_state.child.id();
                 #[cfg(unix)]
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGUSR1);
+                {
+                    let pid = signal_gsr(&gsr_state.child, libc::SIGUSR1);
+                    log::info!("GSR SIGUSR1 → pid {pid}");
                 }
-                log::info!("GSR SIGUSR1 → pid {pid}");
                 let expanded = shexp(&gsr_state.params.output_dir);
                 let targets = gsr_state.params.audio_targets.clone();
                 let rp = if restart_on_save {
@@ -525,6 +526,245 @@ pub fn stop_gsr_replay() -> Result<(), String> {
     Ok(())
 }
 
+// ═══ Locating the recorder ═══
+
+/// Flathub id of GPU Screen Recorder. The install hints recommend the Flatpak
+/// on every non-Arch distro, and a Flatpak puts nothing on $PATH — so a
+/// `$PATH`-only lookup told everyone who followed those hints that the
+/// recorder was still missing.
+pub const GSR_FLATPAK_ID: &str = "com.dec05eba.gpu_screen_recorder";
+
+/// How gpu-screen-recorder is installed on this machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GsrInstall {
+    /// A binary on $PATH or in a standard bin directory.
+    Native(std::path::PathBuf),
+    /// The Flathub package, run through `flatpak run`.
+    Flatpak,
+}
+
+/// Find gpu-screen-recorder, preferring a native binary over the Flatpak.
+///
+/// Uncached and cheap (stat calls only), so "Recheck" after installing
+/// actually sees the new install. Checks a few standard bin directories as
+/// well as $PATH, because an app started from a desktop launcher can have a
+/// narrower $PATH than the user's shell.
+///
+/// `OPENGG_GSR_LAUNCHER=flatpak` or `=native` restricts the search to one
+/// kind, for diagnosing a machine that has both.
+pub fn gsr_install() -> Option<GsrInstall> {
+    let only = std::env::var("OPENGG_GSR_LAUNCHER").unwrap_or_default();
+    let want_native = only != "flatpak";
+    let want_flatpak = only != "native";
+    if want_native {
+        if let Some(found) = native_gsr() {
+            return Some(found);
+        }
+    }
+    if want_flatpak && flatpak_gsr_installed() {
+        return Some(GsrInstall::Flatpak);
+    }
+    None
+}
+
+fn native_gsr() -> Option<GsrInstall> {
+    if let Some(p) = crate::subprocess::find_in_path("gpu-screen-recorder") {
+        return Some(GsrInstall::Native(p.into()));
+    }
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let mut dirs: Vec<std::path::PathBuf> = vec!["/usr/bin".into(), "/usr/local/bin".into()];
+    if let Some(h) = &home {
+        dirs.push(h.join(".local/bin"));
+    }
+    for d in dirs {
+        let p = d.join("gpu-screen-recorder");
+        if p.is_file() {
+            return Some(GsrInstall::Native(p));
+        }
+    }
+    None
+}
+
+fn flatpak_gsr_installed() -> bool {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    // A Flatpak app is installed when its `current/active` deploy exists, in
+    // either the system or the per-user installation.
+    let mut roots: Vec<std::path::PathBuf> = vec!["/var/lib/flatpak".into()];
+    if let Some(h) = &home {
+        roots.push(h.join(".local/share/flatpak"));
+    }
+    let flatpak_on_path = crate::subprocess::find_in_path("flatpak").is_some()
+        || std::path::Path::new("/usr/bin/flatpak").is_file();
+    flatpak_on_path
+        && roots
+            .iter()
+            .any(|r| r.join("app").join(GSR_FLATPAK_ID).join("current/active").exists())
+}
+
+/// A `Command` that runs gpu-screen-recorder however it is installed, or
+/// `None` when it is not. Add the recorder's own arguments to it.
+pub fn gsr_command() -> Option<std::process::Command> {
+    Some(match gsr_install()? {
+        GsrInstall::Native(path) => std::process::Command::new(path),
+        GsrInstall::Flatpak => {
+            let mut cmd = std::process::Command::new("flatpak");
+            // --no-documents-portal: the recorder has host filesystem access
+            // and never needs the portal, and when the portal is not running
+            // bwrap refuses to start the sandbox at all.
+            cmd.args([
+                "run",
+                "--no-documents-portal",
+                "--command=gpu-screen-recorder",
+                GSR_FLATPAK_ID,
+            ]);
+            cmd
+        }
+    })
+}
+
+/// The process a signal meant for the recorder should go to.
+///
+/// For a native install that is the child itself. Under Flatpak the child is
+/// `bwrap`, which does NOT forward signals — SIGUSR1 (save replay) sent to it
+/// simply kills the sandbox and loses the buffer. The recorder is a
+/// descendant, visible in /proc from the host, and can be signalled directly.
+#[cfg(unix)]
+fn gsr_signal_target(child_pid: u32) -> u32 {
+    fn comm(pid: u32) -> String {
+        std::fs::read_to_string(format!("/proc/{pid}/comm"))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+    fn children(pid: u32) -> Vec<u32> {
+        let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+            return Vec::new();
+        };
+        tasks
+            .flatten()
+            .filter_map(|t| std::fs::read_to_string(t.path().join("children")).ok())
+            .flat_map(|s| {
+                s.split_whitespace()
+                    .filter_map(|p| p.parse().ok())
+                    .collect::<Vec<u32>>()
+            })
+            .collect()
+    }
+    // `comm` is truncated to 15 bytes: "gpu-screen-reco".
+    let mut queue = std::collections::VecDeque::from([child_pid]);
+    let mut seen = 0;
+    while let Some(pid) = queue.pop_front() {
+        if comm(pid).starts_with("gpu-screen-rec") {
+            return pid;
+        }
+        seen += 1;
+        if seen > 64 {
+            break;
+        }
+        queue.extend(children(pid));
+    }
+    child_pid
+}
+
+/// Send `sig` to the recorder behind `child` (see `gsr_signal_target`).
+#[cfg(unix)]
+fn signal_gsr(child: &std::process::Child, sig: libc::c_int) -> u32 {
+    let pid = gsr_signal_target(child.id());
+    unsafe {
+        libc::kill(pid as libc::pid_t, sig);
+    }
+    pid
+}
+
+// ═══ GPU Screen Recorder's own overlay (gsr-ui) ═══
+//
+// Many users record with gsr-ui's hotkeys rather than OpenGG's replay
+// buffer. Its default is to save into `~/Videos` with a new folder per game,
+// which lands outside every OpenGG library folder — so each game had to be
+// added by hand. These helpers let the Storage panel notice that and, on the
+// user's click, point gsr-ui at the library instead.
+
+/// Where gsr-ui saves replays, as read from its config file.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct GsrUiReplaySave {
+    /// The `config_ui` file this was read from.
+    pub config_path: String,
+    /// `replay.save_directory`.
+    pub dir: String,
+    /// `replay.save_video_in_game_folder`.
+    pub game_folders: bool,
+}
+
+/// gsr-ui's config files, native first, then the Flatpak's.
+fn gsr_ui_config_paths() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Some(c) = dirs::config_dir() {
+        out.push(c.join("gpu-screen-recorder/config_ui"));
+    }
+    if let Some(h) = dirs::home_dir() {
+        out.push(
+            h.join(".var/app")
+                .join(GSR_FLATPAK_ID)
+                .join("config/gpu-screen-recorder/config_ui"),
+        );
+    }
+    out
+}
+
+/// Parse `replay.save_directory` / `replay.save_video_in_game_folder` out of
+/// gsr-ui's `key value` config text.
+fn parse_gsr_ui_replay(text: &str) -> Option<(String, bool)> {
+    let mut dir = None;
+    let mut game_folders = false;
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("replay.save_directory ") {
+            dir = Some(v.trim().to_string());
+        } else if let Some(v) = line.strip_prefix("replay.save_video_in_game_folder ") {
+            game_folders = v.trim() == "true";
+        }
+    }
+    dir.filter(|d| !d.is_empty()).map(|d| (d, game_folders))
+}
+
+/// Where gsr-ui saves replays, from the first config file that has it.
+pub fn gsr_ui_replay_save() -> Option<GsrUiReplaySave> {
+    gsr_ui_config_paths().into_iter().find_map(|p| {
+        let text = std::fs::read_to_string(&p).ok()?;
+        let (dir, game_folders) = parse_gsr_ui_replay(&text)?;
+        Some(GsrUiReplaySave {
+            config_path: p.to_string_lossy().into_owned(),
+            dir,
+            game_folders,
+        })
+    })
+}
+
+/// Rewrite `replay.save_directory` in gsr-ui's config file to `dir`.
+///
+/// Only ever called from an explicit button. gsr-ui reads its config at
+/// start-up, so it must be restarted to pick the change up.
+pub fn set_gsr_ui_replay_dir(config_path: &str, dir: &str) -> Result<(), String> {
+    let text = std::fs::read_to_string(config_path).map_err(|e| format!("{config_path}: {e}"))?;
+    let expanded = shexp(dir);
+    let mut replaced = false;
+    let mut out: Vec<String> = text
+        .lines()
+        .map(|l| {
+            if l.starts_with("replay.save_directory ") {
+                replaced = true;
+                format!("replay.save_directory {expanded}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    if !replaced {
+        out.push(format!("replay.save_directory {expanded}"));
+    }
+    let _ = std::fs::create_dir_all(&expanded);
+    std::fs::write(config_path, out.join("\n") + "\n").map_err(|e| format!("{config_path}: {e}"))
+}
+
 // ═══ Helper Functions ═══
 
 /// Sanitize a string so it is safe to use as a filename component.
@@ -658,10 +898,7 @@ fn newest_video_after(
 fn gsr_kill_graceful(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
-        let pid = child.id() as libc::pid_t;
-        unsafe {
-            libc::kill(pid, libc::SIGINT);
-        }
+        signal_gsr(child, libc::SIGINT);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             match child.try_wait() {
@@ -869,9 +1106,10 @@ pub struct MonitorInfo {
 /// immediate GSR crash if passed. `--list-monitors` returns the exact X11/Wayland
 /// connector names (e.g. "DP-1", "HDMI-A-1", "screen") its `-w` flag accepts.
 pub fn list_monitors() -> Vec<MonitorInfo> {
-    let output = std::process::Command::new("gpu-screen-recorder")
-        .arg("--list-monitors")
-        .output();
+    let output = match gsr_command() {
+        Some(mut cmd) => cmd.arg("--list-monitors").output(),
+        None => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+    };
 
     let stdout = match output {
         Ok(o) if !o.stdout.is_empty() => String::from_utf8_lossy(&o.stdout).to_string(),
@@ -1010,9 +1248,10 @@ pub fn gsr_diagnostics(audio_sources: Vec<String>, monitor_target: String) -> Gs
 
     // 1. Binary presence + version
     // Prefer --version (plain output) but fall back to --help if it doesn't work
-    let gsr_version_output = std::process::Command::new("gpu-screen-recorder")
-        .arg("--version")
-        .output();
+    let gsr_version_output = match gsr_command() {
+        Some(mut cmd) => cmd.arg("--version").output(),
+        None => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+    };
 
     match gsr_version_output {
         Ok(o) if o.status.success() => {
@@ -1028,10 +1267,7 @@ pub fn gsr_diagnostics(audio_sources: Vec<String>, monitor_target: String) -> Gs
         }
         _ => {
             // --version failed; try --help as fallback (less reliable)
-            if let Ok(o) = std::process::Command::new("gpu-screen-recorder")
-                .arg("--help")
-                .output()
-            {
+            if let Some(Ok(o)) = gsr_command().map(|mut cmd| cmd.arg("--help").output()) {
                 if o.status.success() {
                     result.gsr_installed = true;
                     // Help output starts with "usage:" — no version in first line
@@ -1056,7 +1292,7 @@ pub fn gsr_diagnostics(audio_sources: Vec<String>, monitor_target: String) -> Gs
             } else {
                 result.ok = false;
                 result.items.push(DiagnosticItem {
-                    message: "gpu-screen-recorder not found in PATH. Install it via your package manager.".into(),
+                    message: "gpu-screen-recorder not found (checked $PATH, standard bin directories and the Flatpak). Install it, then press Recheck.".into(),
                     severity: "error".into(),
                     fix: Some(DiagnosticFix {
                         command: gsr_install_cmd.into(),
@@ -1177,7 +1413,9 @@ fn resolve_gsr_target(monitor_target: &str) -> String {
 /// stderr + exit status. This reproduces the exact failure a recording would hit.
 fn gsr_test_capture(target: &str) -> String {
     let tmp = std::env::temp_dir().join("opengg_gsr_diag_test.mp4");
-    let mut cmd = std::process::Command::new("gpu-screen-recorder");
+    let Some(mut cmd) = gsr_command() else {
+        return "test capture skipped: gpu-screen-recorder is not installed".to_string();
+    };
     cmd.args(["-w", target, "-f", "30", "-c", "mp4", "-o"]);
     cmd.arg(&tmp);
     cmd.stderr(std::process::Stdio::piped());
@@ -1202,9 +1440,8 @@ fn gsr_test_capture(target: &str) -> String {
         Ok(Some(status)) => format!("EXITED EARLY with {status:?} (failure)"),
         Ok(None) => {
             // Still running → capture works. Stop it cleanly.
-            let _ = std::process::Command::new("kill")
-                .args(["-SIGINT", &child.id().to_string()])
-                .output();
+            #[cfg(unix)]
+            signal_gsr(&child, libc::SIGINT);
             std::thread::sleep(std::time::Duration::from_millis(400));
             let _ = child.kill();
             let _ = child.wait();
@@ -1265,9 +1502,34 @@ fn build_gsr_report(result: &GsrDiagnosticResult, monitor_target: &str) -> Strin
 
 /// Raw `gpu-screen-recorder --list-monitors` output (newline-joined), for the report.
 fn list_monitors_raw() -> String {
-    match std::process::Command::new("gpu-screen-recorder").arg("--list-monitors").output() {
+    let Some(mut cmd) = gsr_command() else {
+        return "(gpu-screen-recorder not installed)".to_string();
+    };
+    match cmd.arg("--list-monitors").output() {
         Ok(o) if !o.stdout.is_empty() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         Ok(o) => format!("(none; exit={:?})", o.status.code()),
         Err(e) => format!("(failed to run: {e})"),
+    }
+}
+
+#[cfg(test)]
+mod gsr_ui_tests {
+    use super::*;
+
+    #[test]
+    fn parses_and_rewrites_the_replay_directory() {
+        let text = "record.save_directory /home/u/Videos\nreplay.save_directory /home/u/Videos\nreplay.save_video_in_game_folder true\n";
+        assert_eq!(parse_gsr_ui_replay(text), Some(("/home/u/Videos".into(), true)));
+
+        let f = std::env::temp_dir().join(format!("opengg-gsrui-{}", std::process::id()));
+        std::fs::write(&f, text).unwrap();
+        let target = std::env::temp_dir().join(format!("opengg-gsrui-dir-{}", std::process::id()));
+        set_gsr_ui_replay_dir(f.to_str().unwrap(), target.to_str().unwrap()).unwrap();
+        let back = std::fs::read_to_string(&f).unwrap();
+        // Only the replay line moves; the record line and the rest stay.
+        assert!(back.contains("record.save_directory /home/u/Videos\n"));
+        assert_eq!(parse_gsr_ui_replay(&back), Some((target.to_string_lossy().into_owned(), true)));
+        let _ = std::fs::remove_file(&f);
+        let _ = std::fs::remove_dir(&target);
     }
 }
