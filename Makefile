@@ -87,8 +87,19 @@ install: build install-service
 # login and survives reboots (the sinks are ephemeral and recreated on daemon start).
 # No sudo needed — this is a `--user` unit.
 install-service:
-	@mkdir -p $(HOME)/.config/systemd/user
-	cp $(ROOT)/packaging/openggd.service $(HOME)/.config/systemd/user/
+	@mkdir -p $(HOME)/.config/systemd/user $(HOME)/.local/share/dbus-1/services
+	# The packaged units point at /usr/bin/openggd, which is where every
+	# package puts it. A from-source install puts it in ~/.local/bin, so
+	# rewrite the path rather than shipping a unit that starts the wrong
+	# binary (or none at all).
+	sed 's|/usr/bin/openggd|$(HOME)/.local/bin/openggd|' \
+		$(ROOT)/packaging/openggd.service > $(HOME)/.config/systemd/user/openggd.service
+	# Register D-Bus activation too. Without this the daemon only ever starts
+	# because the unit below is enabled — `org.opengg.Daemon` could not be
+	# activated on demand, which is the whole point of a bus-activated service.
+	sed 's|/usr/bin/openggd|$(HOME)/.local/bin/openggd|' \
+		$(ROOT)/packaging/org.opengg.Daemon.service \
+		> $(HOME)/.local/share/dbus-1/services/org.opengg.Daemon.service
 	@systemctl --user daemon-reload
 	@systemctl --user enable --now openggd.service && \
 		echo "✓ openggd.service enabled (auto-starts at login)" || \

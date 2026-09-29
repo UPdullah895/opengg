@@ -5,7 +5,7 @@
 <h1 align="center">OpenGG</h1>
 
 <p align="center">
-  <b>v0.2.1</b> · An open-source Linux gaming hub — audio mixer, device &amp; RGB manager, instant replay.<br/>
+  <b>v0.2.2</b> · An open-source Linux gaming hub — audio mixer, device &amp; RGB manager, instant replay.<br/>
   A modular alternative to SteelSeries GG (Sonar + Engine + Moments).
 </p>
 

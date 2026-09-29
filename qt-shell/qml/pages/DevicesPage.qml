@@ -189,21 +189,21 @@ Rectangle {
                     flat: true
                     icon: "list"
                     active: page.deviceViewMode === "list"
-                    tooltip: "List view"
+                    tooltip: (I18n.language, I18n.t("devices.viewList"))
                     onTriggered: page.setViewMode("list")
                 }
                 IconToggle {
                     flat: true
                     icon: "grid"
                     active: page.deviceViewMode === "grid"
-                    tooltip: "Grid view"
+                    tooltip: (I18n.language, I18n.t("devices.viewGrid"))
                     onTriggered: page.setViewMode("grid")
                 }
                 IconToggle {
                     flat: true
                     icon: "square"
                     active: page.deviceViewMode === "carousel"
-                    tooltip: "Carousel view"
+                    tooltip: (I18n.language, I18n.t("devices.viewCarousel"))
                     onTriggered: page.setViewMode("carousel")
                 }
             }
@@ -215,7 +215,7 @@ Rectangle {
                 Layout.leftMargin: 8
             }
             Text {
-                text: DeviceController.connected ? "daemon connected" : "daemon offline"
+                text: (I18n.language, DeviceController.connected ? I18n.t("devices.daemonConnected") : I18n.t("devices.daemonOffline"))
                 color: Theme.textDim
                 font.pixelSize: 12
             }

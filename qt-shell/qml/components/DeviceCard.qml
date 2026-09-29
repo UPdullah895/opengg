@@ -126,7 +126,7 @@ Rectangle {
                     // here — it is an internal identifier with no meaning to a
                     // normal user. It lives behind the detail panel's
                     // "Advanced" disclosure instead.
-                    text: root.modelData.deviceType
+                    text: (I18n.language, I18n.t("devices.types." + root.modelData.deviceType) === "devices.types." + root.modelData.deviceType ? root.modelData.deviceType : I18n.t("devices.types." + root.modelData.deviceType))
                     color: Theme.textMuted
                     font.pixelSize: 11
                     elide: Text.ElideRight

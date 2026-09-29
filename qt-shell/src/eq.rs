@@ -1,16 +1,21 @@
-//! EqController — per-channel 10-band EQ over `opengg_core::eq`.
+//! EqController — per-channel 10-band EQ and voice processing (noise gate,
+//! compressor, noise reduction) over `opengg_core::eq` and
+//! `opengg_core::voicefx`.
 //!
-//! The engine is PipeWire's own filter-chain (builtin biquads), not an
-//! external LV2 host. See `core/src/eq.rs` for why the previous jalv + LSP
-//! approach could not work; in short it depended on plugins that are not
-//! installed by default, drove jalv with a flag that makes it ignore its
-//! stdin, never linked the result into the audio path, and reported success
-//! for a process that had already exited.
+//! The engine is PipeWire's own filter-chain, not an external LV2 host. See
+//! `core/src/eq.rs` for why the previous jalv + LSP approach could not work.
 //!
-//! `applyNoiseGate`/`applyCompressor`/`applyNoiseReduction` remain no-ops:
-//! there is still no engine for them. They are kept as real invokables so
-//! `DspControls.qml` has a stable call shape, and `dspAvailable` reports
-//! false so the UI can say so rather than implying they work.
+//! One engine per channel:
+//!
+//! * **Output channels** (Game, Chat, …) run one chain between the channel's
+//!   sink monitor and its device: voice stages first when any are on, then
+//!   the EQ bands. It runs while the EQ or any voice stage is enabled.
+//! * **Mic** runs a chain from the hardware mic into `OpenGG_Mic`, replacing
+//!   the daemon's dry loopback while it is up (`voicefx::start_mic`).
+//!
+//! The gate/compressor/NR switches used to be no-ops with `dspAvailable`
+//! hard-wired to false. They now drive real stages; `dspCapsJson` reports
+//! which ones this machine can run.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -31,25 +36,33 @@ pub mod qobject {
         /// JSON array of channel names with a running engine, so the UI can
         /// reflect real state rather than its own optimistic guess.
         #[qproperty(QString, active_channels_json, cxx_name = "activeChannelsJson")]
-        /// Whether the noise gate / compressor / noise reduction controls
-        /// do anything. They do not.
+        /// Whether the noise gate — the one stage that needs nothing beyond
+        /// PipeWire — can run here.
         #[qproperty(bool, dsp_available, cxx_name = "dspAvailable")]
+        /// `{"gate": bool, "compressor": bool, "noiseReduction": bool}` —
+        /// which voice stages this machine can run. The compressor and noise
+        /// reduction need optional LADSPA plugins.
+        #[qproperty(QString, dsp_caps_json, cxx_name = "dspCapsJson")]
+        /// Result of the latest `measureNoiseFloor`, as
+        /// `{"channel": "...", "db": -52.3}` (`db` null if nothing could be
+        /// recorded). Empty while none has finished.
+        #[qproperty(QString, noise_floor_json, cxx_name = "noiseFloorJson")]
         type EqController = super::EqControllerRust;
 
-        /// Start the EQ for `channel`, inserting it between that channel's
-        /// virtual sink and its output device. Returns false and sets
-        /// `lastError` if the engine could not be started.
+        /// Turn the EQ on for `channel`. Returns false and sets `lastError`
+        /// if the engine could not be started.
         #[qinvokable]
         #[cxx_name = "startEngine"]
         fn start_engine(self: Pin<&mut Self>, channel: &QString) -> bool;
 
-        /// Stop the EQ for `channel` and restore its direct output path.
+        /// Turn the EQ off for `channel`. The engine keeps running, with a
+        /// flat EQ, while any voice stage is still on there.
         #[qinvokable]
         #[cxx_name = "stopEngine"]
         fn stop_engine(self: Pin<&mut Self>, channel: &QString);
 
         /// Push a JSON array of band gains in dB to `channel`'s engine.
-        /// No-op when no engine is running there.
+        /// Remembered, so a restart for a voice-stage change keeps them.
         #[qinvokable]
         #[cxx_name = "applyEq"]
         fn apply_eq(self: Pin<&mut Self>, channel: &QString, bands_json: &QString);
@@ -67,31 +80,72 @@ pub mod qobject {
         #[cxx_name = "stopAll"]
         fn stop_all(self: Pin<&mut Self>);
 
+        /// Noise gate. `threshold` is in dB. `auto_detect` is handled by the
+        /// UI through `measureNoiseFloor`; the threshold passed here is
+        /// whatever that produced.
         #[qinvokable]
         #[cxx_name = "applyNoiseGate"]
-        fn apply_noise_gate(self: &Self, channel: &QString, enabled: bool, threshold: f32, auto_detect: bool);
+        fn apply_noise_gate(
+            self: Pin<&mut Self>,
+            channel: &QString,
+            enabled: bool,
+            threshold: f32,
+            auto_detect: bool,
+        );
 
+        /// Compressor, `level` 0..100.
         #[qinvokable]
         #[cxx_name = "applyCompressor"]
-        fn apply_compressor(self: &Self, channel: &QString, enabled: bool, level: f32);
+        fn apply_compressor(self: Pin<&mut Self>, channel: &QString, enabled: bool, level: f32);
 
+        /// Noise reduction, `intensity` 0..100.
         #[qinvokable]
         #[cxx_name = "applyNoiseReduction"]
-        fn apply_noise_reduction(self: &Self, channel: &QString, enabled: bool, intensity: f32);
+        fn apply_noise_reduction(
+            self: Pin<&mut Self>,
+            channel: &QString,
+            enabled: bool,
+            intensity: f32,
+        );
+
+        /// Listen to `channel`'s input for a moment and report its background
+        /// level in `noiseFloorJson`. Threaded; the user should stay quiet.
+        #[qinvokable]
+        #[cxx_name = "measureNoiseFloor"]
+        fn measure_noise_floor(self: Pin<&mut Self>, channel: &QString);
+
+        /// Re-probe which voice stages can run (after installing a plugin).
+        #[qinvokable]
+        #[cxx_name = "refreshCaps"]
+        fn refresh_caps(self: Pin<&mut Self>);
     }
+
+    impl cxx_qt::Threading for EqController {}
 }
 
 use core::pin::Pin;
 use cxx_qt::CxxQtType;
+use cxx_qt::Threading;
 use cxx_qt_lib::QString;
-use std::collections::HashMap;
+use opengg_core::voicefx::{self, FxCaps, FxSettings};
+use std::collections::{HashMap, HashSet};
 use std::process::Child;
 
-/// A running engine, with the routing it displaced so `stop` can put it back.
+/// Where a running engine sits, so `stop` can put the dry path back.
+enum Route {
+    /// Between an output channel's sink monitor and its device.
+    Output { sink: String, device: String },
+    /// Hardware mic → `OpenGG_Mic`, replacing the daemon's loopback.
+    Mic,
+}
+
+/// A running engine.
 struct Engine {
     child: Child,
-    sink: String,
-    device: String,
+    route: Route,
+    /// The voice stages it was built with; a different set needs a restart,
+    /// anything else is a live parameter change.
+    stages: (bool, bool, bool),
 }
 
 pub struct EqControllerRust {
@@ -99,23 +153,59 @@ pub struct EqControllerRust {
     unavailable_reason: QString,
     active_channels_json: QString,
     dsp_available: bool,
+    dsp_caps_json: QString,
+    noise_floor_json: QString,
+    caps: FxCaps,
     engines: HashMap<String, Engine>,
+    /// Channels whose EQ is switched on.
+    eq_on: HashSet<String>,
+    /// Last band gains per channel, re-applied after a restart.
+    bands: HashMap<String, Vec<f32>>,
+    /// Voice-stage settings per channel.
+    fx: HashMap<String, FxSettings>,
+}
+
+fn caps_json(caps: &FxCaps) -> QString {
+    QString::from(&serde_json::to_string(caps).unwrap_or_else(|_| "{}".into()))
 }
 
 impl Default for EqControllerRust {
     fn default() -> Self {
-        let reason = opengg_core::eq::availability()
-            .err()
-            .unwrap_or_default();
+        let reason = opengg_core::eq::availability().err().unwrap_or_default();
+        let caps = voicefx::capabilities();
+        // A chain from a previous run that crashed would have left the mic's
+        // dry path cut; putting it back is harmless when it is already there.
+        voicefx::relink_loopback();
         Self {
             last_error: QString::default(),
             unavailable_reason: QString::from(&reason),
             active_channels_json: QString::from("[]"),
-            // No engine exists for gate/compressor/NR anywhere in the
-            // project. Saying so beats a control that pretends.
-            dsp_available: false,
+            dsp_available: caps.gate,
+            dsp_caps_json: caps_json(&caps),
+            noise_floor_json: QString::default(),
+            caps,
             engines: HashMap::new(),
+            eq_on: HashSet::new(),
+            bands: HashMap::new(),
+            fx: HashMap::new(),
         }
+    }
+}
+
+/// Stop an engine and restore whatever path it replaced.
+fn stop_engine_process(engine: Engine) {
+    match engine.route {
+        Route::Output { sink, device } => opengg_core::eq::stop(engine.child, &sink, &device),
+        Route::Mic => voicefx::stop_mic(engine.child),
+    }
+}
+
+/// The capture-side node name of a channel's engine, for live parameters.
+fn capture_node(channel: &str) -> String {
+    if channel == "Mic" {
+        format!("{}_in", voicefx::MIC_NODE)
+    } else {
+        format!("{}_in", opengg_core::eq::node_name(channel))
     }
 }
 
@@ -132,6 +222,103 @@ impl qobject::EqController {
         self.as_mut().set_active_channels_json(QString::from(&json));
     }
 
+    /// Bring `channel`'s engine in line with what is switched on: start,
+    /// restart, update live, or stop it. Returns whether an engine is now
+    /// running when one is wanted.
+    fn reconcile(mut self: Pin<&mut Self>, channel: &str) -> bool {
+        let fx = self.as_ref().rust().fx.get(channel).cloned().unwrap_or_default();
+        let caps = self.as_ref().rust().caps.clone();
+        let eq_on = self.as_ref().rust().eq_on.contains(channel);
+        let is_mic = channel == "Mic";
+        let wanted = if is_mic { fx.any_enabled() } else { eq_on || fx.any_enabled() };
+
+        if !wanted {
+            if let Some(engine) = self.as_mut().rust_mut().engines.remove(channel) {
+                stop_engine_process(engine);
+            }
+            self.as_mut().publish_active();
+            return true;
+        }
+
+        let stages = if fx.any_enabled() {
+            voicefx::structure(&fx, &caps)
+        } else {
+            (false, false, false)
+        };
+        let running_same = self
+            .as_ref()
+            .rust()
+            .engines
+            .get(channel)
+            .is_some_and(|e| e.stages == stages);
+        if running_same {
+            if fx.any_enabled() {
+                if let Err(e) = voicefx::set_live(&capture_node(channel), &fx, &caps) {
+                    eprintln!("EqController: live update for {channel}: {e}");
+                }
+            }
+            return true;
+        }
+
+        // (Re)start. Tear the old one down first, including its routing.
+        if let Some(engine) = self.as_mut().rust_mut().engines.remove(channel) {
+            stop_engine_process(engine);
+        }
+        let started = if is_mic {
+            voicefx::start_mic(&fx, &caps).map(|child| {
+                voicefx::unlink_loopback();
+                (child, Route::Mic)
+            })
+        } else {
+            if let Err(reason) = opengg_core::eq::availability() {
+                self.as_mut().set_unavailable_reason(QString::from(&reason));
+                Err(reason)
+            } else {
+                let sink = Self::sink_for(channel);
+                let device = opengg_core::audio::current_channel_device(channel);
+                let with_fx = fx.any_enabled().then_some((&fx, &caps));
+                opengg_core::eq::start_with_fx(channel, &sink, &device, with_fx).map(|child| {
+                    // Only cut the dry path once the chain is up, or a
+                    // failed start would leave the channel silent.
+                    opengg_core::eq::unlink_direct(&sink, &device);
+                    (child, Route::Output { sink, device })
+                })
+            }
+        };
+        match started {
+            Ok((child, route)) => {
+                self.as_mut()
+                    .rust_mut()
+                    .engines
+                    .insert(channel.to_string(), Engine { child, route, stages });
+                self.as_mut().set_last_error(QString::default());
+                self.as_mut().publish_active();
+                // A fresh chain starts with flat bands; restore the user's
+                // once its node is up.
+                if eq_on && !is_mic {
+                    if let Some(gains) = self.as_ref().rust().bands.get(channel).cloned() {
+                        let ch = channel.to_string();
+                        std::thread::spawn(move || {
+                            for _ in 0..20 {
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                if opengg_core::eq::set_bands(&ch, &gains).is_ok() {
+                                    return;
+                                }
+                            }
+                        });
+                    }
+                }
+                true
+            }
+            Err(e) => {
+                eprintln!("EqController: start {channel}: {e}");
+                self.as_mut().set_last_error(QString::from(&e));
+                self.as_mut().publish_active();
+                false
+            }
+        }
+    }
+
     pub fn start_engine(mut self: Pin<&mut Self>, channel: &QString) -> bool {
         let channel = channel.to_string();
         if let Err(reason) = opengg_core::eq::availability() {
@@ -139,49 +326,26 @@ impl qobject::EqController {
             self.as_mut().set_last_error(QString::from(&reason));
             return false;
         }
-
-        // Restarting is the documented behaviour, so tear the old one down
-        // first — including its routing, or the restore below would run
-        // against links the new chain has already replaced.
-        self.as_mut().stop_engine(&QString::from(&channel));
-
-        let sink = Self::sink_for(&channel);
-        let device = opengg_core::audio::current_channel_device(&channel);
-
-        match opengg_core::eq::start(&channel, &sink, &device) {
-            Ok(child) => {
-                // Only cut the dry path once the chain is actually up,
-                // otherwise a failed start would leave the channel silent.
-                opengg_core::eq::unlink_direct(&sink, &device);
-                self.as_mut().rust_mut().engines.insert(
-                    channel,
-                    Engine { child, sink, device },
-                );
-                self.as_mut().set_last_error(QString::default());
-                self.as_mut().publish_active();
-                true
-            }
-            Err(e) => {
-                eprintln!("EqController::start_engine({channel}): {e}");
-                self.as_mut().set_last_error(QString::from(&e));
-                false
-            }
+        self.as_mut().rust_mut().eq_on.insert(channel.clone());
+        // Restarting is the documented behaviour.
+        if let Some(engine) = self.as_mut().rust_mut().engines.remove(&channel) {
+            stop_engine_process(engine);
         }
+        self.as_mut().reconcile(&channel)
     }
 
     pub fn stop_engine(mut self: Pin<&mut Self>, channel: &QString) {
-        let key = channel.to_string();
-        if let Some(engine) = self.as_mut().rust_mut().engines.remove(&key) {
-            opengg_core::eq::stop(engine.child, &engine.sink, &engine.device);
+        let channel = channel.to_string();
+        self.as_mut().rust_mut().eq_on.remove(&channel);
+        // Voice stages may still need the chain; flatten the bands for them.
+        if self.as_ref().rust().engines.contains_key(&channel) {
+            let _ = opengg_core::eq::set_bands(&channel, &[0.0; 10]);
         }
-        self.as_mut().publish_active();
+        self.as_mut().reconcile(&channel);
     }
 
     pub fn apply_eq(mut self: Pin<&mut Self>, channel: &QString, bands_json: &QString) {
         let channel = channel.to_string();
-        if !self.as_ref().rust().engines.contains_key(&channel) {
-            return;
-        }
         let bands: Vec<f32> = match serde_json::from_str(&bands_json.to_string()) {
             Ok(b) => b,
             Err(e) => {
@@ -190,6 +354,12 @@ impl qobject::EqController {
                 return;
             }
         };
+        self.as_mut().rust_mut().bands.insert(channel.clone(), bands.clone());
+        if !self.as_ref().rust().engines.contains_key(&channel)
+            || !self.as_ref().rust().eq_on.contains(&channel)
+        {
+            return;
+        }
         match opengg_core::eq::set_bands(&channel, &bands) {
             Ok(()) => self.as_mut().set_last_error(QString::default()),
             Err(e) => {
@@ -208,13 +378,74 @@ impl qobject::EqController {
         let keys: Vec<String> = self.as_ref().rust().engines.keys().cloned().collect();
         for k in keys {
             if let Some(engine) = self.as_mut().rust_mut().engines.remove(&k) {
-                opengg_core::eq::stop(engine.child, &engine.sink, &engine.device);
+                stop_engine_process(engine);
             }
         }
         self.as_mut().publish_active();
     }
 
-    pub fn apply_noise_gate(&self, _channel: &QString, _enabled: bool, _threshold: f32, _auto_detect: bool) {}
-    pub fn apply_compressor(&self, _channel: &QString, _enabled: bool, _level: f32) {}
-    pub fn apply_noise_reduction(&self, _channel: &QString, _enabled: bool, _intensity: f32) {}
+    fn update_fx(mut self: Pin<&mut Self>, channel: &QString, f: impl FnOnce(&mut FxSettings)) {
+        let channel = channel.to_string();
+        f(self.as_mut().rust_mut().fx.entry(channel.clone()).or_default());
+        self.as_mut().reconcile(&channel);
+    }
+
+    pub fn apply_noise_gate(
+        self: Pin<&mut Self>,
+        channel: &QString,
+        enabled: bool,
+        threshold: f32,
+        _auto_detect: bool,
+    ) {
+        self.update_fx(channel, |fx| {
+            fx.gate_enabled = enabled;
+            fx.gate_threshold_db = threshold;
+        });
+    }
+
+    pub fn apply_compressor(self: Pin<&mut Self>, channel: &QString, enabled: bool, level: f32) {
+        self.update_fx(channel, |fx| {
+            fx.comp_enabled = enabled;
+            fx.comp_level = level;
+        });
+    }
+
+    pub fn apply_noise_reduction(
+        self: Pin<&mut Self>,
+        channel: &QString,
+        enabled: bool,
+        intensity: f32,
+    ) {
+        self.update_fx(channel, |fx| {
+            fx.nr_enabled = enabled;
+            fx.nr_intensity = intensity;
+        });
+    }
+
+    pub fn measure_noise_floor(mut self: Pin<&mut Self>, channel: &QString) {
+        let channel = channel.to_string();
+        self.as_mut().set_noise_floor_json(QString::default());
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            // Measure the dry input: the hardware mic for Mic, the channel's
+            // own monitor otherwise.
+            let source = if channel == "Mic" {
+                voicefx::mic_hw_source().unwrap_or_else(|| "OpenGG_Mic.monitor".into())
+            } else {
+                format!("OpenGG_{channel}.monitor")
+            };
+            let db = voicefx::measure_noise_floor_db(&source, 1.5);
+            let json = serde_json::json!({ "channel": channel, "db": db }).to_string();
+            let _ = qt_thread.queue(move |mut c| {
+                c.as_mut().set_noise_floor_json(QString::from(&json));
+            });
+        });
+    }
+
+    pub fn refresh_caps(mut self: Pin<&mut Self>) {
+        let caps = voicefx::capabilities();
+        self.as_mut().set_dsp_available(caps.gate);
+        self.as_mut().set_dsp_caps_json(caps_json(&caps));
+        self.as_mut().rust_mut().caps = caps;
+    }
 }

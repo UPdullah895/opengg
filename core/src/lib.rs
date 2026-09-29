@@ -32,5 +32,6 @@ pub mod steam;
 pub mod storage;
 pub mod subprocess;
 pub mod system;
+pub mod voicefx;
 pub mod vu;
 pub mod watcher;

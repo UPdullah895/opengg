@@ -78,15 +78,15 @@ Rectangle {
 
     function groupLabel(dateKey) {
         if (dateKey === "Unknown")
-            return "Unknown date"
+            return (I18n.language, I18n.t("clips.dateGroup.unknown"))
         const d = new Date(dateKey)
         if (isNaN(d.getTime()))
             return dateKey
         d.setHours(0, 0, 0, 0)
         const today = new Date(); today.setHours(0, 0, 0, 0)
         const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1)
-        if (d.getTime() === today.getTime()) return "Today"
-        if (d.getTime() === yesterday.getTime()) return "Yesterday"
+        if (d.getTime() === today.getTime()) return (I18n.language, I18n.t("clips.dateGroup.today"))
+        if (d.getTime() === yesterday.getTime()) return (I18n.language, I18n.t("clips.dateGroup.yesterday"))
         // Bare Qt.locale() is the SYSTEM locale, which on an Arabic-locale
         // desktop rendered these headers in Arabic while the rest of the UI
         // stayed English. Follow the app's own language instead — the Vue
@@ -350,8 +350,8 @@ Rectangle {
                     id: countLabel
                     anchors.centerIn: parent
                     text: ClipsController.count === ClipsController.totalCount
-                          ? ClipsController.totalCount + (ClipsController.totalCount === 1 ? " clip" : " clips")
-                          : ClipsController.count + " of " + ClipsController.totalCount
+                          ? (I18n.language, I18n.t(ClipsController.totalCount === 1 ? "clips.countOne" : "clips.count")).replace("{n}", ClipsController.totalCount)
+                          : (I18n.language, I18n.t("clips.countOf")).replace("{n}", ClipsController.count).replace("{total}", ClipsController.totalCount)
                     color: Theme.textDim
                     font.pixelSize: 12
                 }
@@ -370,7 +370,7 @@ Rectangle {
                 border.color: Theme.border
                 Text {
                     anchors.centerIn: parent
-                    text: ClipsController.loading ? "Scanning…" : "Refresh"
+                    text: ClipsController.loading ? (I18n.language, I18n.t("clips.scanning")) : (I18n.language, I18n.t("clips.refresh"))
                     color: Theme.text
                     font.pixelSize: 13
                 }
@@ -643,10 +643,10 @@ Rectangle {
                 textRole: "label"
                 valueRole: "value"
                 model: [
-                    { label: "Newest",   value: "newest" },
-                    { label: "Oldest",   value: "oldest" },
-                    { label: "Longest",  value: "longest" },
-                    { label: "Shortest", value: "shortest" }
+                    { label: (I18n.language, I18n.t("clips.sortOptions.newest")),   value: "newest" },
+                    { label: (I18n.language, I18n.t("clips.sortOptions.oldest")),   value: "oldest" },
+                    { label: (I18n.language, I18n.t("clips.sortOptions.longest")),  value: "longest" },
+                    { label: (I18n.language, I18n.t("clips.sortOptions.shortest")), value: "shortest" }
                 ]
                 currentIndex: 0
                 onActivated: ClipsController.setSortMode(currentValue)
@@ -710,7 +710,7 @@ Rectangle {
                 icon: "heart"
                 label: String(ClipsController.favCount)
                 active: page.favoritesOnly
-                tooltip: "Show favorites only"
+                tooltip: (I18n.language, I18n.t("clips.favoritesOnly"))
                 onTriggered: {
                     page.favoritesOnly = !page.favoritesOnly
                     ClipsController.setFavoritesOnly(page.favoritesOnly)
@@ -723,7 +723,7 @@ Rectangle {
             IconToggle {
                 icon: "filter-x"
                 visible: page.anyFilterActive
-                tooltip: "Clear all filters"
+                tooltip: (I18n.language, I18n.t("clips.gamesFilter.clear"))
                 onTriggered: page.clearAllFilters()
             }
 
@@ -818,13 +818,13 @@ Rectangle {
             IconToggle {
                 icon: "bar-chart"
                 active: page.showStats
-                tooltip: "Toggle clip details"
+                tooltip: (I18n.language, I18n.t("clips.toggleDetails"))
                 onTriggered: page.persistView("clipsShowStats", !page.showStats)
             }
             IconToggle {
                 icon: "calendar"
                 active: page.dateGrouped
-                tooltip: "Group by date"
+                tooltip: (I18n.language, I18n.t("clips.groupByDate"))
                 onTriggered: page.persistView("clipsDateGrouped", !page.dateGrouped)
             }
             // A fused pair rather than two separate buttons, so the pair
@@ -834,14 +834,14 @@ Rectangle {
                     flat: true
                     icon: "grid"
                     active: page.viewMode === "grid"
-                    tooltip: "Grid view"
+                    tooltip: (I18n.language, I18n.t("clips.viewGrid"))
                     onTriggered: page.persistView("clipsViewMode", "grid")
                 }
                 IconToggle {
                     flat: true
                     icon: "list"
                     active: page.viewMode === "list"
-                    tooltip: "List view"
+                    tooltip: (I18n.language, I18n.t("clips.viewList"))
                     onTriggered: page.persistView("clipsViewMode", "list")
                 }
             }
@@ -918,7 +918,7 @@ Rectangle {
                 spacing: 10
 
                 Text {
-                    text: page.selectedCount + (page.selectedCount === 1 ? " clip selected" : " clips selected")
+                    text: (I18n.language, I18n.t(page.selectedCount === 1 ? "clips.selectedOne" : "clips.bulkActions.selected")).replace("{count}", page.selectedCount)
                     color: Theme.text
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
@@ -927,12 +927,12 @@ Rectangle {
                 Item { Layout.fillWidth: true }
 
                 ClipsBarButton {
-                    label: "Select all"
+                    label: (I18n.language, I18n.t("clips.bulkActions.selectAll"))
                     icon: "check-square"
                     onTriggered: page.selectAllVisible()
                 }
                 ClipsBarButton {
-                    label: page.allSelectedFavorited ? "Unfavorite" : "Favorite"
+                    label: page.allSelectedFavorited ? (I18n.language, I18n.t("clips.contextMenu.unfavorite")) : (I18n.language, I18n.t("clips.contextMenu.favorite"))
                     icon: "heart"
                     onTriggered: {
                         ClipsController.setFavorites(page.selectedList(),
@@ -945,7 +945,7 @@ Rectangle {
                 // editor; this is the old bulk bar's tool, restored.
                 ClipsBarButton {
                     id: gameBtn
-                    label: "Change Game"
+                    label: (I18n.language, I18n.t("clips.bulkActions.changeGame"))
                     icon: "gamepad"
                     active: bulkGamePop.visible
                     onTriggered: bulkGamePop.toggle()
@@ -1000,7 +1000,7 @@ Rectangle {
                                 id: gameSearch
                                 width: bulkGamePop.availableWidth
                                 height: 28
-                                placeholderText: "Search games…"
+                                placeholderText: (I18n.language, I18n.t("clips.gamesFilter.searchPlaceholder"))
                                 placeholderTextColor: Theme.textMuted
                                 color: Theme.text
                                 font.pixelSize: 12
@@ -1049,7 +1049,7 @@ Rectangle {
                                             Text {
                                                 Layout.fillWidth: true
                                                 text: modelData.isNew
-                                                      ? "Add \u201C" + modelData.label + "\u201D"
+                                                      ? (I18n.language, I18n.t("clips.addGame")).replace("{name}", modelData.label)
                                                       : modelData.label
                                                 color: modelData.isNew ? Theme.accent : Theme.text
                                                 font.pixelSize: 12
@@ -1078,7 +1078,7 @@ Rectangle {
                                 color: Theme.accent
                                 Text {
                                     anchors.centerIn: parent
-                                    text: "Apply"
+                                    text: (I18n.language, I18n.t("common.apply"))
                                     color: Theme.text
                                     font.pixelSize: 12
                                     font.weight: Font.DemiBold
@@ -1105,7 +1105,7 @@ Rectangle {
                 // ── Batch rename drop-up ─────────────────────────────────
                 ClipsBarButton {
                     id: renameBtn
-                    label: "Rename"
+                    label: (I18n.language, I18n.t("clips.bulkActions.rename"))
                     icon: "pencil"
                     active: bulkRenamePop.visible
                     onTriggered: bulkRenamePop.toggle()
@@ -1126,7 +1126,7 @@ Rectangle {
                                 id: patternField
                                 width: bulkRenamePop.availableWidth
                                 height: 28
-                                placeholderText: "e.g. {game} run {n}"
+                                placeholderText: (I18n.language, I18n.t("clips.bulkActions.patternPlaceholder"))
                                 placeholderTextColor: Theme.textMuted
                                 color: Theme.text
                                 font.pixelSize: 12
@@ -1156,7 +1156,7 @@ Rectangle {
                                 color: Theme.accent
                                 Text {
                                     anchors.centerIn: parent
-                                    text: "Apply"
+                                    text: (I18n.language, I18n.t("common.apply"))
                                     color: Theme.text
                                     font.pixelSize: 12
                                     font.weight: Font.DemiBold
@@ -1196,13 +1196,13 @@ Rectangle {
                 }
 
                 ClipsBarButton {
-                    label: "Delete"
+                    label: (I18n.language, I18n.t("clips.bulkActions.delete"))
                     icon: "trash"
                     danger: true
                     onTriggered: page.bulkDeleteTarget = page.selectedList()
                 }
                 ClipsBarButton {
-                    label: "Clear"
+                    label: (I18n.language, I18n.t("clips.bulkActions.clear"))
                     icon: "x"
                     onTriggered: page.clearSelection()
                 }

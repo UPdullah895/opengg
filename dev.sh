@@ -8,6 +8,7 @@
 #   ./dev.sh ui       Run frontend only
 #   ./dev.sh build    Build everything for release
 #   ./dev.sh setup    First-time setup (create dirs, group membership)
+#   ./dev.sh examples Install the bundled example extensions (opt-in)
 #
 set -euo pipefail
 
@@ -153,21 +154,14 @@ do_setup() {
     # Group membership for global hotkeys (may prompt for a password).
     ensure_input_group
 
-    # Install bundled example extensions (folder layout: manifest.json + bin/…)
-    EXT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/opengg/extensions"
-    if [ -d "$ROOT_DIR/packaging/extensions" ]; then
-        for ext in "$ROOT_DIR/packaging/extensions"/*/; do
-            [ -d "$ext" ] || continue
-            name=$(basename "$ext")
-            if [ ! -d "$EXT_DIR/$name" ]; then
-                cp -r "$ext" "$EXT_DIR/$name"
-                # Ensure any daemon executables stay executable after copy
-                find "$EXT_DIR/$name/bin" -type f -exec chmod +x {} \; 2>/dev/null || true
-                logs "Installed example extension: $name"
-            fi
-        done
-    fi
-
+    # Example extensions are NOT installed any more. Setup used to copy every
+    # folder in packaging/extensions/ into the user's own extensions
+    # directory, so each one (Sunshine, …) showed up as if the user had
+    # installed it. Extensions are something a user adds; `./dev.sh examples`
+    # installs these on request. Copies an earlier setup left behind are
+    # removed only while they are byte-identical to the bundled example, so
+    # anything a user has edited stays put.
+    remove_untouched_examples
     # Generate opengg.desktop from template
     if [ -f "$ROOT_DIR/opengg.desktop.template" ]; then
         sed "s|OPENGG_DIR|$ROOT_DIR|g" "$ROOT_DIR/opengg.desktop.template" > "$ROOT_DIR/opengg.desktop"
@@ -249,9 +243,43 @@ echo ""
 
 check_deps
 
+# ── Example extensions ───────────────────────────────────────────
+EXT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/opengg/extensions"
+
+remove_untouched_examples() {
+    [ -d "$ROOT_DIR/packaging/extensions" ] || return 0
+    for ext in "$ROOT_DIR/packaging/extensions"/*/; do
+        [ -d "$ext" ] || continue
+        name=$(basename "$ext")
+        if [ -d "$EXT_DIR/$name" ] && diff -rq "$ext" "$EXT_DIR/$name" >/dev/null 2>&1; then
+            rm -rf "${EXT_DIR:?}/$name"
+            logs "Removed example extension installed by an earlier setup: $name"
+        fi
+    done
+}
+
+install_examples() {
+    mkdir -p "$EXT_DIR"
+    for ext in "$ROOT_DIR/packaging/extensions"/*/; do
+        [ -d "$ext" ] || continue
+        name=$(basename "$ext")
+        if [ -d "$EXT_DIR/$name" ]; then
+            logw "Already installed, left alone: $name"
+            continue
+        fi
+        cp -r "$ext" "$EXT_DIR/$name"
+        # Keep daemon executables executable after the copy.
+        find "$EXT_DIR/$name/bin" -type f -exec chmod +x {} \; 2>/dev/null || true
+        logs "Installed example extension: $name"
+    done
+}
+
 case "${1:-all}" in
     setup)
         do_setup
+        ;;
+    examples)
+        install_examples
         ;;
     daemon|d)
         run_daemon
@@ -293,6 +321,7 @@ case "${1:-all}" in
         echo "  ui              Run Qt6/QML frontend only"
         echo "  build           Build everything for release"
         echo "  setup           First-time setup"
+        echo "  examples        Install the bundled example extensions"
         echo ""
         ;;
 esac

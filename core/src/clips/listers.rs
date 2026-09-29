@@ -6,8 +6,68 @@ use super::db::{get_meta_map, open_db, probe_cache_get, probe_cache_set, ClipInf
 use crate::media::{date_from_stem, fmt_ts_local, probe_video};
 use crate::paths::{get_all_clip_dirs, thumb_dir};
 use crate::clips::hash_str;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// Folder names that hold clips of many games, so they never name a game.
+const GENERIC_FOLDERS: &[&str] = &[
+    "opengg", "videos", "video", "replay", "replays", "clips", "clip", "recordings",
+    "recording", "captures", "capture",
+];
+/// Filename prefixes recorders use instead of a game name.
+const GENERIC_PREFIXES: &[&str] = &[
+    "replay", "clip", "recording", "video", "screenrecording", "screencast", "capture",
+];
+
+/// The game a clip belongs to, from where it lives.
+///
+/// Recorders group clips by game FOLDER — GPU Screen Recorder's "save in game
+/// folder" writes `<dir>/<Game>/Replay_<date>.mov` — while the filename is
+/// often a generic `Replay_…`. So the folder wins whenever it is not a
+/// library root; inside a root the filename prefix is used as before
+/// (OpenGG's own `Game_<date>.mp4`, SteelSeries' `Game__<date>__…`), and a
+/// generic prefix falls back to the root's own name when that looks like a
+/// game folder the user added directly.
+pub fn game_from_location(path: &Path, roots: &[PathBuf]) -> String {
+    let folder_name = |d: &Path| {
+        d.file_name()
+            .map(|n| n.to_string_lossy().trim().to_string())
+            .unwrap_or_default()
+    };
+    let is_generic_folder =
+        |name: &str| name.is_empty() || GENERIC_FOLDERS.contains(&name.to_lowercase().as_str());
+
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let parent_is_root = roots.iter().any(|r| r.as_path() == parent);
+    let parent_name = folder_name(parent);
+    if !parent_is_root && !is_generic_folder(&parent_name) {
+        return parent_name;
+    }
+
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ for the full name.
+    // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ for the prefix.
+    let from_name = if let Some(pos) = stem.find("__") {
+        stem[..pos].replace(['-', '_'], " ")
+    } else {
+        stem.split('_').next().unwrap_or("").replace('-', " ")
+    };
+    let from_name = from_name.trim().to_string();
+    let generic_name = from_name.is_empty()
+        || from_name.chars().next().is_some_and(|c| c.is_ascii_digit())
+        || GENERIC_PREFIXES.contains(&from_name.to_lowercase().as_str());
+    if !generic_name {
+        return from_name;
+    }
+    if !is_generic_folder(&parent_name) {
+        return parent_name;
+    }
+    if from_name.is_empty() {
+        "Unknown".to_string()
+    } else {
+        from_name
+    }
+}
 
 /// Fetch metadata for a single file — used by the frontend file-watcher listener.
 pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, String> {
@@ -46,11 +106,7 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
     let (dur, w, h) = tokio::task::spawn_blocking(move || probe_video(&p_clone))
         .await
         .map_err(|e| format!("spawn_blocking: {e}"))?;
-    let game_from_filename = stem
-        .split('_')
-        .next()
-        .unwrap_or("Unknown")
-        .replace('-', " ");
+    let game_from_filename = game_from_location(&p, &get_all_clip_dirs(""));
     let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
     let game = if game_tag.is_empty() {
         game_from_filename
@@ -152,16 +208,7 @@ pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
                 .unwrap_or(0);
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
             let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
-            // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ to get full game name.
-            // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ to get prefix.
-            let game_raw = if let Some(pos) = stem.find("__") {
-                stem[..pos].replace(['-', '_'], " ")
-            } else {
-                stem.split('_')
-                    .next()
-                    .unwrap_or("Unknown")
-                    .replace('-', " ")
-            };
+            let game_raw = game_from_location(&p, &dirs);
             let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
             let thumb = td.join(format!("{id}.jpg"));
             let thumbnail = if thumb.exists() {
@@ -374,14 +421,7 @@ pub fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
                 .unwrap_or(0);
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
             let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
-            let game_raw = if let Some(pos) = stem.find("__") {
-                stem[..pos].replace(['-', '_'], " ")
-            } else {
-                stem.split('_')
-                    .next()
-                    .unwrap_or("Unknown")
-                    .replace('-', " ")
-            };
+            let game_raw = game_from_location(&p, &dirs);
             let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
             let thumb = td.join(format!("{id}.jpg"));
             let thumbnail = if thumb.exists() {
@@ -480,4 +520,42 @@ pub fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
             t_scan, t_cache - t_scan, t_total_ms - t_cache, t_total_ms, clips.len());
     }
     Ok(clips)
+}
+
+#[cfg(test)]
+mod game_tests {
+    use super::*;
+
+    fn game(path: &str, roots: &[&str]) -> String {
+        let roots: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
+        game_from_location(Path::new(path), &roots)
+    }
+
+    #[test]
+    fn game_folder_wins_over_generic_filename() {
+        let r = ["/v/OpenGG"];
+        assert_eq!(game("/v/OpenGG/Slay the Spire 2/Replay_2026-06-29_17-13-03.mov", &r), "Slay the Spire 2");
+        assert_eq!(game("/v/OpenGG/Hades/Hades_2026-01-01_10-00-00.mp4", &r), "Hades");
+    }
+
+    #[test]
+    fn root_files_use_the_filename() {
+        let r = ["/v/OpenGG"];
+        assert_eq!(game("/v/OpenGG/Apex-Legends_2026-01-01_10-00-00.mp4", &r), "Apex Legends");
+        assert_eq!(game("/v/OpenGG/Counter-Strike__2026-01-01__10-00-00.mp4", &r), "Counter Strike");
+        assert_eq!(game("/v/OpenGG/Replay_2026-01-01_10-00-00.mp4", &r), "Replay");
+    }
+
+    #[test]
+    fn a_game_folder_added_as_a_root_names_its_generic_clips() {
+        let r = ["/v/OpenGG", "/v/Slay the Spire 2"];
+        assert_eq!(game("/v/Slay the Spire 2/Replay_2026-06-29_17-13-03.mov", &r), "Slay the Spire 2");
+        assert_eq!(game("/v/Slay the Spire 2/2026-06-29.mp4", &r), "Slay the Spire 2");
+    }
+
+    #[test]
+    fn generic_subfolders_do_not_name_a_game() {
+        let r = ["/v"];
+        assert_eq!(game("/v/Replay/Hades_2026-01-01_10-00-00.mp4", &r), "Hades");
+    }
 }

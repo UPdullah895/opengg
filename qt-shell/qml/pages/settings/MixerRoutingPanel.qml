@@ -270,7 +270,7 @@ ColumnLayout {
                         anchors.centerIn: parent
                         text: AudioController.checkingVirtualAudio
                             ? I18n.t("settings.dangerZone.creating")
-                            : "Create"
+                            : (I18n.language, I18n.t("settings.audioEngine.create"))
                         color: "#fff"
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -294,6 +294,43 @@ ColumnLayout {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: root.openConfirm("remove")
                     }
+                }
+            }
+
+            /// Why creating the sinks failed. Previously this path threw its
+            /// error away, so pressing Create on a machine where it could not
+            /// work left the mixer showing only Master with nothing said
+            /// about it — impossible for a user to report or act on.
+            Rectangle {
+                visible: AudioController.virtualAudioError.length > 0
+                Layout.fillWidth: true
+                radius: Theme.radius
+                color: Theme.tint(Theme.danger, 12)
+                border.width: 1
+                border.color: Theme.tint(Theme.danger, 45)
+                implicitHeight: vaCol.implicitHeight + 20
+                ColumnLayout {
+                    id: vaCol
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 6
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        color: Theme.textDim
+                        font.pixelSize: 11
+                        text: (I18n.language, I18n.t("settings.audioEngine.createFailed"))
+                    }
+                    ErrorText { Layout.fillWidth: true; text: AudioController.virtualAudioError }
+                    CommandLine { Layout.fillWidth: true; text: "systemctl --user status openggd" }
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        color: Theme.textDim
+                        font.pixelSize: 11
+                        text: (I18n.language, I18n.t("settings.audioEngine.startDaemon"))
+                    }
+                    CommandLine { Layout.fillWidth: true; text: "systemctl --user enable --now openggd" }
                 }
             }
         }

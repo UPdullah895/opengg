@@ -219,10 +219,11 @@ fn settings_mut(s: &mut Value) -> Option<&mut serde_json::Map<String, Value>> {
     s.get_mut("settings").and_then(Value::as_object_mut)
 }
 
-/// Default track definitions (from `DEFAULTS.settings.trackDefs` in
-/// `persistence.ts`) — needed by migrations 5 and 6.
-fn default_track_def(id: &str) -> Option<Value> {
-    let defs = json!([
+/// The default timeline tracks, in order (from `DEFAULTS.settings.trackDefs`
+/// in `persistence.ts`). Also what Settings → Timeline Tracks' "Reset to
+/// defaults" restores.
+pub fn default_track_defs() -> Value {
+    json!([
         { "id": "O1", "name": "Overlays", "color": "#f97316", "icon": "overlay", "visible": true },
         { "id": "V1", "name": "Video",    "color": "#E94560", "icon": "video",   "visible": true },
         { "id": "A1", "name": "Audio 1",  "color": "#10b981", "icon": "game",    "visible": true },
@@ -230,7 +231,12 @@ fn default_track_def(id: &str) -> Option<Value> {
         { "id": "A3", "name": "Audio 3",  "color": "#f59e0b", "icon": "mic",     "visible": true },
         { "id": "A4", "name": "Audio 4",  "color": "#8b5cf6", "icon": "media",   "visible": true },
         { "id": "A5", "name": "Audio 5",  "color": "#ec4899", "icon": "media",   "visible": true }
-    ]);
+    ])
+}
+
+/// One default track definition by id — needed by migrations 5 and 6.
+fn default_track_def(id: &str) -> Option<Value> {
+    let defs = default_track_defs();
     defs.as_array()
         .unwrap()
         .iter()
@@ -439,6 +445,47 @@ fn is_resolution_like(s: &str) -> bool {
 }
 
 /// Index of the first track def with `id == id`.
+/// Timeline tracks the editor cannot work without: `O1` (Overlays) and `V1`
+/// (Video). The editor draws its picture lane from `V1` and its overlay lane
+/// from `O1`, so the settings panel refuses to delete them.
+pub const REQUIRED_TRACK_IDS: [&str; 2] = ["O1", "V1"];
+
+/// Put back any required timeline track missing from `envelope`
+/// (`{ "settings": { "trackDefs": [...] } }`), and seed the full default set
+/// when there is no `trackDefs` array at all. Returns true if it changed
+/// anything.
+///
+/// This runs on every load rather than as a numbered migration because the
+/// Qt shell never ran the migrations, and the panel used to allow deleting
+/// both tracks, so there are settings files in the wild without them. It is
+/// idempotent, and leaves the user's own tracks, order and colours alone.
+pub fn ensure_required_tracks(envelope: &mut Value) -> bool {
+    let Some(settings) = settings_mut(envelope) else {
+        return false;
+    };
+    if !settings.get("trackDefs").is_some_and(Value::is_array) {
+        settings.insert("trackDefs".into(), default_track_defs());
+        return true;
+    }
+    let defs = settings
+        .get_mut("trackDefs")
+        .and_then(Value::as_array_mut)
+        .expect("checked above");
+
+    let mut changed = false;
+    if index_of_id(defs, "O1").is_none() {
+        let pos = index_of_id(defs, "V1").unwrap_or(0);
+        defs.insert(pos, default_track_def("O1").expect("O1 default"));
+        changed = true;
+    }
+    if index_of_id(defs, "V1").is_none() {
+        let pos = index_of_id(defs, "O1").map_or(0, |i| i + 1);
+        defs.insert(pos, default_track_def("V1").expect("V1 default"));
+        changed = true;
+    }
+    changed
+}
+
 fn index_of_id(defs: &[Value], id: &str) -> Option<usize> {
     defs.iter()
         .position(|d| d.get("id").and_then(Value::as_str) == Some(id))
@@ -447,6 +494,45 @@ fn index_of_id(defs: &[Value], id: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_required_tracks_restores_deleted_video_and_overlay() {
+        let mut v = json!({ "settings": { "trackDefs": [
+            { "id": "A5", "name": "Audio 5", "color": "#94a3b8", "icon": "game", "visible": true }
+        ] } });
+        assert!(ensure_required_tracks(&mut v));
+        let ids: Vec<&str> = v["settings"]["trackDefs"]
+            .as_array().unwrap().iter()
+            .map(|d| d["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["O1", "V1", "A5"]);
+        // The user's own track is untouched.
+        assert_eq!(v["settings"]["trackDefs"][2]["color"], "#94a3b8");
+        // Idempotent.
+        assert!(!ensure_required_tracks(&mut v));
+    }
+
+    #[test]
+    fn ensure_required_tracks_keeps_existing_order_and_colours() {
+        let mut v = json!({ "settings": { "trackDefs": [
+            { "id": "A1", "name": "Audio 1", "color": "#123456", "icon": "game", "visible": true },
+            { "id": "V1", "name": "Picture", "color": "#abcdef", "icon": "video", "visible": false }
+        ] } });
+        assert!(ensure_required_tracks(&mut v));
+        let defs = v["settings"]["trackDefs"].as_array().unwrap();
+        let ids: Vec<&str> = defs.iter().map(|d| d["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["A1", "O1", "V1"]);
+        assert_eq!(defs[2]["color"], "#abcdef");
+        assert_eq!(defs[2]["name"], "Picture");
+    }
+
+    #[test]
+    fn ensure_required_tracks_seeds_defaults_when_absent() {
+        let mut v = json!({ "settings": {} });
+        assert!(ensure_required_tracks(&mut v));
+        assert_eq!(v["settings"]["trackDefs"].as_array().unwrap().len(), 7);
+        let mut none = json!(null);
+        assert!(!ensure_required_tracks(&mut none));
+    }
 
     // ── runMigrations (mirrors stores/persistence.test.ts) ──
 

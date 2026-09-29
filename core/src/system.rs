@@ -158,7 +158,13 @@ pub fn get_dependency_status() -> Vec<DependencyStatus> {
         }
         results.push(DependencyStatus {
             binary: binary.to_string(),
-            available: subprocess::is_available(binary),
+            // Uncached, so "Recheck" sees something installed since startup.
+            // The recorder also counts when it is installed as a Flatpak.
+            available: if binary == "gpu-screen-recorder" {
+                crate::gsr::gsr_install().is_some()
+            } else {
+                subprocess::find_in_path(binary).is_some()
+            },
             feature: feature.to_string(),
         });
     }

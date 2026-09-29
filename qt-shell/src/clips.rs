@@ -40,6 +40,9 @@ pub mod qobject {
         include!("cxx-qt-lib/qbytearray.h");
         type QByteArray = cxx_qt_lib::QByteArray;
 
+        include!("cxx-qt-lib/qvector.h");
+        type QVector_i32 = cxx_qt_lib::QVector<i32>;
+
         include!("cxx-qt-lib/qhash.h");
         /// QHash<i32, QByteArray> from cxx_qt_lib
         type QHash_i32_QByteArray = cxx_qt_lib::QHash<cxx_qt_lib::QHashPair_i32_QByteArray>;
@@ -113,6 +116,22 @@ pub mod qobject {
         #[inherit]
         #[cxx_name = "endResetModel"]
         fn end_reset_model(self: Pin<&mut Self>);
+
+        /// Row → QModelIndex, for the targeted `dataChanged` below.
+        #[inherit]
+        fn index(self: &Self, row: i32, column: i32, parent: &QModelIndex) -> QModelIndex;
+
+        /// Tell the view one cell changed. This is the whole reason a
+        /// finished thumbnail no longer resets the model — see
+        /// `thumbnail_ready`.
+        #[inherit]
+        #[cxx_name = "dataChanged"]
+        fn data_changed(
+            self: Pin<&mut Self>,
+            top_left: &QModelIndex,
+            bottom_right: &QModelIndex,
+            roles: &QVector_i32,
+        );
 
         /// Rescan the clip library (fast path: DB + filesystem, no ffprobe).
         #[qinvokable]
@@ -304,26 +323,65 @@ pub struct ClipsControllerRust {
     thumbs_in_flight: HashSet<String>,
 }
 
-type ThumbJob = (String, cxx_qt::CxxQtThread<qobject::ClipsController>);
+/// `(filepath, duration hint, callback handle)`. The duration is passed so
+/// `generate_thumbnail` can skip its `probe_duration` ffprobe — the scan
+/// already knows every clip's length, and that subprocess measured ~80ms
+/// against ~185ms for the ffmpeg call itself, i.e. 30% of the work was
+/// re-discovering something we had in memory.
+type ThumbJob = (String, f64, cxx_qt::CxxQtThread<qobject::ClipsController>);
 
-/// Single persistent worker thread serializing ffmpeg thumbnail generation
-/// (avoids spawning dozens of concurrent ffmpeg processes when a grid full
-/// of un-thumbnailed clips mounts at once).
+/// How many thumbnails are generated at once.
+///
+/// Fixed and small on purpose. Generation happens while the user is
+/// scrolling a grid that is often also decoding video, so the pool is capped
+/// well below the core count and each ffmpeg is held to one thread (see
+/// `core::media::generate_thumbnail`) — the goal is to fill a fresh library
+/// quickly without turning the machine over to ffmpeg while someone is
+/// playing a game.
+fn thumb_workers() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| (n.get() / 4).clamp(1, 4))
+        .unwrap_or(1)
+}
+
+/// Bounded pool serializing ffmpeg thumbnail generation behind one queue, so
+/// a grid full of un-thumbnailed clips cannot spawn dozens of processes.
 fn thumb_worker() -> &'static Sender<ThumbJob> {
     static QUEUE: OnceLock<Sender<ThumbJob>> = OnceLock::new();
     QUEUE.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<ThumbJob>();
-        std::thread::spawn(move || {
-            for (filepath, qt_thread) in rx {
-                let result = opengg_core::media::generate_thumbnail(filepath.clone(), None);
+        // One receiver shared by the pool: whichever worker is free takes the
+        // next job, which keeps the queue in order without a job stealing
+        // scheme.
+        let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+        for _ in 0..thumb_workers() {
+            let rx = rx.clone();
+            std::thread::spawn(move || loop {
+                // Lock only to take a job — held across `recv` so idle workers
+                // block here, but never across the ffmpeg call itself.
+                let job = match rx.lock() {
+                    Ok(guard) => guard.recv(),
+                    Err(_) => return, // a panicking worker poisoned it
+                };
+                let Ok((filepath, duration, qt_thread)) = job else {
+                    return; // sender dropped — app is shutting down
+                };
+                let hint = (duration > 0.0).then_some(duration);
+                let result = opengg_core::media::generate_thumbnail(filepath.clone(), hint);
                 let _ = qt_thread.queue(move |mut controller| {
                     controller.as_mut().rust_mut().thumbs_in_flight.remove(&filepath);
-                    if result.is_ok() {
-                        controller.reload();
+                    if let Ok(thumb) = result {
+                        // NOT reload(): that rescans the whole library and
+                        // resets the model, which destroys every delegate and
+                        // sends the grid back to the top. With a folder of new
+                        // clips that fired once per finished thumbnail, so the
+                        // view snapped upward continuously and scrolling down
+                        // was impossible.
+                        controller.thumbnail_ready(&filepath, thumb);
                     }
                 });
-            }
-        });
+            });
+        }
         tx
     })
 }
@@ -844,8 +902,49 @@ impl qobject::ClipsController {
         if already_queued {
             return;
         }
+        // The scan already knows the duration, so hand it over rather than
+        // make the worker re-probe the file. 0.0 means "unknown" and the
+        // worker falls back to probing.
+        let duration = self
+            .all_clips
+            .iter()
+            .find(|c| c.filepath == fp)
+            .map(|c| c.duration)
+            .unwrap_or(0.0);
         let qt_thread = self.qt_thread();
-        let _ = thumb_worker().send((fp, qt_thread));
+        let _ = thumb_worker().send((fp, duration, qt_thread));
+    }
+
+    /// A thumbnail finished: patch the one cell that changed.
+    ///
+    /// Deliberately avoids `reload()`. That re-reads the whole library from
+    /// disk and wraps the result in `beginResetModel`/`endResetModel`, and a
+    /// model reset makes the view discard its delegates and jump to the top.
+    /// Firing that once per generated thumbnail is what made a freshly added
+    /// folder impossible to scroll.
+    ///
+    /// The clip may be filtered out of the current view, in which case there
+    /// is no row to notify and the cached path is simply updated for when it
+    /// comes back.
+    fn thumbnail_ready(mut self: Pin<&mut Self>, filepath: &str, thumb: String) {
+        let Some(real_idx) = self
+            .all_clips
+            .iter()
+            .position(|c| c.filepath == filepath)
+        else {
+            return;
+        };
+        self.as_mut().rust_mut().all_clips[real_idx].thumbnail = thumb;
+
+        let Some(row) = self.view.iter().position(|&i| i == real_idx) else {
+            return;
+        };
+        let idx = self
+            .as_ref()
+            .index(row as i32, 0, &cxx_qt_lib::QModelIndex::default());
+        let mut roles = cxx_qt_lib::QVector::<i32>::default();
+        roles.append(ClipRoles::Thumbnail.repr);
+        self.as_mut().data_changed(&idx, &idx, &roles);
     }
 
     pub fn start_watcher(self: Pin<&mut Self>) {

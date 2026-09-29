@@ -5,9 +5,16 @@ After=graphical-session.target pipewire.service wireplumber.service
 Requires=pipewire.service
 
 [Service]
+# /usr/bin is where every package puts the daemon (release tarball, AUR).
+# `make install` rewrites this to ~/.local/bin for a from-source install —
+# see the Makefile's install-service target. It used to be the other way
+# round, which meant every packaged install pointed D-Bus activation and
+# this unit at a path that only exists on a developer's machine: the daemon
+# never started, no OpenGG_* sinks were created, and the mixer showed
+# nothing but Master.
 Type=dbus
 BusName=org.opengg.Daemon
-ExecStart=%h/.local/bin/openggd
+ExecStart=/usr/bin/openggd
 Restart=on-failure
 RestartSec=3
 # Security hardening

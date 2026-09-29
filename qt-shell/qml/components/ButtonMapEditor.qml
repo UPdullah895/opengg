@@ -83,9 +83,9 @@ Rectangle {
         if (!action)
             return ""
         if (action.type === "none")
-            return "None"
+            return (I18n.language, I18n.t("devices.buttonMap.none"))
         if (action.type === "button")
-            return "Click " + action.target
+            return (I18n.language, I18n.t("devices.buttonMap.click")).replace("{n}", action.target)
         if (action.type === "special") {
             const found = dlg.catalog.special.find(s => s.name === action.name)
             return found ? found.label : action.name
@@ -95,8 +95,8 @@ Rectangle {
             return found ? found.label : action.name
         }
         if (action.type === "macro")
-            return "Macro (not editable here)"
-        return "Unknown"
+            return (I18n.language, I18n.t("devices.buttonMap.macro"))
+        return (I18n.language, I18n.t("devices.buttonMap.unknown"))
     }
 
     function lowestFreeButtonIndex() {
@@ -177,7 +177,7 @@ Rectangle {
                 Layout.fillWidth: true
                 Text {
                     Layout.fillWidth: true
-                    text: dlg.device ? ("Configure Buttons — " + DeviceController.displayName(dlg.device.name)) : ""
+                    text: dlg.device ? ((I18n.language, I18n.t("devices.buttonMap.title")).replace("{name}", DeviceController.displayName(dlg.device.name))) : ""
                     color: Theme.text
                     font.pixelSize: 18
                     font.weight: Font.DemiBold
@@ -186,7 +186,7 @@ Rectangle {
                 IconToggle {
                     flat: true
                     icon: "x"
-                    tooltip: "Close"
+                    tooltip: (I18n.language, I18n.t("common.close"))
                     onTriggered: { dlg.device = null; dlg.closed() }
                 }
             }
@@ -201,21 +201,19 @@ Rectangle {
                     wrapMode: Text.WordWrap
                     color: Theme.textDim
                     font.pixelSize: 13
-                    text: "Add a photo of your own mouse to place button hotspots on it. " +
-                          "This photo stays on this computer only — it is never uploaded " +
-                          "or shared anywhere."
+                    text: (I18n.language, I18n.t("devices.buttonMap.photoIntro"))
                 }
                 PhotoDropZone {
                     Layout.fillWidth: true
-                    title: "Drag a photo of your mouse here"
-                    subtitle: "or use Browse to pick one. It stays on this computer."
+                    title: (I18n.language, I18n.t("devices.buttonMap.dragPhoto"))
+                    subtitle: (I18n.language, I18n.t("devices.buttonMap.browseHint"))
                     onPhotoChosen: (url) => dlg.acceptPhoto(url)
                 }
-                Text {
-                    visible: dlg.photoError !== ""
+                ErrorText {
+                    Layout.fillWidth: true
+                    width: parent.width
+                    pixelSize: 12
                     text: dlg.photoError
-                    color: Theme.danger
-                    font.pixelSize: 12
                 }
             }
 
@@ -229,15 +227,13 @@ Rectangle {
                     wrapMode: Text.WordWrap
                     color: Theme.textDim
                     font.pixelSize: 12
-                    text: "We have approximate button positions for " + dlg.presetOffer +
-                          ". These were measured on a different photo, so they may not " +
-                          "line up exactly — you can drag them afterward."
+                    text: (I18n.language, I18n.t("devices.buttonMap.presetOffer")).replace("{name}", dlg.presetOffer)
                 }
-                ClipsBarButton { label: "Use as starting point"; icon: "check"; onTriggered: dlg.applyPreset() }
+                ClipsBarButton { label: (I18n.language, I18n.t("devices.buttonMap.usePreset")); icon: "check"; onTriggered: dlg.applyPreset() }
                 IconToggle {
                     flat: true
                     icon: "x"
-                    tooltip: "Dismiss"
+                    tooltip: (I18n.language, I18n.t("devices.buttonMap.dismiss"))
                     onTriggered: dlg.presetOffer = ""
                 }
             }
@@ -341,14 +337,14 @@ Rectangle {
                         Layout.fillWidth: true
                         color: Theme.textDim
                         font.pixelSize: 11
-                        text: dlg.hotspots.length + " / " + dlg.buttonCount + " buttons placed"
+                        text: (I18n.language, I18n.t("devices.buttonMap.placed")).replace("{placed}", dlg.hotspots.length).replace("{total}", dlg.buttonCount)
                     }
                     PhotoDropZone {
                         Layout.fillWidth: true
                         implicitHeight: 104
-                        title: "Drop a new photo"
-                        subtitle: "Replaces the current one."
-                        browseLabel: "Replace…"
+                        title: (I18n.language, I18n.t("devices.buttonMap.dropNew"))
+                        subtitle: (I18n.language, I18n.t("devices.buttonMap.replacesCurrent"))
+                        browseLabel: (I18n.language, I18n.t("devices.buttonMap.replace"))
                         onPhotoChosen: (url) => dlg.acceptPhoto(url)
                     }
 
@@ -367,12 +363,12 @@ Rectangle {
                             color: Theme.text
                             font.pixelSize: 13
                             font.weight: Font.DemiBold
-                            text: "Button " + (parent.hotspot ? parent.hotspot.buttonIndex + 1 : "")
+                            text: (I18n.language, I18n.t("devices.buttonMap.button")).replace("{n}", parent.hotspot ? parent.hotspot.buttonIndex + 1 : "")
                         }
                         Text {
                             color: Theme.textDim
                             font.pixelSize: 12
-                            text: "Currently: " + dlg.actionLabel(parent.currentAction)
+                            text: (I18n.language, I18n.t("devices.buttonMap.currently")).replace("{action}", dlg.actionLabel(parent.currentAction))
                         }
 
                         Text { text: "Action type"; color: Theme.textDim; font.pixelSize: 11 }
@@ -380,10 +376,10 @@ Rectangle {
                             id: typeSelect
                             Layout.fillWidth: true
                             options: [
-                                { value: "none", label: "None (disabled)" },
-                                { value: "button", label: "Mouse Button" },
-                                { value: "special", label: "Special" },
-                                { value: "key", label: "Keyboard Key" },
+                                { value: "none", label: (I18n.language, I18n.t("devices.buttonMap.noneDisabled")) },
+                                { value: "button", label: (I18n.language, I18n.t("devices.buttonMap.mouseButton")) },
+                                { value: "special", label: (I18n.language, I18n.t("devices.buttonMap.special")) },
+                                { value: "key", label: (I18n.language, I18n.t("devices.buttonMap.keyboardKey")) },
                             ]
                             value: parent.currentAction ? parent.currentAction.type : "none"
                             onPicked: (v) => {
@@ -407,7 +403,7 @@ Rectangle {
                                 options: {
                                     const opts = []
                                     for (let i = 1; i <= dlg.buttonCount; i++)
-                                        opts.push({ value: i, label: "Button " + i })
+                                        opts.push({ value: i, label: (I18n.language, I18n.t("devices.buttonMap.button")).replace("{n}", i) })
                                     return opts
                                 }
                                 value: (parent.parent.currentAction && parent.parent.currentAction.type === "button")
@@ -457,29 +453,19 @@ Rectangle {
                         wrapMode: Text.WordWrap
                         color: Theme.textDim
                         font.pixelSize: 12
-                        text: "Click empty space on the photo to place a hotspot for your " +
-                              "next unassigned button, or click an existing hotspot to " +
-                              "change what it does."
+                        text: (I18n.language, I18n.t("devices.buttonMap.placeHint"))
                     }
 
                     Item { Layout.fillHeight: true }
 
-                    Text {
-                        visible: DeviceController.lastErrorDeviceId === (dlg.device ? dlg.device.id : "")
-                                 && DeviceController.lastError !== ""
-                        text: DeviceController.lastError
-                        color: Theme.danger
-                        font.pixelSize: 11
+                    ErrorText {
                         Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
+                        text: DeviceController.lastErrorDeviceId === (dlg.device ? dlg.device.id : "")
+                              ? DeviceController.lastError : ""
                     }
-                    Text {
-                        visible: dlg.photoError !== ""
-                        text: dlg.photoError
-                        color: Theme.danger
-                        font.pixelSize: 11
+                    ErrorText {
                         Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
+                        text: dlg.photoError
                     }
                 }
             }

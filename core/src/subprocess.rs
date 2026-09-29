@@ -52,8 +52,12 @@ pub fn require(bin: &str) -> Result<(), String> {
     }
 }
 
-/// Find a binary in $PATH by name.
-fn find_in_path(bin: &str) -> Option<String> {
+/// Uncached `which`: the full path of `bin` on $PATH, if any.
+///
+/// For probes the user can re-run (the dependency list's "Recheck"), where
+/// `is_available`'s process-lifetime cache would keep reporting a binary as
+/// missing after it has been installed.
+pub fn find_in_path(bin: &str) -> Option<String> {
     let path_var = std::env::var("PATH").ok()?;
 
     for dir in path_var.split(':') {
