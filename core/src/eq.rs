@@ -95,8 +95,36 @@ pub fn availability() -> Result<(), String> {
 /// `target_device` the sink to play out to (empty = let PipeWire pick the
 /// default, which is what happens before a device has been chosen).
 pub fn build_config(channel: &str, source_sink: &str, target_device: &str) -> String {
+    build_config_with_fx(channel, source_sink, target_device, None)
+}
+
+/// [`build_config`] with voice-processing stages (gate/compressor/noise
+/// reduction, see `voicefx`) ahead of the EQ bands — how an output channel
+/// such as Chat gets both from one chain.
+pub fn build_config_with_fx(
+    channel: &str,
+    source_sink: &str,
+    target_device: &str,
+    fx: Option<(&crate::voicefx::FxSettings, &crate::voicefx::FxCaps)>,
+) -> String {
     let mut nodes = String::new();
     let mut links = String::new();
+    // With voice stages in front, the graph's ends must be named: the meter
+    // has more input ports than the one in use, and filter-chain would
+    // otherwise count them all as graph inputs and stop duplicating the
+    // chain per channel.
+    let mut ends = String::new();
+    if let Some((nodes_fx, links_fx, first_in, last_out)) =
+        fx.and_then(|(f, c)| crate::voicefx::graph_nodes(f, c))
+    {
+        nodes.push_str(&nodes_fx);
+        links.push_str(&links_fx);
+        links.push_str(&format!("          {{ output = \"{last_out}\" input = \"eq0:In\" }}\n"));
+        ends = format!(
+            "        inputs  = [ \"{first_in}\" ]\n        outputs = [ \"eq{}:Out\" ]\n",
+            EQ_FREQS.len() - 1
+        );
+    }
     for (i, freq) in EQ_FREQS.iter().enumerate() {
         let label = match i {
             0 => "bq_lowshelf",
@@ -151,7 +179,7 @@ context.modules = [
 {nodes}        ]
         links = [
 {links}        ]
-      }}
+{ends}      }}
       audio.channels = 2
       audio.position = [ FL FR ]
       capture.props  = {{ node.name = "{node}_in" {capture_target} }}
@@ -166,9 +194,19 @@ context.modules = [
 /// Start the EQ for a channel. Returns the hosting process, which the caller
 /// owns — dropping it without [`stop`] leaves the chain running.
 pub fn start(channel: &str, source_sink: &str, target_device: &str) -> Result<Child, String> {
+    start_with_fx(channel, source_sink, target_device, None)
+}
+
+/// [`start`] with voice-processing stages ahead of the bands.
+pub fn start_with_fx(
+    channel: &str,
+    source_sink: &str,
+    target_device: &str,
+    fx: Option<(&crate::voicefx::FxSettings, &crate::voicefx::FxCaps)>,
+) -> Result<Child, String> {
     availability()?;
     let path = config_path(channel);
-    std::fs::write(&path, build_config(channel, source_sink, target_device))
+    std::fs::write(&path, build_config_with_fx(channel, source_sink, target_device, fx))
         .map_err(|e| format!("write {}: {e}", path.display()))?;
 
     let child = command("pipewire")
@@ -305,6 +343,15 @@ mod tests {
     /// nine links, shelves at the ends. A malformed graph makes PipeWire
     /// exit immediately, which is exactly the silent failure this module
     /// exists to end.
+    #[test]
+    fn fx_stages_feed_the_first_band() {
+        let fx = crate::voicefx::FxSettings { gate_enabled: true, ..Default::default() };
+        let caps = crate::voicefx::FxCaps { gate: true, compressor: false, noise_reduction: false };
+        let cfg = build_config_with_fx("Chat", "OpenGG_Chat", "alsa_output.test", Some((&fx, &caps)));
+        assert!(cfg.contains("label = noisegate"));
+        assert!(cfg.contains("output = \"gate:Out\" input = \"eq0:In\""));
+    }
+
     #[test]
     fn config_describes_a_full_ten_band_chain() {
         let cfg = build_config("Game", "OpenGG_Game", "alsa_output.test");
