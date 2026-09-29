@@ -22,17 +22,41 @@ pub fn clips_db_path() -> PathBuf {
 }
 
 /// Open a connection to the clips DB.
+///
+/// Makes sure the schema exists first, once per database file per process.
+/// Nothing ever called `init_clips_db`, so on a machine without a database
+/// left over from the old Tauri app every metadata write failed with "no
+/// such table" — game tags, favourites, renames and saved trim points were
+/// all silently dropped.
 pub fn open_db() -> Result<Connection, String> {
-    Connection::open(clips_db_path()).map_err(|e| format!("DB: {e}"))
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static READY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+
+    let path = clips_db_path();
+    let ready = READY.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut ready = ready.lock().unwrap_or_else(|e| e.into_inner());
+    if !ready.contains(&path) {
+        if let Some(d) = path.parent() {
+            std::fs::create_dir_all(d).ok();
+        }
+        let db = Connection::open(&path).map_err(|e| format!("DB: {e}"))?;
+        ensure_schema(&db)?;
+        ready.insert(path.clone());
+        return Ok(db);
+    }
+    drop(ready);
+    Connection::open(&path).map_err(|e| format!("DB: {e}"))
 }
 
 /// Create the clip DB schema if missing (idempotent).
 pub fn init_clips_db() -> Result<(), String> {
-    let p = clips_db_path();
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d).ok();
-    }
-    let db = open_db()?;
+    open_db().map(|_| ())
+}
+
+/// Every table and column the clip DB is expected to have. `ALTER TABLE ...
+/// ADD COLUMN` fails harmlessly when the column already exists.
+fn ensure_schema(db: &Connection) -> Result<(), String> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS clip_meta(filepath TEXT PRIMARY KEY,custom_name TEXT DEFAULT '',favorite INTEGER DEFAULT 0,tags TEXT DEFAULT '',notes TEXT DEFAULT '');
      CREATE TABLE IF NOT EXISTS trim_state(filepath TEXT PRIMARY KEY,trim_start REAL DEFAULT 0,trim_end REAL DEFAULT 0);").map_err(|e| format!("{e}"))?;
     // Phase 3a: Add ffprobe cache columns (ALTER TABLE is a no-op if column already exists)
@@ -50,6 +74,20 @@ pub fn init_clips_db() -> Result<(), String> {
     );
     let _ = db.execute(
         "ALTER TABLE clip_meta ADD COLUMN mtime INTEGER DEFAULT 0",
+        [],
+    );
+    let _ = db.execute(
+        "ALTER TABLE clip_meta ADD COLUMN game_tag TEXT DEFAULT ''",
+        [],
+    );
+    // Editor state kept per clip alongside the trim window: master volume
+    // (-1 = never set) and per-track gains as a JSON object.
+    let _ = db.execute(
+        "ALTER TABLE trim_state ADD COLUMN volume REAL DEFAULT -1",
+        [],
+    );
+    let _ = db.execute(
+        "ALTER TABLE trim_state ADD COLUMN track_gains TEXT DEFAULT ''",
         [],
     );
     Ok(())
@@ -299,6 +337,66 @@ pub struct TrimState {
     pub trim_end: f64,
 }
 
+/// Everything the clip editor restores when a clip is reopened.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct EditorState {
+    pub trim_start: f64,
+    pub trim_end: f64,
+    /// Master playback volume 0..1, or `None` if never changed.
+    pub volume: Option<f64>,
+    /// Per-track gains keyed by audio track index, as the editor holds them.
+    pub track_gains: serde_json::Value,
+}
+
+/// Upsert a clip's editor state (trim window, volume, track gains).
+pub fn save_editor_state(filepath: &str, st: &EditorState) -> Result<(), String> {
+    let gains = if st.track_gains.is_null() {
+        String::new()
+    } else {
+        st.track_gains.to_string()
+    };
+    open_db()?
+        .execute(
+            "INSERT INTO trim_state(filepath,trim_start,trim_end,volume,track_gains) \
+             VALUES(?1,?2,?3,?4,?5) ON CONFLICT(filepath) DO UPDATE SET \
+             trim_start=?2,trim_end=?3,volume=?4,track_gains=?5",
+            rusqlite::params![
+                filepath,
+                st.trim_start,
+                st.trim_end,
+                st.volume.unwrap_or(-1.0),
+                gains
+            ],
+        )
+        .map_err(|e| format!("{e}"))?;
+    Ok(())
+}
+
+/// Read a clip's saved editor state, if any.
+pub fn get_editor_state(filepath: &str) -> Result<Option<EditorState>, String> {
+    let c = open_db()?;
+    let r = c.query_row(
+        "SELECT trim_start,trim_end,COALESCE(volume,-1),COALESCE(track_gains,'') \
+         FROM trim_state WHERE filepath=?1",
+        [&filepath],
+        |r| {
+            let vol: f64 = r.get(2)?;
+            let gains: String = r.get(3)?;
+            Ok(EditorState {
+                trim_start: r.get(0)?,
+                trim_end: r.get(1)?,
+                volume: (vol >= 0.0).then_some(vol),
+                track_gains: serde_json::from_str(&gains).unwrap_or(serde_json::Value::Null),
+            })
+        },
+    );
+    match r {
+        Ok(t) => Ok(Some(t)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(format!("{e}")),
+    }
+}
+
 /// Upsert a clip's trim window.
 pub fn save_trim_state(filepath: &str, trim_start: f64, trim_end: f64) -> Result<(), String> {
     open_db()?.execute("INSERT INTO trim_state(filepath,trim_start,trim_end) VALUES(?1,?2,?3) ON CONFLICT(filepath) DO UPDATE SET trim_start=?2,trim_end=?3", rusqlite::params![filepath,trim_start,trim_end]).map_err(|e| format!("{e}"))?;
@@ -320,5 +418,40 @@ pub fn get_trim_state(filepath: &str) -> Result<Option<TrimState>, String> {
         Ok(t) => Ok(Some(t)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(format!("{e}")),
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    /// Every metadata write used to fail on a fresh install because nothing
+    /// created the tables. Run against a throwaway data dir.
+    #[test]
+    fn writes_work_on_a_fresh_database() {
+        let d = std::env::temp_dir().join(format!("opengg-fresh-db-{}", std::process::id()));
+        std::env::set_var("XDG_DATA_HOME", &d);
+
+        set_clip_meta(ClipMetaUpdate {
+            filepath: "/clips/a.mp4".into(),
+            custom_name: None,
+            favorite: Some(true),
+            game_tag: Some("Hades".into()),
+            notes: None,
+        })
+        .expect("tag a clip on a fresh db");
+        assert_eq!(get_meta_map()["/clips/a.mp4"].2, "Hades");
+
+        let st = EditorState {
+            trim_start: 1.5,
+            trim_end: 9.0,
+            volume: Some(0.4),
+            track_gains: serde_json::json!({ "0": 0.5, "2": 0.0 }),
+        };
+        save_editor_state("/clips/a.mp4", &st).expect("save editor state");
+        assert_eq!(get_editor_state("/clips/a.mp4").unwrap(), Some(st));
+        assert_eq!(get_editor_state("/clips/none.mp4").unwrap(), None);
+
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
