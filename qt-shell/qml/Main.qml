@@ -60,7 +60,10 @@ ApplicationWindow {
     property bool reallyQuit: false
 
     onClosing: (close) => {
-        if (root.s.runInBackground && !root.reallyQuit) {
+        // Only hide when there is a tray to bring the window back from.
+        // Desktops without a StatusNotifier host (stock GNOME, bare WMs) have
+        // none, and hiding there leaves an invisible process with no way back.
+        if (root.s.runInBackground && trayIcon.available && !root.reallyQuit) {
             close.accepted = false
             root.hide()
             return

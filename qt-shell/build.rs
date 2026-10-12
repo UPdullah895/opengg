@@ -33,6 +33,7 @@ fn main() {
         QmlFile::from("qml/pages/settings/ComingSoonPanel.qml"),
         QmlFile::from("qml/components/VideoPlayer.qml"),
         QmlFile::from("qml/components/ClipVideoSurface.qml"),
+        QmlFile::from("qml/components/ClipGlVideoItem.qml"),
         QmlFile::from("qml/components/ChannelStrip.qml"),
         QmlFile::from("qml/components/DeviceCard.qml"),
             QmlFile::from("qml/components/ConnectionBadge.qml"),

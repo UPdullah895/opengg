@@ -17,12 +17,18 @@ BusName=org.opengg.Daemon
 ExecStart=/usr/bin/openggd
 Restart=on-failure
 RestartSec=3
-# Security hardening
 NoNewPrivileges=true
-ProtectHome=read-only
-ProtectSystem=strict
-ReadWritePaths=%h/.config/opengg %h/.local/share/opengg %h/Videos/OpenGG
-PrivateTmp=true
+# No filesystem sandboxing (ProtectHome/ProtectSystem/ReadWritePaths/PrivateTmp).
+# It used to whitelist %h/.config/opengg, %h/.local/share/opengg and
+# %h/Videos/OpenGG, which broke real installs two ways:
+# - systemd refuses to start a unit whose ReadWritePaths do not exist, so on
+#   any fresh account the daemon died with 226/NAMESPACE ("Failed to set up
+#   mount namespacing: ~/.config/opengg: No such file or directory") — for
+#   D-Bus activation and `systemctl --user enable --now` alike — and the app
+#   came up with no daemon and no OpenGG_* sinks.
+# - the clips folder is the XDG Videos dir (localized names) or a path the
+#   user picks in Settings, neither of which a fixed whitelist can name.
+# A user unit already runs with only the user's own rights.
 
 [Install]
 WantedBy=default.target

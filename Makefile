@@ -72,7 +72,7 @@ setup:
 	@chmod +x dev.sh && ./dev.sh setup
 
 # ── Install ──────────────────────────────────────────────────────
-install: build install-service
+install: build
 	@mkdir -p $(HOME)/.local/bin
 	install -m 755 $(DAEMON)/target/release/openggd $(HOME)/.local/bin/openggd
 	install -m 755 $(QT_SHELL)/target/release/opengg-qt $(HOME)/.local/bin/opengg
@@ -81,6 +81,9 @@ install: build install-service
 	@echo "✓ Installed openggd to ~/.local/bin/"
 	@echo "✓ Installed opengg-qt as ~/.local/bin/opengg"
 	@echo "✓ Installed locales to ~/.local/share/opengg/locales/"
+	# Last, not a prerequisite: enabling the unit starts it, and before the
+	# copy above that fails with 203/EXEC ("Could not enable openggd.service").
+	@$(MAKE) --no-print-directory install-service
 
 # ── systemd user service ─────────────────────────────────────────
 # Install + enable the per-user daemon so the virtual audio engine auto-starts at

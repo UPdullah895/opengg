@@ -8,6 +8,7 @@
 #   ./dev.sh ui       Run frontend only
 #   ./dev.sh build    Build everything for release
 #   ./dev.sh setup    First-time setup (create dirs, group membership)
+#   ./dev.sh deps     Check build prerequisites only (prints an install command)
 #   ./dev.sh examples Install the bundled example extensions (opt-in)
 #
 set -euo pipefail
@@ -41,6 +42,9 @@ logs() { echo -e "${DEV_PREFIX} ${GREEN}✓ $*${RESET}"; }
 PIDS=()
 
 cleanup() {
+    # Keep the real exit status: a failed preflight or build must not look
+    # like success to the caller (CI, scripts, `./dev.sh && ...`).
+    local rc=$?
     echo ""
     log "Shutting down..."
 
@@ -64,27 +68,212 @@ cleanup() {
     pkill -f "target/release/openggd" 2>/dev/null || true
 
     logs "All processes terminated"
-    exit 0
+    exit "$rc"
 }
 
-trap cleanup SIGINT SIGTERM EXIT
+# Ctrl+C / SIGTERM are the normal way to stop the dev stack, so they exit 0;
+# the EXIT trap then sees that status. Anything else keeps its own.
+trap 'exit 0' SIGINT SIGTERM
+trap cleanup EXIT
 
 # ── Preflight Checks ────────────────────────────────────────────
+# Distro family from /etc/os-release (ID, then ID_LIKE): arch, fedora, debian
+# or suse. Anything else is "unknown" and gets a generic tool list.
+detect_family() {
+    local ids
+    ids=" $( . /etc/os-release 2>/dev/null; echo "${ID:-} ${ID_LIKE:-}" ) "
+    case "$ids" in
+        *" arch "*|*" cachyos "*|*" manjaro "*) echo arch ;;
+        *" fedora "*|*" rhel "*|*" centos "*)   echo fedora ;;
+        *" debian "*|*" ubuntu "*)              echo debian ;;
+        *suse*)                                 echo suse ;;
+        *)                                      echo unknown ;;
+    esac
+}
+
+# Package(s) that provide a prerequisite, per distro family. Names verified by
+# building and launching OpenGG in clean containers (see README "Requirements").
+pkg_for() {
+    local family="$1" key="$2"
+    case "$family:$key" in
+        arch:cxx) echo base-devel ;;       fedora:cxx) echo gcc gcc-c++ make ;;
+        debian:cxx) echo build-essential ;; suse:cxx) echo gcc gcc-c++ make ;;
+        *:cmake) echo cmake ;;
+        arch:clang) echo clang ;;          fedora:clang) echo clang clang-devel ;;
+        debian:clang) echo clang libclang-dev ;; suse:clang) echo clang ;;
+        arch:pkgconf) echo pkgconf ;;      debian:pkgconf) echo pkg-config ;;
+        fedora:pkgconf|suse:pkgconf) echo pkgconf-pkg-config ;;
+        arch:qtbase) echo qt6-base ;;      fedora:qtbase) echo qt6-qtbase-devel ;;
+        debian:qtbase) echo qt6-base-dev ;; suse:qtbase) echo qt6-base-devel ;;
+        arch:qtdecl) echo qt6-declarative ;; fedora:qtdecl) echo qt6-qtdeclarative-devel ;;
+        debian:qtdecl) echo qt6-declarative-dev ;; suse:qtdecl) echo qt6-declarative-devel ;;
+        arch:qtmm) echo qt6-multimedia ;;  fedora:qtmm) echo qt6-qtmultimedia-devel ;;
+        debian:qtmm) echo qt6-multimedia-dev ;; suse:qtmm) echo qt6-multimedia-devel ;;
+        arch:qtshader) echo qt6-shadertools ;; fedora:qtshader) echo qt6-qtshadertools-devel ;;
+        debian:qtshader) echo qt6-shadertools-dev ;; suse:qtshader) echo qt6-shadertools-devel ;;
+        arch:gst) echo gstreamer ;;        fedora:gst) echo gstreamer1-devel ;;
+        debian:gst) echo libgstreamer1.0-dev ;; suse:gst) echo gstreamer-devel ;;
+        arch:gstbase) echo gst-plugins-base ;; fedora:gstbase) echo gstreamer1-plugins-base-devel ;;
+        debian:gstbase) echo libgstreamer-plugins-base1.0-dev ;; suse:gstbase) echo gstreamer-plugins-base-devel ;;
+        arch:sqlite) echo sqlite ;;        fedora:sqlite) echo sqlite-devel ;;
+        debian:sqlite) echo libsqlite3-dev ;; suse:sqlite) echo sqlite3-devel ;;
+        arch:gl) echo libglvnd ;;          fedora:gl) echo mesa-libGL-devel ;;
+        debian:gl) echo libgl1-mesa-dev ;; suse:gl) echo Mesa-libGL-devel ;;
+        arch:pactl) echo pipewire-pulse ;; fedora:pactl) echo pipewire-pulseaudio pulseaudio-utils ;;
+        debian:pactl) echo pipewire-pulse pulseaudio-utils ;; suse:pactl) echo pipewire-pulseaudio pulseaudio-utils ;;
+        arch:qml6glsink) echo gst-plugin-qml6 ;; fedora:qml6glsink) echo gstreamer1-plugins-good-qt6 ;;
+        debian:qml6glsink) echo gstreamer1.0-qt6 ;; suse:qml6glsink) echo gstreamer-plugins-good-qtqml6 ;;
+    esac
+}
+
+install_cmd() {
+    case "$1" in
+        arch)   echo "sudo pacman -S --needed" ;;
+        fedora) echo "sudo dnf install" ;;
+        debian) echo "sudo apt install" ;;
+        suse)   echo "sudo zypper install" ;;
+    esac
+}
+
+# Oldest Qt the QML (QtQuick.Controls / Qt.labs / Multimedia APIs) loads on.
+# Ubuntu 24.04 (6.4) and Debian 12 (6.4) build fine and then fail at QML load
+# with "MixerPage is not a type", so reject them up front.
+MIN_QT="6.7"
+
 check_deps() {
-    local missing=()
+    local family pkgs=() hints=() need_pc=0
+    family="$(detect_family)"
 
-    command -v cargo   >/dev/null 2>&1 || missing+=("cargo (install rustup)")
-    command -v pactl   >/dev/null 2>&1 || missing+=("pactl (install pipewire-pulse)")
-    # node/npm are NOT required to build or run OpenGG itself — only for
-    # scaffolding third-party extensions via `make new-extension` (see
-    # scripts/new-extension.sh), which degrades gracefully without them.
-
-    if [ ${#missing[@]} -gt 0 ]; then
-        loge "Missing required tools:"
-        for dep in "${missing[@]}"; do
-            echo -e "   ${RED}•${RESET} $dep"
+    need() { # need <key>…  — queue the packages for a missing prerequisite
+        local k p
+        for k in "$@"; do
+            for p in $(pkg_for "$family" "$k"); do
+                case " ${pkgs[*]:-} " in *" $p "*) ;; *) pkgs+=("$p") ;; esac
+            done
         done
-        exit 1
+    }
+
+    # Rust is installed with rustup on every distro (distro rustc is often too
+    # old for the 2021+ edition features in use).
+    command -v cargo >/dev/null 2>&1 \
+        || hints+=("cargo — install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh")
+
+    command -v c++ >/dev/null 2>&1 || command -v g++ >/dev/null 2>&1 || command -v clang++ >/dev/null 2>&1 \
+        && command -v make >/dev/null 2>&1 || need cxx
+    command -v cmake >/dev/null 2>&1 || need cmake
+    # bindgen (via cxx-qt) loads libclang at build time.
+    command -v clang >/dev/null 2>&1 || ls /usr/lib*/libclang*.so* /usr/lib/*/libclang*.so* /usr/lib/llvm*/lib/libclang*.so* >/dev/null 2>&1 \
+        || need clang
+
+    if command -v pkg-config >/dev/null 2>&1; then
+        need_pc=1
+    else
+        need pkgconf
+    fi
+
+    # pc_has <module> <package-key>: queue the package if pkg-config can't find
+    # the module (or if pkg-config itself is missing, so can't tell).
+    pc_has() {
+        if [ "$need_pc" = 1 ] && pkg-config --exists "$1" 2>/dev/null; then return 0; fi
+        need "$2"
+    }
+    pc_has Qt6Core        qtbase
+    pc_has Qt6Qml         qtdecl
+    pc_has Qt6Quick       qtdecl
+    pc_has Qt6Multimedia  qtmm
+    pc_has Qt6ShaderTools qtshader
+    pc_has gstreamer-1.0      gst
+    pc_has gstreamer-base-1.0 gstbase
+    pc_has sqlite3        sqlite
+    pc_has gl             gl
+
+    command -v pactl >/dev/null 2>&1 || need pactl
+
+    # Qt version gate — only decidable when pkg-config can see Qt6Core.
+    local qt_ver="" qt_old=0
+    if [ "$need_pc" = 1 ] && qt_ver="$(pkg-config --modversion Qt6Core 2>/dev/null)" && [ -n "$qt_ver" ]; then
+        if [ "$(printf '%s\n%s\n' "$MIN_QT" "$qt_ver" | sort -V | head -n1)" != "$MIN_QT" ]; then
+            qt_old=1
+        fi
+    fi
+
+    if [ ${#hints[@]} -eq 0 ] && [ ${#pkgs[@]} -eq 0 ] && [ "$qt_old" = 0 ]; then
+        check_runtime "$family"
+        return 0
+    fi
+
+    if [ ${#hints[@]} -gt 0 ] || [ ${#pkgs[@]} -gt 0 ]; then
+        loge "Missing build prerequisites (detected distro family: ${family}):"
+        local h
+        for h in "${hints[@]:-}"; do [ -n "$h" ] && echo -e "   ${RED}•${RESET} $h"; done
+        if [ ${#pkgs[@]} -gt 0 ]; then
+            if [ "$family" = unknown ]; then
+                echo -e "   ${RED}•${RESET} unrecognised distro — install: a C++ compiler, make, cmake, clang/libclang,"
+                echo -e "     pkg-config, Qt ${MIN_QT}+ (base, declarative, multimedia, shadertools) dev packages,"
+                echo -e "     GStreamer + gst-plugins-base dev packages, SQLite dev, OpenGL dev, pactl (PipeWire)"
+            else
+                echo ""
+                log "Install everything missing with:"
+                echo -e "   ${CYAN}$(install_cmd "$family") ${pkgs[*]}${RESET}"
+            fi
+        fi
+    fi
+
+    if [ "$qt_old" = 1 ]; then
+        echo ""
+        loge "Qt ${qt_ver} is too old: OpenGG needs Qt ${MIN_QT} or newer."
+        echo -e "   It would compile but fail when loading the UI (\"MixerPage is not a type\")."
+        echo -e "   Supported: Arch/CachyOS, Fedora, Debian 13+, Ubuntu 26.04+, openSUSE Tumbleweed."
+        echo -e "   Ubuntu 24.04 / Debian 12 ship Qt 6.4 — upgrade the distro or use another install channel."
+    fi
+    trap - EXIT   # nothing was started; skip the "shutting down" cleanup
+    exit 1
+}
+
+# Runtime packages per family, beyond what the -dev packages pull in. On
+# Debian/Ubuntu every QML module is its own package and a missing one stops
+# the main window loading ("module ... is not installed"); openSUSE splits
+# QtMultimedia's QML imports out the same way. Verified in clean containers.
+runtime_pkgs() {
+    case "$1" in
+        arch)   echo gst-plugin-qml6 gst-plugins-good gst-plugins-bad pipewire-pulse ;;
+        fedora) echo gstreamer1-plugins-good-qt6 gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+                     gstreamer1-plugin-libav pipewire-pulseaudio qt6-qtwayland ;;
+        debian) echo qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+                     qml6-module-qtquick-window qml6-module-qtquick-templates qml6-module-qtquick-dialogs \
+                     qml6-module-qtquick-shapes qml6-module-qtmultimedia qml6-module-qt-labs-platform \
+                     qml6-module-qtqml-workerscript gstreamer1.0-qt6 gstreamer1.0-plugins-good \
+                     gstreamer1.0-plugins-bad gstreamer1.0-libav qt6-wayland pipewire-pulse ;;
+        suse)   echo qt6-multimedia-imports gstreamer-plugins-good-qtqml6 gstreamer-plugins-good \
+                     gstreamer-plugins-bad gstreamer-plugins-libav pipewire-pulseaudio ;;
+    esac
+}
+
+pkg_installed() {
+    case "$1" in
+        arch)        pacman -Q "$2" >/dev/null 2>&1 ;;
+        debian)      dpkg-query -W -f='${Status}' "$2" 2>/dev/null | grep -q "ok installed" ;;
+        fedora|suse) rpm -q --whatprovides "$2" >/dev/null 2>&1 ;;
+        *)           return 0 ;;
+    esac
+}
+
+# Runtime-only pieces: not needed to compile, but without them the app
+# either fails to open its window (QML modules) or loses clip video/audio.
+# Warnings only — never fails the check, since the build itself is fine.
+check_runtime() {
+    local family="$1" rt=() p
+    for p in $(runtime_pkgs "$family"); do
+        pkg_installed "$family" "$p" || rt+=("$p")
+    done
+    command -v ffmpeg >/dev/null 2>&1 || rt+=(ffmpeg)
+    if [ ${#rt[@]} -gt 0 ] && [ "$family" != unknown ]; then
+        logw "Runtime packages not installed (the window, clip video or audio need them):"
+        echo -e "       ${CYAN}$(install_cmd "$family") ${rt[*]}${RESET}"
+    fi
+    if command -v pactl >/dev/null 2>&1 && ! pactl info >/dev/null 2>&1; then
+        logw "pactl can't reach an audio server — the mixer needs PipeWire's pulse server running:"
+        echo -e "       ${CYAN}systemctl --user enable --now pipewire.socket pipewire-pulse.socket wireplumber.service${RESET}"
     fi
 }
 
@@ -131,17 +320,28 @@ ensure_input_group() {
     fi
 }
 
+# cargo check one crate; on failure show the tail of cargo's output instead of
+# swallowing it (a missing system library surfaces here as a build-script error).
+check_crate() {
+    local name="$1" dir="$2" out
+    if out="$(cd "$dir" && cargo check --quiet 2>&1)"; then
+        logs "$name compiles OK"
+    else
+        loge "$name does not compile — last lines of 'cargo check':"
+        echo "$out" | tail -n 25 | sed 's/^/       /'
+        return 1
+    fi
+}
+
 do_setup() {
     log "${BOLD}Running first-time setup...${RESET}"
     echo ""
 
     # Check Rust toolchain
     log "Checking Rust toolchain..."
-    cd "$DAEMON_DIR"
-    cargo check --quiet 2>/dev/null && logs "Daemon compiles OK" || logw "Daemon has compile issues — run 'cargo check' in daemon/"
-
-    cd "$QT_SHELL_DIR"
-    cargo check --quiet 2>/dev/null && logs "Qt6 frontend compiles OK" || logw "Qt6 frontend has compile issues — run 'cargo check' in qt-shell/"
+    local failed=0
+    check_crate "Daemon" "$DAEMON_DIR" || failed=1
+    check_crate "Qt6 frontend" "$QT_SHELL_DIR" || failed=1
 
     # Create data dirs
     mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/opengg"
@@ -170,6 +370,10 @@ do_setup() {
     fi
 
     echo ""
+    if [ "$failed" = 1 ]; then
+        loge "Setup finished, but the build check failed (output above). Fix that, then re-run ${CYAN}./dev.sh setup${RESET}."
+        return 1
+    fi
     logs "${BOLD}Setup complete!${RESET} Run ${CYAN}./dev.sh${RESET} to start developing."
 }
 
@@ -278,6 +482,10 @@ case "${1:-all}" in
     setup)
         do_setup
         ;;
+    deps)
+        trap - EXIT   # nothing was started; skip the "shutting down" cleanup
+        logs "All build prerequisites found"
+        ;;
     examples)
         install_examples
         ;;
@@ -321,6 +529,7 @@ case "${1:-all}" in
         echo "  ui              Run Qt6/QML frontend only"
         echo "  build           Build everything for release"
         echo "  setup           First-time setup"
+        echo "  deps            Check build prerequisites (prints the install command)"
         echo "  examples        Install the bundled example extensions"
         echo ""
         ;;

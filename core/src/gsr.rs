@@ -1154,6 +1154,7 @@ fn resolve_distro_family(id: &str, id_like: &str) -> &'static str {
         "arch" | "manjaro" | "endeavouros" | "garuda" | "cachyos" => return "arch",
         "debian" | "ubuntu" => return "debian",
         "fedora" | "rhel" | "centos" => return "fedora",
+        _ if id.contains("suse") => return "suse",
         _ => {}
     }
     let id_like_lower = id_like.to_lowercase();
@@ -1166,6 +1167,9 @@ fn resolve_distro_family(id: &str, id_like: &str) -> &'static str {
     if id_like_lower.contains("fedora") || id_like_lower.contains("rhel") || id_like_lower.contains("centos") {
         return "fedora";
     }
+    if id_like_lower.contains("suse") {
+        return "suse";
+    }
     "unknown"
 }
 
@@ -1173,6 +1177,18 @@ fn resolve_distro_family(id: &str, id_like: &str) -> &'static str {
 fn detect_distro() -> &'static str {
     let info = crate::system::get_distro_info();
     resolve_distro_family(&info.id, &info.id_like)
+}
+
+/// Package that ships the GStreamer `qml6glsink` element on this distro.
+/// Every distro names it differently; None of them is a dependency of Qt itself.
+pub fn qml6_plugin_package() -> &'static str {
+    match detect_distro() {
+        "arch" => "gst-plugin-qml6",
+        "fedora" => "gstreamer1-plugins-good-qt6",
+        "debian" => "gstreamer1.0-qt6",
+        "suse" => "gstreamer-plugins-good-qtqml6",
+        _ => "the GStreamer Qt6 plugin (qml6glsink)",
+    }
 }
 
 /// A single actionable fix that the UI can present with a copy button.
@@ -1515,6 +1531,13 @@ fn list_monitors_raw() -> String {
 #[cfg(test)]
 mod gsr_ui_tests {
     use super::*;
+
+    #[test]
+    fn distro_family_covers_suse() {
+        assert_eq!(resolve_distro_family("opensuse-tumbleweed", "opensuse suse"), "suse");
+        assert_eq!(resolve_distro_family("sles", "suse"), "suse");
+        assert_eq!(resolve_distro_family("cachyos", "arch"), "arch");
+    }
 
     #[test]
     fn parses_and_rewrites_the_replay_directory() {

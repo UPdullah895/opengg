@@ -37,7 +37,10 @@ fn main() {
     if let Err(e) = gstreamer::init() {
         eprintln!("gstreamer init failed, clip video disabled: {e}");
     } else if gstreamer::ElementFactory::make("qml6glsink").build().is_err() {
-        eprintln!("qml6glsink unavailable — install gst-plugin-qml6 for clip video");
+        eprintln!(
+            "qml6glsink unavailable — install {} for clip video",
+            opengg_core::gsr::qml6_plugin_package()
+        );
     }
 
     let mut app = QGuiApplication::new();

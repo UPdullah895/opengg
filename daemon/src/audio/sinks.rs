@@ -218,7 +218,19 @@ impl SinkManager {
             );
         }
 
-        tracing::info!("Virtual sinks ready (no PipeWire restart)");
+        // `module_ids` is empty on a restart too (existing sinks are reused), so
+        // ask whether the sinks exist rather than whether we created any.
+        if !SINK_CHANNELS.iter().any(|ch| sink_exists(&format!("OpenGG_{ch}"))) {
+            // No OpenGG sink exists after trying. By far the usual cause is no
+            // PulseAudio-protocol server: pactl is installed (libpulse) but
+            // pipewire-pulse is not, or is not running.
+            tracing::error!(
+                "No OpenGG virtual sinks could be created — is pipewire-pulse installed and running? \
+                 (check: `pactl info`, `systemctl --user status pipewire-pulse`)"
+            );
+        } else {
+            tracing::info!("Virtual sinks ready (no PipeWire restart)");
+        }
         Ok(Self {
             channels,
             module_ids: Arc::new(Mutex::new(module_ids)),
