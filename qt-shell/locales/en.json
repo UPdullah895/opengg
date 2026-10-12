@@ -158,6 +158,18 @@
     },
     "changelog": [
       {
+        "version": "V0.2.3",
+        "date": "2026-10-12",
+        "items": [
+          "OpenGG now starts on a fresh account — its background service used to fail until certain folders existed, leaving the mixer with no channels",
+          "The Arch package now installs pipewire-pulse; without it no OpenGG channels were created, and the service now says so in its log",
+          "A missing GStreamer Qt6 plugin no longer stops the window opening — only clip video is disabled, and the message names your distro's package",
+          "Closing the window no longer hides OpenGG on desktops without a system tray, where there was no way to bring it back",
+          "Building from source on Fedora, Debian 13+, Ubuntu 26.04+ and openSUSE: ./dev.sh deps checks your system and prints the exact install command",
+          "Faster mouse-wheel scrolling now applies to the Devices list too"
+        ]
+      },
+      {
         "version": "V0.2.2",
         "date": "2026-09-29",
         "items": [

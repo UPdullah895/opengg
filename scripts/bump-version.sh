@@ -30,6 +30,9 @@ sed -i "s/^version = \"[^\"]*\"/version = \"$NEW_VERSION\"/" "$ROOT/core/Cargo.t
 # The line reads "**v0.1.5** · Open-source Linux gaming hub …" — anchored to
 # the leading "**v" so it cannot touch any other bold text in the file.
 sed -i "s/^\*\*v[0-9][0-9.]*\*\* ·/**v$NEW_VERSION** ·/" "$ROOT/README.md"
+# The header has since become HTML ("  <b>v0.2.2</b> · …"), which the line
+# above no longer matches, so handle that form too.
+sed -i "s|^\( *\)<b>v[0-9][0-9.]*</b> ·|\1<b>v$NEW_VERSION</b> ·|" "$ROOT/README.md"
 
 # ── Extension template ──
 sed -i "s/\"version\":\s*\"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$ROOT/extension-template/manifest.json"
