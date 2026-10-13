@@ -133,7 +133,10 @@ jobs:
           case "${{ matrix.family }}" in
             debian) apt-get update && apt-get install -y --no-install-recommends ca-certificates git ;;
             fedora) dnf install -y git ca-certificates tar gzip ;;
-            suse)   zypper --non-interactive install --no-recommends git ca-certificates tar gzip ;;
+            # gawk is named explicitly: with --no-recommends zypper otherwise picks
+            # busybox-gawk to satisfy git's `awk`, which then conflicts with the real
+            # gawk that qt6-base-devel pulls in later (via cups-devel -> rpm-build).
+            suse)   zypper --non-interactive install --no-recommends git gawk ca-certificates tar gzip ;;
           esac
 
       - uses: actions/checkout@v4
