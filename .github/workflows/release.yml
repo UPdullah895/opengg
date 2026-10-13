@@ -115,7 +115,17 @@ jobs:
   packages:
     name: ${{ matrix.target }} package
     runs-on: ubuntu-latest
-    container: ${{ matrix.image }}
+    # The opensuse/tumbleweed image defines no ENV PATH (the others do). The
+    # runner builds each step's PATH as <GITHUB_PATH entries>:<base PATH>, so
+    # without a base the rustup step's ~/.cargo/bin became the whole PATH and
+    # the next step died with `exec: "sh": executable file not found`. Give
+    # the job a standard base PATH explicitly.
+    container:
+      image: ${{ matrix.image }}
+      env:
+        PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    env:
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     strategy:
       fail-fast: false
       matrix:
