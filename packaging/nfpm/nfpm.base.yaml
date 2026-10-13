@@ -1,0 +1,75 @@
+# Shared nfpm config for the .deb and .rpm release packages. Not used directly:
+# scripts/build-packages.sh substitutes @VERSION@/@RELEASE@/@STAGE@, appends
+# targets/<target>.yaml (the per-distro depends/recommends/suggests lists) and
+# runs nfpm. nfpm does not detect shared-library dependencies, so every target
+# file names them by hand (see the comments in each target file).
+name: opengg
+arch: amd64
+platform: linux
+version: "@VERSION@"
+release: "@RELEASE@"
+section: utils
+priority: optional
+maintainer: "UPdullah895 <abdullahbomozh@gmail.com>"
+vendor: UPdullah895
+homepage: https://github.com/UPdullah895/opengg
+license: MIT
+description: |
+  Open-source Linux gaming hub (audio mixer, device manager, clip recorder)
+  A five-channel PipeWire mixer (Game/Chat/Media/Aux/Mic) with per-app
+  routing and EQ, mouse/keyboard/RGB configuration, and a replay-buffer clip
+  gallery with trimming and export. Ships the opengg Qt6/QML app and the
+  openggd background daemon (D-Bus activated, systemd user unit).
+
+contents:
+  - src: "@STAGE@/usr/bin/opengg"
+    dst: /usr/bin/opengg
+    file_info: { mode: 0755 }
+  - src: "@STAGE@/usr/bin/openggd"
+    dst: /usr/bin/openggd
+    file_info: { mode: 0755 }
+  - src: "@STAGE@/usr/lib/udev/rules.d/99-opengg.rules"
+    dst: /usr/lib/udev/rules.d/99-opengg.rules
+    file_info: { mode: 0644 }
+  - src: "@STAGE@/usr/share/dbus-1/services/org.opengg.Daemon.service"
+    dst: /usr/share/dbus-1/services/org.opengg.Daemon.service
+    file_info: { mode: 0644 }
+  - src: "@STAGE@/usr/lib/systemd/user/openggd.service"
+    dst: /usr/lib/systemd/user/openggd.service
+    file_info: { mode: 0644 }
+  - src: "@STAGE@/usr/share/polkit-1/actions/org.opengg.setup.policy"
+    dst: /usr/share/polkit-1/actions/org.opengg.setup.policy
+    file_info: { mode: 0644 }
+  - src: "@STAGE@/usr/share/applications/opengg.desktop"
+    dst: /usr/share/applications/opengg.desktop
+    file_info: { mode: 0644 }
+  - src: "@STAGE@/usr/share/icons/hicolor/256x256/apps/opengg.png"
+    dst: /usr/share/icons/hicolor/256x256/apps/opengg.png
+    file_info: { mode: 0644 }
+  - dst: /usr/share/opengg
+    type: dir
+    file_info: { mode: 0755 }
+  - dst: /usr/share/opengg/locales
+    type: dir
+    file_info: { mode: 0755 }
+  - src: "@STAGE@/usr/share/opengg/locales/*.json"
+    dst: /usr/share/opengg/locales/
+    file_info: { mode: 0644 }
+  - src: "@STAGE@/usr/share/doc/opengg/copyright"
+    dst: /usr/share/doc/opengg/copyright
+    packager: deb
+    file_info: { mode: 0644 }
+  - src: "@STAGE@/usr/share/doc/opengg/changelog.Debian.gz"
+    dst: /usr/share/doc/opengg/changelog.Debian.gz
+    packager: deb
+    file_info: { mode: 0644 }
+  - src: "@STAGE@/usr/share/doc/opengg/copyright"
+    dst: /usr/share/licenses/opengg/LICENSE
+    packager: rpm
+    type: license
+    file_info: { mode: 0644 }
+
+scripts:
+  postinstall: "@NFPM_DIR@/scripts/postinstall.sh"
+  postremove: "@NFPM_DIR@/scripts/postremove.sh"
+

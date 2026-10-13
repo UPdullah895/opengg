@@ -1,0 +1,41 @@
+# openSUSE Tumbleweed: Qt 6.11.x (rolling). Soname capabilities as rpmbuild
+# would generate them. The binary imports no Qt private API (qt-shell/build.rs
+# builds the QML as bytecode only), so a Qt patch update on this rolling distro
+# does not touch the package. Package names verified in an
+# opensuse/tumbleweed container.
+depends:
+  - libQt6Core.so.6()(64bit)
+  - libQt6Gui.so.6()(64bit)
+  - libQt6Qml.so.6()(64bit)
+  - libQt6Quick.so.6()(64bit)
+  - libgstreamer-1.0.so.0()(64bit)
+  - libgobject-2.0.so.0()(64bit)
+  - libglib-2.0.so.0()(64bit)
+  - libgio-2.0.so.0()(64bit)
+  - libstdc++.so.6()(64bit)
+  - libgcc_s.so.1()(64bit)
+  - libm.so.6(GLIBC_2.43)(64bit)
+  - libc.so.6(GLIBC_2.39)(64bit)
+  # QML modules: openSUSE splits the QML imports into *-imports packages.
+  - qt6-declarative-imports
+  - qt6-multimedia-imports
+  - qt6-wayland
+  # Clip playback: qml6glsink + codecs.
+  - gstreamer-plugins-base
+  - gstreamer-plugins-good
+  - gstreamer-plugins-good-qtqml6
+  - gstreamer-plugins-bad
+  - gstreamer-plugins-libav
+  # Audio: pactl needs a PulseAudio-protocol server (pipewire-pulseaudio).
+  - pipewire
+  - pipewire-pulseaudio
+  # The daemon, EQ and Voice FX shell out to pw-link / pw-cli / pw-dump /
+  # pw-metadata. Name the package that ships them (it is only an accident of
+  # dependency chains that some distros pull it in anyway).
+  - pipewire-tools
+  - pulseaudio-utils
+  - wireplumber
+  - ffmpeg
+recommends:
+  - polkit
+  - gpu-screen-recorder

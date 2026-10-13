@@ -1,0 +1,42 @@
+# Fedora 44: Qt 6.11. rpm resolves soname capabilities, so the shared-library
+# requirements are written as rpmbuild's automatic dependency generator would.
+# The binary imports no Qt private API (qt-shell/build.rs builds the QML as
+# bytecode only), so no Qt_6.x_PRIVATE_API capability is required.
+# Package names verified in a fedora:44 container.
+depends:
+  - libQt6Core.so.6()(64bit)
+  - libQt6Gui.so.6()(64bit)
+  - libQt6Qml.so.6()(64bit)
+  - libQt6Quick.so.6()(64bit)
+  - libgstreamer-1.0.so.0()(64bit)
+  - libgobject-2.0.so.0()(64bit)
+  - libglib-2.0.so.0()(64bit)
+  - libgio-2.0.so.0()(64bit)
+  - libstdc++.so.6()(64bit)
+  - libgcc_s.so.1()(64bit)
+  - libm.so.6(GLIBC_2.43)(64bit)
+  - libc.so.6(GLIBC_2.39)(64bit)
+  # QML modules (QtQuick.Controls, Dialogs, Qt.labs.platform, QtMultimedia...)
+  - qt6-qtdeclarative
+  - qt6-qtmultimedia
+  - qt6-qtwayland
+  # Clip playback: qml6glsink + codecs.
+  - gstreamer1-plugins-base
+  - gstreamer1-plugins-good
+  - gstreamer1-plugins-good-qt6
+  - gstreamer1-plugins-bad-free
+  - gstreamer1-plugin-libav
+  # Audio: pactl needs a PulseAudio-protocol server (pipewire-pulseaudio).
+  - pipewire
+  - pipewire-pulseaudio
+  # The daemon, EQ and Voice FX shell out to pw-link / pw-cli / pw-dump /
+  # pw-metadata. Name the package that ships them (it is only an accident of
+  # dependency chains that some distros pull it in anyway).
+  - pipewire-utils
+  - pulseaudio-utils
+  - wireplumber
+  # ffmpeg-free (Fedora) and rpmfusion's ffmpeg both ship the CLI, but only the
+  # latter *provides* the name `ffmpeg`, so depend on the file.
+  - /usr/bin/ffmpeg
+recommends:
+  - polkit

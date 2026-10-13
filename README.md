@@ -33,6 +33,17 @@
 yay -S opengg-bin
 ```
 
+**Debian, Ubuntu, Fedora, openSUSE** — download the package for your distro from the [latest release](https://github.com/UPdullah895/opengg/releases/latest) (check it against `SHA256SUMS`) and install it with your package manager, which pulls in every dependency:
+
+| Distro | Package | Install |
+|---|---|---|
+| Debian 13 | `opengg_<version>_debian13_amd64.deb` | `sudo apt install ./opengg_*_debian13_amd64.deb` |
+| Ubuntu 26.04 | `opengg_<version>_ubuntu2604_amd64.deb` | `sudo apt install ./opengg_*_ubuntu2604_amd64.deb` |
+| Fedora 44 | `opengg-<version>-1.fc44.x86_64.rpm` | `sudo dnf install ./opengg-*.fc44.x86_64.rpm` |
+| openSUSE Tumbleweed | `opengg-<version>-1.tumbleweed.x86_64.rpm` | `sudo zypper install --allow-unsigned-rpm ./opengg-*.tumbleweed.x86_64.rpm` |
+
+Then follow the post-install message: add yourself to the `audio`, `input` and `video` groups, **log out and back in**, and run `systemctl --user enable --now openggd.service`. The packages are unsigned and each is built against that distro's own Qt, so use the one matching your release. Ubuntu 24.04 and Debian 12 ship Qt 6.4, which is too old (OpenGG needs 6.7+). Packages cover x86_64 only.
+
 **From source** (any distro with Qt 6.7+ — install the packages under [Requirements](#requirements) first):
 
 ```bash
