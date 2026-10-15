@@ -23,6 +23,7 @@ pub mod eq;
 pub mod extensions;
 pub mod gsr;
 pub mod hotkeys;
+pub mod logging;
 pub mod media;
 pub mod notify;
 pub mod paths;

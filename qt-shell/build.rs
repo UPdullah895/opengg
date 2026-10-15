@@ -274,6 +274,8 @@ fn main() {
         // Hand-written C++ for the three Qt facts the GStreamer player needs
         // that cxx-qt cannot express — see src/cpp/video_bridge.cpp.
         .cpp_file("src/cpp/video_bridge.cpp")
+        // Qt message handler -> Rust logger — see src/cpp/log_bridge.cpp.
+        .cpp_file("src/cpp/log_bridge.cpp")
         // Qt Multimedia (MediaPlayer/VideoOutput) for the clip player — the
         // GStreamer backend is the PoC-validated Wayland-native path (plan §7).
         .qt_module("Multimedia")

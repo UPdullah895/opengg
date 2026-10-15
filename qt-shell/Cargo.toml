@@ -24,6 +24,9 @@ opengg-core = { path = "../core" }
 # mixing pipeline (decodebin -> per-track volume -> audiomixer). Ported from
 # the video PoC, which validated this design.
 gstreamer = "0.25.3"
+# The `log` facade: opengg_core::logging installs the backend, qt-shell only
+# emits records (already in the lockfile through opengg-core).
+log = "0.4"
 
 [build-dependencies]
 cxx-qt-build = "0.9"

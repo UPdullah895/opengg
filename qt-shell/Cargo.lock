@@ -1710,6 +1710,7 @@ dependencies = [
  "cxx-qt-build",
  "cxx-qt-lib",
  "gstreamer",
+ "log",
  "opengg-core",
  "serde_json",
 ]
