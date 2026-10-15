@@ -120,16 +120,17 @@ pub mod qobject {
         fn refresh_caps(self: Pin<&mut Self>);
     }
 
+    // The engine watchdog runs on its own thread and reports a chain that
+    // died after start-up back to the UI thread through this.
     impl cxx_qt::Threading for EqController {}
 }
 
 use core::pin::Pin;
-use cxx_qt::CxxQtType;
-use cxx_qt::Threading;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
+use opengg_core::eq::Chain;
 use opengg_core::voicefx::{self, FxCaps, FxSettings};
 use std::collections::{HashMap, HashSet};
-use std::process::Child;
 
 /// Where a running engine sits, so `stop` can put the dry path back.
 enum Route {
@@ -141,7 +142,7 @@ enum Route {
 
 /// A running engine.
 struct Engine {
-    child: Child,
+    chain: Chain,
     route: Route,
     /// The voice stages it was built with; a different set needs a restart,
     /// anything else is a live parameter change.
@@ -175,7 +176,9 @@ impl Default for EqControllerRust {
         let caps = voicefx::capabilities();
         // A chain from a previous run that crashed would have left the mic's
         // dry path cut; putting it back is harmless when it is already there.
-        voicefx::relink_loopback();
+        if let Err(e) = voicefx::relink_loopback() {
+            eprintln!("EqController: could not restore the mic dry path at startup: {e}");
+        }
         Self {
             last_error: QString::default(),
             unavailable_reason: QString::from(&reason),
@@ -193,11 +196,18 @@ impl Default for EqControllerRust {
 }
 
 /// Stop an engine and restore whatever path it replaced.
-fn stop_engine_process(engine: Engine) {
-    match engine.route {
-        Route::Output { sink, device } => opengg_core::eq::stop(engine.child, &sink, &device),
-        Route::Mic => voicefx::stop_mic(engine.child),
+///
+/// A failure to restore means the channel (or the mic) may now be silent, so
+/// it is logged loudly and returned for the caller to surface.
+fn stop_engine_process(engine: Engine) -> Result<(), String> {
+    let r = match engine.route {
+        Route::Output { sink, device } => opengg_core::eq::stop(engine.chain, &sink, &device),
+        Route::Mic => voicefx::stop_mic(engine.chain),
+    };
+    if let Err(e) = &r {
+        eprintln!("EqController: could not restore the dry path: {e}");
     }
+    r
 }
 
 /// The capture-side node name of a channel's engine, for live parameters.
@@ -234,7 +244,7 @@ impl qobject::EqController {
 
         if !wanted {
             if let Some(engine) = self.as_mut().rust_mut().engines.remove(channel) {
-                stop_engine_process(engine);
+                let _ = stop_engine_process(engine);
             }
             self.as_mut().publish_active();
             return true;
@@ -262,12 +272,17 @@ impl qobject::EqController {
 
         // (Re)start. Tear the old one down first, including its routing.
         if let Some(engine) = self.as_mut().rust_mut().engines.remove(channel) {
-            stop_engine_process(engine);
+            let _ = stop_engine_process(engine);
         }
         let started = if is_mic {
-            voicefx::start_mic(&fx, &caps).map(|child| {
-                voicefx::unlink_loopback();
-                (child, Route::Mic)
+            // `start_mic` only returns Ok once the chain is up; cutting the
+            // dry loopback any earlier would leave the mic dead on failure.
+            voicefx::start_mic(&fx, &caps).and_then(|chain| {
+                if let Err(e) = voicefx::unlink_loopback() {
+                    let _ = voicefx::stop_mic(chain);
+                    return Err(e);
+                }
+                Ok((chain, Route::Mic))
             })
         } else {
             if let Err(reason) = opengg_core::eq::availability() {
@@ -277,20 +292,42 @@ impl qobject::EqController {
                 let sink = Self::sink_for(channel);
                 let device = opengg_core::audio::current_channel_device(channel);
                 let with_fx = fx.any_enabled().then_some((&fx, &caps));
-                opengg_core::eq::start_with_fx(channel, &sink, &device, with_fx).map(|child| {
-                    // Only cut the dry path once the chain is up, or a
-                    // failed start would leave the channel silent.
-                    opengg_core::eq::unlink_direct(&sink, &device);
-                    (child, Route::Output { sink, device })
+                // `start_with_fx` returns only once the chain is alive and in
+                // the graph, so cutting the dry path here cannot silence a
+                // channel whose engine failed to come up.
+                opengg_core::eq::start_with_fx(channel, &sink, &device, with_fx).and_then(|chain| {
+                    if let Err(e) = opengg_core::eq::unlink_direct(&sink, &device) {
+                        let _ = opengg_core::eq::stop(chain, &sink, &device);
+                        return Err(e);
+                    }
+                    Ok((chain, Route::Output { sink, device }))
                 })
             }
         };
         match started {
-            Ok((child, route)) => {
+            Ok((chain, route)) => {
+                // If the host dies later, the watchdog restores the dry path
+                // itself and tells us, so the UI stops claiming an active chain.
+                let qt_thread = self.qt_thread();
+                let ch = channel.to_string();
+                let on_exit = move |msg: String| {
+                    let _ = qt_thread.queue(move |mut c| {
+                        c.as_mut().rust_mut().engines.remove(&ch);
+                        c.as_mut().set_last_error(QString::from(&msg));
+                        c.as_mut().publish_active();
+                    });
+                };
+                match &route {
+                    Route::Output { sink, device } => {
+                        let (sink, device) = (sink.clone(), device.clone());
+                        chain.watch(move || opengg_core::eq::relink_direct(&sink, &device), on_exit);
+                    }
+                    Route::Mic => chain.watch(voicefx::relink_loopback, on_exit),
+                }
                 self.as_mut()
                     .rust_mut()
                     .engines
-                    .insert(channel.to_string(), Engine { child, route, stages });
+                    .insert(channel.to_string(), Engine { chain, route, stages });
                 self.as_mut().set_last_error(QString::default());
                 self.as_mut().publish_active();
                 // A fresh chain starts with flat bands; restore the user's
@@ -329,7 +366,7 @@ impl qobject::EqController {
         self.as_mut().rust_mut().eq_on.insert(channel.clone());
         // Restarting is the documented behaviour.
         if let Some(engine) = self.as_mut().rust_mut().engines.remove(&channel) {
-            stop_engine_process(engine);
+            let _ = stop_engine_process(engine);
         }
         self.as_mut().reconcile(&channel)
     }
@@ -378,7 +415,7 @@ impl qobject::EqController {
         let keys: Vec<String> = self.as_ref().rust().engines.keys().cloned().collect();
         for k in keys {
             if let Some(engine) = self.as_mut().rust_mut().engines.remove(&k) {
-                stop_engine_process(engine);
+                let _ = stop_engine_process(engine);
             }
         }
         self.as_mut().publish_active();

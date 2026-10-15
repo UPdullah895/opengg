@@ -34,10 +34,11 @@
 //! Output channels (Chat) get the same stages inside their EQ chain — see
 //! [`graph_nodes`] and `eq::build_config`.
 
-use crate::subprocess::{command, run_cmd_sync};
+use crate::subprocess::{command, run_tool};
+use std::process::Stdio;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::{Child, Stdio};
+use crate::eq::Chain;
 
 /// What the user asked for on one channel.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -329,7 +330,7 @@ context.modules = [
 /// The hardware mic the daemon's loopback reads, so processing starts from
 /// the same device. Read from the loopback module's own arguments.
 pub fn mic_hw_source() -> Option<String> {
-    let list = run_cmd_sync("pactl", &["list", "short", "modules"]).ok()?;
+    let list = run_tool("pactl", &["list", "short", "modules"]).ok()?;
     list.lines()
         .filter(|l| l.contains("module-loopback") && l.contains("sink=OpenGG_Mic"))
         .find_map(|l| {
@@ -341,53 +342,56 @@ pub fn mic_hw_source() -> Option<String> {
 const LOOPBACK_OUT: &str = "OpenGG_Mic_Loopback_out";
 
 /// Cut the daemon's dry `loopback → OpenGG_Mic` path while processing runs.
-pub fn unlink_loopback() {
+/// Only call this once the chain is confirmed up (see [`start_mic`]): with
+/// the dry path cut and no chain, the microphone is dead.
+pub fn unlink_loopback() -> Result<(), String> {
     for p in ["FL", "FR"] {
-        let _ = run_cmd_sync(
+        match run_tool(
             "pw-link",
             &["-d", &format!("{LOOPBACK_OUT}:output_{p}"), &format!("OpenGG_Mic:playback_{p}")],
-        );
+        ) {
+            Ok(_) | Err(crate::subprocess::ToolError::Failed { .. }) => {}
+            Err(e) => return Err(e.to_string()),
+        }
     }
+    Ok(())
 }
 
-/// Restore the dry path. Harmless when it already exists.
-pub fn relink_loopback() {
+/// Restore the dry path. Harmless when it already exists. Returns the error
+/// instead of eating it: a failure here leaves the mic silent.
+pub fn relink_loopback() -> Result<(), String> {
     for p in ["FL", "FR"] {
-        let _ = run_cmd_sync(
-            "pw-link",
-            &[&format!("{LOOPBACK_OUT}:output_{p}"), &format!("OpenGG_Mic:playback_{p}")],
-        );
+        crate::audio::link_ports(
+            &format!("{LOOPBACK_OUT}:output_{p}"),
+            &format!("OpenGG_Mic:playback_{p}"),
+        )
+        .map_err(|e| e.to_string())?;
     }
+    Ok(())
 }
 
-/// Start the mic chain. The caller owns the process; see [`stop_mic`].
-pub fn start_mic(fx: &FxSettings, caps: &FxCaps) -> Result<Child, String> {
+/// Start the mic chain and wait until it is alive and in the graph. The
+/// caller owns the chain; see [`stop_mic`]. Cut the dry path
+/// ([`unlink_loopback`]) only after this returns `Ok`.
+pub fn start_mic(fx: &FxSettings, caps: &FxCaps) -> Result<Chain, String> {
     let hw = mic_hw_source().ok_or(
         "the daemon's microphone loopback is not running, so there is no mic to process",
     )?;
     let cfg = build_mic_config(fx, caps, &hw).ok_or("no processing stage is enabled")?;
     let path = config_path();
     std::fs::write(&path, cfg).map_err(|e| format!("write {}: {e}", path.display()))?;
-    command("pipewire")
-        .arg("-c")
-        .arg(&path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn pipewire: {e}"))
+    crate::eq::host_chain("mic-fx", &path, &format!("{MIC_NODE}_in"))
 }
 
 /// Stop the mic chain and put the dry path back.
-pub fn stop_mic(mut child: Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-    relink_loopback();
+pub fn stop_mic(chain: Chain) -> Result<(), String> {
+    chain.shutdown();
+    relink_loopback()
 }
 
 /// PipeWire node id of a chain's capture side, by node name.
 pub fn node_id(capture_node_name: &str) -> Option<u32> {
-    let dump = run_cmd_sync("pw-dump", &[]).ok()?;
+    let dump = run_tool("pw-dump", &[]).ok()?;
     let v: serde_json::Value = serde_json::from_str(&dump).ok()?;
     v.as_array()?.iter().find_map(|obj| {
         let name = obj
@@ -413,7 +417,7 @@ pub fn set_live(capture_node_name: &str, fx: &FxSettings, caps: &FxCaps) -> Resu
         return Ok(());
     }
     let param = format!("{{ params = [ {} ] }}", body.join(" "));
-    run_cmd_sync("pw-cli", &["set-param", &id.to_string(), "Props", &param]).map(|_| ())
+    run_tool("pw-cli", &["set-param", &id.to_string(), "Props", &param]).map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Measure a source's background level in dBFS over `secs`, for the gate's

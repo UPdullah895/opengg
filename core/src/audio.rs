@@ -13,11 +13,82 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::process::Command;
+use std::fmt;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 use crate::daemon::{call_dbus, call_dbus_void, AU_IFACE, AU_PATH};
-use crate::subprocess::run_cmd_sync;
+use crate::subprocess::{is_available, run_cmd_sync, run_tool, ToolError};
+
+/// Why an audio-server query failed, in the terms the UI needs to act on.
+///
+/// Before this existed every pactl failure collapsed to an empty string, so
+/// "pipewire-pulse is not running" was indistinguishable from "there are no
+/// sinks" and the Mixer offered to *create virtual audio* when the real
+/// problem was one layer down.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioError {
+    /// `pactl` (or another required tool) is not installed. Carries the
+    /// full user-facing message including the package to install.
+    NotInstalled(String),
+    /// The tool is installed but the sound server does not answer: the
+    /// pipewire-pulse (or PulseAudio) service is down or missing.
+    ServerUnreachable(String),
+    /// The tool ran and rejected the request.
+    Failed(String),
+}
+
+impl fmt::Display for AudioError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AudioError::NotInstalled(m) | AudioError::Failed(m) => f.write_str(m),
+            AudioError::ServerUnreachable(detail) => write!(
+                f,
+                "The audio server is not reachable ({detail}). Make sure pipewire-pulse is \
+                 installed and running (systemctl --user enable --now pipewire-pulse)."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AudioError {}
+
+impl From<AudioError> for String {
+    fn from(e: AudioError) -> String {
+        e.to_string()
+    }
+}
+
+impl From<ToolError> for AudioError {
+    fn from(e: ToolError) -> Self {
+        match &e {
+            ToolError::ToolMissing { .. } => AudioError::NotInstalled(e.to_string()),
+            _ if e.is_server_unreachable() => AudioError::ServerUnreachable(e.to_string()),
+            _ => AudioError::Failed(e.to_string()),
+        }
+    }
+}
+
+/// Run `pactl` (locale pinned, 5 s timeout) and classify any failure.
+pub fn pactl(args: &[&str]) -> Result<String, AudioError> {
+    run_tool("pactl", args).map_err(AudioError::from)
+}
+
+/// `Ok(())` when the sound server answers `pactl info`; otherwise why not.
+/// Cheap enough to call from a poll, and the right thing to consult before
+/// telling the user the channel list is "empty".
+pub fn audio_server_status() -> Result<(), AudioError> {
+    pactl(&["info"]).map(|_| ())
+}
+
+/// Create one PipeWire link. "Already linked" is success: `pw-link` reports
+/// it as an error (`File exists`) but the requested state holds.
+pub fn link_ports(output_port: &str, input_port: &str) -> Result<(), ToolError> {
+    match run_tool("pw-link", &[output_port, input_port]) {
+        Ok(_) => Ok(()),
+        Err(ToolError::Failed { stderr, .. }) if stderr.contains("File exists") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
 
 const ROUTING_BLACKLIST: &[&str] = &[
     "plasmashell", "kwin_wayland", "kwin_x11", "swaync", "sway",
@@ -222,77 +293,89 @@ pub fn get_audio_devices() -> Result<Vec<AudioDevice>, String> {
 
 pub fn set_channel_device(channel: String, device_name: String) -> Result<(), String> {
     if channel == "Mic" {
-        let current = run_cmd_sync("pactl", &["get-default-source"])
-            
-            .unwrap_or_default();
+        let current = pactl(&["get-default-source"]).unwrap_or_default();
         if current.trim() != device_name {
-            run_cmd_sync("pactl", &["set-default-source", &device_name])?;
-            eprintln!("set_channel_device: Mic source → {device_name}");
+            pactl(&["set-default-source", &device_name])?;
+            log::info!("set_channel_device: Mic source → {device_name}");
         }
         return Ok(());
     }
     if channel == "Master" {
-        let current = run_cmd_sync("pactl", &["get-default-sink"])
-            
-            .unwrap_or_default();
+        let current = pactl(&["get-default-sink"]).unwrap_or_default();
         if current.trim() != device_name {
-            run_cmd_sync("pactl", &["set-default-sink", &device_name])?;
-            eprintln!("set_channel_device: Master sink → {device_name}");
+            pactl(&["set-default-sink", &device_name])?;
+            log::info!("set_channel_device: Master sink → {device_name}");
         }
         return Ok(());
+    }
+
+    // Routing a channel IS pw-link. Without it nothing below can work, and
+    // reporting success would show the device as selected while the audio
+    // keeps going to the old one (the Fedora "pipewire-utils absent" case).
+    if !is_available("pw-link") {
+        let e = ToolError::ToolMissing { tool: "pw-link".into() };
+        log::error!("set_channel_device({channel}): {e}");
+        return Err(e.to_string());
     }
 
     let sink = format!("OpenGG_{channel}");
 
     // ★ Idempotent: only modify links that are actually different.
     //   Query current links, unlink from wrong devices, link to target if missing.
+    let mut failures: Vec<String> = Vec::new();
     for p in ["FL", "FR"] {
         let current = get_linked_device_for_monitor(&sink, p);
         if current == device_name {
             // Already linked to the target device — nothing to do.
             continue;
         }
-        // Unlink from the current wrong device if any.
+        // Unlink from the current wrong device if any. A failure here only
+        // risks doubled audio, and the link below reports the real problem.
         if !current.is_empty() {
-            let _ = run_cmd_sync(
+            if let Err(e) = run_tool(
                 "pw-link",
                 &[
                     "-d",
                     &format!("{sink}:monitor_{p}"),
                     &format!("{current}:playback_{p}"),
                 ],
-            )
-            ;
+            ) {
+                log::warn!("set_channel_device: unlink {sink}:monitor_{p} from {current}: {e}");
+            }
         }
         // Create the new link.
-        match run_cmd_sync(
-            "pw-link",
-            &[
-                &format!("{sink}:monitor_{p}"),
-                &format!("{device_name}:playback_{p}"),
-            ],
-        )
-        
-        {
-            Ok(_) => {
-                eprintln!(
-                    "set_channel_device: linked {sink}:monitor_{p} → {device_name}:playback_{p}"
-                );
-            }
-            Err(err) => {
-                eprintln!("set_channel_device: pw-link failed: {err}");
+        match link_ports(
+            &format!("{sink}:monitor_{p}"),
+            &format!("{device_name}:playback_{p}"),
+        ) {
+            Ok(()) => log::info!(
+                "set_channel_device: linked {sink}:monitor_{p} → {device_name}:playback_{p}"
+            ),
+            Err(e) => {
+                log::warn!("set_channel_device: {e}");
+                failures.push(format!("{p}: {e}"));
             }
         }
     }
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Could not route {channel} to {device_name}: {}",
+            failures.join("; ")
+        ))
+    }
 }
 // ═══ VU ═══
 
-pub fn check_virtual_audio_status() -> Result<bool, String> {
-    let sinks = run_cmd_sync("pactl", &["list", "sinks", "short"]).unwrap_or_default();
-    let sources = run_cmd_sync("pactl", &["list", "sources", "short"]).unwrap_or_default();
-    let any_present = sinks.contains("OpenGG_") || sources.contains("OpenGG_");
-    Ok(any_present)
+/// Whether any OpenGG virtual sink/source exists. `Err` means the audio
+/// server could not be queried at all — callers must NOT read that as "not
+/// created yet", because offering to create sinks cannot fix a missing
+/// pipewire-pulse.
+pub fn check_virtual_audio_status() -> Result<bool, AudioError> {
+    let sinks = pactl(&["list", "sinks", "short"])?;
+    let sources = pactl(&["list", "sources", "short"])?;
+    Ok(sinks.contains("OpenGG_") || sources.contains("OpenGG_"))
 }
 
 /// Create all OpenGG virtual null sinks (idempotent — skips existing).
@@ -547,13 +630,12 @@ pub fn hydrate_audio_routing() {
         };
 
         if channel == "Mic" {
-            let current = run_cmd_sync("pactl", &["get-default-source"]).unwrap_or_default();
+            let current = pactl(&["get-default-source"]).unwrap_or_default();
             if current.trim() != device {
-                Command::new("pactl")
-                    .args(["set-default-source", &device])
-                    .output()
-                    .ok();
-                eprintln!("hydrate: Mic source → {device}");
+                match pactl(&["set-default-source", &device]) {
+                    Ok(_) => log::info!("hydrate: Mic source → {device}"),
+                    Err(e) => log::warn!("hydrate: could not set Mic source {device}: {e}"),
+                }
             }
         } else if channel == "Master" {
             // Setting default sink is intentionally skipped — it changes the
@@ -572,26 +654,26 @@ pub fn hydrate_audio_routing() {
                     continue;
                 }
                 if !current.is_empty() {
-                    Command::new("pw-link")
-                        .args([
+                    let _ = run_tool(
+                        "pw-link",
+                        &[
                             "-d",
                             &format!("{sink}:monitor_{p}"),
                             &format!("{current}:playback_{p}"),
-                        ])
-                        .output()
-                        .ok();
+                        ],
+                    );
                 }
-                Command::new("pw-link")
-                    .args([
-                        &format!("{sink}:monitor_{p}"),
-                        &format!("{device}:playback_{p}"),
-                    ])
-                    .output()
-                    .ok();
+                if let Err(e) = link_ports(
+                    &format!("{sink}:monitor_{p}"),
+                    &format!("{device}:playback_{p}"),
+                ) {
+                    log::warn!("hydrate: {channel} → {device} ({p}): {e}");
+                    continue;
+                }
                 changed = true;
             }
             if changed {
-                eprintln!("hydrate: {channel} → {device}");
+                log::info!("hydrate: {channel} → {device}");
             }
         }
     }
@@ -610,19 +692,17 @@ pub fn hydrate_audio_routing() {
         if let Some(saved) = volumes.and_then(|m| m.get(channel)).and_then(|x| x.as_u64()) {
             let saved = saved.min(150) as u32;
             if current_sink_volume_pct(&sink).map(|c| c != saved).unwrap_or(true) {
-                Command::new("pactl")
-                    .args(["set-sink-volume", &sink, &format!("{saved}%")])
-                    .output()
-                    .ok();
-                eprintln!("hydrate: {channel} volume → {saved}%");
+                match pactl(&["set-sink-volume", &sink, &format!("{saved}%")]) {
+                    Ok(_) => log::info!("hydrate: {channel} volume → {saved}%"),
+                    Err(e) => log::warn!("hydrate: {channel} volume: {e}"),
+                }
             }
         }
         if let Some(saved) = mutes.and_then(|m| m.get(channel)).and_then(|x| x.as_bool()) {
             if current_sink_muted(&sink).map(|c| c != saved).unwrap_or(true) {
-                Command::new("pactl")
-                    .args(["set-sink-mute", &sink, if saved { "1" } else { "0" }])
-                    .output()
-                    .ok();
+                if let Err(e) = pactl(&["set-sink-mute", &sink, if saved { "1" } else { "0" }]) {
+                    log::warn!("hydrate: {channel} mute: {e}");
+                }
             }
         }
     }
@@ -631,24 +711,46 @@ pub fn hydrate_audio_routing() {
 /// Live volume percentage of a sink via `pactl get-sink-volume` (first channel's `%`).
 
 pub fn list_audio_sinks() -> Result<Vec<String>, String> {
-    let output = std::process::Command::new("pactl")
-        .args(["list", "sinks", "short"])
-        .output()
-        .map_err(|e| format!("pactl not found: {e}"))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let sinks: Vec<String> = text
-        .lines()
-        .filter_map(|line| {
-            // Format: "<id>\t<name>\t<driver>\t<sample_spec>\t<state>"
-            line.split('\t').nth(1).map(|s| s.trim().to_string())
-        })
-        .filter(|s| !s.is_empty())
-        .collect();
+    // A pactl failure is reported as itself (not installed / server down),
+    // never as "no sinks": the fix for the two is entirely different.
+    let text = pactl(&["list", "sinks", "short"])?;
+    let sinks = parse_short_names(&text);
     if sinks.is_empty() {
-        Err("No audio sinks found via pactl".into())
+        Err("No audio sinks found: the audio server is running but reports no output devices".into())
     } else {
         Ok(sinks)
     }
+}
+
+/// Names from `pactl list {sinks,sources} short`.
+/// Format: "<id>\t<name>\t<driver>\t<sample_spec>\t<state>"
+fn parse_short_names(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| line.split('\t').nth(1).map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// `(Name, Description)` for every block of `pactl list sinks|sources`.
+///
+/// Matches the top-level `Name:` / `Description:` labels, which pactl
+/// translates — the runner pins `LC_ALL=C` so they are always English here.
+/// (Properties use the lowercase `device.description` form, which this
+/// deliberately does not match.)
+fn parse_name_description(text: &str) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut cur_name: Option<String> = None;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("Name: ") {
+            cur_name = Some(rest.trim().to_string());
+        } else if let Some(rest) = t.strip_prefix("Description: ") {
+            if let Some(n) = cur_name.take() {
+                pairs.push((n, rest.trim().to_string()));
+            }
+        }
+    }
+    pairs
 }
 
 /// Real playback devices for a channel's output-device selector, as
@@ -667,32 +769,14 @@ pub fn list_audio_sinks() -> Result<Vec<String>, String> {
 /// was never a real target. This is a new function rather than a change to
 /// `list_audio_sinks` so GSR's existing behavior is untouched.
 pub fn list_audio_sinks_friendly() -> Result<Vec<CaptureSource>, String> {
-    let output = std::process::Command::new("pactl")
-        .args(["list", "sinks"])
-        .output()
-        .map_err(|e| format!("pactl not found: {e}"))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-
-    let mut pairs: Vec<(String, String)> = Vec::new();
-    let mut cur_name: Option<String> = None;
-    for line in text.lines() {
-        let t = line.trim();
-        if let Some(rest) = t.strip_prefix("Name: ") {
-            cur_name = Some(rest.trim().to_string());
-        } else if let Some(rest) = t.strip_prefix("Description: ") {
-            if let Some(n) = cur_name.take() {
-                pairs.push((n, rest.trim().to_string()));
-            }
-        }
-    }
-
-    let out: Vec<CaptureSource> = pairs
+    let text = pactl(&["list", "sinks"])?;
+    let out: Vec<CaptureSource> = parse_name_description(&text)
         .into_iter()
         .filter(|(name, _)| !name.starts_with("OpenGG_"))
         .map(|(value, label)| CaptureSource { value, label })
         .collect();
     if out.is_empty() {
-        Err("No audio sinks found via pactl".into())
+        Err("No output devices found: the audio server is running but reports no hardware sinks".into())
     } else {
         Ok(out)
     }
@@ -776,28 +860,11 @@ pub fn list_mic_input_sources() -> Result<Vec<CaptureSource>, String> {
 type CategorizedSources = (Vec<CaptureSource>, Vec<CaptureSource>, Vec<CaptureSource>);
 
 fn list_sources_categorized() -> Result<CategorizedSources, String> {
-    let output = std::process::Command::new("pactl")
-        .args(["list", "sources"])
-        .output()
-        .map_err(|e| format!("pactl not found: {e}"))?;
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = pactl(&["list", "sources"])?;
+    Ok(categorize_sources(parse_name_description(&text)))
+}
 
-    // Collect (node.name, friendly description) for every source. In `pactl list sources`,
-    // each block has a top-level "Name:" then "Description:" line (properties use the
-    // lowercase "device.description" form, which we deliberately don't match).
-    let mut pairs: Vec<(String, String)> = Vec::new();
-    let mut cur_name: Option<String> = None;
-    for line in text.lines() {
-        let t = line.trim();
-        if let Some(rest) = t.strip_prefix("Name: ") {
-            cur_name = Some(rest.trim().to_string());
-        } else if let Some(rest) = t.strip_prefix("Description: ") {
-            if let Some(n) = cur_name.take() {
-                pairs.push((n, rest.trim().to_string()));
-            }
-        }
-    }
-
+fn categorize_sources(pairs: Vec<(String, String)>) -> CategorizedSources {
     let (mut og, mut inputs, mut monitors) = (Vec::new(), Vec::new(), Vec::new());
     for (name, desc) in pairs {
         let lower = name.to_lowercase();
@@ -820,7 +887,7 @@ fn list_sources_categorized() -> Result<CategorizedSources, String> {
         }
     }
 
-    Ok((og, inputs, monitors))
+    (og, inputs, monitors)
 }
 
 pub fn get_session_type() -> String {
@@ -909,30 +976,21 @@ pub fn sink_prop_value(value: &str) -> String {
 /// Returns a map of pactl sink-input index → StreamInfo.
 /// Uses pw-dump for fast enumeration when available, falls back to pactl on any parse error.
 fn get_streams_from_pw_dump() -> Result<HashMap<u32, StreamInfo>, String> {
-    use crate::subprocess;
-
     // First, try pw-dump if available
-    if !subprocess::is_available("pw-dump") {
-        eprintln!("pw-dump not available, using pactl fallback");
+    if !is_available("pw-dump") {
+        log::debug!("pw-dump not available, using pactl fallback");
         return Err("pw-dump unavailable".into());
     }
 
-    match subprocess::run("pw-dump", &[]) {
-        Ok(output) => {
-            let dump_str = String::from_utf8_lossy(&output.stdout);
-            match parse_pw_dump_streams(&dump_str) {
-                Ok(map) => {
-                    eprintln!("pw-dump: enumerated {} streams", map.len());
-                    return Ok(map);
-                }
-                Err(e) => {
-                    eprintln!("pw-dump parse failed: {}, falling back to pactl", e);
-                }
+    match run_tool("pw-dump", &[]) {
+        Ok(dump_str) => match parse_pw_dump_streams(&dump_str) {
+            Ok(map) => {
+                log::debug!("pw-dump: enumerated {} streams", map.len());
+                return Ok(map);
             }
-        }
-        Err(e) => {
-            eprintln!("pw-dump execution failed: {}, falling back to pactl", e);
-        }
+            Err(e) => log::warn!("pw-dump parse failed: {e}, falling back to pactl"),
+        },
+        Err(e) => log::warn!("pw-dump: {e}; falling back to pactl"),
     }
 
     // Fallback: use pactl
@@ -1537,32 +1595,26 @@ fn resolve_pactl_si_index(app_id: u32) -> Option<u32> {
 /// settling time + default-sink loopback links if not), so a freshly
 /// created channel is immediately audible.
 fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
-    if let Ok(o) = Command::new("pactl").args(["list", "sinks", "short"]).output() {
-        if String::from_utf8_lossy(&o.stdout).contains(name) {
-            return Ok(());
-        }
+    // Propagate a pactl failure: loading a module into a server that is not
+    // there would only produce a second, less useful error.
+    if pactl(&["list", "sinks", "short"])?.contains(name) {
+        return Ok(());
     }
     let display_name = live_display_name(ch);
-    let c = Command::new("pactl")
-        .args([
-            "load-module",
-            "module-null-sink",
-            &format!("sink_name={name}"),
-            &format!(
-                "sink_properties=node.description={} node.nick={} device.description={} media.name={}",
-                sink_prop_value(&display_name),
-                sink_prop_value(&display_name),
-                sink_prop_value(&display_name),
-                sink_prop_value(&display_name),
-            ),
-            "channels=2",
-            "channel_map=front-left,front-right",
-        ])
-        .output()
-        .map_err(|e| format!("{e}"))?;
-    if !c.status.success() {
-        return Err(String::from_utf8_lossy(&c.stderr).to_string());
-    }
+    pactl(&[
+        "load-module",
+        "module-null-sink",
+        &format!("sink_name={name}"),
+        &format!(
+            "sink_properties=node.description={} node.nick={} device.description={} media.name={}",
+            sink_prop_value(&display_name),
+            sink_prop_value(&display_name),
+            sink_prop_value(&display_name),
+            sink_prop_value(&display_name),
+        ),
+        "channels=2",
+        "channel_map=front-left,front-right",
+    ])?;
     std::thread::sleep(Duration::from_millis(600));
 
     if let Ok(def) = run_cmd_sync("pactl", &["get-default-sink"]) {
@@ -1570,9 +1622,9 @@ fn ensure_sink_exists(name: &str, ch: &str) -> Result<(), String> {
             if !get_linked_device_for_monitor(name, p).is_empty() {
                 continue; // already linked to something — skip to avoid duplicates
             }
-            let _ = Command::new("pw-link")
-                .args([&format!("{name}:monitor_{p}"), &format!("{def}:playback_{p}")])
-                .output();
+            if let Err(e) = link_ports(&format!("{name}:monitor_{p}"), &format!("{def}:playback_{p}")) {
+                log::warn!("ensure_sink_exists: could not link {name}:monitor_{p} to {def}: {e}");
+            }
         }
     }
     log::info!("ensure_sink_exists: sink '{name}' ready");
@@ -1782,6 +1834,111 @@ pub fn unroute_app(app_id: u32, binary: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `LC_ALL=C pactl list sinks` (trimmed to the lines the parser sees,
+    /// plus the noise around them), captured from PipeWire 1.6 / pipewire-pulse.
+    const PACTL_LIST_SINKS_C: &str = "Sink #50
+\tState: RUNNING
+\tName: alsa_output.usb-Generic_MZ-630_USB_Speaker_Bar_20170726905923-00.analog-stereo
+\tDescription: MZ-630 USB Speaker Bar Analog Stereo
+\tDriver: PipeWire
+\tMonitor Source: alsa_output.usb-Generic_MZ-630_USB_Speaker_Bar_20170726905923-00.analog-stereo.monitor
+\tProperties:
+\t\tdevice.description = \"MZ-630 USB Speaker Bar\"
+\t\tnode.name = \"alsa_output.usb-Generic_MZ-630_USB_Speaker_Bar_20170726905923-00.analog-stereo\"
+Sink #61
+\tState: IDLE
+\tName: OpenGG_Game
+\tDescription: Game
+\tDriver: PipeWire
+\tProperties:
+\t\tdevice.description = \"Game\"
+";
+
+    const PACTL_LIST_SOURCES_C: &str = "Source #51
+\tName: alsa_output.usb-Generic_MZ-630.analog-stereo.monitor
+\tDescription: Monitor of MZ-630 USB Speaker Bar Analog Stereo
+Source #52
+\tName: alsa_input.usb-Blue_Yeti-00.analog-stereo
+\tDescription: Yeti Stereo Microphone Analog Stereo
+Source #62
+\tName: OpenGG_Game.monitor
+\tDescription: Monitor of Game
+Source #63
+\tName: OpenGG_Virtual_Mic
+\tDescription: OpenGG Virtual Mic
+Source #70
+\tName: gsr-default_output
+\tDescription: gsr
+";
+
+    #[test]
+    fn sinks_parse_from_a_c_locale_pactl_listing() {
+        let pairs = parse_name_description(PACTL_LIST_SINKS_C);
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].1, "MZ-630 USB Speaker Bar Analog Stereo");
+        assert_eq!(pairs[1], ("OpenGG_Game".to_string(), "Game".to_string()));
+    }
+
+    /// The reason the runner pins LC_ALL=C: a translated pactl labels these
+    /// lines differently and the parser silently finds nothing. This pins the
+    /// behaviour so nobody mistakes the fixture for locale-proof.
+    #[test]
+    fn a_translated_listing_yields_nothing_which_is_why_the_locale_is_pinned() {
+        let german = PACTL_LIST_SINKS_C.replace("Description:", "Beschreibung:");
+        assert!(parse_name_description(&german).is_empty());
+    }
+
+    #[test]
+    fn short_listing_names_are_column_two() {
+        let short = "50\talsa_output.pci-0000_00_1f.3.analog-stereo\tPipeWire\ts32le 2ch 48000Hz\tSUSPENDED\n\
+                     61\tOpenGG_Game\tPipeWire\ts16le 2ch 48000Hz\tIDLE\n";
+        assert_eq!(
+            parse_short_names(short),
+            vec!["alsa_output.pci-0000_00_1f.3.analog-stereo", "OpenGG_Game"]
+        );
+        assert!(parse_short_names("").is_empty());
+    }
+
+    #[test]
+    fn sources_are_categorised_and_internal_helpers_dropped() {
+        let (og, inputs, monitors) =
+            categorize_sources(parse_name_description(PACTL_LIST_SOURCES_C));
+        assert_eq!(og.len(), 1);
+        assert_eq!(og[0].value, "OpenGG_Game.monitor");
+        assert_eq!(og[0].label, "Game");
+        assert_eq!(inputs.len(), 1, "only the real microphone is an input");
+        assert_eq!(inputs[0].label, "Yeti Stereo Microphone Analog Stereo");
+        assert_eq!(monitors.len(), 1);
+        assert!(monitors[0].label.ends_with("(Monitor)"));
+    }
+
+    #[test]
+    fn tool_errors_map_to_actionable_audio_errors() {
+        let missing = AudioError::from(ToolError::ToolMissing { tool: "pactl".into() });
+        assert!(matches!(missing, AudioError::NotInstalled(ref m) if m.contains("pactl")));
+
+        let down = AudioError::from(ToolError::Failed {
+            tool: "pactl".into(),
+            status: Some(1),
+            stderr: "Connection failure: Connection refused".into(),
+        });
+        assert!(matches!(down, AudioError::ServerUnreachable(_)));
+        assert!(down.to_string().contains("pipewire-pulse"));
+
+        let other = AudioError::from(ToolError::Failed {
+            tool: "pactl".into(),
+            status: Some(1),
+            stderr: "No such entity".into(),
+        });
+        assert!(matches!(other, AudioError::Failed(_)));
+
+        let hung = AudioError::from(ToolError::TimedOut {
+            tool: "pactl".into(),
+            after: Duration::from_secs(5),
+        });
+        assert!(matches!(hung, AudioError::ServerUnreachable(_)));
+    }
 
     #[test]
     fn json_u32_accepts_a_real_number() {
