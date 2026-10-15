@@ -46,6 +46,9 @@ sed -i "s/\"version\":\s*\"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$ROOT/exten
 
 # ── AUR packaging ──
 sed -i "s/^pkgver=.*/pkgver=$NEW_VERSION/" "$ROOT/packaging/aur/PKGBUILD"
+# A new pkgver starts again at pkgrel 1 (pkgrel only counts repackagings of
+# the same upstream version).
+sed -i "s/^pkgrel=.*/pkgrel=1/" "$ROOT/packaging/aur/PKGBUILD"
 if command -v makepkg >/dev/null 2>&1; then
   (cd "$ROOT/packaging/aur" && makepkg --printsrcinfo > .SRCINFO)
 else

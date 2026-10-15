@@ -1,7 +1,7 @@
 # Maintainer: UPdullah895 <abdullahbomozh@gmail.com>
 pkgname=opengg-bin
 pkgver=0.2.3
-pkgrel=1
+pkgrel=2
 pkgdesc="Open-source Linux gaming hub — OpenGG"
 arch=('x86_64')
 url="https://github.com/UPdullah895/opengg"
@@ -9,13 +9,20 @@ license=('MIT')
 # pipewire-pulse: the daemon and mixer drive PipeWire through `pactl`, which
 # needs a PulseAudio-protocol server. libpulse alone (pulled in by ffmpeg)
 # installs pactl but nothing for it to talk to, and every OpenGG_* sink fails.
+# Versioned Qt/glibc: the binary is built against archlinux:latest's Qt and
+# will not load on an older one ("version `Qt_6.12' not found"). Unversioned,
+# pacman installed it on systems still on Qt 6.11, where it failed at launch.
+# scripts/check-pkgbuild-floors.sh fails the release build if these fall behind.
 depends=('pipewire' 'pipewire-pulse' 'wireplumber' 'ffmpeg' 'gstreamer' 'gst-plugins-base' 'gst-plugins-good'
-         'gst-plugins-bad' 'gst-plugin-qml6' 'qt6-base' 'qt6-declarative' 'qt6-multimedia'
-         'qt6-shadertools')
+         'gst-plugins-bad' 'gst-plugin-qml6' 'glibc>=2.43'
+         'qt6-base>=6.12' 'qt6-declarative>=6.12' 'qt6-multimedia>=6.12' 'qt6-shadertools>=6.12')
 optdepends=('polkit: for privileged device setup')
 provides=('opengg')
 conflicts=('opengg')
 install=opengg.install
+# Prebuilt binaries: makepkg's default `debug` option would emit an empty
+# opengg-bin-debug package next to it.
+options=('!debug')
 source=("${url}/releases/download/v${pkgver}/opengg-v${pkgver}-linux-x86_64.tar.gz"
         "opengg.png::${url}/raw/refs/tags/v${pkgver}/packaging/icons/256x256.png"
         "opengg.desktop::${url}/raw/refs/tags/v${pkgver}/packaging/opengg.desktop")

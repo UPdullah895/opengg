@@ -16,6 +16,8 @@ on:
       - 'packaging/*.service'
       - 'packaging/*.rules'
       - 'qt-shell/build.rs'
+      - 'packaging/aur/PKGBUILD'
+      - 'scripts/check-pkgbuild-floors.sh'
 
 # Releases are created exactly once, by the final `publish` job, after every
 # build job has uploaded its artifact (avoids concurrent release-creation races).
@@ -57,6 +59,12 @@ jobs:
 
       - name: Build Qt6/QML frontend (release)
         run: cd qt-shell && cargo build --release
+
+      # Before packaging: refuse to ship a binary that needs a newer Qt/glibc
+      # than the AUR PKGBUILD declares (v0.2.3 did, and failed to launch on
+      # systems still on Qt 6.11).
+      - name: Check PKGBUILD version floors
+        run: scripts/check-pkgbuild-floors.sh packaging/aur/PKGBUILD qt-shell/target/release/opengg-qt daemon/target/release/openggd
 
       - name: Package release tarball
         run: |
