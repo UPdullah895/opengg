@@ -6,6 +6,10 @@ use zbus::{proxy, zvariant, Connection};
 use super::identity_overrides::IdentityOverrides;
 use super::types::{DeviceInfo, DeviceType};
 
+/// Until when `list_raw_devices` skips probing ratbagd after a failed attempt.
+static RATBAG_DOWN_UNTIL: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+
 // ── D-Bus proxy definitions ──────────────────────────────────────────────────
 
 #[proxy(
@@ -737,6 +741,14 @@ impl RatbagManager {
     }
 
     async fn list_raw_devices(&self) -> Vec<RawRatbagDevice> {
+        // After a failed probe, do not repeat the 3x500 ms retry (and its log
+        // line) on every GetDevices poll: that made the Devices page take 1.5 s
+        // per refresh on machines without ratbagd. Re-probe every 30 s.
+        if let Some(until) = *RATBAG_DOWN_UNTIL.lock().unwrap_or_else(|p| p.into_inner()) {
+            if std::time::Instant::now() < until {
+                return vec![];
+            }
+        }
         let manager = {
             let mut last_err = None;
             let mut result = None;
@@ -752,11 +764,24 @@ impl RatbagManager {
             match result {
                 Some(m) => m,
                 None => {
-                    tracing::warn!("ratbagd not available after 3 attempts: {}", last_err.unwrap());
+                    let why = last_err.map(|e| e.to_string()).unwrap_or_default();
+                    if crate::statelog::changed("ratbagd", &why) {
+                        tracing::warn!(
+                            "ratbagd not available after 3 attempts: {why} \
+                             (mouse configuration needs the ratbagd/libratbag service; \
+                             re-checking every 30 s)"
+                        );
+                    }
+                    *RATBAG_DOWN_UNTIL.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(30));
                     return vec![];
                 }
             }
         };
+        if crate::statelog::changed("ratbagd", "ok") {
+            tracing::info!("ratbagd reachable");
+        }
+        *RATBAG_DOWN_UNTIL.lock().unwrap_or_else(|p| p.into_inner()) = None;
 
         let paths = match manager.devices().await {
             Ok(p) => p,

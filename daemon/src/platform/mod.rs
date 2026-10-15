@@ -11,6 +11,10 @@
 //! NOTE: The existing D-Bus handlers and call sites remain unchanged. This is purely
 //! additive scaffolding; the facades continue to be used directly by the daemon.
 
+// Newer clippy flags the `#[must_use]` that `#[async_trait]` itself generates on
+// every trait method; there is no source-level attribute to remove.
+#![allow(clippy::double_must_use)]
+
 use anyhow::Result;
 use async_trait::async_trait;
 

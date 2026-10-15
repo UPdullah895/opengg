@@ -1,6 +1,7 @@
 //! D-Bus IPC layer
 
 pub mod audio_iface;
+pub mod core_iface;
 pub mod extensions_iface;
 
 use anyhow::{Context, Result};
@@ -23,6 +24,11 @@ pub async fn serve(
         .context("Failed to connect to session D-Bus")?
         .name("org.opengg.Daemon")
         .context("Failed to acquire bus name")?;
+
+    builder = builder
+        .serve_at("/org/opengg/Daemon", core_iface::CoreInterface)
+        .context("Failed to register Core interface")?;
+    tracing::info!("D-Bus: /org/opengg/Daemon");
 
     if let Some(hub) = audio {
         let iface = audio_iface::AudioInterface::new(hub);

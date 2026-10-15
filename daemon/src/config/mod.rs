@@ -6,10 +6,10 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Top-level daemon configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub modules: ModuleConfig,
@@ -168,7 +168,13 @@ fn default_openrgb_port() -> u16 { 6742 }
 
 fn default_clips_dir() -> PathBuf {
     dirs::video_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap().join("Videos"))
+        // No HOME at all (minimal service environments): fall back to the temp
+        // dir rather than panicking inside a serde default.
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("Videos")
+        })
         .join("OpenGG")
 }
 
@@ -183,42 +189,194 @@ fn default_screenshot_key() -> String { "Alt+F12".into() }
 
 /// Get the config file path.
 pub fn config_path() -> PathBuf {
+    // `dirs::config_dir()` is None only with neither XDG_CONFIG_HOME nor a
+    // resolvable home. The old literal "~/.config" fallback created a directory
+    // actually named "~" in the working directory; use the temp dir instead.
     dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
+        .unwrap_or_else(|| std::env::temp_dir().join("opengg-config"))
         .join("opengg/daemon.toml")
 }
 
-/// Load config from disk, creating defaults if the file doesn't exist.
-pub fn load() -> Result<Config> {
-    let path = config_path();
+/// What `load` did, so the caller can log it (and diagnostics can report it).
+pub struct Loaded {
+    pub config: Config,
+    /// Set when the on-disk file could not be used and defaults were taken
+    /// instead. Human-readable, includes the path and the parse error.
+    pub problem: Option<String>,
+}
 
-    if path.exists() {
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read config at {}", path.display()))?;
-        let config: Config =
-            toml::from_str(&content).context("Failed to parse config TOML")?;
-        Ok(config)
-    } else {
-        let config = Config {
-            modules: ModuleConfig::default(),
-            audio: AudioConfig::default(),
-            device: DeviceConfig::default(),
-            replay: ReplayConfig::default(),
-        };
-        save(&config)?;
-        Ok(config)
+/// Parse a config file's text. Separate from I/O so the error text is testable.
+fn parse(content: &str) -> std::result::Result<Config, toml::de::Error> {
+    toml::from_str(content)
+}
+
+/// Load config from disk, creating defaults if the file doesn't exist.
+///
+/// Never fails the daemon: a hand-edited or truncated `daemon.toml` used to
+/// abort startup, and with `Restart=on-failure` that became an endless crash
+/// loop the app could only see as "daemon not installed". Now a file that does
+/// not parse is moved aside as `daemon.toml.bad-<unix-ts>` (so the user's edits
+/// are not lost), an ERROR naming the parse error is logged, and the daemon
+/// continues on defaults.
+pub fn load() -> Loaded {
+    load_from(&config_path())
+}
+
+fn load_from(path: &Path) -> Loaded {
+    if !path.exists() {
+        let config = Config::default();
+        if let Err(e) = save_to(path, &config) {
+            tracing::warn!("Could not write default config: {e:#}");
+        }
+        return Loaded { config, problem: None };
+    }
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            // Unreadable (permissions, I/O error): do not touch the file.
+            let problem = format!(
+                "cannot read {}: {e} - running on built-in defaults",
+                path.display()
+            );
+            tracing::error!("{problem}");
+            return Loaded { config: Config::default(), problem: Some(problem) };
+        }
+    };
+
+    match parse(&content) {
+        Ok(config) => Loaded { config, problem: None },
+        Err(e) => {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let mut bad = path.as_os_str().to_owned();
+            bad.push(format!(".bad-{ts}"));
+            let bad = PathBuf::from(bad);
+            let moved = match std::fs::rename(path, &bad) {
+                Ok(()) => format!("kept as {}", bad.display()),
+                Err(re) => format!("could not be moved aside ({re})"),
+            };
+            let problem = format!(
+                "{} is not valid TOML: {} - using built-in defaults; the bad file was {moved}",
+                path.display(),
+                e.to_string().trim()
+            );
+            tracing::error!("{problem}");
+            let config = Config::default();
+            if let Err(we) = save_to(path, &config) {
+                tracing::warn!("Could not rewrite default config: {we:#}");
+            }
+            Loaded { config, problem: Some(problem) }
+        }
     }
 }
 
-/// Save config to disk.
-pub fn save(config: &Config) -> Result<()> {
+/// Read the config without any side effect (no quarantine, no default file).
+/// For `--diagnose`, which must be safe to run next to a live daemon.
+pub fn peek() -> std::result::Result<Config, String> {
     let path = config_path();
+    if !path.exists() {
+        return Ok(Config::default());
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    parse(&content).map_err(|e| format!("{}: {}", path.display(), e.to_string().trim()))
+}
+
+/// Save config to disk.
+#[allow(dead_code)]
+pub fn save(config: &Config) -> Result<()> {
+    save_to(&config_path(), config)
+}
+
+/// Write atomically: serialize to a sibling temp file, fsync, rename over the
+/// target. A crash or full disk mid-write can then never leave a truncated
+/// `daemon.toml` behind (which is exactly what used to produce the corrupt file
+/// that crash-looped the daemon).
+fn save_to(path: &Path, config: &Config) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
     let content = toml::to_string_pretty(config).context("Failed to serialize config")?;
-    std::fs::write(&path, content)
-        .with_context(|| format!("Failed to write config to {}", path.display()))?;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)
+            .with_context(|| format!("Failed to create {}", tmp.display()))?;
+        f.write_all(content.as_bytes())
+            .with_context(|| format!("Failed to write {}", tmp.display()))?;
+        f.sync_all().ok();
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::anyhow!("Failed to move {} into place at {}: {e}", tmp.display(), path.display())
+    })?;
     tracing::info!("Config saved to {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("openggd-cfg-{name}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn missing_file_writes_defaults_atomically() {
+        let dir = scratch("missing");
+        let path = dir.join("daemon.toml");
+        let loaded = load_from(&path);
+        assert!(loaded.problem.is_none());
+        assert!(path.exists());
+        assert!(!dir.join("daemon.toml.tmp").exists(), "temp file must be renamed away");
+        // And what was written round-trips.
+        assert!(parse(&std::fs::read_to_string(&path).unwrap()).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_file_is_quarantined_and_defaults_used() {
+        let dir = scratch("corrupt");
+        let path = dir.join("daemon.toml");
+        std::fs::write(&path, "[modules\naudio_enabled = tru").unwrap();
+        let loaded = load_from(&path);
+        let problem = loaded.problem.expect("a parse failure must be reported");
+        assert!(problem.contains("daemon.toml") && problem.contains("not valid TOML"), "{problem}");
+        assert!(loaded.config.modules.audio_enabled);
+        let bad: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".bad-"))
+            .collect();
+        assert_eq!(bad.len(), 1, "the user's file must be kept");
+        assert!(std::fs::read_to_string(bad[0].path()).unwrap().contains("tru"));
+        // A fresh, valid default file replaced it.
+        assert!(parse(&std::fs::read_to_string(&path).unwrap()).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn valid_partial_file_loads_without_problem() {
+        let dir = scratch("partial");
+        let path = dir.join("daemon.toml");
+        std::fs::write(&path, "[modules]\naudio_enabled = false\n").unwrap();
+        let loaded = load_from(&path);
+        assert!(loaded.problem.is_none());
+        assert!(!loaded.config.modules.audio_enabled);
+        assert!(loaded.config.modules.device_enabled);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

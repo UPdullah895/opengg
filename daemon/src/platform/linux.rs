@@ -31,17 +31,17 @@ impl AudioBackend for AudioHub {
 
     /// port scaffolding — implemented per-OS in Phase 4-5
     async fn set_volume(&self, channel: &str, volume: u32) -> Result<()> {
-        AudioHub::set_volume(self, channel, volume)
+        AudioHub::set_volume(self, channel, volume).await
     }
 
     /// port scaffolding — implemented per-OS in Phase 4-5
     async fn set_mute(&self, channel: &str, muted: bool) -> Result<()> {
-        AudioHub::set_mute(self, channel, muted)
+        AudioHub::set_mute(self, channel, muted).await
     }
 
     /// port scaffolding — implemented per-OS in Phase 4-5
     async fn route_app(&self, stream_id: u32, channel: &str) -> Result<()> {
-        AudioHub::route_app(self, stream_id, channel)
+        AudioHub::route_app(self, stream_id, channel).await
     }
 }
 

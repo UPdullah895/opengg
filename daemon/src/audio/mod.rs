@@ -1,3 +1,4 @@
+mod coalesce;
 mod hub;
 pub mod sinks;
 pub mod routing;

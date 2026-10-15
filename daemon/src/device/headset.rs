@@ -10,7 +10,11 @@ use crate::subprocess;
 use super::types::{DeviceInfo, DeviceType, EqMeta};
 
 /// TTL cache for headsetcontrol output — avoids spawning the CLI on every poll.
-static HEADSET_CACHE: OnceLock<Mutex<(Vec<DeviceInfo>, Instant)>> = OnceLock::new();
+/// Empty results are cached too (`None` = never queried yet): a machine without
+/// a headset, or without `headsetcontrol`, otherwise re-spawned the tool and
+/// re-logged the same failure on every GetDevices poll.
+type HeadsetCache = Mutex<Option<(Vec<DeviceInfo>, Instant)>>;
+static HEADSET_CACHE: OnceLock<HeadsetCache> = OnceLock::new();
 const HEADSET_CACHE_TTL_SECS: u64 = 5;
 
 // headsetcontrol --output json top-level response
@@ -75,22 +79,36 @@ impl HeadsetManager {
     /// List all connected headsets by invoking `headsetcontrol --output json`.
     /// Results are cached for 5 seconds to avoid spawning the CLI on every poll.
     pub fn list_devices() -> Vec<DeviceInfo> {
-        let cache = HEADSET_CACHE.get_or_init(|| Mutex::new((Vec::new(), Instant::now())));
+        let cache = HEADSET_CACHE.get_or_init(|| Mutex::new(None));
         if let Ok(lock) = cache.lock() {
-            if lock.1.elapsed() < Duration::from_secs(HEADSET_CACHE_TTL_SECS) && !lock.0.is_empty() {
-                return lock.0.clone();
+            if let Some((devices, at)) = lock.as_ref() {
+                if at.elapsed() < Duration::from_secs(HEADSET_CACHE_TTL_SECS) {
+                    return devices.clone();
+                }
             }
         }
 
         let devices = Self::list_devices_fresh();
 
         if let Ok(mut lock) = cache.lock() {
-            *lock = (devices.clone(), Instant::now());
+            *lock = Some((devices.clone(), Instant::now()));
         }
         devices
     }
 
     fn list_devices_fresh() -> Vec<DeviceInfo> {
+        // Optional tool: absent is a status, not a per-poll warning. The
+        // availability check is itself cached (re-probed once a minute), so
+        // installing headsetcontrol later is picked up without a restart.
+        if !subprocess::is_available("headsetcontrol") {
+            if crate::statelog::changed("headsetcontrol", "missing") {
+                tracing::info!(
+                    "headsetcontrol not found - headset support off ({})",
+                    subprocess::install_hint("headsetcontrol")
+                );
+            }
+            return vec![];
+        }
         let path_env = std::env::var("PATH")
             .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
 
@@ -101,14 +119,20 @@ impl HeadsetManager {
         {
             Ok(o) => o,
             Err(e) => {
-                tracing::warn!("headsetcontrol spawn failed: {e}");
+                let msg = subprocess::spawn_error("headsetcontrol", &e);
+                if crate::statelog::changed("headsetcontrol", &msg) {
+                    tracing::warn!("{msg}");
+                }
                 return vec![];
             }
         };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!("headsetcontrol exited {:?}: {stderr}", output.status.code());
+            let msg = format!("headsetcontrol exited {:?}: {}", output.status.code(), stderr.trim());
+            if crate::statelog::changed("headsetcontrol", &msg) {
+                tracing::warn!("{msg}");
+            }
             return vec![];
         }
 
@@ -116,10 +140,14 @@ impl HeadsetManager {
         let parsed: HscOutput = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!("headsetcontrol JSON parse error: {e}");
+                let msg = format!("headsetcontrol JSON parse error: {e}");
+                if crate::statelog::changed("headsetcontrol", &msg) {
+                    tracing::warn!("{msg}");
+                }
                 return vec![];
             }
         };
+        crate::statelog::changed("headsetcontrol", "ok");
 
         parsed
             .devices
