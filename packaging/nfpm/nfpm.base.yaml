@@ -37,9 +37,6 @@ contents:
   - src: "@STAGE@/usr/lib/systemd/user/openggd.service"
     dst: /usr/lib/systemd/user/openggd.service
     file_info: { mode: 0644 }
-  - src: "@STAGE@/usr/share/polkit-1/actions/org.opengg.setup.policy"
-    dst: /usr/share/polkit-1/actions/org.opengg.setup.policy
-    file_info: { mode: 0644 }
   - src: "@STAGE@/usr/share/applications/opengg.desktop"
     dst: /usr/share/applications/opengg.desktop
     file_info: { mode: 0644 }

@@ -12,6 +12,8 @@ on:
       - '.github/workflows/release.yml'
       - 'scripts/build-packages.sh'
       - 'scripts/install-build-deps.sh'
+      - 'scripts/smoke-package.sh'
+      - 'scripts/check-versions.sh'
       - 'packaging/nfpm/**'
       - 'packaging/*.service'
       - 'packaging/*.rules'
@@ -25,8 +27,22 @@ permissions:
   contents: read
 
 jobs:
+  # Cheapest check first, so a mistyped tag fails in seconds instead of after
+  # 40 minutes of builds: the tag, the three crates' versions and the AUR
+  # pkgver must agree (the packages are named from the tag, the binary reports
+  # CARGO_PKG_VERSION). On a pull request there is no tag, so it only checks
+  # that the files agree with each other.
+  version-check:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag == Cargo.toml (daemon, core, qt-shell) == PKGBUILD pkgver
+        run: scripts/check-versions.sh "${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}"
+
   build-arch:
     name: Arch tarball
+    needs: version-check
     runs-on: ubuntu-latest
     # Same container CI uses to build the Qt6/QML shell: it needs Qt 6.7+
     # (per-corner radii, etc.) which ubuntu-latest's Qt packages don't have.
@@ -91,9 +107,6 @@ jobs:
           mkdir -p "$ROOT/usr/lib/systemd/user"
           cp packaging/openggd.service "$ROOT/usr/lib/systemd/user/"
 
-          mkdir -p "$ROOT/usr/share/polkit-1/actions"
-          cp packaging/org.opengg.setup.policy "$ROOT/usr/share/polkit-1/actions/"
-
           mkdir -p "$ROOT/usr/share/applications"
           cp packaging/opengg.desktop "$ROOT/usr/share/applications/"
 
@@ -122,6 +135,7 @@ jobs:
   # load on another). Ubuntu 24.04 / Debian 12 (Qt 6.4) are unsupported.
   packages:
     name: ${{ matrix.target }} package
+    needs: version-check
     runs-on: ubuntu-latest
     # The opensuse/tumbleweed image defines no ENV PATH (the others do). The
     # runner builds each step's PATH as <GITHUB_PATH entries>:<base PATH>, so
@@ -195,11 +209,101 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # Install each package the way a user would, in a FRESH container of the same
+  # distro (no -dev packages, no build tools, nothing the build image had), and
+  # launch the shipped binary. Everything above only proves the package builds;
+  # a missing runtime dependency (a qml6-module-* package, pipewire-utils, a Qt
+  # floor above what the distro ships) would otherwise first show up as a user's
+  # window that never opens. See scripts/smoke-package.sh for the checks.
+  smoke-packages:
+    name: ${{ matrix.target }} install + launch
+    needs: packages
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.image }}
+      env:
+        PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    env:
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: debian13,   image: 'debian:trixie',        family: debian }
+          - { target: ubuntu2604, image: 'ubuntu:26.04',         family: debian }
+          - { target: fedora44,   image: 'fedora:44',            family: fedora }
+          - { target: tumbleweed, image: 'opensuse/tumbleweed',  family: suse }
+    steps:
+      # Only what actions/checkout needs; the package's own dependencies must
+      # come from the package itself. (Same bootstrap as the `packages` job,
+      # including the explicit gawk on openSUSE.)
+      - name: Bootstrap (tools for checkout)
+        run: |
+          case "${{ matrix.family }}" in
+            debian) apt-get update && apt-get install -y --no-install-recommends ca-certificates git ;;
+            fedora) dnf install -y git ca-certificates tar gzip ;;
+            suse)   zypper --non-interactive install --no-recommends git gawk ca-certificates tar gzip ;;
+          esac
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-pkg-${{ matrix.target }}
+          path: pkg
+
+      - name: Install the package and launch it
+        run: |
+          set -- pkg/*
+          [ "$#" -eq 1 ] || { echo "expected exactly one package in pkg/, got: $*" >&2; exit 1; }
+          scripts/smoke-package.sh "${{ matrix.family }}" "$1" smoke-out
+
+      - name: Upload launch screenshot and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.target }}
+          path: smoke-out
+          if-no-files-found: warn
+
+  smoke-arch:
+    name: Arch tarball install + launch
+    needs: build-arch
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-arch-tarball
+          path: pkg
+
+      # The dependency list under test is parsed out of packaging/aur/PKGBUILD,
+      # i.e. exactly what `pacman -S opengg-bin` would pull in, on a bare base.
+      # (Not run through makepkg: that refuses root and would only re-test the
+      # tar extraction, which smoke-package.sh already does.)
+      - name: Install PKGBUILD depends, unpack the tarball, launch
+        run: |
+          set -- pkg/*.tar.gz
+          [ "$#" -eq 1 ] || { echo "expected exactly one tarball in pkg/, got: $*" >&2; exit 1; }
+          scripts/smoke-package.sh arch "$1" smoke-out
+
+      - name: Upload launch screenshot and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-arch
+          path: smoke-out
+          if-no-files-found: warn
+
+  # A release cannot ship a package that does not install and start: every
+  # smoke job must pass first.
   publish:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: [build-arch, packages]
+    needs: [version-check, build-arch, packages, smoke-arch, smoke-packages]
     permissions:
       contents: write
     steps:

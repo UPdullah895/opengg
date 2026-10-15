@@ -84,7 +84,6 @@ fi
 install -Dm644 "$ROOT/packaging/99-opengg.rules"            "$STAGE/usr/lib/udev/rules.d/99-opengg.rules"
 install -Dm644 "$ROOT/packaging/org.opengg.Daemon.service"  "$STAGE/usr/share/dbus-1/services/org.opengg.Daemon.service"
 install -Dm644 "$ROOT/packaging/openggd.service"            "$STAGE/usr/lib/systemd/user/openggd.service"
-install -Dm644 "$ROOT/packaging/org.opengg.setup.policy"    "$STAGE/usr/share/polkit-1/actions/org.opengg.setup.policy"
 install -Dm644 "$ROOT/packaging/opengg.desktop"             "$STAGE/usr/share/applications/opengg.desktop"
 # The UI reads its translations from here; without them every string renders
 # as its raw key ("nav.home").

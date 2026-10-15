@@ -383,10 +383,11 @@ run_daemon() {
     cd "$DAEMON_DIR"
 
     # Build in debug mode (faster compilation)
-    cargo build 2>&1 | sed "s/^/$(echo -e "${DAEMON_PREFIX} ")/" &
-    wait $!
-
-    if [ $? -ne 0 ]; then
+    # Run it in the foreground inside `if !`: pipefail then reports cargo's
+    # status. Backgrounding the pipeline and `wait $!` returned sed's status
+    # (the last stage), so a failed build was reported as success and the
+    # stale target/debug/openggd from the previous build was started.
+    if ! cargo build 2>&1 | sed -u "s/^/$(echo -e "${DAEMON_PREFIX} ")/"; then
         loge "Daemon build failed"
         return 1
     fi

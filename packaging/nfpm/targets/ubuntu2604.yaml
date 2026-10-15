@@ -44,5 +44,4 @@ depends:
   # without this has no user bus at all.
   - dbus-user-session
 recommends:
-  - polkitd
   - hicolor-icon-theme

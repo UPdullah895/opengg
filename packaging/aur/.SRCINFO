@@ -20,15 +20,10 @@ pkgbase = opengg-bin
 	depends = qt6-declarative>=6.12
 	depends = qt6-multimedia>=6.12
 	depends = qt6-shadertools>=6.12
-	optdepends = polkit: for privileged device setup
 	provides = opengg
 	conflicts = opengg
 	options = !debug
 	source = https://github.com/UPdullah895/opengg/releases/download/v0.2.3/opengg-v0.2.3-linux-x86_64.tar.gz
-	source = opengg.png::https://github.com/UPdullah895/opengg/raw/refs/tags/v0.2.3/packaging/icons/256x256.png
-	source = opengg.desktop::https://github.com/UPdullah895/opengg/raw/refs/tags/v0.2.3/packaging/opengg.desktop
-	sha256sums = SKIP
-	sha256sums = SKIP
 	sha256sums = SKIP
 
 pkgname = opengg-bin

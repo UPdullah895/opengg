@@ -38,5 +38,3 @@ depends:
   # ffmpeg-free (Fedora) and rpmfusion's ffmpeg both ship the CLI, but only the
   # latter *provides* the name `ffmpeg`, so depend on the file.
   - /usr/bin/ffmpeg
-recommends:
-  - polkit

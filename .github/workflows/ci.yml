@@ -29,6 +29,105 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
+  # opengg-core holds most of the logic (settings, EQ, audio, recorder) and is
+  # not a workspace member of anything, so nothing above ever tested or linted
+  # it directly; it was only compiled as a dependency of qt-shell.
+  rust-core:
+    name: Rust Core
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./core"
+      - name: Check
+        run: cargo check --all-targets
+      - name: Test
+        run: cargo test
+      # core still carries a pre-existing clippy baseline (19 lint errors under
+      # -D warnings; `cargo clippy` without it is clean), so this reports but
+      # does not block yet. Flip continue-on-error off once the baseline is
+      # fixed — daemon and qt-shell are already clippy-clean and gated.
+      - name: Clippy (non-blocking, known baseline)
+        continue-on-error: true
+        run: cargo clippy --all-targets -- -D warnings
+
+  # Everything the other jobs cannot see because they never start the daemon:
+  # the real openggd against a real (headless) PipeWire on a private session
+  # bus. Fresh empty $HOME each time, so it also proves the daemon creates its
+  # own config/data dirs on a new account.
+  daemon-sinks:
+    name: Daemon + PipeWire (sinks appear)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./daemon"
+      - name: Install PipeWire stack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pipewire pipewire-pulse wireplumber pipewire-bin pulseaudio-utils dbus-user-session systemd
+      - name: Build daemon
+        working-directory: ./daemon
+        run: cargo build
+      # `systemd-analyze verify` of the shipped unit (the units it names must
+      # exist, hence after the PipeWire install), plus a ban on the filesystem
+      # sandbox keys that caused 226/NAMESPACE on fresh accounts.
+      - name: Verify packaging/openggd.service
+        run: scripts/verify-unit.sh
+      - name: Daemon creates the five OpenGG_* sinks
+        run: scripts/ci-daemon-sinks.sh normal daemon/target/debug/openggd
+
+  # Same, but the daemon starts BEFORE pipewire-pulse (what a fresh install does:
+  # the app D-Bus-activates the daemon while the audio session is still coming
+  # up). The sinks must still appear within 30 s with nobody restarting it.
+  daemon-sinks-late-pulse:
+    name: Daemon started before pipewire-pulse
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./daemon"
+      - name: Install PipeWire stack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pipewire pipewire-pulse wireplumber pipewire-bin pulseaudio-utils dbus-user-session
+      - name: Build daemon
+        working-directory: ./daemon
+        run: cargo build
+      - name: Sinks appear once pipewire-pulse comes up late
+        run: scripts/ci-daemon-sinks.sh late-pulse daemon/target/debug/openggd
+
+  # Cheap consistency checks on the files that ship.
+  packaging-checks:
+    name: Packaging checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions agree (daemon, core, qt-shell, PKGBUILD)
+        run: scripts/check-versions.sh
+      - name: Shell syntax (scripts, dev.sh, package scripts)
+        run: |
+          for f in scripts/*.sh dev.sh packaging/nfpm/scripts/*.sh packaging/create-extension.sh; do
+            bash -n "$f" || exit 1
+          done
+      - name: .desktop file
+        run: |
+          sudo apt-get install -y --no-install-recommends desktop-file-utils
+          desktop-file-validate packaging/opengg.desktop
+
   # The Qt6/QML shell — the only UI OpenGG ships. The old Tauri + Vue
   # frontend/ was removed entirely (it had been archived, kept only for
   # reference, and was never built or launched by default).
