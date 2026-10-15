@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 /// Video extensions recognized as clips.
 pub const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "ts", "flv"];
@@ -21,86 +22,145 @@ pub fn clips_db_path() -> PathBuf {
         .join("opengg/clips.db")
 }
 
-/// Open a connection to the clips DB.
-///
-/// Makes sure the schema exists first, once per database file per process.
-/// Nothing ever called `init_clips_db`, so on a machine without a database
-/// left over from the old Tauri app every metadata write failed with "no
-/// such table" — game tags, favourites, renames and saved trim points were
-/// all silently dropped.
+// ── Open / schema / corruption handling ──
+//
+// `clips.db` is NOT a pure cache: favourites, custom names, game tags, notes
+// and trim windows live only here (the clip files themselves carry none of
+// it). So a database SQLite reports as corrupt is never deleted — it is moved
+// to `clips.db.corrupt-<ts>` for manual recovery, a fresh one is created so
+// the app keeps working, and `db_error()` carries the story to the UI.
+// Any other failure (read-only disk, permissions) is returned as-is and
+// retried on the next call rather than papered over.
+//
+// The schema used to be created by `init_clips_db`, which nothing called, so
+// a fresh install had no tables at all; `open_db` now does it on first use.
+
+static DB_READY: Mutex<bool> = Mutex::new(false);
+static DB_ERROR: Mutex<String> = Mutex::new(String::new());
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Non-empty when the clip database had to be set aside, or could not be
+/// opened/migrated. Sticky for the session so the UI can still show it.
+pub fn db_error() -> String {
+    lock(&DB_ERROR).clone()
+}
+
+/// Open a connection to the clips DB, creating/migrating the schema on first
+/// use in this process.
 pub fn open_db() -> Result<Connection, String> {
-    use std::collections::HashSet;
-    use std::sync::{Mutex, OnceLock};
-    static READY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
-
-    let path = clips_db_path();
-    let ready = READY.get_or_init(|| Mutex::new(HashSet::new()));
-    let mut ready = ready.lock().unwrap_or_else(|e| e.into_inner());
-    if !ready.contains(&path) {
-        if let Some(d) = path.parent() {
-            std::fs::create_dir_all(d).ok();
+    {
+        let mut ready = lock(&DB_READY);
+        if !*ready {
+            match prepare_db_at(&clips_db_path()) {
+                Ok(note) => {
+                    if let Some(n) = note {
+                        *lock(&DB_ERROR) = n;
+                    }
+                    *ready = true;
+                }
+                Err(e) => {
+                    log::error!("clips.db unavailable: {e}");
+                    *lock(&DB_ERROR) = e.clone();
+                    return Err(e);
+                }
+            }
         }
-        let db = Connection::open(&path).map_err(|e| format!("DB: {e}"))?;
-        ensure_schema(&db)?;
-        ready.insert(path.clone());
-        return Ok(db);
     }
-    drop(ready);
-    Connection::open(&path).map_err(|e| format!("DB: {e}"))
+    connect(&clips_db_path()).map_err(|e| format!("DB: {e}"))
 }
 
-/// Create the clip DB schema if missing (idempotent).
-pub fn init_clips_db() -> Result<(), String> {
-    open_db().map(|_| ())
+fn connect(p: &Path) -> rusqlite::Result<Connection> {
+    let c = Connection::open(p)?;
+    // The daemon-side scanner and the UI can touch the file at once; wait
+    // briefly instead of failing with SQLITE_BUSY.
+    c.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(c)
 }
 
-/// Every table and column the clip DB is expected to have. `ALTER TABLE ...
-/// ADD COLUMN` fails harmlessly when the column already exists.
-fn ensure_schema(db: &Connection) -> Result<(), String> {
+/// SQLite said the file is not a database / is malformed.
+fn is_corrupt_db(e: &rusqlite::Error) -> bool {
+    matches!(e, rusqlite::Error::SqliteFailure(f, _)
+        if matches!(f.code, rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt))
+}
+
+/// `ALTER TABLE .. ADD COLUMN` on a column that already exists — the expected
+/// outcome when the migration re-runs, as opposed to a real failure.
+fn is_duplicate_column(e: &rusqlite::Error) -> bool {
+    matches!(e, rusqlite::Error::SqliteFailure(_, Some(msg)) if msg.contains("duplicate column name"))
+}
+
+/// Add a column, treating "already there" as success and surfacing anything
+/// else (read-only DB, full disk, missing table).
+fn add_column(db: &Connection, table: &str, col: &str, decl: &str) -> rusqlite::Result<()> {
+    match db.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"), []) {
+        Ok(_) => Ok(()),
+        Err(e) if is_duplicate_column(&e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Create the schema if missing and add any later columns (idempotent).
+fn init_schema(p: &Path) -> rusqlite::Result<()> {
+    let db = connect(p)?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS clip_meta(filepath TEXT PRIMARY KEY,custom_name TEXT DEFAULT '',favorite INTEGER DEFAULT 0,tags TEXT DEFAULT '',notes TEXT DEFAULT '');
-     CREATE TABLE IF NOT EXISTS trim_state(filepath TEXT PRIMARY KEY,trim_start REAL DEFAULT 0,trim_end REAL DEFAULT 0);").map_err(|e| format!("{e}"))?;
-    // Phase 3a: Add ffprobe cache columns (ALTER TABLE is a no-op if column already exists)
-    let _ = db.execute(
-        "ALTER TABLE clip_meta ADD COLUMN duration REAL DEFAULT 0",
-        [],
-    );
-    let _ = db.execute(
-        "ALTER TABLE clip_meta ADD COLUMN width INTEGER DEFAULT 0",
-        [],
-    );
-    let _ = db.execute(
-        "ALTER TABLE clip_meta ADD COLUMN height INTEGER DEFAULT 0",
-        [],
-    );
-    let _ = db.execute(
-        "ALTER TABLE clip_meta ADD COLUMN mtime INTEGER DEFAULT 0",
-        [],
-    );
-    let _ = db.execute(
-        "ALTER TABLE clip_meta ADD COLUMN game_tag TEXT DEFAULT ''",
-        [],
-    );
+     CREATE TABLE IF NOT EXISTS trim_state(filepath TEXT PRIMARY KEY,trim_start REAL DEFAULT 0,trim_end REAL DEFAULT 0);")?;
+    // Phase 3a: ffprobe cache columns; later: game_tag.
+    add_column(&db, "clip_meta", "duration", "REAL DEFAULT 0")?;
+    add_column(&db, "clip_meta", "width", "INTEGER DEFAULT 0")?;
+    add_column(&db, "clip_meta", "height", "INTEGER DEFAULT 0")?;
+    add_column(&db, "clip_meta", "mtime", "INTEGER DEFAULT 0")?;
+    add_column(&db, "clip_meta", "game_tag", "TEXT DEFAULT ''")?;
     // Editor state kept per clip alongside the trim window: master volume
     // (-1 = never set) and per-track gains as a JSON object.
-    let _ = db.execute(
-        "ALTER TABLE trim_state ADD COLUMN volume REAL DEFAULT -1",
-        [],
-    );
-    let _ = db.execute(
-        "ALTER TABLE trim_state ADD COLUMN track_gains TEXT DEFAULT ''",
-        [],
-    );
+    add_column(&db, "trim_state", "volume", "REAL DEFAULT -1")?;
+    add_column(&db, "trim_state", "track_gains", "TEXT DEFAULT ''")?;
     Ok(())
+}
+
+/// Ensure the database at `p` is usable. `Ok(Some(msg))` means it was corrupt
+/// and has been set aside (`msg` says where); `Ok(None)` means all was well.
+fn prepare_db_at(p: &Path) -> Result<Option<String>, String> {
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("DB: create {}: {e}", d.display()))?;
+    }
+    match init_schema(p) {
+        Ok(()) => Ok(None),
+        Err(e) if is_corrupt_db(&e) => {
+            let dest = crate::settings::quarantine(p).map_err(|re| {
+                format!("DB: {} is corrupt ({e}) and could not be set aside: {re}", p.display())
+            })?;
+            // A stale -wal/-shm next to a brand-new database would corrupt it.
+            for suffix in ["-wal", "-shm"] {
+                let side = PathBuf::from(format!("{}{suffix}", p.display()));
+                if side.exists() {
+                    let _ = std::fs::rename(&side, PathBuf::from(format!("{}{suffix}", dest.display())));
+                }
+            }
+            init_schema(p).map_err(|e2| format!("DB: could not recreate {}: {e2}", p.display()))?;
+            let msg = format!(
+                "The clip database was corrupt ({e}). It was kept as {} and a new one was created; favourites, custom names, game tags and trims saved in it are not shown.",
+                dest.display()
+            );
+            log::error!("{msg}");
+            Ok(Some(msg))
+        }
+        Err(e) => Err(format!("DB: {e}")),
+    }
+}
+
+/// Create the clip DB schema if missing (idempotent). `open_db` does this on
+/// first use; this is for callers that want to fail early.
+pub fn init_clips_db() -> Result<(), String> {
+    open_db().map(|_| ())
 }
 
 /// Map of filepath → (custom_name, favorite, game_tag) for all clip metadata.
 pub fn get_meta_map() -> HashMap<String, (String, bool, String)> {
     let mut m = HashMap::new();
     if let Ok(c) = open_db() {
-        let _ = c.execute(
-            "ALTER TABLE clip_meta ADD COLUMN game_tag TEXT DEFAULT ''",
-            [],
-        );
         if let Ok(mut s) =
             c.prepare("SELECT filepath,custom_name,favorite,COALESCE(game_tag,'') FROM clip_meta")
         {
@@ -207,10 +267,6 @@ pub struct ClipMetaUpdate {
 /// Upsert clip metadata (only non-empty text fields overwrite existing values).
 pub fn set_clip_meta(update: ClipMetaUpdate) -> Result<(), String> {
     let db = open_db()?;
-    let _ = db.execute(
-        "ALTER TABLE clip_meta ADD COLUMN game_tag TEXT DEFAULT ''",
-        [],
-    );
     // Build dynamic UPDATE to only set provided fields
     let cn = update.custom_name.unwrap_or_default();
     let fav = update.favorite.unwrap_or(false) as i32;
@@ -226,10 +282,6 @@ pub fn set_clip_meta(update: ClipMetaUpdate) -> Result<(), String> {
 /// Return a clip's full metadata as a JSON string (`"null"` if absent).
 pub fn get_clip_meta(filepath: &str) -> Result<String, String> {
     let db = open_db()?;
-    let _ = db.execute(
-        "ALTER TABLE clip_meta ADD COLUMN game_tag TEXT DEFAULT ''",
-        [],
-    );
     match db.query_row("SELECT custom_name,favorite,COALESCE(game_tag,''),COALESCE(notes,'') FROM clip_meta WHERE filepath=?1", [&filepath], |r| {
         Ok(serde_json::json!({
             "custom_name": r.get::<_,String>(0)?,
@@ -239,7 +291,8 @@ pub fn get_clip_meta(filepath: &str) -> Result<String, String> {
         }))
     }) {
         Ok(v) => Ok(v.to_string()),
-        Err(_) => Ok("null".into()),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok("null".into()),
+        Err(e) => Err(format!("{e}")),
     }
 }
 
@@ -422,36 +475,5 @@ pub fn get_trim_state(filepath: &str) -> Result<Option<TrimState>, String> {
 }
 
 #[cfg(test)]
-mod schema_tests {
-    use super::*;
-
-    /// Every metadata write used to fail on a fresh install because nothing
-    /// created the tables. Run against a throwaway data dir.
-    #[test]
-    fn writes_work_on_a_fresh_database() {
-        let d = std::env::temp_dir().join(format!("opengg-fresh-db-{}", std::process::id()));
-        std::env::set_var("XDG_DATA_HOME", &d);
-
-        set_clip_meta(ClipMetaUpdate {
-            filepath: "/clips/a.mp4".into(),
-            custom_name: None,
-            favorite: Some(true),
-            game_tag: Some("Hades".into()),
-            notes: None,
-        })
-        .expect("tag a clip on a fresh db");
-        assert_eq!(get_meta_map()["/clips/a.mp4"].2, "Hades");
-
-        let st = EditorState {
-            trim_start: 1.5,
-            trim_end: 9.0,
-            volume: Some(0.4),
-            track_gains: serde_json::json!({ "0": 0.5, "2": 0.0 }),
-        };
-        save_editor_state("/clips/a.mp4", &st).expect("save editor state");
-        assert_eq!(get_editor_state("/clips/a.mp4").unwrap(), Some(st));
-        assert_eq!(get_editor_state("/clips/none.mp4").unwrap(), None);
-
-        let _ = std::fs::remove_dir_all(&d);
-    }
-}
+#[path = "db_tests.rs"]
+mod db_tests;

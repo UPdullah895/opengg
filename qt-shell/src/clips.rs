@@ -72,6 +72,11 @@ pub mod qobject {
         #[base = QAbstractListModel]
         #[qproperty(bool, loading)]
         #[qproperty(QString, error)]
+        /// Non-empty when clips.db was corrupt (set aside as
+        /// `clips.db.corrupt-<ts>`, fresh one in use — favourites, names,
+        /// tags and trims are gone from view) or could not be opened. Sticky
+        /// for the session. Human-readable.
+        #[qproperty(QString, db_error, cxx_name = "dbError")]
         #[qproperty(i32, count)]
         #[qproperty(i32, total_count, cxx_name = "totalCount")]
         #[qproperty(QStringList, game_list, cxx_name = "gameList")]
@@ -311,6 +316,7 @@ pub struct ClipsControllerRust {
     date_format: String,
     loading: bool,
     error: QString,
+    db_error: QString,
     count: i32,
     total_count: i32,
     fav_count: i32,
@@ -578,6 +584,9 @@ impl qobject::ClipsController {
                 self.as_mut().set_error(QString::from(&e));
             }
         }
+        // After the scan: that is what opens (and may quarantine) the DB.
+        let db_err = opengg_core::clips::db_error();
+        self.as_mut().set_db_error(QString::from(&db_err));
         self.as_mut().update_game_list();
         self.as_mut().apply_filter();
         self.as_mut().set_loading(false);

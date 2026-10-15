@@ -17,6 +17,10 @@ pub mod qobject {
         #[qml_element]
         #[qml_singleton]
         #[qproperty(QString, settings_json, cxx_name = "settingsJson")]
+        /// Non-empty when ui-settings.json was unreadable (it was set aside as
+        /// `ui-settings.json.corrupt-<ts>` and defaults are in use) or the last
+        /// save failed. Human-readable, safe to show or copy.
+        #[qproperty(QString, load_error, cxx_name = "loadError")]
         type SettingsController = super::SettingsControllerRust;
 
         /// Reload `settingsJson` from disk.
@@ -57,6 +61,7 @@ use serde_json::{json, Value};
 #[derive(Default)]
 pub struct SettingsControllerRust {
     settings_json: QString,
+    load_error: QString,
 }
 
 /// Mirrors `DEFAULTS.settings.shortcuts` in `stores/persistence.ts`.
@@ -74,7 +79,10 @@ fn default_shortcuts() -> Value {
     })
 }
 
-/// Load the full on-disk envelope, or `{"settings":{}}` when absent/corrupt.
+/// Load the full on-disk envelope, or `{"settings":{}}` when absent. The core
+/// loader migrates old schemas and sets a corrupt file aside (see
+/// `opengg_core::settings`), so a parse failure here only ever means "start
+/// from defaults" — and nothing is written back until a real change is made.
 fn load_envelope() -> Value {
     let raw = opengg_core::settings::load_ui_settings().unwrap_or_default();
     let mut v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
@@ -88,38 +96,38 @@ fn load_envelope() -> Value {
     v
 }
 
-fn save_envelope(v: &Value) {
-    if let Ok(s) = serde_json::to_string(v) {
-        let _ = opengg_core::settings::save_ui_settings(&s);
-    }
-}
-
 impl qobject::SettingsController {
-    pub fn refresh(self: Pin<&mut Self>) {
+    pub fn refresh(mut self: Pin<&mut Self>) {
         let v = load_envelope();
         let settings_str = serde_json::to_string(&v["settings"]).unwrap_or_else(|_| "{}".into());
-        self.set_settings_json(QString::from(&settings_str));
+        self.as_mut().set_settings_json(QString::from(&settings_str));
+        // Read after the load, so a file quarantined by this very read shows.
+        let err = opengg_core::settings::settings_error();
+        self.set_load_error(QString::from(&err));
     }
 
     pub fn set_value(self: Pin<&mut Self>, key: QString, value_json: QString) {
-        let mut v = load_envelope();
         let parsed: Value =
             serde_json::from_str(&value_json.to_string()).unwrap_or(Value::Null);
         let key = key.to_string();
 
-        if let Some((outer, inner)) = key.split_once('.') {
-            if !v["settings"][outer].is_object() {
-                v["settings"][outer] = json!({});
+        // load -> modify -> save under core's process-wide settings lock, so a
+        // worker thread's write (app routing, ear blast) can't be lost to this
+        // one or vice versa. A failure is logged by core and surfaces through
+        // `loadError` on the refresh below.
+        let _ = opengg_core::settings::update_ui_settings(|v| {
+            if let Some((outer, inner)) = key.split_once('.') {
+                if !v["settings"][outer].is_object() {
+                    v["settings"][outer] = json!({});
+                }
+                v["settings"][outer][inner] = parsed;
+            } else {
+                v["settings"][key.as_str()] = parsed;
             }
-            v["settings"][outer][inner] = parsed;
-        } else {
-            v["settings"][key] = parsed;
-        }
-        // The panel already refuses to delete Video/Overlays; this keeps a
-        // stale or scripted write from saving a file without them.
-        opengg_core::settings::ensure_required_tracks(&mut v);
-
-        save_envelope(&v);
+            // The panel already refuses to delete Video/Overlays; this keeps a
+            // stale or scripted write from saving a file without them.
+            opengg_core::settings::ensure_required_tracks(v);
+        });
         self.refresh();
     }
 
@@ -128,16 +136,16 @@ impl qobject::SettingsController {
     }
 
     pub fn reset_track_defs(self: Pin<&mut Self>) {
-        let mut v = load_envelope();
-        v["settings"]["trackDefs"] = opengg_core::settings::default_track_defs();
-        save_envelope(&v);
+        let _ = opengg_core::settings::update_ui_settings(|v| {
+            v["settings"]["trackDefs"] = opengg_core::settings::default_track_defs();
+        });
         self.refresh();
     }
 
     pub fn reset_shortcuts(self: Pin<&mut Self>) {
-        let mut v = load_envelope();
-        v["settings"]["shortcuts"] = default_shortcuts();
-        save_envelope(&v);
+        let _ = opengg_core::settings::update_ui_settings(|v| {
+            v["settings"]["shortcuts"] = default_shortcuts();
+        });
         self.refresh();
     }
 }
