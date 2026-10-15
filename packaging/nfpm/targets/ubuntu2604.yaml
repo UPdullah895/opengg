@@ -1,0 +1,47 @@
+# Ubuntu 26.04: Qt 6.10. Package names verified in an ubuntu:26.04 container
+# (see debian13.yaml for the reasoning).
+depends:
+  - libqt6core6t64 (>= 6.10)
+  - libqt6gui6 (>= 6.10)
+  - libqt6qml6 (>= 6.10)
+  - libqt6quick6 (>= 6.10)
+  - libgstreamer1.0-0
+  - libglib2.0-0t64
+  - libstdc++6
+  - libgcc-s1
+  - libc6
+  # QML modules: on Debian/Ubuntu each is its own package, and a missing one
+  # stops the main window loading ("module ... is not installed").
+  - qml6-module-qtquick
+  - qml6-module-qtquick-controls
+  - qml6-module-qtquick-layouts
+  - qml6-module-qtquick-window
+  - qml6-module-qtquick-templates
+  - qml6-module-qtquick-dialogs
+  - qml6-module-qtquick-shapes
+  - qml6-module-qtmultimedia
+  - qml6-module-qt-labs-platform
+  - qml6-module-qtqml-workerscript
+  # Clip playback: the qml6glsink GStreamer element (QML video item) + codecs.
+  - gstreamer1.0-qt6
+  - gstreamer1.0-plugins-base
+  - gstreamer1.0-plugins-good
+  - gstreamer1.0-plugins-bad
+  - gstreamer1.0-libav
+  - qt6-wayland
+  # Audio: the daemon/mixer drive PipeWire through `pactl`, which needs a
+  # PulseAudio-protocol server (pipewire-pulse), not just libpulse.
+  - pipewire
+  - pipewire-pulse
+  # The daemon, EQ and Voice FX shell out to pw-link / pw-cli / pw-dump /
+  # pw-metadata. Name the package that ships them (it is only an accident of
+  # dependency chains that some distros pull it in anyway).
+  - pipewire-bin
+  - wireplumber
+  - pulseaudio-utils
+  - ffmpeg
+  # The daemon is D-Bus activated on the user bus; a minimal install
+  # without this has no user bus at all.
+  - dbus-user-session
+recommends:
+  - hicolor-icon-theme

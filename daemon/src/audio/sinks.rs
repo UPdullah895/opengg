@@ -9,18 +9,29 @@
 //!   2. If not, create them via `pactl load-module module-null-sink`
 //!   3. Link their monitor ports to the default output via `pw-link`
 //!   4. On daemon exit, sinks stay alive (object.linger) — no disruption
+//!
+//! Nothing here runs at construction time: `SinkManager::new` is pure, and
+//! `tick` (driven by `AudioHub`'s background reconciler) is what waits for
+//! pipewire-pulse, creates whatever is missing and records a `Health` snapshot.
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::env;
 use std::path::PathBuf;
 use crate::subprocess;
+use super::coalesce::Coalescer;
 
 /// Minimum interval between `pactl` spawns for the same channel.
 /// Prevents process storm during slider drags (≤10 spawns/sec instead of 60+).
-const VOLUME_DEBOUNCE_MS: u128 = 100;
+/// Trailing-edge: the last value of a burst is always applied (see `coalesce`).
+const VOLUME_DEBOUNCE: Duration = Duration::from_millis(100);
+
+/// While the graph is degraded (links or mic loopback missing) a full
+/// create-and-link pass is retried at most this often.
+const DEGRADED_RETRY: Duration = Duration::from_secs(60);
 
 pub const CHANNEL_NAMES: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
 /// All channels get virtual null-sinks, including Mic.
@@ -128,6 +139,11 @@ pub struct ChannelInfo {
     pub volume: f32,
     pub muted: bool,
     pub assigned_apps: Vec<AppInfo>,
+    /// True when volume/mute were read from the live sink this call; false
+    /// when the sink was not found and these are cached in-memory values (not
+    /// real). Lets the UI show "audio backend unavailable" instead of
+    /// presenting a dead mixer as healthy.
+    pub live: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -137,30 +153,192 @@ pub struct AppInfo {
     pub binary: String,
 }
 
+/// Snapshot of what the audio backend looks like, produced by the reconciler
+/// and exposed through `GetDiagnostics`. "Ready" is derived from it, never
+/// assumed.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct Health {
+    pub pulse_reachable: bool,
+    pub sinks_present: Vec<String>,
+    pub sinks_missing: Vec<String>,
+    /// Output channel links (OpenGG_x:monitor -> default sink) still missing
+    /// after the verify pass; `None` = not evaluated (no default output).
+    pub output_links_missing: Option<usize>,
+    pub default_sink: Option<String>,
+    /// `None` = mic loopback + virtual mic in place; `Some(reason)` otherwise.
+    pub mic_loopback_error: Option<String>,
+    pub last_check_unix: u64,
+}
+
+impl Health {
+    /// Everything that is wrong, in words. Empty = fully ready.
+    pub fn problems(&self) -> Vec<String> {
+        let mut p = Vec::new();
+        if !self.pulse_reachable {
+            p.push("pipewire-pulse is not reachable".to_string());
+            return p;
+        }
+        if !self.sinks_missing.is_empty() {
+            p.push(format!(
+                "{}/{} virtual sinks present, missing: {}",
+                self.sinks_present.len(),
+                SINK_CHANNELS.len(),
+                self.sinks_missing.join(", ")
+            ));
+        }
+        match self.output_links_missing {
+            Some(0) => {}
+            Some(n) => p.push(format!(
+                "{n} output link(s) to the default sink missing (those channels will be silent)"
+            )),
+            None => p.push("no default output device - channels are not linked to speakers".into()),
+        }
+        if let Some(e) = &self.mic_loopback_error {
+            p.push(format!("mic loopback: {e}"));
+        }
+        p
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.problems().is_empty()
+    }
+}
+
+/// Names from `pactl list sinks short` output (second whitespace column).
+pub(crate) fn sink_names_from_short(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| l.split_whitespace().nth(1))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Which `OpenGG_<channel>` sinks are absent from `present` (exact name match;
+/// `contains` would let `OpenGG_Mic` be satisfied by a longer unrelated name).
+pub(crate) fn missing_sinks(present: &[String]) -> Vec<String> {
+    SINK_CHANNELS
+        .iter()
+        .map(|ch| format!("OpenGG_{ch}"))
+        .filter(|name| !present.iter().any(|p| p == name))
+        .collect()
+}
+
+/// `pactl list sinks short`, distinguishing "tool missing" / "server down" from
+/// "no sinks". This doubles as the reachability probe: it needs a live
+/// pipewire-pulse to answer.
+pub fn list_sink_names() -> std::result::Result<Vec<String>, String> {
+    let out = subprocess::command("pactl")
+        .args(["list", "sinks", "short"])
+        .output()
+        .map_err(|e| subprocess::spawn_error("pactl", &e))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("pactl list sinks failed: {}", err.trim()));
+    }
+    Ok(sink_names_from_short(&String::from_utf8_lossy(&out.stdout)))
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// What one `tick` found.
+pub enum Tick {
+    /// pipewire-pulse / pactl cannot be reached right now (reason attached).
+    PulseDown(String),
+    Ok,
+}
+
 pub struct SinkManager {
     pub channels: Arc<Mutex<HashMap<String, ChannelInfo>>>,
     /// Module IDs from pactl load-module (for cleanup if needed)
     module_ids: Arc<Mutex<Vec<u32>>>,
-    /// Last time `pactl set-sink-volume` was spawned per channel.
-    last_volume_spawn: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Trailing-edge coalescer in front of `pactl set-sink-volume`.
+    volume: Coalescer,
+    /// False after an explicit teardown ("Danger Zone"), so the reconciler does
+    /// not fight the user by re-creating sinks they just removed. Set again by
+    /// `ensure_created`.
+    desired: Arc<AtomicBool>,
+    health: Arc<Mutex<Health>>,
+    /// When the last full create-and-link pass ran.
+    last_full: Mutex<Option<Instant>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    }
+}
+
+/// `pactl set-sink-volume`, with failures turned into text the caller can
+/// return over D-Bus (previously discarded, so a dead backend looked fine).
+fn apply_volume(channel: &str, volume: f32) -> std::result::Result<(), String> {
+    let pct_str = format!("{}%", (volume * 100.0) as u32);
+    let sink = sink_for(channel);
+    run_pactl(&["set-sink-volume", &sink, &pct_str])
+}
+
+fn sink_for(channel: &str) -> String {
+    // Master has no virtual sink — it controls the hardware default output directly.
+    if channel == "Master" { "@DEFAULT_SINK@".to_string() } else { format!("OpenGG_{channel}") }
+}
+
+/// Run `pactl <args>`; Err carries tool-missing / stderr text.
+fn run_pactl(args: &[&str]) -> std::result::Result<(), String> {
+    let out = subprocess::command("pactl")
+        .args(args)
+        .output()
+        .map_err(|e| subprocess::spawn_error("pactl", &e))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "pactl {} failed: {}",
+            args.first().copied().unwrap_or(""),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// Log a pactl failure once per distinct message (a slider drag would
+/// otherwise repeat it 60 times a second).
+fn warn_pactl_failure(what: &str, err: &str) {
+    if crate::statelog::changed(&format!("audio.{what}"), err) {
+        tracing::warn!("{what}: {err}");
+    }
+}
+
+/// Outcome of one create-and-link pass.
+struct CreateReport {
+    module_ids: Vec<u32>,
+    /// Output links still missing after verify; `None` = no default sink.
+    links_missing: Option<usize>,
+    default_sink: Option<String>,
+    mic_error: Option<String>,
 }
 
 /// Create (idempotently) every OpenGG virtual sink and its loopbacks, and
-/// return the pactl module IDs created along the way. Shared by
-/// `SinkManager::create_all` (daemon boot) and `SinkManager::ensure_created`
-/// (the on-demand "Create Virtual Audio" D-Bus call), so there is exactly
-/// one code path that knows how to bring sinks into existence and exactly
-/// one place their module IDs get recorded for later cleanup.
-fn create_sinks_and_loopbacks() -> Vec<u32> {
+/// return the pactl module IDs created along the way. Shared by the
+/// reconciler (`SinkManager::tick`) and `SinkManager::ensure_created` (the
+/// on-demand "Create Virtual Audio" D-Bus call), so there is exactly one code
+/// path that knows how to bring sinks into existence and exactly one place
+/// their module IDs get recorded for later cleanup.
+fn create_sinks_and_loopbacks() -> CreateReport {
     remove_legacy_sink_config();
 
     let mut module_ids = Vec::new();
+
+    // One listing up front instead of a pactl spawn per channel.
+    let present = list_sink_names().unwrap_or_default();
 
     for &ch in SINK_CHANNELS {
         let sink_name = format!("OpenGG_{ch}");
 
         // Step 1: Check if this sink already exists (idempotent)
-        if !sink_exists(&sink_name) {
+        if !present.contains(&sink_name) {
             // Step 2: Create via pactl load-module (non-destructive)
             match create_null_sink(&sink_name, ch) {
                 Ok(module_id) => {
@@ -172,58 +350,162 @@ fn create_sinks_and_loopbacks() -> Vec<u32> {
                 }
             }
         } else {
-            tracing::info!("Sink {sink_name} already exists — skipping creation");
+            tracing::debug!("Sink {sink_name} already exists — skipping creation");
         }
     }
 
     // Step 3: Wait briefly for sinks to register, then set up loopbacks
     std::thread::sleep(std::time::Duration::from_millis(500));
-    if let Err(e) = setup_loopbacks() {
-        tracing::warn!("Loopback setup had issues: {e}");
-    }
+    let (links_missing, default_sink) = match setup_loopbacks() {
+        Ok(st) => (st.missing, st.default_sink),
+        Err(e) => {
+            tracing::warn!("Loopback setup had issues: {e:#}");
+            (None, None)
+        }
+    };
     // Dedup: WirePlumber session policies may auto-route system apps (plasmashell, kwin_*)
     // to OpenGG sinks every time they are created. Move them back to default output.
     cleanup_blacklisted_routing();
 
     // Step 4: Wire hardware mic → OpenGG_Mic virtual sink via loopback.
     // The sink's monitor port is what GSR and DSP chains capture from.
-    match setup_mic_loopback() {
+    let mic_error = match setup_mic_loopback() {
         Ok(mic_module_ids) => {
             module_ids.extend(mic_module_ids);
+            None
         }
         Err(e) => {
-            tracing::warn!("Mic loopback setup failed (raw HW mic will be used as fallback): {e}");
+            let msg = format!("{e:#}");
+            // Fires on every degraded retry; only the transition is news.
+            if crate::statelog::changed("audio.mic-loopback", &msg) {
+                tracing::warn!("Mic loopback setup failed (raw HW mic will be used as fallback): {msg}");
+            }
+            Some(msg)
         }
+    };
+    if mic_error.is_none() {
+        crate::statelog::changed("audio.mic-loopback", "ok");
     }
 
-    module_ids
+    CreateReport { module_ids, links_missing, default_sink, mic_error }
 }
 
 impl SinkManager {
-    /// Create virtual sinks gracefully — NO PipeWire restart.
-    pub fn create_all() -> Result<Self> {
-        let module_ids = create_sinks_and_loopbacks();
-
-        // Initialize all channel state (including Mic which doesn't need a virtual sink)
+    /// Build the manager WITHOUT touching PipeWire. Creation is the
+    /// reconciler's job (`tick`), so daemon startup — and with it D-Bus name
+    /// acquisition — never waits on pipewire-pulse.
+    pub fn new() -> Self {
         let channels = Arc::new(Mutex::new(HashMap::new()));
         for &name in CHANNEL_NAMES {
-            channels.lock().unwrap().insert(
+            lock(&channels).insert(
                 name.to_string(),
                 ChannelInfo {
                     name: name.to_string(),
                     volume: 1.0,
                     muted: false,
                     assigned_apps: Vec::new(),
+                    live: false,
                 },
             );
         }
-
-        tracing::info!("Virtual sinks ready (no PipeWire restart)");
-        Ok(Self {
+        Self {
             channels,
-            module_ids: Arc::new(Mutex::new(module_ids)),
-            last_volume_spawn: Arc::new(Mutex::new(HashMap::new())),
-        })
+            module_ids: Arc::new(Mutex::new(Vec::new())),
+            volume: Coalescer::new(VOLUME_DEBOUNCE, apply_volume),
+            desired: Arc::new(AtomicBool::new(true)),
+            health: Arc::new(Mutex::new(Health::default())),
+            last_full: Mutex::new(None),
+        }
+    }
+
+    pub fn health(&self) -> Health {
+        lock(&self.health).clone()
+    }
+
+    pub fn health_handle(&self) -> Arc<Mutex<Health>> {
+        Arc::clone(&self.health)
+    }
+
+    /// One reconcile step (blocking; call from `spawn_blocking`).
+    ///
+    /// * pipewire-pulse unreachable -> `Tick::PulseDown(reason)` and nothing
+    ///   else; the caller backs off and retries.
+    /// * any OpenGG sink missing (first start, pipewire-pulse restarted, a
+    ///   module crashed), or `force`, or a degraded graph whose retry interval
+    ///   elapsed -> run the full idempotent create-and-link pass.
+    /// * otherwise just refresh the health snapshot (one `pactl` spawn).
+    ///
+    /// Never restarts PipeWire; every step is a stateless pactl/pw-link call.
+    pub fn tick(&self, force: bool) -> Tick {
+        let present = match list_sink_names() {
+            Ok(p) => p,
+            Err(reason) => {
+                lock(&self.health).pulse_reachable = false;
+                return Tick::PulseDown(reason);
+            }
+        };
+
+        if !self.desired.load(Ordering::SeqCst) {
+            let mut h = lock(&self.health);
+            h.pulse_reachable = true;
+            h.sinks_missing = missing_sinks(&present);
+            h.sinks_present = present.into_iter().filter(|n| n.starts_with("OpenGG_")).collect();
+            h.last_check_unix = unix_now();
+            return Tick::Ok;
+        }
+
+        let missing = missing_sinks(&present);
+        let degraded_retry_due = {
+            let degraded = !self.health().is_ready();
+            degraded && lock(&self.last_full).is_none_or(|t| t.elapsed() >= DEGRADED_RETRY)
+        };
+
+        if force || !missing.is_empty() || degraded_retry_due {
+            self.create_and_record();
+        } else {
+            let mut h = lock(&self.health);
+            h.pulse_reachable = true;
+            h.sinks_missing = Vec::new();
+            h.sinks_present = present.into_iter().filter(|n| n.starts_with("OpenGG_")).collect();
+            h.last_check_unix = unix_now();
+        }
+        Tick::Ok
+    }
+
+    /// Run the create-and-link pass, fold module ids in, record `Health`, and
+    /// log ONE summary whose level reflects the worst state ("ready" only when
+    /// every sink and link is actually there).
+    fn create_and_record(&self) {
+        let report = create_sinks_and_loopbacks();
+        *lock(&self.last_full) = Some(Instant::now());
+        lock(&self.module_ids).extend(report.module_ids);
+
+        let present = list_sink_names().unwrap_or_default();
+        let health = Health {
+            pulse_reachable: true,
+            sinks_missing: missing_sinks(&present),
+            sinks_present: present.into_iter().filter(|n| n.starts_with("OpenGG_")).collect(),
+            output_links_missing: report.links_missing,
+            default_sink: report.default_sink,
+            mic_loopback_error: report.mic_error,
+            last_check_unix: unix_now(),
+        };
+        let problems = health.problems();
+        let summary = problems.join("; ");
+        if crate::statelog::changed("audio.health", &summary) {
+            if problems.is_empty() {
+                tracing::info!(
+                    "Virtual audio ready: {}/{} sinks, all output links, mic loopback active",
+                    health.sinks_present.len(),
+                    SINK_CHANNELS.len()
+                );
+            } else if !health.sinks_missing.is_empty() {
+                tracing::error!("Virtual audio NOT ready: {summary}");
+            } else {
+                tracing::warn!("Virtual audio degraded: {summary}");
+            }
+        }
+        *lock(&self.health) = health;
     }
 
     /// (Re)create any missing OpenGG virtual sinks on an already-running
@@ -234,82 +516,88 @@ impl SinkManager {
     /// where the Qt UI process created these sinks directly via
     /// `opengg_core::audio::create_virtual_audio()`, invisible to this
     /// struct entirely.
+    ///
+    /// Returns an error naming what is still missing, so the caller sees a
+    /// failed creation instead of a silent success.
     pub fn ensure_created(&self) -> Result<()> {
-        let new_ids = create_sinks_and_loopbacks();
-        self.module_ids.lock().unwrap().extend(new_ids);
+        self.desired.store(true, Ordering::SeqCst);
+        if let Err(reason) = list_sink_names() {
+            anyhow::bail!("audio backend unavailable: {reason}");
+        }
+        self.create_and_record();
 
         // Re-seed channel state for any channel that isn't already tracked
         // (fresh SinkManager instances always have all of them; this only
         // matters if CHANNEL_NAMES ever grows without a daemon restart).
-        let mut channels = self.channels.lock().unwrap();
+        let mut channels = lock(&self.channels);
         for &name in CHANNEL_NAMES {
             channels.entry(name.to_string()).or_insert_with(|| ChannelInfo {
                 name: name.to_string(),
                 volume: 1.0,
                 muted: false,
                 assigned_apps: Vec::new(),
+                live: false,
             });
+        }
+        drop(channels);
+
+        let h = self.health();
+        if !h.sinks_missing.is_empty() {
+            anyhow::bail!("could not create virtual sinks: {}", h.problems().join("; "));
         }
         Ok(())
     }
 
+    /// Set a channel's volume. The in-memory value is updated immediately; the
+    /// `pactl` call is coalesced per channel (leading + trailing edge) so a
+    /// slider drag neither storms pactl nor loses its final position. An error
+    /// from the immediate apply (tool missing, server down, sink absent) is
+    /// returned so the UI/core fallback sees it instead of a fake success.
     pub fn set_volume(&self, channel: &str, volume: f32) -> Result<()> {
         let volume = volume.clamp(0.0, 1.5);
-        if let Some(info) = self.channels.lock().unwrap().get_mut(channel) {
+        if let Some(info) = lock(&self.channels).get_mut(channel) {
             info.volume = volume;
         }
-
-        // Debounce: skip pactl spawn if this channel was touched <100ms ago.
-        let now = Instant::now();
-        {
-            let mut last_map = self.last_volume_spawn.lock().unwrap();
-            if let Some(last) = last_map.get(channel) {
-                if now.duration_since(*last).as_millis() < VOLUME_DEBOUNCE_MS {
-                    return Ok(());
-                }
-            }
-            last_map.insert(channel.to_string(), now);
-        }
-
-        let vol_pct = (volume * 100.0) as u32;
-        let pct_str = format!("{vol_pct}%");
-        // Master has no virtual sink — it controls the hardware default output directly.
-        let sink_name = if channel == "Master" { "@DEFAULT_SINK@".to_string() } else { format!("OpenGG_{channel}") };
-        let _ = subprocess::command("pactl")
-            .args(["set-sink-volume", &sink_name, &pct_str])
-            .output();
-        Ok(())
+        self.volume.submit(channel, volume).map_err(|e| {
+            warn_pactl_failure("set-volume", &e);
+            anyhow::anyhow!(e)
+        })
     }
 
     pub fn set_mute(&self, channel: &str, muted: bool) -> Result<()> {
-        if let Some(info) = self.channels.lock().unwrap().get_mut(channel) {
+        if let Some(info) = lock(&self.channels).get_mut(channel) {
             info.muted = muted;
         }
         let val = if muted { "1" } else { "0" };
-        let sink_name = if channel == "Master" { "@DEFAULT_SINK@".to_string() } else { format!("OpenGG_{channel}") };
-        let _ = subprocess::command("pactl")
-            .args(["set-sink-mute", &sink_name, val])
-            .output();
+        let sink_name = sink_for(channel);
+        run_pactl(&["set-sink-mute", &sink_name, val]).map_err(|e| {
+            warn_pactl_failure("set-mute", &e);
+            anyhow::anyhow!(e)
+        })?;
         // Muting the Mic channel's virtual sink only silences consumers reading
         // from OpenGG_Mic.monitor. GSR and other capture tools still subscribe
         // directly to the hardware capture source, so the actual mic input must
         // also be muted at the source for the mute to have any real effect.
         if channel == "Mic" {
-            let _ = subprocess::command("pactl")
-                .args(["set-source-mute", "@DEFAULT_SOURCE@", val])
-                .output();
+            if let Err(e) = run_pactl(&["set-source-mute", "@DEFAULT_SOURCE@", val]) {
+                // The sink itself is muted; a machine with no default capture
+                // source should not turn that into a failed call.
+                warn_pactl_failure("set-source-mute", &e);
+            }
         }
         Ok(())
     }
 
     /// Return channel state with **live** volume/mute read from pactl, so the mixer
     /// always reflects reality (including external changes via pavucontrol) instead of a
-    /// stale in-memory default. The cached in-memory value is the fallback when a sink
-    /// isn't found (e.g. before creation or right after a restart).
+    /// stale in-memory default. When a sink is not found the cached value is kept but
+    /// `live` is false and the state change is logged, so cached numbers are never
+    /// presented as if they were real.
     pub fn get_channels(&self) -> Vec<ChannelInfo> {
         let live = read_live_sink_state();
         let default_sink = get_default_sink_name();
-        let mut channels: Vec<ChannelInfo> = self.channels.lock().unwrap().values().cloned().collect();
+        let mut channels: Vec<ChannelInfo> = lock(&self.channels).values().cloned().collect();
+        let mut not_live = Vec::new();
         for ch in &mut channels {
             // Master controls the hardware default output directly; everything else is OpenGG_{name}.
             let sink_name = if ch.name == "Master" {
@@ -317,16 +605,34 @@ impl SinkManager {
             } else {
                 Some(format!("OpenGG_{}", ch.name))
             };
+            ch.live = false;
             if let Some(name) = sink_name {
                 if let Some(&(vol, muted)) = live.get(&name) {
                     ch.volume = vol;
                     ch.muted = muted;
+                    ch.live = true;
                 }
+            }
+            if !ch.live && ch.name != "Master" {
+                not_live.push(ch.name.clone());
+            }
+        }
+        not_live.sort();
+        let state = if not_live.is_empty() { "all live".to_string() } else { not_live.join(",") };
+        if crate::statelog::changed("audio.get-channels-live", &state) {
+            if not_live.is_empty() {
+                tracing::info!("GetChannels: all channels are reading live sink state again");
+            } else {
+                tracing::warn!(
+                    "GetChannels: no live sink for [{state}] — returning cached values flagged live=false \
+                     (audio backend down or sinks not created yet)"
+                );
             }
         }
         channels
     }
 }
+
 
 /// Resolve the current default sink's node name via `pactl get-default-sink`.
 fn get_default_sink_name() -> Option<String> {
@@ -389,6 +695,10 @@ impl SinkManager {
     /// 6. Restore OS defaults
     /// 7. Verify no OpenGG nodes remain
     pub fn teardown_all(&self) -> anyhow::Result<()> {
+        // The user asked for the sinks to be gone: stop the reconciler from
+        // re-creating them until `ensure_created` is called again.
+        self.desired.store(false, Ordering::SeqCst);
+
         // Step 1: Remove legacy config file
         remove_legacy_sink_config();
 
@@ -527,15 +837,6 @@ impl Drop for SinkManager {
     }
 }
 
-/// Check if a PipeWire sink with this name already exists.
-fn sink_exists(name: &str) -> bool {
-    if let Ok(output) = subprocess::command("pactl").args(["list", "sinks", "short"]).output() {
-        let text = String::from_utf8_lossy(&output.stdout);
-        return text.lines().any(|line| line.contains(name));
-    }
-    false
-}
-
 /// Create a null-sink via `pactl load-module` — returns the module ID.
 ///
 /// This is the KEY difference from the old approach:
@@ -563,11 +864,15 @@ fn create_null_sink(sink_name: &str, description: &str) -> Result<u32> {
             "channel_map=front-left,front-right",
         ])
         .output()
-        .context("pactl not found — is PipeWire running?")?;
+        .map_err(|e| anyhow::anyhow!("{}", subprocess::spawn_error("pactl", &e)))?;
 
     if output.status.success() {
         let id_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let module_id = id_str.parse::<u32>().unwrap_or(0);
+        // Do not fall back to 0: teardown would later `unload-module 0`, i.e.
+        // some unrelated module on the server.
+        let module_id = id_str
+            .parse::<u32>()
+            .map_err(|_| anyhow::anyhow!("pactl load-module returned a non-numeric module id: {id_str:?}"))?;
         Ok(module_id)
     } else {
         let err = String::from_utf8_lossy(&output.stderr);
@@ -641,7 +946,7 @@ fn setup_mic_loopback() -> Result<Vec<u32>> {
             tracing::warn!("Could not parse loopback module ID, assuming already created");
         }
     } else {
-        tracing::info!("Mic loopback already active — skipping loopback creation");
+        tracing::debug!("Mic loopback already active — skipping loopback creation");
     }
 
     // ── Virtual mic source creation (apps can select this as input) ──
@@ -667,7 +972,7 @@ fn setup_mic_loopback() -> Result<Vec<u32>> {
     // re-bound to the default sink monitor) is unloaded and recreated.
     if sources.lines().any(|l| l.contains("OpenGG_Virtual_Mic")) {
         if virtual_mic_wired_correctly() {
-            tracing::info!("Virtual mic source already exists and is wired to OpenGG_Mic — skipping");
+            tracing::debug!("Virtual mic source already exists and is wired to OpenGG_Mic — skipping");
             return Ok(module_ids);
         }
         tracing::warn!("Virtual mic source exists but is wired to the wrong master — rebuilding");
@@ -748,7 +1053,7 @@ fn parse_pw_links() -> Result<std::collections::HashSet<(String, String)>> {
     let output = subprocess::command("pw-link")
         .args(["-l"])
         .output()
-        .context("pw-link -l failed")?;
+        .map_err(|e| anyhow::anyhow!("{}", subprocess::spawn_error("pw-link", &e)))?;
 
     if !output.status.success() {
         anyhow::bail!(
@@ -785,21 +1090,26 @@ fn parse_pw_links() -> Result<std::collections::HashSet<(String, String)>> {
 
 /// Link each virtual sink's monitor output to the default audio device.
 /// With post-link verification and retry logic to handle WirePlumber startup races.
-pub fn setup_loopbacks() -> Result<()> {
+pub fn setup_loopbacks() -> Result<LoopStatus> {
     let output = subprocess::command("pactl")
         .args(["get-default-sink"])
         .output()
-        .context("pactl not found")?;
+        .map_err(|e| anyhow::anyhow!("{}", subprocess::spawn_error("pactl", &e)))?;
     let default_sink = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
     if default_sink.is_empty() {
-        tracing::warn!("No default audio output detected — loopbacks skipped");
-        return Ok(());
+        if crate::statelog::changed("audio.no-default-sink", "none") {
+            tracing::warn!("No default audio output detected — loopbacks skipped");
+        }
+        return Ok(LoopStatus { default_sink: None, missing: None });
     }
+    crate::statelog::changed("audio.no-default-sink", "present");
 
     // Output channels only — Mic is a capture sink, not a playback sink.
     const OUTPUT_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux"];
-    tracing::info!("Linking virtual sinks → {default_sink}");
+    if crate::statelog::changed("audio.link-target", &default_sink) {
+        tracing::info!("Linking virtual sinks → {default_sink}");
+    }
 
     // Pre-check: read existing links so we can skip ones already present.
     let existing_links = parse_pw_links().unwrap_or_default();
@@ -834,11 +1144,21 @@ pub fn setup_loopbacks() -> Result<()> {
                         tracing::debug!("pw-link {source} → {dest}: {err_str}");
                     }
                 }
-                Err(e) => tracing::debug!("pw-link spawn failed: {e}"),
+                Err(e) => {
+                    // Missing pw-link means NO channel gets linked to the
+                    // speakers; say so (once) with the package to install.
+                    let msg = subprocess::spawn_error("pw-link", &e);
+                    if crate::statelog::changed("audio.pw-link-spawn", &msg) {
+                        tracing::error!("audio routing disabled: {msg}");
+                    }
+                }
                 _ => {}
             }
         }
     }
+
+    // Unverified links count as missing: "ready" must be earned.
+    let mut last_missing = intended_links.len();
 
     // Post-link verification: retry missing links up to 3 times with backoff
     const MAX_RETRIES: u32 = 3;
@@ -858,9 +1178,11 @@ pub fn setup_loopbacks() -> Result<()> {
                     .cloned()
                     .collect();
 
+                last_missing = missing.len();
                 if missing.is_empty() {
-                    tracing::debug!("Loopback verification passed (attempt {MAX_RETRIES}/{MAX_RETRIES})");
-                    return Ok(());
+                    tracing::debug!("Loopback verification passed (attempt {attempt}/{MAX_RETRIES})");
+                    crate::statelog::changed("audio.links-missing", "none");
+                    return Ok(LoopStatus { default_sink: Some(default_sink.clone()), missing: Some(0) });
                 }
 
                 // Retry missing links
@@ -878,31 +1200,39 @@ pub fn setup_loopbacks() -> Result<()> {
                             .output();
                     }
                 } else {
-                    // Final attempt: log as error (non-fatal, but unmissable)
-                    for (source, dest, channel) in missing.iter() {
+                    // Final attempt: log as error (non-fatal, but unmissable) —
+                    // once per distinct set, since a degraded graph is re-tried
+                    // every minute and would otherwise repeat this forever.
+                    let key: Vec<String> = missing.iter().map(|(s, d, _)| format!("{s}>{d}")).collect();
+                    if crate::statelog::changed("audio.links-missing", &key.join(",")) {
+                        for (source, dest, channel) in missing.iter() {
+                            tracing::error!(
+                                "Failed to link after {} retries: {} → {} (channel {}) — this channel may be silent \
+                                 (sinks without playback_FL/FR ports, e.g. pro-audio profiles, cannot be linked)",
+                                MAX_RETRIES,
+                                source,
+                                dest,
+                                channel
+                            );
+                        }
                         tracing::error!(
-                            "Failed to link after {} retries: {} → {} (channel {}) — this channel may be silent",
-                            MAX_RETRIES,
-                            source,
-                            dest,
-                            channel
+                            "Some loopback links could not be established. Check WirePlumber logs: systemctl --user status wireplumber"
                         );
                     }
-                    tracing::error!(
-                        "Some loopback links could not be established. Check WirePlumber logs: systemctl --user status wireplumber"
-                    );
                 }
             }
             Err(e) => {
-                tracing::warn!(
+                tracing::debug!(
                     "Failed to verify loopback links on attempt {}/{}: {}",
                     attempt,
                     MAX_RETRIES,
                     e
                 );
-                if attempt == MAX_RETRIES {
+                if attempt == MAX_RETRIES
+                    && crate::statelog::changed("audio.links-verify", &format!("{e:#}"))
+                {
                     tracing::error!(
-                        "Could not verify loopback setup after {} attempts — continuing anyway",
+                        "Could not verify loopback setup after {} attempts ({e:#}) — continuing anyway",
                         MAX_RETRIES
                     );
                 }
@@ -910,7 +1240,14 @@ pub fn setup_loopbacks() -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(LoopStatus { default_sink: Some(default_sink), missing: Some(last_missing) })
+}
+
+/// Result of linking the output channels to the default sink.
+pub struct LoopStatus {
+    pub default_sink: Option<String>,
+    /// Links still absent after the verify pass; `None` = nothing to link to.
+    pub missing: Option<usize>,
 }
 
 /// Move blacklisted system-app streams (plasmashell, kwin_*, etc.) off OpenGG
@@ -980,5 +1317,61 @@ fn cleanup_blacklisted_routing() {
         let _result = subprocess::command("pactl")
             .args(["move-sink-input", &idx.to_string(), &default_sink])
             .output();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SHORT: &str = "\
+60\talsa_output.pci-0000_00_1f.3.analog-stereo\tPipeWire\ts32le 2ch 48000Hz\tRUNNING
+61\tOpenGG_Game\tPipeWire\ts16le 2ch 48000Hz\tIDLE
+62\tOpenGG_Chat\tPipeWire\ts16le 2ch 48000Hz\tIDLE
+";
+
+    #[test]
+    fn parses_sink_names_and_finds_exactly_what_is_missing() {
+        let names = sink_names_from_short(SHORT);
+        assert_eq!(names.len(), 3);
+        assert_eq!(missing_sinks(&names), vec!["OpenGG_Media", "OpenGG_Aux", "OpenGG_Mic"]);
+    }
+
+    #[test]
+    fn missing_match_is_exact_not_substring() {
+        // A longer name must not satisfy OpenGG_Mic.
+        let names = vec!["OpenGG_Mic_extra".to_string()];
+        assert!(missing_sinks(&names).contains(&"OpenGG_Mic".to_string()));
+    }
+
+    #[test]
+    fn health_is_ready_only_when_everything_is_there() {
+        let all: Vec<String> = SINK_CHANNELS.iter().map(|c| format!("OpenGG_{c}")).collect();
+        let mut h = Health {
+            pulse_reachable: true,
+            sinks_present: all,
+            sinks_missing: vec![],
+            output_links_missing: Some(0),
+            default_sink: Some("x".into()),
+            mic_loopback_error: None,
+            last_check_unix: 0,
+        };
+        assert!(h.is_ready(), "{:?}", h.problems());
+
+        h.sinks_present.truncate(1);
+        h.sinks_missing = missing_sinks(&h.sinks_present);
+        let p = h.problems().join("; ");
+        assert!(p.contains("1/5 virtual sinks present") && p.contains("OpenGG_Chat"), "{p}");
+
+        h.sinks_missing.clear();
+        h.output_links_missing = Some(3);
+        assert!(h.problems().join(";").contains("3 output link"));
+        h.output_links_missing = None;
+        assert!(h.problems().join(";").contains("no default output"));
+        h.output_links_missing = Some(0);
+        h.mic_loopback_error = Some("No default source".into());
+        assert!(h.problems().join(";").contains("mic loopback: No default source"));
+        h.pulse_reachable = false;
+        assert_eq!(h.problems(), vec!["pipewire-pulse is not reachable".to_string()]);
     }
 }

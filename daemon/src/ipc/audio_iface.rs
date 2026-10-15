@@ -22,6 +22,9 @@ struct ChannelData {
     volume: u32,
     muted: bool,
     apps: Vec<AppData>,
+    /// Additive field: false = volume/muted are cached values because the
+    /// channel's sink was not found (backend down / not created yet).
+    live: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -39,6 +42,7 @@ impl AudioInterface {
             name: ch.name,
             volume: (ch.volume * 100.0) as u32,
             muted: ch.muted,
+            live: ch.live,
             apps: ch.assigned_apps.into_iter().map(|a| AppData {
                 id: a.id, name: a.name, binary: a.binary,
             }).collect(),
@@ -47,11 +51,11 @@ impl AudioInterface {
     }
 
     async fn set_volume(&self, channel: &str, volume: u32) -> zbus::fdo::Result<()> {
-        self.hub.set_volume(channel, volume).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        self.hub.set_volume(channel, volume).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
     async fn set_mute(&self, channel: &str, muted: bool) -> zbus::fdo::Result<()> {
-        self.hub.set_mute(channel, muted).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        self.hub.set_mute(channel, muted).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
     async fn get_apps(&self) -> String {
@@ -70,7 +74,7 @@ impl AudioInterface {
     }
 
     async fn route_app(&self, app_id: u32, channel: &str) -> zbus::fdo::Result<()> {
-        self.hub.route_app(app_id, channel).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        self.hub.route_app(app_id, channel).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
     async fn remove_virtual_audio(&self) -> zbus::fdo::Result<()> {

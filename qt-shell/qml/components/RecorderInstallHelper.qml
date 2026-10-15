@@ -15,7 +15,6 @@ ColumnLayout {
     property var distro: JSON.parse(SystemController.distroJson || "{}")
     readonly property bool isMissing: root.deps.some(d => d.feature === "recording" && !d.available)
 
-    property bool copied: false
     property bool rechecking: false
 
     function distroFamily() {
@@ -81,51 +80,10 @@ ColumnLayout {
                 }
             }
 
-            RowLayout {
+            CommandLine {
                 Layout.fillWidth: true
-                spacing: 8
-                Rectangle {
-                    Layout.fillWidth: true
-                    radius: Theme.radius
-                    color: Theme.bg
-                    border.width: 1
-                    border.color: Theme.border
-                    implicitHeight: cmdText.implicitHeight + 12
-                    Text {
-                        id: cmdText
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        text: root.installCommand()
-                        color: Theme.text
-                        font.pixelSize: 11
-                        font.family: "monospace"
-                        wrapMode: Text.WordWrap
-                    }
-                }
-                Rectangle {
-                    width: 60; height: 24
-                    radius: Theme.radius
-                    color: Theme.surface
-                    border.width: 1
-                    border.color: Theme.border
-                    Text {
-                        anchors.centerIn: parent
-                        text: root.copied ? (I18n.language, I18n.t("settings.captureGsr.copied")) : (I18n.language, I18n.t("common.copy"))
-                        color: Theme.textDim
-                        font.pixelSize: 10
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            SystemController.writeClipboard(root.installCommand())
-                            root.copied = true
-                            copiedTimer.restart()
-                        }
-                    }
-                }
+                text: root.installCommand()
             }
-            Timer { id: copiedTimer; interval: 1500; onTriggered: root.copied = false }
 
             Text {
                 horizontalAlignment: Text.AlignLeft

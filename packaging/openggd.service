@@ -1,21 +1,46 @@
 [Unit]
 Description=OpenGG Gaming Daemon
 Documentation=https://github.com/UPdullah895/opengg
-After=graphical-session.target pipewire.service wireplumber.service
-Requires=pipewire.service
+# pactl talks to pipewire-pulse, not to pipewire itself, so order after (and pull
+# in) pipewire-pulse too. Ordering alone does not guarantee the socket is
+# answering yet; openggd also waits for it and retries on its own.
+Wants=pipewire-pulse.service wireplumber.service
+After=graphical-session.target pipewire.service pipewire-pulse.service pipewire-pulse.socket wireplumber.service
+# Deliberately NOT Requires=pipewire.service: desktops that start PipeWire from an
+# autostart script instead of a systemd user unit have no such unit, and a hard
+# dependency made openggd fail to start there ("dependency failed / unit not
+# found"). Wants= starts it when it exists and is harmless when it does not.
+Wants=pipewire.service
+# Give up (and show a clear "failed" state in `systemctl --user status openggd`)
+# after 5 failed starts within a minute instead of restarting every 3 s forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
+# /usr/bin is where every package puts the daemon (release tarball, AUR).
+# `make install` rewrites this to ~/.local/bin for a from-source install —
+# see the Makefile's install-service target. It used to be the other way
+# round, which meant every packaged install pointed D-Bus activation and
+# this unit at a path that only exists on a developer's machine: the daemon
+# never started, no OpenGG_* sinks were created, and the mixer showed
+# nothing but Master.
 Type=dbus
 BusName=org.opengg.Daemon
-ExecStart=%h/.local/bin/openggd
+ExecStart=/usr/bin/openggd
 Restart=on-failure
 RestartSec=3
-# Security hardening
 NoNewPrivileges=true
-ProtectHome=read-only
-ProtectSystem=strict
-ReadWritePaths=%h/.config/opengg %h/.local/share/opengg %h/Videos/OpenGG
-PrivateTmp=true
+# No filesystem sandboxing (ProtectHome/ProtectSystem/ReadWritePaths/PrivateTmp).
+# It used to whitelist %h/.config/opengg, %h/.local/share/opengg and
+# %h/Videos/OpenGG, which broke real installs two ways:
+# - systemd refuses to start a unit whose ReadWritePaths do not exist, so on
+#   any fresh account the daemon died with 226/NAMESPACE ("Failed to set up
+#   mount namespacing: ~/.config/opengg: No such file or directory") — for
+#   D-Bus activation and `systemctl --user enable --now` alike — and the app
+#   came up with no daemon and no OpenGG_* sinks.
+# - the clips folder is the XDG Videos dir (localized names) or a path the
+#   user picks in Settings, neither of which a fixed whitelist can name.
+# A user unit already runs with only the user's own rights.
 
 [Install]
 WantedBy=default.target

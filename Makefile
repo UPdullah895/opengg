@@ -72,7 +72,7 @@ setup:
 	@chmod +x dev.sh && ./dev.sh setup
 
 # ── Install ──────────────────────────────────────────────────────
-install: build install-service
+install: build
 	@mkdir -p $(HOME)/.local/bin
 	install -m 755 $(DAEMON)/target/release/openggd $(HOME)/.local/bin/openggd
 	install -m 755 $(QT_SHELL)/target/release/opengg-qt $(HOME)/.local/bin/opengg
@@ -81,14 +81,28 @@ install: build install-service
 	@echo "✓ Installed openggd to ~/.local/bin/"
 	@echo "✓ Installed opengg-qt as ~/.local/bin/opengg"
 	@echo "✓ Installed locales to ~/.local/share/opengg/locales/"
+	# Last, not a prerequisite: enabling the unit starts it, and before the
+	# copy above that fails with 203/EXEC ("Could not enable openggd.service").
+	@$(MAKE) --no-print-directory install-service
 
 # ── systemd user service ─────────────────────────────────────────
 # Install + enable the per-user daemon so the virtual audio engine auto-starts at
 # login and survives reboots (the sinks are ephemeral and recreated on daemon start).
 # No sudo needed — this is a `--user` unit.
 install-service:
-	@mkdir -p $(HOME)/.config/systemd/user
-	cp $(ROOT)/packaging/openggd.service $(HOME)/.config/systemd/user/
+	@mkdir -p $(HOME)/.config/systemd/user $(HOME)/.local/share/dbus-1/services
+	# The packaged units point at /usr/bin/openggd, which is where every
+	# package puts it. A from-source install puts it in ~/.local/bin, so
+	# rewrite the path rather than shipping a unit that starts the wrong
+	# binary (or none at all).
+	sed 's|/usr/bin/openggd|$(HOME)/.local/bin/openggd|' \
+		$(ROOT)/packaging/openggd.service > $(HOME)/.config/systemd/user/openggd.service
+	# Register D-Bus activation too. Without this the daemon only ever starts
+	# because the unit below is enabled — `org.opengg.Daemon` could not be
+	# activated on demand, which is the whole point of a bus-activated service.
+	sed 's|/usr/bin/openggd|$(HOME)/.local/bin/openggd|' \
+		$(ROOT)/packaging/org.opengg.Daemon.service \
+		> $(HOME)/.local/share/dbus-1/services/org.opengg.Daemon.service
 	@systemctl --user daemon-reload
 	@systemctl --user enable --now openggd.service && \
 		echo "✓ openggd.service enabled (auto-starts at login)" || \

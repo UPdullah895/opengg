@@ -93,7 +93,7 @@ Rectangle {
             spacing: 14
 
             Text {
-                text: dlg.result.length > 0 ? "Export Complete" : "Export Clip"
+                text: dlg.result.length > 0 ? "Export Complete" : (I18n.language, I18n.t("editor.exportClip"))
                 color: Theme.text
                 font.pixelSize: 18
                 font.weight: Font.Bold
@@ -116,12 +116,12 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: 8
                     ClipsBarButton {
-                        label: "Show in folder"
+                        label: (I18n.language, I18n.t("clips.contextMenu.showInFolder"))
                         icon: "folder"
                         onTriggered: SystemController.revealInFolder(dlg.result)
                     }
                     ClipsBarButton {
-                        label: "Copy path"
+                        label: (I18n.language, I18n.t("clips.contextMenu.copyPath"))
                         icon: "package"
                         onTriggered: SystemController.writeClipboard(dlg.result)
                     }
@@ -321,13 +321,9 @@ Rectangle {
                     }
                 }
 
-                Text {
+                ErrorText {
                     Layout.fillWidth: true
-                    visible: dlg.error.length > 0
                     text: dlg.error
-                    color: Theme.danger
-                    font.pixelSize: 11
-                    wrapMode: Text.WordWrap
                 }
             }
 
@@ -348,7 +344,7 @@ Rectangle {
                     border.color: Theme.border
                     Text {
                         anchors.centerIn: parent
-                        text: dlg.result.length > 0 ? "Close" : "Cancel"
+                        text: dlg.result.length > 0 ? (I18n.language, I18n.t("common.close")) : (I18n.language, I18n.t("common.cancel"))
                         color: Theme.text
                         font.pixelSize: 13
                     }
@@ -369,7 +365,7 @@ Rectangle {
                     color: dlg.running ? Theme.bgHover : Theme.accent
                     Text {
                         anchors.centerIn: parent
-                        text: dlg.running ? "Exporting…" : "Export Clip"
+                        text: dlg.running ? (I18n.language, I18n.t("editor.exporting")) : (I18n.language, I18n.t("editor.exportClip"))
                         color: dlg.running ? Theme.textDim : "#ffffff"
                         font.pixelSize: 13
                         font.weight: Font.DemiBold

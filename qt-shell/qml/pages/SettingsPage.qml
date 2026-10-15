@@ -38,7 +38,7 @@ Rectangle {
         {
             labelKey: "extensions",
             items: [
-                { key: "extensions", built: true, badge: "Beta" },
+                { key: "extensions", built: true, badge: (I18n.language, I18n.t("common.beta")) },
                 { key: "store", built: true },
             ],
         },

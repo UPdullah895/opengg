@@ -16,31 +16,78 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tracing::{debug, trace};
 
-/// Global cache for binary availability checks.
-static BIN_CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+/// How long a "tool is missing" answer is trusted. A positive answer is cached
+/// for the life of the process (a tool does not usually vanish), but a negative
+/// one must expire: the user who installs `pipewire-utils` or `headsetcontrol`
+/// while the daemon runs should not have to restart it to be noticed.
+const MISSING_RECHECK: Duration = Duration::from_secs(60);
+
+/// Global cache for binary availability checks: (found, when it was checked).
+static BIN_CACHE: OnceLock<Mutex<HashMap<String, (bool, Instant)>>> = OnceLock::new();
 
 /// Initialize or get the binary cache.
-fn get_cache() -> &'static Mutex<HashMap<String, bool>> {
+fn get_cache() -> &'static Mutex<HashMap<String, (bool, Instant)>> {
     BIN_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Whether a cached entry may still be used.
+fn cache_entry_fresh(found: bool, age: Duration) -> bool {
+    found || age < MISSING_RECHECK
 }
 
 /// Check if a binary is available on $PATH.
 ///
 /// Implements a `which`-style lookup: iterates $PATH entries and checks for an
-/// executable file. Results are cached in a global `HashMap<String, bool>`.
+/// executable file. Hits are cached for the process lifetime, misses for
+/// `MISSING_RECHECK` so a later install is picked up.
 pub fn is_available(bin: &str) -> bool {
     let cache = get_cache();
-    let mut map = cache.lock().unwrap();
+    let mut map = match cache.lock() {
+        Ok(m) => m,
+        Err(p) => p.into_inner(),
+    };
 
-    if let Some(&cached) = map.get(bin) {
-        return cached;
+    if let Some(&(found, at)) = map.get(bin) {
+        if cache_entry_fresh(found, at.elapsed()) {
+            return found;
+        }
     }
 
     let found = find_in_path(bin).is_some();
-    map.insert(bin.to_string(), found);
+    map.insert(bin.to_string(), (found, Instant::now()));
     found
+}
+
+/// Absolute path of `bin` on $PATH, uncached (diagnostics only).
+pub fn which(bin: &str) -> Option<String> {
+    find_in_path(bin)
+}
+
+/// Human install hint for a tool the daemon shells out to, so "not found" tells
+/// the user what to do instead of just what failed.
+pub fn install_hint(bin: &str) -> &'static str {
+    match bin {
+        "pactl" => "install pipewire-pulse (Arch/Fedora) or pulseaudio-utils (Debian/Ubuntu)",
+        "pw-link" | "pw-cli" | "pw-dump" => {
+            "install pipewire (Arch/Debian/Ubuntu) or pipewire-utils (Fedora/openSUSE)"
+        }
+        "ffmpeg" | "ffprobe" => "install ffmpeg",
+        "gpu-screen-recorder" => "install gpu-screen-recorder",
+        "headsetcontrol" => "install headsetcontrol (optional, headset support)",
+        _ => "install it and make sure it is on PATH",
+    }
+}
+
+/// Describe a failed spawn: names the binary and, for "not found", the package.
+pub fn spawn_error(bin: &str, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        format!("{bin} not found on PATH - {}", install_hint(bin))
+    } else {
+        format!("could not run {bin}: {e}")
+    }
 }
 
 /// Require a binary to be available, returning an error if it is not.
@@ -93,9 +140,16 @@ fn is_executable(path: &Path) -> bool {
 /// Logs the binary invocation at debug level. The returned `Command` can be
 /// further configured with args, stdin, stdout, etc., and then spawned by
 /// the caller.
+///
+/// `LC_ALL=C` is forced because several callers parse the human-readable text
+/// of pactl / pw-link (`Mute: yes`, `Name: `, "already"), and pactl localises
+/// those strings; in a translated session the parse would silently find
+/// nothing.
 pub fn command(bin: &str) -> Command {
     debug!("subprocess: invoking {}", bin);
-    Command::new(bin)
+    let mut cmd = Command::new(bin);
+    cmd.env("LC_ALL", "C");
+    cmd
 }
 
 /// Run a command synchronously and return its output.
@@ -172,6 +226,22 @@ mod tests {
     #[test]
     fn test_nonexistent_binary() {
         assert!(!is_available("nonexistent_binary_xyz_123"));
+    }
+
+    #[test]
+    fn missing_results_expire_but_hits_do_not() {
+        assert!(cache_entry_fresh(true, Duration::from_secs(86_400)));
+        assert!(cache_entry_fresh(false, Duration::from_secs(5)));
+        assert!(!cache_entry_fresh(false, MISSING_RECHECK + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn spawn_error_names_the_package_for_missing_tools() {
+        let e = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let msg = spawn_error("pw-link", &e);
+        assert!(msg.contains("pw-link not found") && msg.contains("pipewire"), "{msg}");
+        let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(spawn_error("pactl", &e).contains("could not run pactl"));
     }
 
     #[test]

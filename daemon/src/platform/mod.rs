@@ -11,6 +11,10 @@
 //! NOTE: The existing D-Bus handlers and call sites remain unchanged. This is purely
 //! additive scaffolding; the facades continue to be used directly by the daemon.
 
+// Newer clippy flags the `#[must_use]` that `#[async_trait]` itself generates on
+// every trait method; there is no source-level attribute to remove.
+#![allow(clippy::double_must_use)]
+
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -81,6 +85,10 @@ impl std::fmt::Display for Platform {
 /// platform-specific audio routing and mixing APIs.
 /// Port scaffolding — implemented per-OS in Phase 4-5.
 #[allow(dead_code)]
+// async_trait marks each generated method #[must_use] while also returning
+// a #[must_use] boxed future, which newer clippy flags as double_must_use.
+// The lint is about macro output, not code written here.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait AudioBackend: Send + Sync {
     /// Get all audio channels and their current state.
@@ -109,6 +117,10 @@ pub trait AudioBackend: Send + Sync {
 /// screen recording, replay buffer, and clip saving.
 /// Port scaffolding — implemented per-OS in Phase 4-5.
 #[allow(dead_code)]
+// async_trait marks each generated method #[must_use] while also returning
+// a #[must_use] boxed future, which newer clippy flags as double_must_use.
+// The lint is about macro output, not code written here.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait CaptureBackend: Send + Sync {
     /// Get current recorder state (Idle, Replay, or Recording).
@@ -137,6 +149,10 @@ pub trait CaptureBackend: Send + Sync {
 /// mice, headsets, and other input/output devices.
 /// Port scaffolding — implemented per-OS in Phase 4-5.
 #[allow(dead_code)]
+// async_trait marks each generated method #[must_use] while also returning
+// a #[must_use] boxed future, which newer clippy flags as double_must_use.
+// The lint is about macro output, not code written here.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait DeviceBackend: Send + Sync {
     /// List all connected devices.

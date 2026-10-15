@@ -43,6 +43,9 @@ pub mod qobject {
         /// and fills in asynchronously as `requestWaveform` calls land, so the
         /// editor's lanes draw a baseline first and gain their waveform after.
         #[qproperty(QString, waveforms_json, cxx_name = "waveformsJson")]
+        /// What `loadClip` restored besides the trim window, as JSON:
+        /// `{"volume": 0.4 | null, "trackGains": {"0": 0.5, ...} | null}`.
+        #[qproperty(QString, saved_state_json, cxx_name = "savedStateJson")]
         type EditorController = super::EditorControllerRust;
 
         /// Probe the clip's duration and load its saved trim window (if any,
@@ -55,6 +58,21 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "saveTrim"]
         fn save_trim(self: Pin<&mut Self>, filepath: QString, start: f64, end: f64);
+
+        /// Persist everything the editor restores on reopen: the trim window,
+        /// the master volume (negative = unset) and per-track gains (a JSON
+        /// object keyed by track index). Called as the user edits, not only
+        /// on export — leaving the editor used to throw the trim away.
+        #[qinvokable]
+        #[cxx_name = "saveState"]
+        fn save_state(
+            self: Pin<&mut Self>,
+            filepath: QString,
+            start: f64,
+            end: f64,
+            volume: f64,
+            track_gains_json: QString,
+        );
 
         /// Run the lossless trim export on a background thread.
         #[qinvokable]
@@ -134,6 +152,7 @@ pub struct EditorControllerRust {
     media_info_json: QString,
     screenshot_path: QString,
     waveforms_json: QString,
+    saved_state_json: QString,
     /// `<filepath>|<stream>|<peaks>` keys already dispatched, so a lane that
     /// re-evaluates its binding cannot spawn a second ffmpeg for the same
     /// track. Cleared by `loadClip`.
@@ -151,14 +170,21 @@ impl qobject::EditorController {
         self.as_mut().set_export_error(QString::default());
         self.as_mut().set_export_result(QString::default());
 
-        match opengg_core::clips::get_trim_state(&fp) {
+        match opengg_core::clips::get_editor_state(&fp) {
             Ok(Some(t)) => {
-                self.as_mut().set_trim_start(t.trim_start);
-                self.as_mut().set_trim_end(t.trim_end.min(dur).max(t.trim_start));
+                self.as_mut().set_trim_start(t.trim_start.clamp(0.0, dur));
+                // A zero end is what an untouched row holds; treat it as "whole clip".
+                let end = if t.trim_end > 0.0 { t.trim_end.min(dur) } else { dur };
+                self.as_mut().set_trim_end(end.max(t.trim_start.min(dur)));
+                self.as_mut().set_saved_state_json(QString::from(
+                    &serde_json::json!({ "volume": t.volume, "trackGains": t.track_gains })
+                        .to_string(),
+                ));
             }
             _ => {
                 self.as_mut().set_trim_start(0.0);
                 self.as_mut().set_trim_end(dur);
+                self.as_mut().set_saved_state_json(QString::from("{}"));
             }
         }
 
@@ -185,6 +211,26 @@ impl qobject::EditorController {
     pub fn save_trim(self: Pin<&mut Self>, filepath: QString, start: f64, end: f64) {
         if let Err(e) = opengg_core::clips::save_trim_state(&filepath.to_string(), start, end) {
             eprintln!("EditorController::save_trim: {e}");
+        }
+    }
+
+    pub fn save_state(
+        self: Pin<&mut Self>,
+        filepath: QString,
+        start: f64,
+        end: f64,
+        volume: f64,
+        track_gains_json: QString,
+    ) {
+        let st = opengg_core::clips::EditorState {
+            trim_start: start,
+            trim_end: end,
+            volume: (volume >= 0.0).then_some(volume.min(1.0)),
+            track_gains: serde_json::from_str(&track_gains_json.to_string())
+                .unwrap_or(serde_json::Value::Null),
+        };
+        if let Err(e) = opengg_core::clips::save_editor_state(&filepath.to_string(), &st) {
+            eprintln!("EditorController::save_state: {e}");
         }
     }
 

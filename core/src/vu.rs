@@ -31,14 +31,10 @@ pub fn spawn_channel_reader(
     gen: Arc<AtomicU64>,
     my_gen: u64,
 ) {
-    let has_pw_cat = Command::new("which")
-        .arg("pw-cat")
-        .output()
-        .ok()
-        .map(|out| out.status.success())
-        .unwrap_or(false);
-
-    if !has_pw_cat {
+    // In-process PATH lookup (cached) instead of forking `which`, which is
+    // itself not installed everywhere.
+    if !crate::subprocess::is_available("pw-cat") {
+        log::warn!("vu: pw-cat not found ({}); metering disabled", crate::subprocess::package_hint("pw-cat"));
         let _ = tx.send((name, -60.0));
         return;
     }

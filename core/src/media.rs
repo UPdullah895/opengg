@@ -315,8 +315,16 @@ pub fn generate_thumbnail(filepath: String, duration: Option<f64>) -> Result<Str
     // 480p thumbnails: ~853x480 at q:v 3 (~90KB each). Matches SteelSeries quality.
     let r = Command::new("ffmpeg")
         .args([
+            // One decode thread per process. Several of these run in
+            // parallel (see the pool in `qt-shell/src/clips.rs`), and letting
+            // each one fan out across every core is what makes thumbnailing
+            // a fresh library feel like the machine has stalled.
+            "-threads", "1",
             "-ss", &format!("{seek:.2}"),
             "-i", &filepath,
+            // Nothing here needs the audio or subtitle streams; decoding them
+            // to throw them away is pure cost.
+            "-an", "-sn",
             "-vframes", "1",
             "-vf", "scale=-2:480",
             "-q:v", "3",
@@ -709,8 +717,11 @@ pub fn count_audio_streams(path: &str) -> u32 {
 
 /// Get the global stream indices of all audio streams.
 pub fn get_audio_stream_global_indices(path: &str) -> Vec<u32> {
-    if let Ok(o) = Command::new("ffprobe")
-        .args([
+    // Bounded: ffprobe on a clip on a stalled network mount would otherwise
+    // hang the calling thread forever.
+    if let Ok(out) = crate::subprocess::run_tool(
+        "ffprobe",
+        &[
             "-v",
             "quiet",
             "-select_streams",
@@ -720,23 +731,18 @@ pub fn get_audio_stream_global_indices(path: &str) -> Vec<u32> {
             "-of",
             "csv=p=0",
             path,
-        ])
-        .output()
-    {
-        if o.status.success() {
-            return String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter_map(|l| l.trim().parse::<u32>().ok())
-                .collect();
-        }
+        ],
+    ) {
+        return out.lines().filter_map(|l| l.trim().parse::<u32>().ok()).collect();
     }
     vec![0]
 }
 
 /// Probe video resolution for normalized overlay sizing.
 pub fn probe_resolution(path: &str) -> (u32, u32) {
-    if let Ok(o) = Command::new("ffprobe")
-        .args([
+    if let Ok(s) = crate::subprocess::run_tool(
+        "ffprobe",
+        &[
             "-v",
             "quiet",
             "-select_streams",
@@ -746,17 +752,13 @@ pub fn probe_resolution(path: &str) -> (u32, u32) {
             "-of",
             "csv=s=x:p=0",
             path,
-        ])
-        .output()
-    {
-        if o.status.success() {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            let parts: Vec<&str> = s.split('x').collect();
-            if parts.len() == 2 {
-                let w = parts[0].parse().unwrap_or(1920);
-                let h = parts[1].parse().unwrap_or(1080);
-                return (w, h);
-            }
+        ],
+    ) {
+        let parts: Vec<&str> = s.split('x').collect();
+        if parts.len() == 2 {
+            let w = parts[0].parse().unwrap_or(1920);
+            let h = parts[1].parse().unwrap_or(1080);
+            return (w, h);
         }
     }
     (1920, 1080) // fallback
@@ -798,15 +800,9 @@ pub fn find_system_font_by_name(hint: Option<&str>) -> String {
             }
         }
         // Unknown name: ask fontconfig
-        if let Ok(out) = Command::new("fc-match")
-            .args(["--format=%{file}", name])
-            .output()
-        {
-            if out.status.success() {
-                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !p.is_empty() && Path::new(&p).exists() {
-                    return p;
-                }
+        if let Ok(p) = crate::subprocess::run_tool("fc-match", &["--format=%{file}", name]) {
+            if !p.is_empty() && Path::new(&p).exists() {
+                return p;
             }
         }
     }
@@ -833,15 +829,9 @@ pub fn find_system_font() -> String {
         }
     }
     // Fallback: use fc-match to find any available sans-serif font
-    if let Ok(output) = Command::new("fc-match")
-        .args(["--format=%{file}", "sans"])
-        .output()
-    {
-        if output.status.success() {
-            let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !p.is_empty() && std::path::Path::new(&p).exists() {
-                return p;
-            }
+    if let Ok(p) = crate::subprocess::run_tool("fc-match", &["--format=%{file}", "sans"]) {
+        if !p.is_empty() && std::path::Path::new(&p).exists() {
+            return p;
         }
     }
     // Last resort
@@ -941,8 +931,9 @@ pub fn trim_clip<F: Fn(f64, &str)>(
 /// Probe a video file for duration, width, height.
 pub fn probe_video(p: &Path) -> (f64, u32, u32) {
     let d = probe_duration(&p.to_string_lossy());
-    let dm = Command::new("ffprobe")
-        .args([
+    let dm = crate::subprocess::run_tool(
+        "ffprobe",
+        &[
             "-v",
             "quiet",
             "-select_streams",
@@ -952,11 +943,9 @@ pub fn probe_video(p: &Path) -> (f64, u32, u32) {
             "-of",
             "csv=s=x:p=0",
             &p.to_string_lossy(),
-        ])
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
+        ],
+    )
+    .unwrap_or_default();
     let ps: Vec<&str> = dm.split('x').collect();
     (
         d,
@@ -967,8 +956,9 @@ pub fn probe_video(p: &Path) -> (f64, u32, u32) {
 
 /// Probe a file for duration in seconds.
 pub fn probe_duration(p: &str) -> f64 {
-    Command::new("ffprobe")
-        .args([
+    crate::subprocess::run_tool(
+        "ffprobe",
+        &[
             "-v",
             "quiet",
             "-show_entries",
@@ -976,11 +966,11 @@ pub fn probe_duration(p: &str) -> f64 {
             "-of",
             "default=noprint_wrappers=1:nokey=1",
             p,
-        ])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
-        .unwrap_or(0.0)
+        ],
+    )
+    .ok()
+    .and_then(|s| s.parse().ok())
+    .unwrap_or(0.0)
 }
 
 /// Extract "YYYY-MM-DD HH:MM" from a filename stem.

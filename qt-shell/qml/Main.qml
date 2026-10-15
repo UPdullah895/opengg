@@ -33,7 +33,9 @@ ApplicationWindow {
 
     /// Immersive AND the view has faded its chrome out after an idle moment.
     readonly property bool immersiveChromeHidden:
-        (root.currentPage === "editor" && editorPage.theaterMode && editorPage.chromeHidden)
+        // The editor's full view drops the title bar at once rather than
+        // after the idle fade: only the playback controls stay on screen.
+        (root.currentPage === "editor" && editorPage.theaterMode)
         || clipsPage.playerChromeHidden
 
     // Settings → General → "Minimize to Tray" was persisted but nothing
@@ -58,7 +60,10 @@ ApplicationWindow {
     property bool reallyQuit: false
 
     onClosing: (close) => {
-        if (root.s.runInBackground && !root.reallyQuit) {
+        // Only hide when there is a tray to bring the window back from.
+        // Desktops without a StatusNotifier host (stock GNOME, bare WMs) have
+        // none, and hiding there leaves an invisible process with no way back.
+        if (root.s.runInBackground && trayIcon.available && !root.reallyQuit) {
             close.accepted = false
             root.hide()
             return

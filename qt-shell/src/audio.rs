@@ -26,6 +26,12 @@ pub mod qobject {
         #[qproperty(QString, apps_json, cxx_name = "appsJson")]
         #[qproperty(bool, connected)]
         #[qproperty(bool, virtual_audio_ready, cxx_name = "virtualAudioReady")]
+        /// Why the last create/remove of the virtual sinks failed, or empty.
+        /// These used to discard their `Result` entirely, so a user whose
+        /// daemon was unreachable pressed "Create Virtual Audio", got no
+        /// channels and no message, and had nothing to report but "it did
+        /// nothing".
+        #[qproperty(QString, virtual_audio_error, cxx_name = "virtualAudioError")]
         #[qproperty(bool, checking_virtual_audio, cxx_name = "checkingVirtualAudio")]
         // Live per-channel VU levels as a JSON object (`{"Master": -12.3, ...}`,
         // dB, -60..0). Only populated while `vuRunning` — see startVuStream.
@@ -56,6 +62,20 @@ pub mod qobject {
         // to know whether Mixer's toggle was on, so it could push a channel
         // to 150% even with Overdrive off.
         #[qproperty(bool, overdrive_enabled, cxx_name = "overdriveEnabled")]
+        // Text of the most recent failed mixer action (route an app, change a
+        // device, set volume/mute, create/remove virtual audio). Cleared by
+        // the next successful user action of the same kind. Previously these
+        // went to stderr only, so the UI could not say why nothing happened.
+        #[qproperty(QString, last_error, cxx_name = "lastError")]
+        // Why `connected` is false: the daemon / audio-server error from the
+        // last refresh(), verbatim (e.g. a D-Bus ServiceUnknown). Empty while
+        // connected.
+        #[qproperty(QString, connection_error, cxx_name = "connectionError")]
+        // Non-empty when the audio server itself cannot be queried (pactl
+        // missing, or pipewire-pulse not running) — in which case
+        // `virtualAudioReady == false` means "unknown", NOT "not created yet",
+        // and offering "Create virtual audio" cannot help. Carries the fix.
+        #[qproperty(QString, server_error, cxx_name = "serverError")]
         type AudioController = super::AudioControllerRust;
 
         /// Fetch the current channel list from the daemon.
@@ -164,6 +184,7 @@ pub struct AudioControllerRust {
     apps_json: QString,
     connected: bool,
     virtual_audio_ready: bool,
+    virtual_audio_error: QString,
     checking_virtual_audio: bool,
     vu_levels_json: QString,
     vu_running: bool,
@@ -174,6 +195,9 @@ pub struct AudioControllerRust {
     channel_devices_json: QString,
     ear_blast_json: QString,
     overdrive_enabled: bool,
+    last_error: QString,
+    connection_error: QString,
+    server_error: QString,
 }
 
 impl qobject::AudioController {
@@ -196,8 +220,19 @@ impl qobject::AudioController {
                     Ok(j) => {
                         controller.as_mut().set_channels_json(QString::from(&j));
                         controller.as_mut().set_connected(true);
+                        controller.as_mut().set_connection_error(QString::default());
                     }
-                    Err(_) => controller.as_mut().set_connected(false),
+                    Err(e) => {
+                        // Keep the reason: "daemon not running" and "daemon
+                        // returned garbage" need different fixes. Only log on
+                        // a change, since this runs on a 2 s poll.
+                        let msg = QString::from(&e);
+                        if controller.connection_error() != &msg {
+                            eprintln!("AudioController::refresh: {e}");
+                        }
+                        controller.as_mut().set_connected(false);
+                        controller.as_mut().set_connection_error(msg);
+                    }
                 }
                 if let Ok(j) = apps {
                     controller.as_mut().set_apps_json(QString::from(&j));
@@ -223,14 +258,23 @@ impl qobject::AudioController {
         let binary = binary.to_string();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
-            match opengg_core::audio::route_app(app_id as u32, channel.clone(), binary.clone()) {
+            let result = match opengg_core::audio::route_app(app_id as u32, channel.clone(), binary.clone()) {
                 // Remember the choice so it survives the stream ending and
                 // the machine restarting — a bare `move-sink-input` lasts
                 // only as long as this sink-input does.
-                Ok(()) => store_app_rule(&binary, Some(&channel)),
-                Err(e) => eprintln!("routeApp: {e}"),
-            }
-            let _ = qt_thread.queue(|mut controller| controller.as_mut().refresh());
+                Ok(()) => {
+                    store_app_rule(&binary, Some(&channel));
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("routeApp: {e}");
+                    Err(e)
+                }
+            };
+            let _ = qt_thread.queue(move |mut controller| {
+                controller.as_mut().record_result(result);
+                controller.as_mut().refresh();
+            });
         });
     }
 
@@ -238,13 +282,22 @@ impl qobject::AudioController {
         let binary = binary.to_string();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
-            match opengg_core::audio::unroute_app(app_id as u32, binary.clone()) {
+            let result = match opengg_core::audio::unroute_app(app_id as u32, binary.clone()) {
                 // Back on Master means "no rule", not "a rule pointing at
                 // Master" — otherwise re-linking later would fight it.
-                Ok(()) => store_app_rule(&binary, None),
-                Err(e) => eprintln!("unrouteApp: {e}"),
-            }
-            let _ = qt_thread.queue(|mut controller| controller.as_mut().refresh());
+                Ok(()) => {
+                    store_app_rule(&binary, None);
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("unrouteApp: {e}");
+                    Err(e)
+                }
+            };
+            let _ = qt_thread.queue(move |mut controller| {
+                controller.as_mut().record_result(result);
+                controller.as_mut().refresh();
+            });
         });
     }
 
@@ -256,6 +309,7 @@ impl qobject::AudioController {
         // clamping the legitimate 100-150 range back down.
         let vol = volume.clamp(0, 150) as u32;
         let channel = channel.to_string();
+        let qt_thread = self.qt_thread();
         // Was a direct synchronous call (pactl subprocess spawn or a D-Bus
         // round trip, then a second round trip for refresh()) on the Qt/UI
         // thread. A fader drag calls this on every `onPositionChanged`, so
@@ -270,8 +324,12 @@ impl qobject::AudioController {
         // the dragged value optimistically, and MixerPage's 2s poll
         // reconciles with the daemon shortly after.
         std::thread::spawn(move || {
+            // Only a failure is reported back: a drag fires this continuously
+            // and a per-call success round trip would defeat the point of
+            // not touching the Qt thread here.
             if let Err(e) = opengg_core::audio::set_volume(channel, vol) {
                 eprintln!("setVolume: {e}");
+                let _ = qt_thread.queue(move |mut c| c.as_mut().record_result(Err(e)));
             }
         });
     }
@@ -280,10 +338,14 @@ impl qobject::AudioController {
         let channel = channel.to_string();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
-            if let Err(e) = opengg_core::audio::set_mute(channel, muted) {
+            let result = opengg_core::audio::set_mute(channel, muted);
+            if let Err(e) = &result {
                 eprintln!("setMute: {e}");
             }
-            let _ = qt_thread.queue(|mut c| c.as_mut().refresh());
+            let _ = qt_thread.queue(move |mut c| {
+                c.as_mut().record_result(result);
+                c.as_mut().refresh();
+            });
         });
     }
 
@@ -298,10 +360,21 @@ impl qobject::AudioController {
     pub fn refresh_devices(self: Pin<&mut Self>) {
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
-            let sinks = opengg_core::audio::list_audio_sinks_friendly().unwrap_or_default();
-            let sources = opengg_core::audio::list_mic_input_sources().unwrap_or_default();
+            let sinks_res = opengg_core::audio::list_audio_sinks_friendly();
+            let sources_res = opengg_core::audio::list_mic_input_sources();
+            // Keep the reason an empty picker is empty (pactl missing, server
+            // down) instead of showing a blank list with no explanation.
+            let problem = sinks_res.as_ref().err().cloned();
+            if let Some(e) = &problem {
+                eprintln!("refreshDevices: {e}");
+            }
+            let sinks = sinks_res.unwrap_or_default();
+            let sources = sources_res.unwrap_or_default();
             let channel_devices = opengg_core::audio::get_channel_devices_json();
             let _ = qt_thread.queue(move |mut c| {
+                if let Some(e) = problem {
+                    c.as_mut().set_last_error(QString::from(&e));
+                }
                 c.as_mut().set_output_devices_json(QString::from(
                     &serde_json::to_string(&sinks).unwrap_or_else(|_| "[]".into()),
                 ));
@@ -319,31 +392,68 @@ impl qobject::AudioController {
         let device = device.to_string();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
-            if let Err(e) = opengg_core::audio::set_channel_device(channel, device) {
+            let result = opengg_core::audio::set_channel_device(channel, device);
+            if let Err(e) = &result {
                 eprintln!("setChannelDevice: {e}");
             }
-            let _ = qt_thread.queue(|mut c| {
+            let _ = qt_thread.queue(move |mut c| {
+                c.as_mut().record_result(result);
                 c.as_mut().refresh();
                 c.as_mut().refresh_devices();
             });
         });
     }
 
+    /// Record the outcome of a user action: the error text on failure, a
+    /// clear on success.
+    fn record_result(mut self: Pin<&mut Self>, result: Result<(), String>) {
+        match result {
+            Ok(()) => self.as_mut().set_last_error(QString::default()),
+            Err(e) => self.as_mut().set_last_error(QString::from(&e)),
+        }
+    }
+
     pub fn refresh_virtual_audio_status(mut self: Pin<&mut Self>) {
         self.as_mut().set_checking_virtual_audio(true);
-        let ready = opengg_core::audio::check_virtual_audio_status().unwrap_or(false);
-        self.as_mut().set_virtual_audio_ready(ready);
+        match opengg_core::audio::check_virtual_audio_status() {
+            Ok(ready) => {
+                self.as_mut().set_virtual_audio_ready(ready);
+                self.as_mut().set_server_error(QString::default());
+            }
+            Err(e) => {
+                // Unknown, not "absent": see the serverError property doc.
+                eprintln!("refreshVirtualAudioStatus: {e}");
+                self.as_mut().set_virtual_audio_ready(false);
+                self.as_mut().set_server_error(QString::from(&e.to_string()));
+            }
+        }
         self.as_mut().set_checking_virtual_audio(false);
     }
 
     pub fn create_virtual_audio(mut self: Pin<&mut Self>) {
-        let _ = opengg_core::audio::create_virtual_audio();
+        match opengg_core::audio::create_virtual_audio() {
+            Ok(()) => self.as_mut().set_virtual_audio_error(QString::default()),
+            Err(e) => {
+                eprintln!("AudioController::create_virtual_audio: {e}");
+                self.as_mut().set_virtual_audio_error(QString::from(&e));
+            }
+        }
         self.as_mut().refresh_virtual_audio_status();
+        // Re-query the channel list. Creating the sinks changes exactly what
+        // `get_channels` reports, and without this the Mixer kept showing the
+        // list from before — so a successful creation still looked like the
+        // button had done nothing.
+        self.as_mut().refresh();
     }
 
     pub fn remove_virtual_audio(mut self: Pin<&mut Self>) {
-        let _ = opengg_core::audio::remove_virtual_audio();
+        let result = opengg_core::audio::remove_virtual_audio();
+        if let Err(e) = &result {
+            eprintln!("removeVirtualAudio: {e}");
+        }
+        self.as_mut().record_result(result);
         self.as_mut().refresh_virtual_audio_status();
+        self.as_mut().refresh();
     }
 
     pub fn start_vu_stream(mut self: Pin<&mut Self>) {

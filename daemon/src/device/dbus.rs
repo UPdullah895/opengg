@@ -46,7 +46,13 @@ impl DeviceInterface {
         }
 
         // Headsets via headsetcontrol CLI
-        let mut headsets = HeadsetManager::list_devices();
+        // Shells out (cached 5 s): keep the blocking spawn off the async workers.
+        let mut headsets = tokio::task::spawn_blocking(HeadsetManager::list_devices)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!("headset listing task panicked: {e}");
+                Vec::new()
+            });
         devices.append(&mut headsets);
 
         serde_json::to_string(&devices).unwrap_or_else(|_| "[]".into())

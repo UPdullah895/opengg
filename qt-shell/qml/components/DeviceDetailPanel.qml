@@ -67,7 +67,7 @@ Rectangle {
         Text {
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
-            text: "Select a device"
+            text: (I18n.language, I18n.t("devices.panel.selectTitle"))
             color: Theme.textDim
             font.pixelSize: 15
             font.weight: Font.DemiBold
@@ -76,7 +76,7 @@ Rectangle {
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.WordWrap
-            text: "Choose a device from the list to see its settings."
+            text: (I18n.language, I18n.t("devices.panel.selectHint"))
             color: Theme.textMuted
             font.pixelSize: 12
         }
@@ -157,7 +157,7 @@ Rectangle {
                     }
 
                     Text {
-                        text: panel.device ? panel.device.deviceType : ""
+                        text: panel.device ? (I18n.language, I18n.t("devices.types." + panel.device.deviceType) === "devices.types." + panel.device.deviceType ? panel.device.deviceType : I18n.t("devices.types." + panel.device.deviceType)) : ""
                         color: Theme.textDim
                         font.pixelSize: 12
                         Layout.fillWidth: true
@@ -172,7 +172,7 @@ Rectangle {
                 visible: panel.device && panel.device.deviceType === "headset"
 
                 Text {
-                    text: "Status"
+                    text: (I18n.language, I18n.t("devices.panel.status"))
                     color: Theme.textDim
                     font.pixelSize: 11
                     font.weight: Font.DemiBold
@@ -192,7 +192,7 @@ Rectangle {
                         }
                         Text {
                             text: panel.device && panel.device.batteryLevel >= 0
-                                  ? panel.device.batteryLevel + "%" : "n/a"
+                                  ? panel.device.batteryLevel + "%" : (I18n.language, I18n.t("devices.panel.na"))
                             color: Theme.text
                             font.pixelSize: 13
                             anchors.verticalCenter: parent.verticalCenter
@@ -200,7 +200,7 @@ Rectangle {
                     }
                     Text {
                         visible: panel.device && panel.device.chatmix !== undefined
-                        text: "chatmix " + (panel.device ? panel.device.chatmix : "")
+                        text: (I18n.language, I18n.t("devices.panel.chatMixValue")) + (panel.device ? panel.device.chatmix : "")
                         color: Theme.text
                         font.pixelSize: 13
                     }
@@ -218,7 +218,7 @@ Rectangle {
                 visible: panel.hasCapability("chatmix_status")
 
                 Text {
-                    text: "Chat Mix"
+                    text: (I18n.language, I18n.t("devices.panel.chatMix"))
                     color: Theme.textDim
                     font.pixelSize: 11
                     font.weight: Font.DemiBold
@@ -227,7 +227,7 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: 12
                     Text {
-                        text: "Game / Chat"
+                        text: (I18n.language, I18n.t("devices.panel.gameChat"))
                         color: Theme.textMuted
                         font.pixelSize: 12
                         Layout.preferredWidth: 130
@@ -265,7 +265,7 @@ Rectangle {
                          || panel.hasCapability("bt_when_powered_on")
 
                 Text {
-                    text: "Headset Controls"
+                    text: (I18n.language, I18n.t("devices.panel.headsetControls"))
                     color: Theme.textDim
                     font.pixelSize: 11
                     font.weight: Font.DemiBold
@@ -273,18 +273,17 @@ Rectangle {
                 Text {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
-                    text: "This headset doesn't report these back, so they show the last "
-                          + "value sent from here — not the current state of the hardware."
+                    text: (I18n.language, I18n.t("devices.panel.writeOnlyNote"))
                     color: Theme.textMuted
                     font.pixelSize: 11
                 }
 
                 Repeater {
                     model: [
-                        { cap: "sidetone",            label: "Sidetone",       fn: "setSidetone" },
-                        { cap: "microphone_volume",   label: "Mic Volume",     fn: "setMicVolume" },
-                        { cap: "microphone_mute_led_brightness", label: "Mic Mute LED", fn: "setMicMuteLed" },
-                        { cap: "bt_call_volume",      label: "BT Call Volume", fn: "setBtCallVolume" }
+                        { cap: "sidetone",            label: (I18n.language, I18n.t("devices.sidetone")),       fn: "setSidetone" },
+                        { cap: "microphone_volume",   label: (I18n.language, I18n.t("devices.panel.micVolume")),     fn: "setMicVolume" },
+                        { cap: "microphone_mute_led_brightness", label: (I18n.language, I18n.t("devices.panel.micMuteLed")), fn: "setMicMuteLed" },
+                        { cap: "bt_call_volume",      label: (I18n.language, I18n.t("devices.btCallVolume")), fn: "setBtCallVolume" }
                     ]
 
                     RowLayout {
@@ -315,7 +314,7 @@ Rectangle {
                     spacing: 12
                     visible: panel.hasCapability("inactive_time")
                     Text {
-                        text: "Auto Shut-off"
+                        text: (I18n.language, I18n.t("devices.panel.autoShutoff"))
                         color: Theme.textMuted
                         font.pixelSize: 12
                         Layout.preferredWidth: 130
@@ -327,12 +326,12 @@ Rectangle {
                         // timeout would assert a setting the headset never
                         // told us about.
                         options: [
-                            { value: -1, label: "Set timeout…" },
-                            { value: 0,  label: "Never" },
-                            { value: 10, label: "10 minutes" },
-                            { value: 20, label: "20 minutes" },
-                            { value: 30, label: "30 minutes" },
-                            { value: 60, label: "60 minutes" }
+                            { value: -1, label: (I18n.language, I18n.t("devices.panel.setTimeout")) },
+                            { value: 0,  label: (I18n.language, I18n.t("devices.autoOffNever")) },
+                            { value: 10, label: (I18n.language, I18n.t("devices.panel.minutes")).replace("{n}", 10) },
+                            { value: 20, label: (I18n.language, I18n.t("devices.panel.minutes")).replace("{n}", 20) },
+                            { value: 30, label: (I18n.language, I18n.t("devices.panel.minutes")).replace("{n}", 30) },
+                            { value: 60, label: (I18n.language, I18n.t("devices.panel.minutes")).replace("{n}", 60) }
                         ]
                         value: -1
                         onPicked: (v) => {
@@ -345,8 +344,8 @@ Rectangle {
 
                 Repeater {
                     model: [
-                        { cap: "volume_limiter",     label: "Volume Limiter",    fn: "setVolumeLimiter" },
-                        { cap: "bt_when_powered_on", label: "Bluetooth When On", fn: "setBtPoweredOn" }
+                        { cap: "volume_limiter",     label: (I18n.language, I18n.t("devices.volumeLimiter")),    fn: "setVolumeLimiter" },
+                        { cap: "bt_when_powered_on", label: (I18n.language, I18n.t("devices.panel.btWhenOn")), fn: "setBtPoweredOn" }
                     ]
 
                     RowLayout {
@@ -385,7 +384,7 @@ Rectangle {
                          && panel.eqPresetNames.length > 0
 
                 Text {
-                    text: "Equalizer"
+                    text: (I18n.language, I18n.t("devices.panel.equalizer"))
                     color: Theme.textDim
                     font.pixelSize: 11
                     font.weight: Font.DemiBold
@@ -394,7 +393,7 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: 12
                     Text {
-                        text: "Preset"
+                        text: (I18n.language, I18n.t("devices.panel.preset"))
                         color: Theme.textMuted
                         font.pixelSize: 12
                         Layout.preferredWidth: 130
@@ -404,7 +403,7 @@ Rectangle {
                         // Same placeholder reasoning as Auto Shut-off: the
                         // headset does not report which preset is active, so
                         // the box must not appear to be showing one.
-                        options: [{ value: "", label: "Apply preset…" }].concat(
+                        options: [{ value: "", label: (I18n.language, I18n.t("devices.panel.applyPreset")) }].concat(
                             panel.eqPresetNames.map(n => ({
                                 value: n,
                                 label: n.charAt(0).toUpperCase() + n.slice(1)
@@ -429,7 +428,7 @@ Rectangle {
                 visible: panel.hasCapability("dpi") || panel.hasCapability("polling_rate")
 
                 Text {
-                    text: "Sensor"
+                    text: (I18n.language, I18n.t("devices.panel.sensor"))
                     color: Theme.textDim
                     font.pixelSize: 11
                     font.weight: Font.DemiBold
@@ -452,7 +451,7 @@ Rectangle {
                     ColumnLayout {
                         visible: panel.hasCapability("polling_rate")
                         spacing: 5
-                        Text { text: "Polling Rate"; color: Theme.textMuted; font.pixelSize: 11 }
+                        Text { text: (I18n.language, I18n.t("devices.pollingRate")); color: Theme.textMuted; font.pixelSize: 11 }
                         SelectField {
                             Layout.preferredWidth: 160
                             options: panel.pollingRateOptions()
@@ -471,7 +470,7 @@ Rectangle {
                 visible: panel.hasCapability("buttons")
 
                 Text {
-                    text: "Buttons"
+                    text: (I18n.language, I18n.t("devices.panel.buttons"))
                     color: Theme.textDim
                     font.pixelSize: 11
                     font.weight: Font.DemiBold
@@ -480,13 +479,13 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: 12
                     ClipsBarButton {
-                        label: "Configure Buttons"
+                        label: (I18n.language, I18n.t("devices.panel.configureButtons"))
                         icon: "gear"
                         onTriggered: panel.configureButtonsRequested()
                     }
                     Text {
                         text: panel.device && panel.device.buttonCount
-                              ? panel.device.buttonCount + " buttons" : ""
+                              ? (I18n.language, I18n.t("devices.panel.buttonCount")).replace("{n}", panel.device.buttonCount) : ""
                         color: Theme.textMuted
                         font.pixelSize: 12
                         Layout.alignment: Qt.AlignVCenter
@@ -496,15 +495,11 @@ Rectangle {
             }
 
             // ── Write-failure feedback, keyed to this device ─────────────────
-            Text {
+            ErrorText {
                 Layout.fillWidth: true
-                visible: panel.device
-                         && DeviceController.lastErrorDeviceId === panel.device.id
-                         && DeviceController.lastError !== ""
-                text: DeviceController.lastError
-                color: Theme.danger
-                font.pixelSize: 12
-                wrapMode: Text.WordWrap
+                pixelSize: 12
+                text: panel.device && DeviceController.lastErrorDeviceId === panel.device.id
+                      ? DeviceController.lastError : ""
             }
 
             // ── Advanced disclosure ─────────────────────────────────────────
@@ -536,7 +531,7 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                         }
                         Text {
-                            text: "Advanced"
+                            text: (I18n.language, I18n.t("devices.panel.advanced"))
                             color: Theme.textMuted
                             font.pixelSize: 11
                             font.weight: Font.DemiBold
@@ -553,7 +548,7 @@ Rectangle {
                     columnSpacing: 16
                     rowSpacing: 6
 
-                    Text { text: "Model"; color: Theme.textMuted; font.pixelSize: 11 }
+                    Text { text: (I18n.language, I18n.t("devices.panel.model")); color: Theme.textMuted; font.pixelSize: 11 }
                     Text {
                         text: panel.device ? panel.device.model : ""
                         color: Theme.textDim
@@ -561,7 +556,7 @@ Rectangle {
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
-                    Text { text: "Full name"; color: Theme.textMuted; font.pixelSize: 11 }
+                    Text { text: (I18n.language, I18n.t("devices.panel.fullName")); color: Theme.textMuted; font.pixelSize: 11 }
                     Text {
                         text: panel.device ? panel.device.name : ""
                         color: Theme.textDim
@@ -569,7 +564,7 @@ Rectangle {
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
-                    Text { text: "Device id"; color: Theme.textMuted; font.pixelSize: 11 }
+                    Text { text: (I18n.language, I18n.t("devices.panel.deviceId")); color: Theme.textMuted; font.pixelSize: 11 }
                     Text {
                         text: panel.device ? panel.device.id : ""
                         color: Theme.textDim

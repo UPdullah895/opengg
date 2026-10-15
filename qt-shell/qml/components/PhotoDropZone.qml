@@ -25,9 +25,9 @@ Item {
     /// either path. The caller does the saving — this component only collects.
     signal photoChosen(string url)
 
-    property string title: "Drag a photo here"
-    property string subtitle: "or use Browse to pick one. It stays on this computer."
-    property string browseLabel: "Browse…"
+    property string title: (I18n.language, I18n.t("devices.buttonMap.dragAny"))
+    property string subtitle: (I18n.language, I18n.t("devices.buttonMap.browseHint"))
+    property string browseLabel: (I18n.language, I18n.t("devices.buttonMap.browse"))
 
     implicitHeight: 132
 
@@ -50,7 +50,7 @@ Item {
 
     FileDialog {
         id: browseDialog
-        title: "Choose a photo"
+        title: (I18n.language, I18n.t("devices.buttonMap.choosePhoto"))
         nameFilters: ["Images (*.png *.jpg *.jpeg *.webp *.bmp)"]
         // Ask Qt for its own Quick-drawn chooser rather than the platform
         // portal. Verified present on this Qt build (the enum resolves); if a
@@ -84,7 +84,7 @@ Item {
             Text {
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignHCenter
-                text: zone.rejecting ? "That file isn't an image" : zone.title
+                text: zone.rejecting ? (I18n.language, I18n.t("devices.buttonMap.notImage")) : zone.title
                 color: zone.rejecting ? Theme.danger : Theme.text
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
@@ -94,7 +94,7 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 text: zone.rejecting
-                      ? "PNG, JPEG, WebP or BMP only."
+                      ? (I18n.language, I18n.t("devices.buttonMap.formats"))
                       : zone.subtitle
                 color: Theme.textMuted
                 font.pixelSize: 11

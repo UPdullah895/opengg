@@ -76,13 +76,13 @@ impl qobject::SystemController {
 
     pub fn set_autostart(&self, enable: bool) {
         if let Err(e) = opengg_core::system::set_autostart(enable) {
-            eprintln!("SystemController::set_autostart: {e}");
+            log::warn!("SystemController::set_autostart: {e}");
         }
     }
 
     pub fn open_crash_logs_folder(&self) {
         if let Err(e) = opengg_core::system::open_crash_logs_folder() {
-            eprintln!("SystemController::open_crash_logs_folder: {e}");
+            log::warn!("SystemController::open_crash_logs_folder: {e}");
         }
     }
 
@@ -102,13 +102,13 @@ impl qobject::SystemController {
 
     pub fn reveal_in_folder(&self, path: &QString) {
         if let Err(e) = opengg_core::system::reveal_in_folder(&path.to_string()) {
-            eprintln!("revealInFolder: {e}");
+            log::warn!("revealInFolder: {e}");
         }
     }
 
     pub fn write_clipboard(&self, text: QString) {
         if let Err(e) = opengg_core::system::write_clipboard(&text.to_string()) {
-            eprintln!("SystemController::write_clipboard: {e}");
+            log::warn!("SystemController::write_clipboard: {e}");
         }
     }
 

@@ -330,30 +330,10 @@ ColumnLayout {
                             Layout.fillWidth: true
                             Layout.leftMargin: 30
                             spacing: 4
-                            RowLayout {
+                            CommandLine {
                                 Layout.fillWidth: true
-                                spacing: 6
-                                Text {
-                                    text: root.installCommand(depRow.modelData.binary).command
-                                    color: Theme.text
-                                    font.pixelSize: 10
-                                    font.family: "monospace"
-                                    wrapMode: Text.WordWrap
-                                    Layout.fillWidth: true
-                                }
-                                Rectangle {
-                                    width: 50; height: 22
-                                    radius: Theme.radius
-                                    color: Theme.bg
-                                    border.width: 1
-                                    border.color: Theme.border
-                                    Text { anchors.centerIn: parent; text: (I18n.language, I18n.t("common.copy")); color: Theme.accent; font.pixelSize: 10 }
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: SystemController.writeClipboard(root.installCommand(depRow.modelData.binary).command)
-                                    }
-                                }
+                                pixelSize: 10
+                                text: root.installCommand(depRow.modelData.binary).command
                             }
                             Text {
                                 horizontalAlignment: Text.AlignLeft
@@ -476,32 +456,11 @@ ColumnLayout {
                             spacing: 4
                             Repeater {
                                 model: (root.accessFixMaps[accessRow.modelData.id] || { commands: [] }).commands
-                                RowLayout {
-                                    id: cmdRow
+                                CommandLine {
                                     required property string modelData
                                     Layout.fillWidth: true
-                                    spacing: 6
-                                    Text {
-                                        text: cmdRow.modelData
-                                        color: Theme.text
-                                        font.pixelSize: 10
-                                        font.family: "monospace"
-                                        wrapMode: Text.WordWrap
-                                        Layout.fillWidth: true
-                                    }
-                                    Rectangle {
-                                        width: 50; height: 22
-                                        radius: Theme.radius
-                                        color: Theme.bg
-                                        border.width: 1
-                                        border.color: Theme.border
-                                        Text { anchors.centerIn: parent; text: (I18n.language, I18n.t("common.copy")); color: Theme.accent; font.pixelSize: 10 }
-                                        MouseArea {
-                                            anchors.fill: parent
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: SystemController.writeClipboard(cmdRow.modelData)
-                                        }
-                                    }
+                                    pixelSize: 10
+                                    text: modelData
                                 }
                             }
                             Text {

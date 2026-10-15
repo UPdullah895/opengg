@@ -69,10 +69,17 @@ pub fn list_streams() -> Result<Vec<StreamInfo>> {
     let output = subprocess::command("pactl")
         .args(["-f", "json", "list", "sink-inputs"])
         .output()
-        .context("pactl not found")?;
+        .map_err(|e| anyhow::anyhow!("{}", subprocess::spawn_error("pactl", &e)))?;
 
     if !output.status.success() {
-        return list_streams_text();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Only a pactl too old for `-f json` (PulseAudio < 16) justifies the text
+        // parser. Any other failure (server down, connection refused) used to fall
+        // through to it and come back as a silent empty list; report it instead.
+        if json_flag_unsupported(&stderr) {
+            return list_streams_text();
+        }
+        anyhow::bail!("pactl list sink-inputs failed: {}", stderr.trim());
     }
 
     let raw: serde_json::Value =
@@ -166,8 +173,24 @@ fn list_source_outputs() -> Vec<StreamInfo> {
     streams
 }
 
+/// Does this pactl stderr mean "I don't know `-f json`" (as opposed to a
+/// server connection problem)?
+fn json_flag_unsupported(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.contains("invalid option") || s.contains("unrecognized option") || s.contains("unknown option")
+}
+
 fn list_streams_text() -> Result<Vec<StreamInfo>> {
-    let output = subprocess::command("pactl").args(["list", "sink-inputs"]).output()?;
+    let output = subprocess::command("pactl")
+        .args(["list", "sink-inputs"])
+        .output()
+        .map_err(|e| anyhow::anyhow!("{}", subprocess::spawn_error("pactl", &e)))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "pactl list sink-inputs failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
     let text = String::from_utf8_lossy(&output.stdout);
     let mut streams = Vec::new();
     let mut current: Option<StreamInfo> = None;
@@ -285,4 +308,15 @@ pub fn apps_for_channel(streams: &[StreamInfo], channel: &str) -> Vec<AppInfo> {
         .filter(|s| s.channel == channel)
         .map(|s| AppInfo { id: s.index, name: s.app_name.clone(), binary: s.binary.clone() })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_old_pactl_falls_back_to_text_parsing() {
+        assert!(json_flag_unsupported("pactl: invalid option -- 'f'"));
+        assert!(!json_flag_unsupported("Connection failure: Connection refused"));
+    }
 }

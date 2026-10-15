@@ -51,6 +51,10 @@ pub mod qobject {
         #[qproperty(i32, titlebar_h, cxx_name = "titlebarH")]
         #[qproperty(i32, sidebar_w, cxx_name = "sidebarW")]
         #[qproperty(bool, dark_mode, cxx_name = "darkMode")]
+        /// Non-empty when theme.json was unreadable (set aside as
+        /// `theme.json.corrupt-<ts>`, built-in theme in use) or the last save
+        /// failed. Human-readable.
+        #[qproperty(QString, load_error, cxx_name = "loadError")]
         type ThemeController = super::ThemeControllerRust;
 
         /// Reload from disk (applies on startup and after external changes).
@@ -97,6 +101,7 @@ pub struct ThemeControllerRust {
     titlebar_h: i32,
     sidebar_w: i32,
     dark_mode: bool,
+    load_error: QString,
 }
 
 /// The mode-dependent half of the palette — exactly the keys `html.light`
@@ -262,6 +267,7 @@ impl Default for ThemeControllerRust {
             titlebar_h: TITLEBAR_H,
             sidebar_w: SIDEBAR_W,
             dark_mode: true,
+            load_error: QString::default(),
         };
         r.apply(resolve(&Value::Null));
         r
@@ -321,9 +327,14 @@ impl qobject::ThemeController {
         self.as_mut().set_titlebar_h(r.titlebar_h);
         self.as_mut().set_sidebar_w(r.sidebar_w);
         self.as_mut().set_dark_mode(r.dark_mode);
+        // After the load, so a file quarantined by this very read is reported.
+        let err = opengg_core::settings::theme_error();
+        self.set_load_error(QString::from(&err));
     }
 
     pub fn save(self: Pin<&mut Self>, accent_hex: QString, dark: bool) {
+        // load_theme never returns a corrupt file (it sets it aside and serves
+        // the default), so this can't overwrite unreadable user data.
         let raw = opengg_core::settings::load_theme().unwrap_or_default();
         let mut v: Value = serde_json::from_str(&raw).unwrap_or_default();
         if !v.is_object() {
@@ -335,6 +346,8 @@ impl qobject::ThemeController {
         v["colors"]["--accent"] = json!(accent_hex.to_string());
         v["mode"] = json!(if dark { "dark" } else { "light" });
 
+        // A failed save is logged by core and shown through `loadError`
+        // (reload() below re-reads it).
         if let Ok(s) = serde_json::to_string_pretty(&v) {
             let _ = opengg_core::settings::save_theme(&s);
         }

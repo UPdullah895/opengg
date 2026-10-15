@@ -21,11 +21,40 @@ if ! command -v makepkg >/dev/null 2>&1; then
   exit 1
 fi
 
+# Everything the PKGBUILD names locally has to travel with it. `install=` is
+# the one that bit before: only PKGBUILD was copied, so edits to
+# opengg.install never reached the AUR and makepkg failed on a clone that
+# lacked the file.
 cp "$ROOT/packaging/aur/PKGBUILD" "$AUR_DIR/PKGBUILD"
+install_file="$(sed -n "s/^install=['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}$/\1/p" "$ROOT/packaging/aur/PKGBUILD" | head -n1)"
+if [[ -n "$install_file" ]]; then
+  if [[ ! -f "$ROOT/packaging/aur/$install_file" ]]; then
+    echo "✗ PKGBUILD says install=$install_file but packaging/aur/$install_file does not exist." >&2
+    exit 1
+  fi
+  cp "$ROOT/packaging/aur/$install_file" "$AUR_DIR/$install_file"
+fi
+
+# The repo's PKGBUILD keeps sha256sums=('SKIP') because the tarball does not
+# exist until the release workflow has built it. By the time someone syncs the
+# AUR it does, and the workflow publishes SHA256SUMS next to it: use that so
+# the AUR package is integrity-checked. Falls back to SKIP (with a warning)
+# when the release or its SHA256SUMS is not reachable.
+pkgver="$(sed -n 's/^pkgver=//p' "$AUR_DIR/PKGBUILD" | head -n1)"
+tarball="opengg-v${pkgver}-linux-x86_64.tar.gz"
+sums_url="https://github.com/UPdullah895/opengg/releases/download/v${pkgver}/SHA256SUMS"
+if sum="$(curl -fsSL --max-time 30 "$sums_url" 2>/dev/null | awk -v f="$tarball" '$2 == f {print $1}')" && [[ "$sum" =~ ^[0-9a-f]{64}$ ]]; then
+  sed -i "s/^sha256sums=.*/sha256sums=('$sum')/" "$AUR_DIR/PKGBUILD"
+  echo "✓ sha256sums filled from the v${pkgver} release (${sum:0:12}…)"
+else
+  echo "⚠ could not read $tarball's checksum from $sums_url — AUR PKGBUILD keeps sha256sums=('SKIP')." >&2
+fi
 (cd "$AUR_DIR" && makepkg --printsrcinfo > .SRCINFO)
 
-if git -C "$AUR_DIR" diff --quiet; then
-  echo "✓ $AUR_DIR already matches packaging/aur/PKGBUILD — nothing to publish."
+# `status --porcelain`, not `diff --quiet`: a newly copied (untracked) file such
+# as opengg.install is a change worth publishing too.
+if [[ -z "$(git -C "$AUR_DIR" status --porcelain)" ]]; then
+  echo "✓ $AUR_DIR already matches packaging/aur — nothing to publish."
 else
   NEW_VER="$(grep -m1 '^pkgver=' "$AUR_DIR/PKGBUILD" | cut -d= -f2)"
   echo "✓ Synced PKGBUILD and regenerated .SRCINFO in $AUR_DIR"

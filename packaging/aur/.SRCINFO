@@ -1,12 +1,13 @@
 pkgbase = opengg-bin
 	pkgdesc = Open-source Linux gaming hub — OpenGG
-	pkgver = 0.2.1
-	pkgrel = 1
+	pkgver = 0.2.3
+	pkgrel = 2
 	url = https://github.com/UPdullah895/opengg
 	install = opengg.install
 	arch = x86_64
 	license = MIT
 	depends = pipewire
+	depends = pipewire-pulse
 	depends = wireplumber
 	depends = ffmpeg
 	depends = gstreamer
@@ -14,18 +15,15 @@ pkgbase = opengg-bin
 	depends = gst-plugins-good
 	depends = gst-plugins-bad
 	depends = gst-plugin-qml6
-	depends = qt6-base
-	depends = qt6-declarative
-	depends = qt6-multimedia
-	depends = qt6-shadertools
-	optdepends = polkit: for privileged device setup
+	depends = glibc>=2.43
+	depends = qt6-base>=6.12
+	depends = qt6-declarative>=6.12
+	depends = qt6-multimedia>=6.12
+	depends = qt6-shadertools>=6.12
 	provides = opengg
 	conflicts = opengg
-	source = https://github.com/UPdullah895/opengg/releases/download/v0.2.1/opengg-v0.2.1-linux-x86_64.tar.gz
-	source = opengg.png::https://github.com/UPdullah895/opengg/raw/refs/tags/v0.2.1/packaging/icons/256x256.png
-	source = opengg.desktop::https://github.com/UPdullah895/opengg/raw/refs/tags/v0.2.1/packaging/opengg.desktop
-	sha256sums = SKIP
-	sha256sums = SKIP
+	options = !debug
+	source = https://github.com/UPdullah895/opengg/releases/download/v0.2.3/opengg-v0.2.3-linux-x86_64.tar.gz
 	sha256sums = SKIP
 
 pkgname = opengg-bin

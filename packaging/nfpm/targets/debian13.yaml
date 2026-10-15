@@ -1,0 +1,51 @@
+# Debian 13 (trixie): Qt 6.8. Package names verified in a debian:trixie
+# container; shared-library packages come from `dpkg -S` on `readelf -d`'s
+# NEEDED list (libc6/libgcc-s1/libstdc++6 are essential-ish but named anyway).
+# The binary imports no Qt private API (qt-shell/build.rs builds the QML as
+# bytecode only), so there is no upper bound on the Qt version; the lower
+# bounds are the Qt the package is built and tested against.
+depends:
+  - libqt6core6t64 (>= 6.8)
+  - libqt6gui6 (>= 6.8)
+  - libqt6qml6 (>= 6.8)
+  - libqt6quick6 (>= 6.8)
+  - libgstreamer1.0-0
+  - libglib2.0-0t64
+  - libstdc++6
+  - libgcc-s1
+  - libc6
+  # QML modules: on Debian/Ubuntu each is its own package, and a missing one
+  # stops the main window loading ("module ... is not installed").
+  - qml6-module-qtquick
+  - qml6-module-qtquick-controls
+  - qml6-module-qtquick-layouts
+  - qml6-module-qtquick-window
+  - qml6-module-qtquick-templates
+  - qml6-module-qtquick-dialogs
+  - qml6-module-qtquick-shapes
+  - qml6-module-qtmultimedia
+  - qml6-module-qt-labs-platform
+  - qml6-module-qtqml-workerscript
+  # Clip playback: the qml6glsink GStreamer element (QML video item) + codecs.
+  - gstreamer1.0-qt6
+  - gstreamer1.0-plugins-base
+  - gstreamer1.0-plugins-good
+  - gstreamer1.0-plugins-bad
+  - gstreamer1.0-libav
+  - qt6-wayland
+  # Audio: the daemon/mixer drive PipeWire through `pactl`, which needs a
+  # PulseAudio-protocol server (pipewire-pulse), not just libpulse.
+  - pipewire
+  - pipewire-pulse
+  # The daemon, EQ and Voice FX shell out to pw-link / pw-cli / pw-dump /
+  # pw-metadata. Name the package that ships them (it is only an accident of
+  # dependency chains that some distros pull it in anyway).
+  - pipewire-bin
+  - wireplumber
+  - pulseaudio-utils
+  - ffmpeg
+  # The daemon is D-Bus activated on the user bus; a minimal install
+  # without this has no user bus at all.
+  - dbus-user-session
+recommends:
+  - hicolor-icon-theme

@@ -27,7 +27,7 @@ ColumnLayout {
         if (root.isWayland) {
             opts.forEach(o => { if (o.value === "screen") o.label = I18n.t("settings.captureGsr.portalOption") })
         } else {
-            opts.push({ value: "focused", label: "Fullscreen Application" })
+            opts.push({ value: "focused", label: (I18n.language, I18n.t("settings.captureGsr.focusedOption")) })
         }
         return opts
     }
@@ -393,22 +393,17 @@ ColumnLayout {
                                         color: parent.sevColor
                                         Layout.alignment: Qt.AlignTop
                                     }
-                                    Text {
+                                    ErrorText {
                                         text: diagItem.modelData.message
                                         color: parent.sevColor
-                                        font.pixelSize: 11
-                                        wrapMode: Text.WordWrap
                                         Layout.fillWidth: true
                                     }
                                 }
-                                Text {
+                                CommandLine {
                                     visible: !!(diagItem.modelData.fix && diagItem.modelData.fix.command)
                                     text: diagItem.modelData.fix ? diagItem.modelData.fix.command : ""
-                                    color: Theme.text
-                                    font.pixelSize: 10
-                                    font.family: "monospace"
+                                    pixelSize: 10
                                     Layout.leftMargin: 14
-                                    wrapMode: Text.WordWrap
                                     Layout.fillWidth: true
                                 }
                             }

@@ -704,9 +704,7 @@ Rectangle {
                     Text {
                         text: RecordingController.running
                               ? (I18n.language, I18n.t("dashboard.stop"))
-                              : (page.settingsObj.gsrEnabled
-                                 ? (I18n.language, I18n.t("dashboard.startReplayBuffer"))
-                                 : (I18n.language, I18n.t("dashboard.startReplay")))
+                              : (I18n.language, I18n.t("dashboard.startReplay"))
                         color: RecordingController.running ? Theme.danger : Theme.accent
                         font.pixelSize: 12
                         font.weight: Font.Bold

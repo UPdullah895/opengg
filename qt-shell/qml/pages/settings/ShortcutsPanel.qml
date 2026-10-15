@@ -167,20 +167,29 @@ ColumnLayout {
                 color: Theme.tint(Theme.overdrive, 12)
                 border.width: 1
                 border.color: Theme.tint(Theme.overdrive, 40)
-                implicitHeight: offNote.implicitHeight + 20
-                Text {
-                    id: offNote
+                implicitHeight: offCol.implicitHeight + 20
+                ColumnLayout {
+                    id: offCol
                     anchors.fill: parent
                     anchors.margins: 10
-                    wrapMode: Text.WordWrap
-                    color: Theme.textDim
-                    font.pixelSize: 11
-                    text: "Global shortcuts are not running — "
-                          + (HotkeyController.error
-                             || "the daemon has not confirmed a keyboard listener")
-                          + ". Reading keys system-wide needs membership of "
-                          + "the 'input' group — run  ./dev.sh setup  to join it, "
-                          + "then log out and back in."
+                    spacing: 6
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        color: Theme.textDim
+                        font.pixelSize: 11
+                        text: (I18n.language, I18n.t("settings.shortcuts.listenerOff"))
+                    }
+                    CommandLine {
+                        Layout.fillWidth: true
+                        text: 'sudo usermod -aG input "$USER"'
+                    }
+                    ErrorText {
+                        Layout.fillWidth: true
+                        color: Theme.textMuted
+                        text: HotkeyController.error
+                              || (I18n.language, I18n.t("settings.shortcuts.noListener"))
+                    }
                 }
             }
 
@@ -237,7 +246,7 @@ ColumnLayout {
                             Text {
                                 id: offText
                                 anchors.centerIn: parent
-                                text: "listener off"
+                                text: (I18n.language, I18n.t("settings.shortcuts.badgeListenerOff"))
                                 color: Theme.overdrive
                                 font.pixelSize: 9
                                 font.weight: Font.DemiBold
@@ -254,7 +263,7 @@ ColumnLayout {
                             Text {
                                 id: badgeText
                                 anchors.centerIn: parent
-                                text: "not wired up"
+                                text: (I18n.language, I18n.t("settings.shortcuts.badgeNotWired"))
                                 color: Theme.overdrive
                                 font.pixelSize: 9
                                 font.weight: Font.DemiBold

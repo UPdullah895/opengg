@@ -151,7 +151,9 @@ Item {
         anchors.leftMargin: lane.gutter
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        height: 22
+        // Grows with the lane, so dragging the timeline taller gives the
+        // waveform more room instead of just adding empty space.
+        height: Math.max(22, lane.height - 8)
         radius: 4
         color: Theme.tint(lane.accent, lane.monitorable && !lane.monitoring ? 10 : 28)
         border.width: 1

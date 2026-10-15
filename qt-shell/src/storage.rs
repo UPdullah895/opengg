@@ -43,6 +43,20 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "pickFolder"]
         fn pick_folder(self: Pin<&mut Self>, tag: QString, title: QString, start_dir: QString);
+
+        /// Where GPU Screen Recorder's own overlay (gsr-ui) saves replays, as
+        /// `{configPath, dir, gameFolders, watched}` — `watched` is whether
+        /// that folder is inside one of `clip_directories_json` — or `null`
+        /// when gsr-ui is not configured on this machine.
+        #[qinvokable]
+        #[cxx_name = "gsrUiReplayJson"]
+        fn gsr_ui_replay_json(self: &Self, clip_directories_json: QString) -> QString;
+
+        /// Point gsr-ui's replay folder at `dir`. Returns an error message,
+        /// empty on success.
+        #[qinvokable]
+        #[cxx_name = "setGsrUiReplayDir"]
+        fn set_gsr_ui_replay_dir(self: &Self, config_path: QString, dir: QString) -> QString;
     }
 
     impl cxx_qt::Threading for StorageController {}
@@ -103,5 +117,34 @@ impl qobject::StorageController {
                 c.as_mut().set_picked_json(QString::from(&json));
             });
         });
+    }
+
+    pub fn gsr_ui_replay_json(&self, clip_directories_json: QString) -> QString {
+        let Some(save) = opengg_core::gsr::gsr_ui_replay_save() else {
+            return QString::from("null");
+        };
+        let roots: Vec<String> =
+            serde_json::from_str(&clip_directories_json.to_string()).unwrap_or_default();
+        let dir = std::path::PathBuf::from(opengg_core::paths::shexp(&save.dir));
+        let watched = roots
+            .iter()
+            .map(|r| std::path::PathBuf::from(opengg_core::paths::shexp(r)))
+            .any(|r| dir.starts_with(&r));
+        QString::from(
+            &serde_json::json!({
+                "configPath": save.config_path,
+                "dir": save.dir,
+                "gameFolders": save.game_folders,
+                "watched": watched,
+            })
+            .to_string(),
+        )
+    }
+
+    pub fn set_gsr_ui_replay_dir(&self, config_path: QString, dir: QString) -> QString {
+        match opengg_core::gsr::set_gsr_ui_replay_dir(&config_path.to_string(), &dir.to_string()) {
+            Ok(()) => QString::default(),
+            Err(e) => QString::from(&e),
+        }
     }
 }

@@ -20,6 +20,11 @@ import com.opengg.app
 Rectangle {
     id: root
     color: Theme.scrim(92)
+
+    // Playback controls keep their left-to-right layout in an RTL language —
+    // the scrub bar fills and seeks the way time runs. See ClipEditorPage.qml.
+    LayoutMirroring.enabled: false
+    LayoutMirroring.childrenInherit: true
     property string source: ""
     property string title: ""
     /// Cached thumbnail, shown until the pipeline renders its first frame.
@@ -185,6 +190,19 @@ Rectangle {
         root.chromeVisible = true
         idleTimer.restart()
     }
+    /// Last pointer position seen, in root coordinates.
+    property point lastPointer: Qt.point(-1, -1)
+    /// Wake the chrome only on REAL pointer movement. Qt re-delivers hover
+    /// events whenever items shift under a still cursor — the controls
+    /// fading out included — so poking on every event kept them on screen
+    /// for as long as the pointer was inside the window.
+    function pointerMoved(area, m) {
+        const p = area.mapToItem(root, m.x, m.y)
+        if (Math.abs(p.x - root.lastPointer.x) < 3 && Math.abs(p.y - root.lastPointer.y) < 3)
+            return
+        root.lastPointer = Qt.point(p.x, p.y)
+        root.poke()
+    }
     Timer {
         id: idleTimer
         interval: 2600
@@ -295,10 +313,11 @@ Rectangle {
 
     // Backdrop click closes (only outside the panel — the panel absorbs its own).
     MouseArea {
+        id: wakeBackdrop
         anchors.fill: parent
         hoverEnabled: true
         onClicked: root.closed()
-        onPositionChanged: root.poke()
+        onPositionChanged: (m) => root.pointerMoved(wakeBackdrop, m)
     }
 
     // ── Player panel ──────────────────────────────────────────────────────
@@ -333,11 +352,12 @@ Rectangle {
 
         // Click the video to toggle playback; movement wakes the chrome.
         MouseArea {
+            id: wakeVideo
             anchors.fill: parent
             hoverEnabled: true
             onClicked: root.togglePlay()
             onDoubleClicked: root.expanded = !root.expanded
-            onPositionChanged: root.poke()
+            onPositionChanged: (m) => root.pointerMoved(wakeVideo, m)
         }
 
         Text {
@@ -427,9 +447,10 @@ Rectangle {
 
             // Absorb clicks so they don't reach the play/pause surface.
             MouseArea {
+                id: wakeControls
                 anchors.fill: parent
                 hoverEnabled: true
-                onPositionChanged: root.poke()
+                onPositionChanged: (m) => root.pointerMoved(wakeControls, m)
             }
 
             // Scrub bar
@@ -523,7 +544,7 @@ Rectangle {
                     spacing: 4
 
                     PlayerButton {
-                        icon: "rewind"; tooltip: "Back 5s"
+                        icon: "rewind"; tooltip: (I18n.language, I18n.t("player.back5"))
                         onTriggered: root.skip(-5000)
                     }
                     PlayerButton {
@@ -532,7 +553,7 @@ Rectangle {
                         onTriggered: root.togglePlay()
                     }
                     PlayerButton {
-                        icon: "fast-forward"; tooltip: "Forward 5s"
+                        icon: "fast-forward"; tooltip: (I18n.language, I18n.t("player.forward5"))
                         onTriggered: root.skip(5000)
                     }
 
@@ -548,7 +569,7 @@ Rectangle {
                             id: volIcon
                             icon: root.userMuted || root.userVolume <= 0.001 ? "volume-x"
                                 : root.userVolume < 0.5 ? "volume-1" : "volume-2"
-                            tooltip: root.userMuted ? "Unmute" : "Mute"
+                            tooltip: root.userMuted ? (I18n.language, I18n.t("editor.unmute")) : (I18n.language, I18n.t("editor.mute"))
                             onTriggered: root.toggleMute()
                         }
                         Slider {
@@ -623,7 +644,7 @@ Rectangle {
                     PlayerButton {
                         id: trackBtn
                         icon: "music"
-                        tooltip: "Audio tracks"
+                        tooltip: (I18n.language, I18n.t("player.audioTracks"))
                         visible: root.mixed && ClipAudioMixer.trackCount > 1
                         active: trackMenu.open
                         onTriggered: {
@@ -635,7 +656,7 @@ Rectangle {
                     PlayerButton {
                         id: speedBtn
                         icon: "gear"
-                        tooltip: "Playback speed"
+                        tooltip: (I18n.language, I18n.t("player.speed"))
                         active: speedMenu.open
                         onTriggered: {
                             speedMenu.open = !speedMenu.open
@@ -645,7 +666,7 @@ Rectangle {
                     }
                     PlayerButton {
                         icon: root.expanded ? "minimize" : "maximize"
-                        tooltip: root.expanded ? "Exit full view" : "Full view"
+                        tooltip: root.expanded ? (I18n.language, I18n.t("editor.exitFullView")) : (I18n.language, I18n.t("editor.keys.fullView"))
                         onTriggered: {
                             root.expanded = !root.expanded
                             root.poke()

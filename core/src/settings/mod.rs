@@ -7,7 +7,10 @@
 //! `ui-settings.json` shape shared across both UIs.
 
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 /// Current settings schema version. Migrations run sequentially up to this.
 /// Keep in lockstep with `CURRENT_SCHEMA_VERSION` in `persistence.ts`.
@@ -55,42 +58,275 @@ pub fn button_hotspots_path() -> PathBuf {
 pub const DEFAULT_THEME_JSON: &str =
     "{\"colors\":{\"--accent\":\"#E94560\"},\"layout\":{\"--clips-grid-cols\":\"4\"}}";
 
-/// Read `theme.json`, or the built-in default when absent.
+// ── Safe persistence: atomic writes, corrupt-file quarantine, one lock ──
+//
+// Both files used to be read with "any failure == empty" and written with a
+// truncating `fs::write`. A crash mid-write left a partial file, the next load
+// treated it as empty, and the next toggle overwrote it — wiping every
+// shortcut, track and route with no trace. The rules now:
+//   * writes go through `atomic_write` (same-dir temp + fsync + rename);
+//   * a file that does not parse is MOVED ASIDE to `<name>.corrupt-<ts>`
+//     (never deleted), an ERROR is logged and recorded for the UI, and the
+//     caller starts from defaults;
+//   * every read-modify-write of ui-settings.json holds `SETTINGS_LOCK`, so the
+//     UI thread and worker threads cannot lose each other's updates.
+
+static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
+static THEME_LOCK: Mutex<()> = Mutex::new(());
+/// Sticky for the session: the file that was quarantined on load.
+static SETTINGS_LOAD_ERROR: Mutex<String> = Mutex::new(String::new());
+/// Cleared by the next successful save.
+static SETTINGS_SAVE_ERROR: Mutex<String> = Mutex::new(String::new());
+static THEME_LOAD_ERROR: Mutex<String> = Mutex::new(String::new());
+static THEME_SAVE_ERROR: Mutex<String> = Mutex::new(String::new());
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    // A panic while holding the lock must not take settings down with it.
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn set_msg(slot: &Mutex<String>, msg: &str) {
+    *lock(slot) = msg.to_string();
+}
+
+fn either(a: &Mutex<String>, b: &Mutex<String>) -> String {
+    let a = lock(a).clone();
+    if a.is_empty() {
+        lock(b).clone()
+    } else {
+        a
+    }
+}
+
+/// Human-readable problem with `ui-settings.json` (unreadable file that was
+/// set aside, or a failed save); empty when everything is fine.
+pub fn settings_error() -> String {
+    either(&SETTINGS_LOAD_ERROR, &SETTINGS_SAVE_ERROR)
+}
+
+/// Same as [`settings_error`] for `theme.json`.
+pub fn theme_error() -> String {
+    either(&THEME_LOAD_ERROR, &THEME_SAVE_ERROR)
+}
+
+/// Write `data` to `path` so a reader (or a crash) only ever sees the old or
+/// the new complete file: temp file in the same directory, fsync, rename, then
+/// a best-effort fsync of the directory. Creates the parent directory.
+pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let tmp = dir.join(format!(
+        ".{name}.tmp-{}-{}",
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
+
+/// Move `path` to `<path>.corrupt-<unix-ts>` (suffixing `-N` on collision) and
+/// return the new location. The file is kept, never deleted.
+pub fn quarantine(path: &Path) -> std::io::Result<PathBuf> {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let base = path.as_os_str().to_string_lossy().into_owned();
+    let mut dest = PathBuf::from(format!("{base}.corrupt-{ts}"));
+    let mut n = 1;
+    while dest.exists() {
+        dest = PathBuf::from(format!("{base}.corrupt-{ts}-{n}"));
+        n += 1;
+    }
+    std::fs::rename(path, &dest)?;
+    Ok(dest)
+}
+
+/// Set an unparseable `path` aside, log at ERROR, and return the message.
+fn quarantine_for_user(path: &Path, why: &str) -> String {
+    let shown = path.display();
+    let m = match quarantine(path) {
+        Ok(dest) => format!(
+            "{shown} could not be read ({why}); it was kept as {} and defaults are in use",
+            dest.display()
+        ),
+        Err(e) => format!(
+            "{shown} could not be read ({why}) and could not be set aside ({e}); defaults are in use for now"
+        ),
+    };
+    log::error!("{m}");
+    m
+}
+
+/// Read `theme.json`, or the built-in default when absent or unreadable.
 pub fn load_theme() -> Result<String, String> {
-    let p = theme_path();
-    if p.exists() {
-        std::fs::read_to_string(&p).map_err(|e| format!("{e}"))
-    } else {
-        Ok(DEFAULT_THEME_JSON.into())
+    let _g = lock(&THEME_LOCK);
+    load_theme_at(&theme_path())
+}
+
+fn load_theme_at(p: &Path) -> Result<String, String> {
+    let raw = match std::fs::read_to_string(p) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(DEFAULT_THEME_JSON.into()),
+        Err(e) => {
+            let m = format!("{} could not be read: {e}", p.display());
+            log::error!("{m}");
+            set_msg(&THEME_LOAD_ERROR, &m);
+            return Err(m);
+        }
+    };
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(v) if v.is_object() => Ok(raw),
+        Ok(_) => {
+            set_msg(&THEME_LOAD_ERROR, &quarantine_for_user(p, "not a JSON object"));
+            Ok(DEFAULT_THEME_JSON.into())
+        }
+        Err(e) => {
+            set_msg(&THEME_LOAD_ERROR, &quarantine_for_user(p, &e.to_string()));
+            Ok(DEFAULT_THEME_JSON.into())
+        }
     }
 }
 
-/// Write `theme.json` (creating the parent directory if needed).
+/// Write `theme.json` atomically (creating the parent directory if needed).
 pub fn save_theme(theme_json: &str) -> Result<(), String> {
+    let _g = lock(&THEME_LOCK);
     let p = theme_path();
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d).ok();
+    match atomic_write(&p, theme_json.as_bytes()) {
+        Ok(()) => {
+            set_msg(&THEME_SAVE_ERROR, "");
+            Ok(())
+        }
+        Err(e) => {
+            let m = format!("could not save {}: {e}", p.display());
+            log::error!("{m}");
+            set_msg(&THEME_SAVE_ERROR, &m);
+            Err(m)
+        }
     }
-    std::fs::write(&p, theme_json).map_err(|e| format!("{e}"))
 }
 
-/// Write `ui-settings.json` (creating the parent directory if needed).
+/// Write `ui-settings.json` atomically (creating the parent directory if needed).
 pub fn save_ui_settings(settings_json: &str) -> Result<(), String> {
-    let p = settings_path();
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d).ok();
-    }
-    std::fs::write(&p, settings_json).map_err(|e| format!("{e}"))
+    let _g = lock(&SETTINGS_LOCK);
+    save_settings_locked(&settings_path(), settings_json)
 }
 
-/// Read `ui-settings.json`, or the string `"null"` when absent.
-pub fn load_ui_settings() -> Result<String, String> {
-    let p = settings_path();
-    if p.exists() {
-        std::fs::read_to_string(&p).map_err(|e| format!("{e}"))
-    } else {
-        Ok("null".into())
+fn save_settings_locked(p: &Path, settings_json: &str) -> Result<(), String> {
+    match atomic_write(p, settings_json.as_bytes()) {
+        Ok(()) => {
+            set_msg(&SETTINGS_SAVE_ERROR, "");
+            Ok(())
+        }
+        Err(e) => {
+            let m = format!("could not save {}: {e}", p.display());
+            log::error!("{m}");
+            set_msg(&SETTINGS_SAVE_ERROR, &m);
+            Err(m)
+        }
     }
+}
+
+/// Read `ui-settings.json`, or the string `"null"` when absent (or when it was
+/// unreadable and has been set aside). Settings written by an older schema are
+/// migrated and the result persisted first, so every caller sees current-shape
+/// data and migrations run once per file, not once per read.
+pub fn load_ui_settings() -> Result<String, String> {
+    let _g = lock(&SETTINGS_LOCK);
+    load_settings_at(&settings_path())
+}
+
+fn load_settings_at(p: &Path) -> Result<String, String> {
+    let raw = match std::fs::read_to_string(p) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok("null".into()),
+        Err(e) => {
+            // Unreadable is not the same as corrupt (permissions, I/O error):
+            // don't move anything, just report it.
+            let m = format!("{} could not be read: {e}", p.display());
+            log::error!("{m}");
+            set_msg(&SETTINGS_LOAD_ERROR, &m);
+            return Err(m);
+        }
+    };
+    let mut v: Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_msg(&SETTINGS_LOAD_ERROR, &quarantine_for_user(p, &e.to_string()));
+            return Ok("null".into());
+        }
+    };
+    if v.is_null() {
+        return Ok(raw);
+    }
+    if !v.is_object() {
+        set_msg(&SETTINGS_LOAD_ERROR, &quarantine_for_user(p, "not a JSON object"));
+        return Ok("null".into());
+    }
+    let saved = v.get("_schemaVersion").and_then(Value::as_i64).unwrap_or(0);
+    // Only older files: one from a NEWER build keeps its version, since
+    // stamping it down would make that build re-run migrations it already did.
+    if saved >= CURRENT_SCHEMA_VERSION {
+        return Ok(raw);
+    }
+    let backup = PathBuf::from(format!("{}.bak-v{saved}", p.display()));
+    if !backup.exists() {
+        if let Err(e) = std::fs::copy(p, &backup) {
+            log::warn!("could not back up {} before migrating: {e}", p.display());
+        }
+    }
+    run_migrations(&mut v);
+    log::info!("migrated {} from schema v{saved} to v{CURRENT_SCHEMA_VERSION}", p.display());
+    let out = serde_json::to_string(&v).map_err(|e| format!("{e}"))?;
+    // A failed persist is logged and recorded by save_settings_locked; the
+    // migrated data is still returned so this session works.
+    let _ = save_settings_locked(p, &out);
+    Ok(out)
+}
+
+/// Load -> modify -> save of the whole `ui-settings.json` envelope under the
+/// process-wide settings lock, so concurrent writers (UI thread + workers)
+/// cannot overwrite each other's keys. `f` receives an object that always has
+/// an object at `"settings"`. Prefer this over `load_ui_settings` +
+/// `save_ui_settings` for any read-modify-write.
+pub fn update_ui_settings(f: impl FnOnce(&mut Value)) -> Result<(), String> {
+    let _g = lock(&SETTINGS_LOCK);
+    update_settings_at(&settings_path(), f)
+}
+
+fn update_settings_at(p: &Path, f: impl FnOnce(&mut Value)) -> Result<(), String> {
+    let raw = load_settings_at(p)?;
+    let mut v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    if !v.is_object() {
+        v = json!({});
+    }
+    if !v["settings"].is_object() {
+        v["settings"] = json!({});
+    }
+    f(&mut v);
+    if v.get("_schemaVersion").is_none() {
+        v["_schemaVersion"] = json!(CURRENT_SCHEMA_VERSION);
+    }
+    let out = serde_json::to_string(&v).map_err(|e| format!("{e}"))?;
+    save_settings_locked(p, &out)
 }
 
 /// Ensure `~/.config/opengg/locales/` exists, seed it with the bundled English
@@ -219,10 +455,11 @@ fn settings_mut(s: &mut Value) -> Option<&mut serde_json::Map<String, Value>> {
     s.get_mut("settings").and_then(Value::as_object_mut)
 }
 
-/// Default track definitions (from `DEFAULTS.settings.trackDefs` in
-/// `persistence.ts`) — needed by migrations 5 and 6.
-fn default_track_def(id: &str) -> Option<Value> {
-    let defs = json!([
+/// The default timeline tracks, in order (from `DEFAULTS.settings.trackDefs`
+/// in `persistence.ts`). Also what Settings → Timeline Tracks' "Reset to
+/// defaults" restores.
+pub fn default_track_defs() -> Value {
+    json!([
         { "id": "O1", "name": "Overlays", "color": "#f97316", "icon": "overlay", "visible": true },
         { "id": "V1", "name": "Video",    "color": "#E94560", "icon": "video",   "visible": true },
         { "id": "A1", "name": "Audio 1",  "color": "#10b981", "icon": "game",    "visible": true },
@@ -230,7 +467,12 @@ fn default_track_def(id: &str) -> Option<Value> {
         { "id": "A3", "name": "Audio 3",  "color": "#f59e0b", "icon": "mic",     "visible": true },
         { "id": "A4", "name": "Audio 4",  "color": "#8b5cf6", "icon": "media",   "visible": true },
         { "id": "A5", "name": "Audio 5",  "color": "#ec4899", "icon": "media",   "visible": true }
-    ]);
+    ])
+}
+
+/// One default track definition by id — needed by migrations 5 and 6.
+fn default_track_def(id: &str) -> Option<Value> {
+    let defs = default_track_defs();
     defs.as_array()
         .unwrap()
         .iter()
@@ -439,14 +681,97 @@ fn is_resolution_like(s: &str) -> bool {
 }
 
 /// Index of the first track def with `id == id`.
+/// Timeline tracks the editor cannot work without: `O1` (Overlays) and `V1`
+/// (Video). The editor draws its picture lane from `V1` and its overlay lane
+/// from `O1`, so the settings panel refuses to delete them.
+pub const REQUIRED_TRACK_IDS: [&str; 2] = ["O1", "V1"];
+
+/// Put back any required timeline track missing from `envelope`
+/// (`{ "settings": { "trackDefs": [...] } }`), and seed the full default set
+/// when there is no `trackDefs` array at all. Returns true if it changed
+/// anything.
+///
+/// This runs on every load rather than as a numbered migration because the
+/// Qt shell never ran the migrations, and the panel used to allow deleting
+/// both tracks, so there are settings files in the wild without them. It is
+/// idempotent, and leaves the user's own tracks, order and colours alone.
+pub fn ensure_required_tracks(envelope: &mut Value) -> bool {
+    let Some(settings) = settings_mut(envelope) else {
+        return false;
+    };
+    if !settings.get("trackDefs").is_some_and(Value::is_array) {
+        settings.insert("trackDefs".into(), default_track_defs());
+        return true;
+    }
+    let defs = settings
+        .get_mut("trackDefs")
+        .and_then(Value::as_array_mut)
+        .expect("checked above");
+
+    let mut changed = false;
+    if index_of_id(defs, "O1").is_none() {
+        let pos = index_of_id(defs, "V1").unwrap_or(0);
+        defs.insert(pos, default_track_def("O1").expect("O1 default"));
+        changed = true;
+    }
+    if index_of_id(defs, "V1").is_none() {
+        let pos = index_of_id(defs, "O1").map_or(0, |i| i + 1);
+        defs.insert(pos, default_track_def("V1").expect("V1 default"));
+        changed = true;
+    }
+    changed
+}
+
 fn index_of_id(defs: &[Value], id: &str) -> Option<usize> {
     defs.iter()
         .position(|d| d.get("id").and_then(Value::as_str) == Some(id))
 }
 
 #[cfg(test)]
+mod persistence_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_required_tracks_restores_deleted_video_and_overlay() {
+        let mut v = json!({ "settings": { "trackDefs": [
+            { "id": "A5", "name": "Audio 5", "color": "#94a3b8", "icon": "game", "visible": true }
+        ] } });
+        assert!(ensure_required_tracks(&mut v));
+        let ids: Vec<&str> = v["settings"]["trackDefs"]
+            .as_array().unwrap().iter()
+            .map(|d| d["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["O1", "V1", "A5"]);
+        // The user's own track is untouched.
+        assert_eq!(v["settings"]["trackDefs"][2]["color"], "#94a3b8");
+        // Idempotent.
+        assert!(!ensure_required_tracks(&mut v));
+    }
+
+    #[test]
+    fn ensure_required_tracks_keeps_existing_order_and_colours() {
+        let mut v = json!({ "settings": { "trackDefs": [
+            { "id": "A1", "name": "Audio 1", "color": "#123456", "icon": "game", "visible": true },
+            { "id": "V1", "name": "Picture", "color": "#abcdef", "icon": "video", "visible": false }
+        ] } });
+        assert!(ensure_required_tracks(&mut v));
+        let defs = v["settings"]["trackDefs"].as_array().unwrap();
+        let ids: Vec<&str> = defs.iter().map(|d| d["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["A1", "O1", "V1"]);
+        assert_eq!(defs[2]["color"], "#abcdef");
+        assert_eq!(defs[2]["name"], "Picture");
+    }
+
+    #[test]
+    fn ensure_required_tracks_seeds_defaults_when_absent() {
+        let mut v = json!({ "settings": {} });
+        assert!(ensure_required_tracks(&mut v));
+        assert_eq!(v["settings"]["trackDefs"].as_array().unwrap().len(), 7);
+        let mut none = json!(null);
+        assert!(!ensure_required_tracks(&mut none));
+    }
 
     // ── runMigrations (mirrors stores/persistence.test.ts) ──
 

@@ -13,7 +13,13 @@ import com.opengg.app
 Item {
     id: rec
 
-    property bool menuOpen: false
+    /// Read-only view of the flyout, for the pill's hover/chevron state.
+    readonly property bool menuOpen: menu.visible
+
+    // A page switch hides this control but not a Popup it owns, which lives
+    // in the window overlay — close it explicitly so it cannot outlive the
+    // Clips page.
+    onVisibleChanged: if (!rec.visible) menu.close()
 
     implicitWidth: pill.width
     implicitHeight: 32
@@ -104,7 +110,9 @@ Item {
 
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                text: RecordingController.running ? "Recording" : "Idle"
+                text: RecordingController.running
+                      ? (I18n.language, I18n.t("recording.recording"))
+                      : (I18n.language, I18n.t("recording.idle"))
                 color: RecordingController.running ? Theme.danger : Theme.textDim
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
@@ -123,40 +131,28 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: rec.menuOpen = !rec.menuOpen
+            onClicked: menu.toggle()
         }
     }
 
     // ── Menu ──────────────────────────────────────────────────────────────
-    // Plain positioned Rectangle rather than a QQC2 Popup, matching the
-    // established choice everywhere else in this shell.
-    Rectangle {
+    // A FlyoutPopup, not the plain Rectangle this used to be: that one only
+    // closed when the pill was clicked again, so it stayed open over whatever
+    // the user clicked or navigated to next. The popup closes on any press
+    // outside it and on Escape.
+    FlyoutPopup {
         id: menu
-        visible: rec.menuOpen
-        y: pill.height + 4
+        anchorItem: pill
         width: 260
-        height: menuCol.implicitHeight + 20
-        z: 60
-        radius: Theme.radius
-        color: Theme.surface
-        border.width: 1
-        border.color: Theme.border
+        implicitHeight: menuCol.implicitHeight + 16
 
-        ColumnLayout {
+        contentItem: ColumnLayout {
             id: menuCol
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: 10
             spacing: 8
 
-            Text {
+            ErrorText {
                 Layout.fillWidth: true
-                visible: RecordingController.error.length > 0
                 text: RecordingController.error
-                color: Theme.danger
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
             }
 
             RowLayout {
@@ -192,7 +188,9 @@ Item {
                     border.color: RecordingController.running ? Theme.danger : Theme.border
                     Text {
                         anchors.centerIn: parent
-                        text: RecordingController.running ? "Stop" : "Start Replay Buffer"
+                        text: RecordingController.running
+                              ? (I18n.language, I18n.t("dashboard.stop"))
+                              : (I18n.language, I18n.t("dashboard.startReplay"))
                         color: RecordingController.running ? Theme.danger : Theme.text
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -229,7 +227,7 @@ Item {
                         hoverEnabled: true
                         enabled: RecordingController.running
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: { RecordingController.save(); rec.menuOpen = false }
+                        onClicked: { RecordingController.save(); menu.close() }
                     }
                 }
             }

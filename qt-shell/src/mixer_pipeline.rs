@@ -43,8 +43,14 @@ pub const VIDEO_ITEM_OBJECT_NAME: &str = "clipVideoItem";
 /// `QT_QPA_PLATFORM=offscreen`, where qml6glsink fails the whole pipeline
 /// with "Could not initialize window system" — the screenshot harness runs
 /// there, so the caller falls back to a poster frame instead.
+///
+/// Also false when the qml6glsink plugin is not installed (it is packaged
+/// separately on every distro). ClipVideoSurface.qml only loads the
+/// GStreamer QML module when this is true, so a missing plugin costs clip
+/// video, not the whole window.
 pub fn gl_video_available() -> bool {
-    unsafe { opengg_has_gl_window_system() }
+    let gl = unsafe { opengg_has_gl_window_system() };
+    gl && gst::ElementFactory::find("qml6glsink").is_some()
 }
 
 /// Point a qml6glsink at the QML video surface.

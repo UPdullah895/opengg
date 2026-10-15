@@ -189,21 +189,21 @@ Rectangle {
                     flat: true
                     icon: "list"
                     active: page.deviceViewMode === "list"
-                    tooltip: "List view"
+                    tooltip: (I18n.language, I18n.t("devices.viewList"))
                     onTriggered: page.setViewMode("list")
                 }
                 IconToggle {
                     flat: true
                     icon: "grid"
                     active: page.deviceViewMode === "grid"
-                    tooltip: "Grid view"
+                    tooltip: (I18n.language, I18n.t("devices.viewGrid"))
                     onTriggered: page.setViewMode("grid")
                 }
                 IconToggle {
                     flat: true
                     icon: "square"
                     active: page.deviceViewMode === "carousel"
-                    tooltip: "Carousel view"
+                    tooltip: (I18n.language, I18n.t("devices.viewCarousel"))
                     onTriggered: page.setViewMode("carousel")
                 }
             }
@@ -215,7 +215,7 @@ Rectangle {
                 Layout.leftMargin: 8
             }
             Text {
-                text: DeviceController.connected ? "daemon connected" : "daemon offline"
+                text: (I18n.language, DeviceController.connected ? I18n.t("devices.daemonConnected") : I18n.t("devices.daemonOffline"))
                 color: Theme.textDim
                 font.pixelSize: 12
             }
@@ -227,125 +227,137 @@ Rectangle {
             Layout.fillHeight: true
             spacing: 20
 
-            // Master: the device list.
-            ScrollView {
-                id: listScroll
+            // Master: the device list. Wrapped so the wheel accelerator can be
+            // listScroll's sibling — a Layout child can't be anchor-targeted
+            // from outside the layout (see SettingsPage's navScroll).
+            Item {
                 Layout.preferredWidth: 420
                 Layout.fillHeight: true
-                contentWidth: availableWidth
-                contentHeight: listCol.implicitHeight
-                clip: true
 
-                ColumnLayout {
-                    id: listCol
-                    width: listScroll.availableWidth
-                    spacing: 12
+                ScrollView {
+                    id: listScroll
+                    anchors.fill: parent
+                    contentWidth: availableWidth
+                    contentHeight: listCol.implicitHeight
+                    clip: true
 
-                    // Three view modes as static siblings switched by
-                    // `visible` only — never a Loader that recreates content.
-                    // Same reasoning as MixerPage.qml's tab panels: rebuilding
-                    // DeviceCards on every mode switch would re-run
-                    // imagePath() and could flash empty content for a frame.
-
-                    // List — one card per row.
                     ColumnLayout {
-                        Layout.fillWidth: true
-                        visible: page.deviceViewMode === "list"
+                        id: listCol
+                        width: listScroll.availableWidth
                         spacing: 12
 
-                        Repeater {
-                            model: page.devices
-                            DeviceCard {
-                                Layout.fillWidth: true
-                                selected: modelData.id === page.selectedId
-                                onClicked: page.selectedId = modelData.id
-                            }
-                        }
-                    }
+                        // Three view modes as static siblings switched by
+                        // `visible` only — never a Loader that recreates content.
+                        // Same reasoning as MixerPage.qml's tab panels: rebuilding
+                        // DeviceCards on every mode switch would re-run
+                        // imagePath() and could flash empty content for a frame.
 
-                    // Grid — two columns. Both columns share the row height
-                    // because DeviceCard is a fixed height, so a mouse and a
-                    // headset in the same row can no longer render ragged or
-                    // overlap.
-                    GridLayout {
-                        Layout.fillWidth: true
-                        visible: page.deviceViewMode === "grid"
-                        columns: 2
-                        columnSpacing: 12
-                        rowSpacing: 12
-
-                        Repeater {
-                            model: page.devices
-                            DeviceCard {
-                                Layout.fillWidth: true
-                                selected: modelData.id === page.selectedId
-                                onClicked: page.selectedId = modelData.id
-                            }
-                        }
-                    }
-
-                    // Carousel — one card at a time.
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        visible: page.deviceViewMode === "carousel"
-                        spacing: 10
-
-                        SwipeView {
-                            id: carousel
+                        // List — one card per row.
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 72
-                            clip: true
+                            visible: page.deviceViewMode === "list"
+                            spacing: 12
 
                             Repeater {
                                 model: page.devices
                                 DeviceCard {
-                                    width: carousel.width
-                                    // SwipeView positions every page including
-                                    // off-screen ones and relies on its own
-                                    // clip -- but Icon.qml's Shape glyphs do
-                                    // not respect that clip under the offscreen
-                                    // QPA backend (confirmed via ui-shots.sh:
-                                    // a battery icon painted through the clip
-                                    // and floated outside the visible page,
-                                    // reproducibly). Hiding non-current pages
-                                    // sidesteps the interaction entirely.
-                                    visible: SwipeView.isCurrentItem
+                                    Layout.fillWidth: true
                                     selected: modelData.id === page.selectedId
                                     onClicked: page.selectedId = modelData.id
                                 }
                             }
-                            // Guarded on the active view mode: a SwipeView
-                            // still constructs and emits currentIndexChanged
-                            // (with index 0) even while its parent is
-                            // `visible: false`, so without this the hidden
-                            // carousel silently yanked the selection back to
-                            // the first device every time the page loaded in
-                            // List or Grid mode — overriding whatever the user
-                            // had actually clicked.
-                            onCurrentIndexChanged: {
-                                if (page.deviceViewMode !== "carousel")
-                                    return
-                                if (currentIndex >= 0 && currentIndex < page.devices.length)
-                                    page.selectedId = page.devices[currentIndex].id
+                        }
+
+                        // Grid — two columns. Both columns share the row height
+                        // because DeviceCard is a fixed height, so a mouse and a
+                        // headset in the same row can no longer render ragged or
+                        // overlap.
+                        GridLayout {
+                            Layout.fillWidth: true
+                            visible: page.deviceViewMode === "grid"
+                            columns: 2
+                            columnSpacing: 12
+                            rowSpacing: 12
+
+                            Repeater {
+                                model: page.devices
+                                DeviceCard {
+                                    Layout.fillWidth: true
+                                    selected: modelData.id === page.selectedId
+                                    onClicked: page.selectedId = modelData.id
+                                }
                             }
                         }
-                        PageIndicator {
-                            Layout.alignment: Qt.AlignHCenter
-                            visible: carousel.count > 1
-                            count: carousel.count
-                            currentIndex: carousel.currentIndex
+
+                        // Carousel — one card at a time.
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            visible: page.deviceViewMode === "carousel"
+                            spacing: 10
+
+                            SwipeView {
+                                id: carousel
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 72
+                                clip: true
+
+                                Repeater {
+                                    model: page.devices
+                                    DeviceCard {
+                                        width: carousel.width
+                                        // SwipeView positions every page including
+                                        // off-screen ones and relies on its own
+                                        // clip -- but Icon.qml's Shape glyphs do
+                                        // not respect that clip under the offscreen
+                                        // QPA backend (confirmed via ui-shots.sh:
+                                        // a battery icon painted through the clip
+                                        // and floated outside the visible page,
+                                        // reproducibly). Hiding non-current pages
+                                        // sidesteps the interaction entirely.
+                                        visible: SwipeView.isCurrentItem
+                                        selected: modelData.id === page.selectedId
+                                        onClicked: page.selectedId = modelData.id
+                                    }
+                                }
+                                // Guarded on the active view mode: a SwipeView
+                                // still constructs and emits currentIndexChanged
+                                // (with index 0) even while its parent is
+                                // `visible: false`, so without this the hidden
+                                // carousel silently yanked the selection back to
+                                // the first device every time the page loaded in
+                                // List or Grid mode — overriding whatever the user
+                                // had actually clicked.
+                                onCurrentIndexChanged: {
+                                    if (page.deviceViewMode !== "carousel")
+                                        return
+                                    if (currentIndex >= 0 && currentIndex < page.devices.length)
+                                        page.selectedId = page.devices[currentIndex].id
+                                }
+                            }
+                            PageIndicator {
+                                Layout.alignment: Qt.AlignHCenter
+                                visible: carousel.count > 1
+                                count: carousel.count
+                                currentIndex: carousel.currentIndex
+                            }
                         }
-                    }
 
-                    Text {
-                        Layout.fillWidth: true
-                        visible: page.devices.length === 0
-                        text: (I18n.language, I18n.t("devices.noDevices"))
-                        color: Theme.textDim
-                        font.pixelSize: 13
-                    }
+                        Text {
+                            Layout.fillWidth: true
+                            visible: page.devices.length === 0
+                            text: (I18n.language, I18n.t("devices.noDevices"))
+                            color: Theme.textDim
+                            font.pixelSize: 13
+                        }
 
-                    Item { Layout.fillHeight: true }
+                        Item { Layout.fillHeight: true }
+                    }
+                }
+
+                // Above the ScrollView, not inside it — see WheelScroller.qml.
+                Item {
+                    anchors.fill: parent
+                    WheelScroller { anchors.fill: parent; flick: listScroll.contentItem }
                 }
             }
 
@@ -358,12 +370,6 @@ Rectangle {
                 onConfigureButtonsRequested: buttonEditor.device = page.selectedDevice
             }
         }
-    }
-
-    // Above the ScrollView, not inside it — see WheelScroller.qml.
-    Item {
-        anchors.fill: listScroll
-        WheelScroller { anchors.fill: parent; flick: listScroll.contentItem }
     }
 
     // One shared instance rather than one per card.
