@@ -27,6 +27,7 @@ The user asked for an in-depth study of BasilForge/Kairos (Windows instant repla
 - The MP4 muxer may drop `title=` stream tags (keeps `handler_name`).
 - A `.part` → final rename is a `Modify(Name)` notify event; the clip watcher missed it.
 - In a QML `onXChanged` handler, a sibling binding on X may still be stale — read the new value directly.
+- `check-colors.sh`'s emoji check uses `grep -P` with `\x{…}` ranges, which errors (and the script still prints "clean") under a non-UTF-8 locale such as this container's `C`. Run it with `LC_ALL=C.UTF-8`, as CI's Arch image effectively does — a "★" in ShareDialog slipped through locally that way and failed CI.
 - `ui-shots.sh` happily screenshots a stale binary after a failed build (a duplicate `onVisibleChanged` failed qmlcachegen); always check `cargo build`'s result first.
 - This cloud container has Ubuntu's Qt 6.4, too old for the QML (6.7+ APIs: every page fails "is not a type"). Built against 6.4 headers, then ran with the PySide6 6.8 wheel's Qt libs via `LD_LIBRARY_PATH`/`QT_PLUGIN_PATH`/`QML_IMPORT_PATH` and a stub `org.freedesktop.gstreamer.Qt6GLVideoItem` module — enough for a warning-free offscreen sweep. The 4 `mixer_pipeline` tests fail here (and on the base branch) for lack of GStreamer plugins.
 

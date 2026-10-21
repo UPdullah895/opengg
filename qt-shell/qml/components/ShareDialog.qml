@@ -229,7 +229,7 @@ Rectangle {
                     model: dlg.plan.ladder || []
                     ChoiceChip {
                         required property var modelData
-                        text: modelData.shortSide + "p" + (modelData.original ? " ★" : "")
+                        text: (I18n.language, modelData.shortSide + "p" + (modelData.original ? " · " + I18n.t("share.original") : ""))
                         selected: dlg.shortSide === modelData.shortSide
                         enabled: !ShareController.running
                         onTriggered: dlg.shortSide = modelData.shortSide
