@@ -28,6 +28,14 @@ pub mod qobject {
         #[qproperty(QString, session_type, cxx_name = "sessionType")]
         #[qproperty(QString, diagnostics_json, cxx_name = "diagnosticsJson")]
         #[qproperty(bool, diagnostics_running, cxx_name = "diagnosticsRunning")]
+        /// True while a replay save is being written (runs off the UI thread).
+        #[qproperty(bool, saving)]
+        /// Outcome of the latest save as JSON: `{ok, reason, message,
+        /// game, filename, filepath, sizeMb, lowDiskFreeBytes, seq}`.
+        /// `reason` is a stable id ("off", "starting", "busy", "timeout",
+        /// "empty", "diskFull", "error") for a translated message; `seq`
+        /// increments every save so QML sees repeats of the same outcome.
+        #[qproperty(QString, last_save_json, cxx_name = "lastSaveJson")]
         type RecordingController = super::RecordingControllerRust;
 
         /// Poll the current GSR process state (also clears a stale crash).
@@ -68,7 +76,7 @@ pub mod qobject {
 }
 
 use core::pin::Pin;
-use cxx_qt::Threading;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 
 #[derive(Default)]
@@ -82,6 +90,9 @@ pub struct RecordingControllerRust {
     session_type: QString,
     diagnostics_json: QString,
     diagnostics_running: bool,
+    saving: bool,
+    last_save_json: QString,
+    save_seq: u64,
 }
 
 struct GsrParams {
@@ -196,17 +207,55 @@ impl qobject::RecordingController {
     }
 
     pub fn save(mut self: Pin<&mut Self>) {
-        match opengg_core::gsr::save_gsr_replay(false) {
-            Ok(r) => {
-                self.as_mut().set_error(QString::default());
-                notify_clip_saved(&r.game_title, &r.filename, r.filesize_mb, r.success);
-            }
-            Err(e) => {
-                eprintln!("RecordingController::save: {e}");
-                self.as_mut().set_error(QString::from(&e));
-            }
+        // A save waits for gpu-screen-recorder to finish writing (seconds on
+        // a long buffer) and remuxes the file, so it must not run on the UI
+        // thread. The core gate refuses overlapping saves on its own; this
+        // flag only stops QML from queueing threads while one is running.
+        if *self.saving() {
+            return;
         }
-        self.apply_status();
+        self.as_mut().set_saving(true);
+        let opts = load_save_options();
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let outcome = opengg_core::gsr::save_gsr_replay(false, &opts);
+            let json = match &outcome {
+                Ok(r) => serde_json::json!({
+                    "ok": true,
+                    "reason": "",
+                    "message": "",
+                    "game": r.game_title,
+                    "filename": r.filename,
+                    "filepath": r.filepath,
+                    "sizeMb": r.filesize_mb,
+                    "lowDiskFreeBytes": r.low_disk_free_bytes,
+                }),
+                Err(f) => serde_json::json!({
+                    "ok": false,
+                    "reason": f.id(),
+                    "message": f.to_string(),
+                }),
+            };
+            // Own thread: the low-disk toast waits for the "saved" one, and
+            // that wait must not hold up `saving` going false.
+            std::thread::spawn(move || notify_save_outcome(&outcome));
+            let _ = qt_thread.queue(move |mut c| {
+                let seq = c.as_ref().rust().save_seq + 1;
+                c.as_mut().rust_mut().save_seq = seq;
+                let mut json = json;
+                json["seq"] = serde_json::json!(seq);
+                let failed = !json["ok"].as_bool().unwrap_or(false);
+                c.as_mut().set_last_save_json(QString::from(&json.to_string()));
+                if failed {
+                    let msg = json["message"].as_str().unwrap_or("").to_string();
+                    c.as_mut().set_error(QString::from(&msg));
+                } else {
+                    c.as_mut().set_error(QString::default());
+                }
+                c.as_mut().set_saving(false);
+                c.apply_status();
+            });
+        });
     }
 
     pub fn restart(mut self: Pin<&mut Self>) {
@@ -265,10 +314,23 @@ impl qobject::RecordingController {
     }
 }
 
-/// Fire the clip-saved desktop notification, reading the same
-/// `settings.enableClipNotifications`/`notificationStyle`/`notificationDuration`
-/// keys the (already-shipped) NotificationsPanel.qml writes.
-fn notify_clip_saved(game: &str, filename: &str, filesize_mb: f64, success: bool) {
+/// Filing rules for saved clips, from the Storage settings panel.
+fn load_save_options() -> opengg_core::gsr::SaveOptions {
+    let raw = opengg_core::settings::load_ui_settings().unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    let s = &v["settings"];
+    opengg_core::gsr::SaveOptions {
+        per_game_folder: s["clipsPerGameFolder"].as_bool().unwrap_or(false),
+        max_folder_gb: s["maxClipFolderGb"].as_u64().unwrap_or(0),
+    }
+}
+
+/// Desktop notification for a save, success or not. A refused or failed
+/// save used to be silent — the user only found out when the clip was
+/// missing — so failures always notify (they are rare and actionable),
+/// even with clip notifications turned off. A "busy" refusal stays quiet:
+/// the save already in flight will report.
+fn notify_save_outcome(outcome: &Result<opengg_core::gsr::SaveReplayResult, opengg_core::gsr::SaveFailure>) {
     let raw = opengg_core::settings::load_ui_settings().unwrap_or_default();
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
     let s = &v["settings"];
@@ -277,13 +339,27 @@ fn notify_clip_saved(game: &str, filename: &str, filesize_mb: f64, success: bool
     let mode = s["notificationStyle"].as_str().unwrap_or("auto");
     let duration_secs = s["notificationDuration"].as_u64();
 
-    opengg_core::notify::show_clip_notification(
-        game,
-        filename,
-        filesize_mb,
-        success,
-        enabled,
-        mode,
-        duration_secs,
-    );
+    match outcome {
+        Ok(r) => {
+            opengg_core::notify::show_clip_notification(
+                &r.game_title,
+                &r.filename,
+                r.filesize_mb,
+                true,
+                enabled,
+                mode,
+                duration_secs,
+            );
+            if let Some(free) = r.low_disk_free_bytes {
+                // After the "saved" toast, so both get read.
+                std::thread::sleep(std::time::Duration::from_millis(3500));
+                opengg_core::notify::show_warning(
+                    "Low disk space",
+                    &format!("{:.1} GB left for clips", free as f64 / 1e9),
+                );
+            }
+        }
+        Err(f) if f.id() == "busy" => {}
+        Err(f) => opengg_core::notify::show_warning("Clip not saved", &f.to_string()),
+    }
 }

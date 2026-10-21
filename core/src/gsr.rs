@@ -11,6 +11,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
 
+use crate::clips::organizer;
+use crate::clips::retention;
+use crate::clips::save_watch::{self, buffer_bytes, write_limit, LowDiskWarner, SaveGate, SaveRequest, SaveVerdict};
 use crate::paths::shexp;
 
 /// Parameters for spawning GPU Screen Recorder (passed once at start, used for restarts).
@@ -238,6 +241,7 @@ pub fn start_gsr_replay(
         "GSR started (pid {}) replay={}s fps={fps} quality={quality} bitrate={bitrate_kbps:?}kbps target={target} dir={expanded} audio={:?}",
         child.id(), replay_secs, audio_sources
     );
+    save_gate().lock().unwrap().buffer_started(std::time::Instant::now());
     *lock = Some(GsrState {
         child,
         params: GsrSpawnParams {
@@ -323,168 +327,235 @@ pub fn get_recorder_status() -> String {
     "idle".into()
 }
 
-/// Result of attempting to save a replay clip.
-#[derive(Debug, Clone)]
+/// Result of a replay save that produced a clip.
+#[derive(Debug, Clone, Serialize)]
 pub struct SaveReplayResult {
     pub game_title: String,
     pub filename: String,
+    /// Full path of the saved clip (after any per-game folder / " (n)").
+    pub filepath: String,
     pub filesize_mb: f64,
     pub success: bool,
+    /// Free space left after the save when it is below the low-disk
+    /// threshold and a warning is due (rate-limited), else `None`.
+    pub low_disk_free_bytes: Option<u64>,
 }
 
-/// Save the current replay buffer via SIGUSR1.
-/// After the file flushes, the saved clip is renamed to `<GameName>_<timestamp>.mp4`.
-/// If `restart_on_save` is true, GSR is also killed and respawned so the next save
-/// captures only footage recorded after this moment.
-pub fn save_gsr_replay(restart_on_save: bool) -> Result<SaveReplayResult, String> {
-    // Capture active window title BEFORE signalling (window focus may change after).
-    let game_title = std::process::Command::new("xdotool")
-        .args(["getactivewindow", "getwindowname"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "Unknown".to_string());
+/// Why a save produced no clip. Each variant has a stable [`SaveFailure::id`]
+/// so the UI can show a translated reason instead of a raw error string.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SaveFailure {
+    /// The request was refused before anything was signalled.
+    Refused(SaveRequest),
+    /// The recorder never finished writing within the write limit.
+    Timeout,
+    /// The saved file is empty.
+    Empty,
+    /// The disk is (nearly) full; the clip is likely truncated.
+    DiskFull,
+    /// Anything else (rename failed, process vanished, …).
+    Other(String),
+}
 
-    // Capture current time just before SIGUSR1 so we can identify the new file by mtime.
-    // This avoids the mtime-collision bug where a previously-played clip has a newer
-    // mtime than the freshly-flushed replay file.
+impl SaveFailure {
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::Refused(r) => r.id(),
+            Self::Timeout => "timeout",
+            Self::Empty => "empty",
+            Self::DiskFull => "diskFull",
+            Self::Other(_) => "error",
+        }
+    }
+}
+
+impl std::fmt::Display for SaveFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(SaveRequest::Off) => write!(f, "Clip not saved — the replay buffer is off"),
+            Self::Refused(SaveRequest::Starting) => write!(f, "Clip not saved — the replay buffer is still starting"),
+            Self::Refused(_) => write!(f, "A clip is already being saved"),
+            Self::Timeout => write!(f, "Clip not saved — the recorder did not finish writing it"),
+            Self::Empty => write!(f, "Clip not saved — the file could not be written"),
+            Self::DiskFull => write!(f, "Clip not saved — the disk is full"),
+            Self::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Where and how saved clips are filed (from ui-settings.json).
+#[derive(Debug, Clone, Default)]
+pub struct SaveOptions {
+    /// File each clip under `<clips>/<Game>/`.
+    pub per_game_folder: bool,
+    /// Folder size limit in GB for OpenGG's own clips (0 = off).
+    pub max_folder_gb: u64,
+}
+
+fn save_gate() -> &'static Mutex<SaveGate> {
+    static GATE: OnceLock<Mutex<SaveGate>> = OnceLock::new();
+    GATE.get_or_init(|| Mutex::new(SaveGate::default()))
+}
+
+fn low_disk_warner() -> &'static Mutex<LowDiskWarner> {
+    static W: OnceLock<Mutex<LowDiskWarner>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(LowDiskWarner::default()))
+}
+
+/// Save the current replay buffer.
+///
+/// Safe to call from a worker thread: the GSR lock is held only while
+/// signalling. The flow, in order:
+///
+/// 1. name the game in front *before* signalling (focus may move after);
+/// 2. ask the [`SaveGate`] — refuse when the buffer is off, younger than
+///    2 s, or already saving;
+/// 3. SIGUSR1, then wait for the file GSR writes to be *finished*: GSR no
+///    longer holds it open and its size has stopped changing, within a
+///    write limit sized to the buffer (the old fixed 5 s poll could pick up
+///    a half-written file, or give up on a long one);
+/// 4. remux with per-track titles into a hidden part file beside the
+///    target, then move it into place under a collision-free name;
+/// 5. judge the result (empty file / full disk), record it as OpenGG's for
+///    the folder size limit, and enforce that limit in the background.
+///
+/// If `restart_on_save` is true, GSR is also respawned so the next save
+/// only holds footage recorded after this one.
+pub fn save_gsr_replay(restart_on_save: bool, opts: &SaveOptions) -> Result<SaveReplayResult, SaveFailure> {
+    let game_title = crate::foreground::current_game_name();
     let pre_save_time = std::time::SystemTime::now();
 
-    // Step 1: send SIGUSR1 and clone spawn params.
-    // Lock scope is tight — we drop it before calling start_gsr_replay to avoid deadlock.
-    let (output_dir_exp, restart_params, audio_targets_ordered): (String, Option<GsrSpawnParams>, Vec<String>) = {
+    let (pid, output_dir_exp, restart_params, audio_targets_ordered, limit) = {
         let lock = gsr_process().lock().unwrap();
-        match &*lock {
-            Some(gsr_state) => {
-                let pid = gsr_state.child.id();
-                #[cfg(unix)]
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGUSR1);
-                }
-                log::info!("GSR SIGUSR1 → pid {pid}");
-                let expanded = shexp(&gsr_state.params.output_dir);
-                let targets = gsr_state.params.audio_targets.clone();
-                let rp = if restart_on_save {
-                    Some(GsrSpawnParams {
-                        output_dir: gsr_state.params.output_dir.clone(),
-                        replay_secs: gsr_state.params.replay_secs,
-                        fps: gsr_state.params.fps,
-                        quality: gsr_state.params.quality.clone(),
-                        bitrate_kbps: gsr_state.params.bitrate_kbps,
-                        monitor_target: gsr_state.params.monitor_target.clone(),
-                        audio_sources: gsr_state.params.audio_sources.clone(),
-                        audio_targets: gsr_state.params.audio_targets.clone(),
-                    })
-                } else {
-                    None
-                };
-                (expanded, rp, targets)
-            }
-            None => return Err("gpu-screen-recorder is not running".into()),
+        let running = lock.is_some();
+        let buffer = lock
+            .as_ref()
+            .map(|s| buffer_bytes(u64::from(s.params.bitrate_kbps.unwrap_or(ASSUMED_KBPS)), u64::from(s.params.replay_secs)))
+            .unwrap_or(0);
+        let req = save_gate().lock().unwrap().request(std::time::Instant::now(), running, buffer);
+        if req != SaveRequest::Started {
+            log::info!("replay save refused: {}", req.id());
+            return Err(SaveFailure::Refused(req));
         }
+        let gsr_state = lock.as_ref().expect("running checked above");
+        let pid = gsr_state.child.id();
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGUSR1);
+        }
+        log::info!("GSR SIGUSR1 → pid {pid}");
+        let rp = restart_on_save.then(|| gsr_state.params.clone());
+        (
+            pid,
+            shexp(&gsr_state.params.output_dir),
+            rp,
+            gsr_state.params.audio_targets.clone(),
+            write_limit(buffer),
+        )
     }; // lock dropped here
 
-    // Step 2: poll for the new file (written after pre_save_time) for up to 5 s.
-    // Using a polling loop instead of a fixed sleep makes this both more reliable
-    // and faster on fast NVMe storage while still handling slow HDDs.
+    let outcome = finish_save(pid, &output_dir_exp, pre_save_time, limit, &game_title, &audio_targets_ordered, opts);
+    save_gate().lock().unwrap().finished();
+    let result = outcome?;
 
-    // Step 3: rename the file that appeared after the SIGUSR1 signal.
-    if let Some(src_path) = newest_video_after(&output_dir_exp, pre_save_time, 5000) {
-        let safe_name = sanitize_filename(&game_title);
-        let safe_name = if safe_name.is_empty() {
-            "Clip".to_string()
-        } else {
-            safe_name
-        };
-        let now = {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let secs = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            // Format as YYYY-MM-DD_HH-MM-SS using simple arithmetic (no chrono dep).
-            let s = secs;
-            let sec = s % 60;
-            let min = (s / 60) % 60;
-            let hour = (s / 3600) % 24;
-            let days = s / 86400; // days since 1970-01-01
-                                  // Rata Die algorithm → Gregorian calendar
-            let z = days + 719468;
-            let era = z / 146097;
-            let doe = z - era * 146097;
-            let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-            let y = yoe + era * 400;
-            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-            let mp = (5 * doy + 2) / 153;
-            let d = doy - (153 * mp + 2) / 5 + 1;
-            let m = if mp < 10 { mp + 3 } else { mp - 9 };
-            let y = if m <= 2 { y + 1 } else { y };
-            format!("{y:04}-{m:02}-{d:02}_{hour:02}-{min:02}-{sec:02}")
-        };
-        let new_name = format!("{safe_name}_{now}.mp4");
-        let dest = std::path::Path::new(&output_dir_exp).join(&new_name);
-        // Produce the final file by remuxing with friendly per-track titles
-        // (-c copy = no re-encode), so the muxed audio streams show "Game"/"Chat"/"Mic"
-        // etc. in any player instead of the raw "OpenGG_*.monitor" source names. The audio
-        // stream order matches `audio_targets_ordered`. Falls back to a plain rename if
-        // ffmpeg is unavailable or the remux fails.
-        let remuxed = remux_with_track_titles(&src_path, &dest, &audio_targets_ordered);
-        let (save_ok, filesize_mb) = if remuxed {
-            let _ = std::fs::remove_file(&src_path);
-            log::info!("GSR clip saved as {new_name} (with track titles)");
-            let mb = std::fs::metadata(&dest)
-                .map(|m| m.len() as f64 / 1_000_000.0)
-                .unwrap_or(0.0);
-            (true, mb)
-        } else if let Err(e) = std::fs::rename(&src_path, &dest) {
-            log::warn!("GSR clip rename failed ({src_path:?} → {dest:?}): {e}");
-            (false, 0.0f64)
-        } else {
-            log::info!("GSR clip saved as {new_name}");
-            let mb = std::fs::metadata(&dest)
-                .map(|m| m.len() as f64 / 1_000_000.0)
-                .unwrap_or(0.0);
-            (true, mb)
-        };
-
-        let result = SaveReplayResult {
-            game_title: game_title.clone(),
-            filename: new_name,
-            filesize_mb: (filesize_mb * 10.0).round() / 10.0,
-            success: save_ok,
-        };
-
-        // Step 4: if restart requested, kill and respawn GSR.
-        if let Some(params) = restart_params {
-            {
-                let mut lock = gsr_process().lock().unwrap();
-                if let Some(mut gsr_state) = lock.take() {
-                    gsr_kill_graceful(&mut gsr_state.child);
-                    log::info!("GSR stopped for restart-on-save (SIGINT + wait)");
-                }
-            } // lock dropped before respawn
-            start_gsr_replay(
-                params.output_dir,
-                params.replay_secs,
-                params.fps,
-                params.quality,
-                params.bitrate_kbps,
-                params.monitor_target,
-                params.audio_sources,
-            )?;
-            log::info!("GSR restarted (restart_on_save=true)");
+    if let Some(params) = restart_params {
+        {
+            let mut lock = gsr_process().lock().unwrap();
+            if let Some(mut gsr_state) = lock.take() {
+                gsr_kill_graceful(&mut gsr_state.child);
+                log::info!("GSR stopped for restart-on-save (SIGINT + wait)");
+            }
         }
-
-        Ok(result)
-    } else {
-        Err("No new clip file found after save signal".into())
+        start_gsr_replay(
+            params.output_dir,
+            params.replay_secs,
+            params.fps,
+            params.quality,
+            params.bitrate_kbps,
+            params.monitor_target,
+            params.audio_sources,
+        )
+        .map_err(SaveFailure::Other)?;
+        log::info!("GSR restarted (restart_on_save=true)");
     }
+    Ok(result)
+}
+
+/// Bitrate assumed for sizing the save timeout when the quality preset
+/// gives none: on the high side, so a slow disk is never cut short.
+const ASSUMED_KBPS: u32 = 50_000;
+
+/// Steps 3–5 of [`save_gsr_replay`], after the signal.
+fn finish_save(
+    pid: u32,
+    output_dir: &str,
+    after: std::time::SystemTime,
+    limit: std::time::Duration,
+    game_title: &str,
+    audio_targets: &[String],
+    opts: &SaveOptions,
+) -> Result<SaveReplayResult, SaveFailure> {
+    let src_path = wait_for_finished_clip(pid, output_dir, after, limit).ok_or(SaveFailure::Timeout)?;
+    let root = std::path::Path::new(output_dir);
+    let stamp = organizer::local_stamp(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    );
+    let target = organizer::target_path(root, game_title, &stamp, "mp4", opts.per_game_folder);
+    let target_dir = target.parent().unwrap_or(root).to_path_buf();
+    let _ = std::fs::create_dir_all(&target_dir);
+
+    // Remux with friendly per-track titles ("Game"/"Chat"/"Mic" instead of
+    // "OpenGG_*.monitor"; stream copy, no re-encode) into a hidden part file
+    // so neither the library nor the watcher sees it half-written; a plain
+    // move is the fallback when ffmpeg is missing or fails.
+    let part = target_dir.join(format!(".{}.{}.part.mp4", stamp, std::process::id()));
+    let staged = if remux_with_track_titles(&src_path, &part, audio_targets) {
+        let _ = std::fs::remove_file(&src_path);
+        part
+    } else {
+        let _ = std::fs::remove_file(&part);
+        src_path
+    };
+    let dest = organizer::move_into_place(&staged, &target)
+        .map_err(|e| SaveFailure::Other(format!("Could not move the clip into place: {e}")))?;
+
+    let bytes = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+    let free = save_watch::free_bytes(&target_dir);
+    match save_watch::verdict(bytes, free) {
+        SaveVerdict::Ok => {}
+        SaveVerdict::Empty => return Err(SaveFailure::Empty),
+        SaveVerdict::DiskFull => return Err(SaveFailure::DiskFull),
+    }
+
+    if let Ok(db) = crate::clips::open_db() {
+        let _ = retention::record_owned(&db, &dest);
+    }
+    if opts.max_folder_gb > 0 {
+        let gb = opts.max_folder_gb;
+        std::thread::spawn(move || {
+            retention::enforce(gb);
+        });
+    }
+    let low_disk_free_bytes = low_disk_warner()
+        .lock()
+        .unwrap()
+        .should_warn(std::time::Instant::now(), free)
+        .then_some(free)
+        .flatten();
+
+    let filename = dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    log::info!("GSR clip saved as {dest:?}");
+    Ok(SaveReplayResult {
+        game_title: game_title.to_string(),
+        filename,
+        filepath: dest.to_string_lossy().to_string(),
+        filesize_mb: (bytes as f64 / 100_000.0).round() / 10.0,
+        success: true,
+        low_disk_free_bytes,
+    })
 }
 
 /// Gracefully kill and immediately respawn GSR with updated settings (hot-reload).
@@ -517,6 +588,7 @@ pub fn restart_gsr_replay(
 
 /// Stop the GSR process gracefully (SIGINT → SIGKILL fallback).
 pub fn stop_gsr_replay() -> Result<(), String> {
+    save_gate().lock().unwrap().buffer_stopped();
     let mut lock = gsr_process().lock().unwrap();
     if let Some(mut gsr_state) = lock.take() {
         gsr_kill_graceful(&mut gsr_state.child);
@@ -526,37 +598,6 @@ pub fn stop_gsr_replay() -> Result<(), String> {
 }
 
 // ═══ Helper Functions ═══
-
-/// Sanitize a string so it is safe to use as a filename component.
-/// Replaces any character that is not alphanumeric, a hyphen, or an underscore with `_`.
-/// Strips leading/trailing underscores and collapses consecutive underscores.
-fn sanitize_filename(s: &str) -> String {
-    let raw: String = s
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    // Collapse runs of underscores, then trim boundary underscores
-    let mut out = String::with_capacity(raw.len());
-    let mut prev_under = false;
-    for c in raw.chars() {
-        if c == '_' {
-            if !prev_under {
-                out.push(c);
-            }
-            prev_under = true;
-        } else {
-            out.push(c);
-            prev_under = false;
-        }
-    }
-    out.trim_matches('_').to_string()
-}
 
 /// Map a GSR capture target (e.g. "OpenGG_Game.monitor", "default_output") to a friendly
 /// audio-track title shown in players. Mirrors the frontend mapping in `utils/audio.ts`.
@@ -610,20 +651,27 @@ fn remux_with_track_titles(
     }
 }
 
-/// Find the newest video file written *strictly after* `after_time` in `dir`.
-/// Polls every 200 ms for up to `timeout_ms` milliseconds.
-/// This avoids the mtime-collision bug where a previously-played clip appears
-/// newer than the freshly flushed replay file.
-fn newest_video_after(
+/// Wait for the clip GSR writes after a save signal to be *complete*.
+///
+/// The candidate is the newest visible video in `dir` modified after
+/// `after_time`. It counts as finished once GSR (`pid`) no longer holds it
+/// open and its size is non-zero and unchanged across two polls — or, where
+/// `/proc` cannot tell (another user's process), once the size has been
+/// stable for a full second. Gives up after `limit`.
+fn wait_for_finished_clip(
+    pid: u32,
     dir: &str,
     after_time: std::time::SystemTime,
-    timeout_ms: u64,
+    limit: std::time::Duration,
 ) -> Option<std::path::PathBuf> {
     const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "ts", "flv"];
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    let deadline = std::time::Instant::now() + limit;
+    let mut last: Option<(std::path::PathBuf, u64)> = None;
+    let mut stable_polls = 0u32;
     loop {
         let found = std::fs::read_dir(dir).ok().and_then(|rd| {
             rd.filter_map(|e| e.ok())
+                .filter(|e| !organizer::is_hidden(&e.file_name().to_string_lossy()))
                 .filter(|e| {
                     e.path()
                         .extension()
@@ -640,15 +688,38 @@ fn newest_video_after(
                 .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
                 .map(|e| e.path())
         });
-        if found.is_some() {
-            return found;
+        if let Some(path) = found {
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            if last.as_ref().is_some_and(|(p, s)| *p == path && *s == size) && size > 0 {
+                stable_polls += 1;
+            } else {
+                stable_polls = 0;
+            }
+            let open = holds_open(pid, &path);
+            let done = match open {
+                Some(false) => stable_polls >= 1,
+                Some(true) => false,
+                None => stable_polls >= 5,
+            };
+            if done {
+                return Some(path);
+            }
+            last = Some((path, size));
         }
         if std::time::Instant::now() >= deadline {
-            log::warn!("newest_video_after: no new file in {dir} after {timeout_ms}ms");
+            log::warn!("wait_for_finished_clip: no finished clip in {dir} within {limit:?}");
             return None;
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
+}
+
+/// Whether process `pid` has `path` open, via `/proc/<pid>/fd`. `None` when
+/// that cannot be read (process gone, or not ours).
+fn holds_open(pid: u32, path: &std::path::Path) -> Option<bool> {
+    let rd = std::fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
+    let target = std::fs::canonicalize(path).ok()?;
+    Some(rd.flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|l| l == target)))
 }
 
 /// Send SIGINT to let GSR flush cleanly, wait up to 2 s, then SIGKILL as fallback.

@@ -21,6 +21,7 @@ pub mod device_display;
 pub mod ear_blast;
 pub mod eq;
 pub mod extensions;
+pub mod foreground;
 pub mod gsr;
 pub mod hotkeys;
 pub mod media;
