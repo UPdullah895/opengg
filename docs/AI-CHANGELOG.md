@@ -16,7 +16,8 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 - `3907e25`: Share sheet (`ShareController` + `ShareDialog.qml`) from the clip context menu and the editor; `clips:share` target.
 - `3962ad2`: Screenshot hotkey handler (`desktop_shot`), recorder `supervisor` (auto-start with boot delay, crash restarts with budget, restart after suspend), atomic settings writes with `.bad.json` backup.
 - `051e8db`: thumbnails patched in memory (no rescan per thumbnail); Home/Mixer polling only while visible.
-- docs: `docs/KAIROS_INTEGRATION.md` (licence stance, comparison, roadmap), landmines in `AGENTS.md`.
+- `dd4b27c`: docs — `docs/KAIROS_INTEGRATION.md` (licence stance, comparison, roadmap), landmines in `AGENTS.md`.
+- `2cc92c2`: fixes from a code review of the branch (replay file must be new + GSR-held, name resolved after the signal, container kept, two-step cancel, stale share results dropped, throttled thumbnails, no disk read per supervisor tick).
 
 **Why:**
 The user asked for an in-depth study of BasilForge/Kairos (Windows instant replay, GPL-2.0+) and an integration of its strengths. Because OpenGG is MIT, everything was re-implemented from behavioural specs, never from Kairos code; the comparison surfaced several outright OpenGG bugs (dropped audio tracks on trim, "Elden Ring" → "Elden", Wayland clips named "Unknown", same-second overwrites, a UI-thread save, settings data loss, dead `gsrAutoStart`/`gsrAutoRestart`/Screenshot bindings) that were fixed first.
