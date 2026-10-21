@@ -202,8 +202,13 @@ fn stamp_offset(stem: &str) -> Option<usize> {
 /// carries no timestamp, so the caller can fall back to the folder.
 pub fn game_from_stem(stem: &str) -> Option<String> {
     let at = stamp_offset(stem)?;
-    let prefix = stem[..at].trim_end_matches(['_', ' ', '-']);
-    let name: String = prefix.replace('_', " ");
+    let raw = &stem[..at];
+    let prefix = raw.trim_end_matches(['_', ' ', '-']);
+    // SteelSeries GG writes spaces as '-' too ("Elden-Ring__…"), and its
+    // clips were always grouped that way; OpenGG names keep a real '-'
+    // ("Counter-Strike 2_…").
+    let steelseries = raw.ends_with("__");
+    let name: String = if steelseries { prefix.replace(['_', '-'], " ") } else { prefix.replace('_', " ") };
     let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
     if name.is_empty() {
         None
@@ -352,6 +357,7 @@ mod tests {
         assert_eq!(game_from_stem("Elden_Ring_2026-10-20_12-00-00").as_deref(), Some("Elden Ring"));
         // SteelSeries GG export names.
         assert_eq!(game_from_stem("Elden_Ring__2026-10-20__12-00-00").as_deref(), Some("Elden Ring"));
+        assert_eq!(game_from_stem("Elden-Ring__2026-10-20__12-00-00").as_deref(), Some("Elden Ring"));
         assert_eq!(game_from_stem("Replay_2026-10-20_12-00-00").as_deref(), Some("Replay"));
         assert_eq!(game_from_stem("Counter-Strike 2_2026-10-20_12-00-00").as_deref(), Some("Counter-Strike 2"));
         // Digits in a game name never shadow the real stamp.

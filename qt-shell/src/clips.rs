@@ -304,6 +304,8 @@ pub struct ClipsControllerRust {
     thumbs_in_flight: HashSet<String>,
     /// A thumbnail landed since the view was last re-applied.
     thumbs_dirty: bool,
+    /// When finished thumbnails were last pushed to the view.
+    thumbs_applied_at: Option<std::time::Instant>,
 }
 
 type ThumbJob = (String, cxx_qt::CxxQtThread<qobject::ClipsController>);
@@ -322,9 +324,7 @@ fn thumb_worker() -> &'static Sender<ThumbJob> {
                     // Patch the one clip in memory instead of rescanning the
                     // library: a full `reload()` per finished thumbnail meant
                     // a filesystem walk + DB read + model reset for every
-                    // card, i.e. N rescans for a page of N new clips. The
-                    // view is re-applied once the queue drains, so a batch of
-                    // thumbnails costs one model reset, not one each.
+                    // card, i.e. N rescans for a page of N new clips.
                     let mut changed = false;
                     {
                         let mut st = controller.as_mut().rust_mut();
@@ -337,9 +337,25 @@ fn thumb_worker() -> &'static Sender<ThumbJob> {
                         }
                         st.thumbs_dirty |= changed;
                     }
-                    let drained = controller.as_ref().rust().thumbs_in_flight.is_empty();
-                    if drained && controller.as_ref().rust().thumbs_dirty {
-                        controller.as_mut().rust_mut().thumbs_dirty = false;
+                    // Re-apply when the queue drains, or at most every
+                    // 400 ms while a long queue (first launch, a big
+                    // library) is still working — thumbnails keep appearing
+                    // without one model reset per thumbnail.
+                    let (due, dirty) = {
+                        let pinned = controller.as_ref();
+                        let st = pinned.rust();
+                        let due = st.thumbs_in_flight.is_empty()
+                            || st
+                                .thumbs_applied_at
+                                .is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(400));
+                        (due, st.thumbs_dirty)
+                    };
+                    if due && dirty {
+                        {
+                            let mut st = controller.as_mut().rust_mut();
+                            st.thumbs_dirty = false;
+                            st.thumbs_applied_at = Some(std::time::Instant::now());
+                        }
                         controller.apply_filter();
                     }
                 });

@@ -156,6 +156,10 @@ pub fn export_simple(
         audio_bitrate_kbps: 192,
     };
     export(input, &project, &opts, cancel, |f| on_progress(f * 50.0, "effects"))?;
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err("cancelled".into());
+    }
     let out_s = out.to_string_lossy().to_string();
     let res = crate::media::export_clip_sized(
         &tmp.to_string_lossy(),
@@ -167,6 +171,14 @@ pub fn export_simple(
         |pct, stage| on_progress(50.0 + pct / 2.0, stage),
     );
     let _ = std::fs::remove_file(&tmp);
+    // The sized pass cannot be interrupted mid-run; a cancel that arrived
+    // during it still must not leave a file the user walked away from.
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Ok(p) = &res {
+            let _ = std::fs::remove_file(p);
+        }
+        return Err("cancelled".into());
+    }
     res.map(PathBuf::from)
 }
 

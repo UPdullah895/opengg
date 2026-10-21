@@ -628,8 +628,7 @@ pub fn export_clip_sized<F: Fn(f64, &str)>(
                 "-c:a", "aac",
                 "-b:a", "128k",
                 "-movflags", "+faststart",
-                "-f", "mp4",
-            ])
+                ])
             .arg(&part)
             .status()
             .map_err(|e| format!("ffmpeg: {e}"))?;
@@ -699,7 +698,6 @@ pub fn export_clip_sized<F: Fn(f64, &str)>(
             "-c:a", "aac",
             "-b:a", "128k",
             "-movflags", "+faststart",
-            "-f", "mp4",
         ])
         .arg(&part)
         .status()
@@ -941,7 +939,6 @@ pub fn trim_clip<F: Fn(f64, &str)>(
             "-c", "copy",
             "-avoid_negative_ts", "make_zero",
             "-movflags", "+faststart",
-            "-f", "mp4",
         ])
         .arg(&part)
         .stdout(std::process::Stdio::null())
@@ -983,14 +980,19 @@ pub fn trim_clip<F: Fn(f64, &str)>(
 }
 
 /// Hidden sibling an export is written to before it is complete:
-/// `dir/.<name>.<pid>.part`. The library and file watcher skip dotfiles, so
-/// a half-written export never shows up as a broken clip, and a failed run
-/// never leaves a truncated file under the name the user chose.
+/// `dir/.<stem>.<pid>-<n>.part.<ext>`. The library and file watcher skip
+/// dotfiles, so a half-written export never shows up as a broken clip, and a
+/// failed run never leaves a truncated file under the name the user chose.
+/// The real extension is kept last so ffmpeg picks the muxer the user's
+/// file name asks for; the counter keeps two exports in one process apart.
 pub fn part_path_for(out: &str) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let p = Path::new(out);
     let dir = p.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-    let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "export".into());
-    dir.join(format!(".{name}.{}.part", std::process::id()))
+    let stem = p.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "export".into());
+    let ext = p.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "mp4".into());
+    dir.join(format!(".{stem}.{}-{n}.part.{ext}", std::process::id()))
 }
 
 /// Move a completed part file onto its final name (atomic on one filesystem).
@@ -1304,7 +1306,7 @@ mod multitrack_export_tests {
     }
 
     fn no_part_files(dir: &Path) -> bool {
-        std::fs::read_dir(dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().ends_with(".part"))
+        std::fs::read_dir(dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains(".part"))
     }
 
     #[test]

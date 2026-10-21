@@ -107,7 +107,10 @@ Rectangle {
 
     /// Absolute output path from the two fields, with the source's extension.
     function outputPath() {
-        const ext = String(dlg.clip ? dlg.clip.filepath : "").split(".").pop()
+        // Effects exports are always H.264/AAC in MP4 — keeping a .mkv/.webm
+        // source's extension would put MP4 data under the wrong name.
+        const ext = dlg.effectsActive && dlg.codec === "h264"
+                    ? "mp4" : String(dlg.clip ? dlg.clip.filepath : "").split(".").pop()
         const safe = dlg.filename.trim().length > 0 ? dlg.filename.trim() : "clip"
         return dlg.directory.replace(/\/+$/, "") + "/" + safe + "." + ext
     }

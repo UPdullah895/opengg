@@ -64,8 +64,10 @@ pub mod qobject {
         /// Periodic health check (QML ticks it every few seconds): restarts a
         /// crashed recorder or one left stale by a suspend, per
         /// `gsrAutoRestart`, within a retry budget.
+        /// `auto_restart` is the `gsrAutoRestart` setting, passed from
+        /// QML's cached settings so the tick never touches the disk.
         #[qinvokable]
-        fn supervise(self: Pin<&mut Self>);
+        fn supervise(self: Pin<&mut Self>, auto_restart: bool);
 
         /// Take a desktop screenshot (Screenshot hotkey) into the first
         /// screenshot directory, named after the game in front. Threaded.
@@ -313,7 +315,7 @@ impl qobject::RecordingController {
         });
     }
 
-    pub fn supervise(mut self: Pin<&mut Self>) {
+    pub fn supervise(mut self: Pin<&mut Self>, auto_restart: bool) {
         use opengg_core::supervisor::{Action, Observation};
         // `is_gsr_running` hands over a crash exactly once; keep its stderr
         // tail so the reason still reaches the UI when no restart follows.
@@ -324,12 +326,10 @@ impl qobject::RecordingController {
         if let Some(tail) = &crash_tail {
             self.as_mut().set_error(QString::from(tail));
         }
-        let raw = opengg_core::settings::load_ui_settings().unwrap_or_default();
-        let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
         let obs = Observation {
             wanted: self.as_ref().rust().wanted,
             alive,
-            auto_restart: v["settings"]["gsrAutoRestart"].as_bool().unwrap_or(false),
+            auto_restart,
             suspended_total: opengg_core::supervisor::suspended_total(),
         };
         let action = self.as_mut().rust_mut().supervisor.tick(std::time::Instant::now(), obs);

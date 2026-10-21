@@ -35,7 +35,15 @@ pub struct WindowInfo {
 /// [`crate::clips::organizer::app_folder_name`] ("Desktop" when nothing
 /// game-like is focused).
 pub fn current_game_name() -> String {
-    let win = active_window();
+    name_for(active_window())
+}
+
+/// Resolve the name for a window captured earlier with [`active_window`].
+///
+/// Split from the query on purpose: a save must signal the recorder the
+/// moment the key is pressed, so callers grab the (cheap) focused window
+/// first and run this (manifest / `.desktop` / `/proc` scans) afterwards.
+pub fn name_for(win: Option<WindowInfo>) -> String {
     let steam = win
         .as_ref()
         .and_then(|w| w.pid)

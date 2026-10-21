@@ -73,7 +73,8 @@ QtObject {
         interval: 3000
         repeat: true
         running: !ScreenshotController.active
-        onTriggered: RecordingController.supervise()
+        onTriggered: RecordingController.supervise(
+            !!JSON.parse(SettingsController.settingsJson || "{}").gsrAutoRestart)
     }
 
     property var _conn: Connections {

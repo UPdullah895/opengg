@@ -119,6 +119,11 @@ pub fn load_json_guarded(path: &std::path::Path) -> Result<String, String> {
         return Ok(raw);
     }
     let bad = path.with_extension("bad.json");
+    // Every reader hits this while the file stays broken; back it up once,
+    // not on every read.
+    if std::fs::read_to_string(&bad).is_ok_and(|b| b == raw) {
+        return Ok("null".into());
+    }
     match std::fs::copy(path, &bad) {
         Ok(_) => log::error!("{} is not valid JSON; kept a copy at {}", path.display(), bad.display()),
         Err(e) => log::error!("{} is not valid JSON and could not be backed up: {e}", path.display()),

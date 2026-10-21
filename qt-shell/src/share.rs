@@ -101,6 +101,9 @@ pub struct ShareControllerRust {
     source: Option<SourceInfo>,
     plan: Option<SharePlan>,
     cancel: Arc<AtomicBool>,
+    /// Bumped by `open`/`replan`/`render`; a render result carrying an older
+    /// value belongs to a clip or plan the sheet no longer shows.
+    generation: u64,
 }
 
 /// Parse a request from QML, forcing the input to the opened clip.
@@ -133,7 +136,10 @@ impl qobject::ShareController {
             r.input = input.clone();
             r.source = None;
             r.plan = None;
+            r.generation += 1;
+            r.cancel.store(true, Ordering::Relaxed);
         }
+        self.as_mut().set_running(false);
         self.as_mut().set_plan_json(QString::default());
         self.as_mut().set_result_path(QString::default());
         self.as_mut().set_error(QString::default());
@@ -169,7 +175,14 @@ impl qobject::ShareController {
         };
         let Some(src) = src else { return };
         let plan = share::plan_with_source(&request(&input, &request_json.to_string()), &src);
-        // A new plan invalidates a file rendered for the old one.
+        // A new plan invalidates a file rendered for the old one, and any
+        // render still running for it.
+        {
+            let mut r = self.as_mut().rust_mut();
+            r.generation += 1;
+            r.cancel.store(true, Ordering::Relaxed);
+        }
+        self.as_mut().set_running(false);
         self.as_mut().set_result_path(QString::default());
         self.publish(plan);
     }
@@ -180,7 +193,12 @@ impl qobject::ShareController {
         }
         let Some(plan) = self.as_ref().rust().plan.clone() else { return };
         let cancel = Arc::new(AtomicBool::new(false));
-        self.as_mut().rust_mut().cancel = cancel.clone();
+        let generation = {
+            let mut r = self.as_mut().rust_mut();
+            r.cancel = cancel.clone();
+            r.generation += 1;
+            r.generation
+        };
         self.as_mut().set_running(true);
         self.as_mut().set_progress(0.0);
         self.as_mut().set_error(QString::default());
@@ -190,9 +208,16 @@ impl qobject::ShareController {
         std::thread::spawn(move || {
             let out = share::default_output_path(&plan);
             let result = share::render(&plan, &out, &cancel, move |f| {
-                let _ = progress_thread.queue(move |mut c| c.as_mut().set_progress(f));
+                let _ = progress_thread.queue(move |mut c| {
+                    if c.as_ref().rust().generation == generation {
+                        c.as_mut().set_progress(f);
+                    }
+                });
             });
             let _ = qt_thread.queue(move |mut c| {
+                if c.as_ref().rust().generation != generation {
+                    return; // superseded by a newer clip, plan or render
+                }
                 c.as_mut().set_running(false);
                 match result {
                     Ok(p) => c.as_mut().set_result_path(QString::from(&p.to_string_lossy().to_string())),

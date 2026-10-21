@@ -377,7 +377,7 @@ impl std::fmt::Display for SaveFailure {
             Self::Refused(_) => write!(f, "A clip is already being saved"),
             Self::Timeout => write!(f, "Clip not saved — the recorder did not finish writing it"),
             Self::Empty => write!(f, "Clip not saved — the file could not be written"),
-            Self::DiskFull => write!(f, "Clip not saved — the disk is full"),
+            Self::DiskFull => write!(f, "The disk is full — the clip was kept but may be incomplete"),
             Self::Other(e) => write!(f, "{e}"),
         }
     }
@@ -422,10 +422,13 @@ fn low_disk_warner() -> &'static Mutex<LowDiskWarner> {
 /// If `restart_on_save` is true, GSR is also respawned so the next save
 /// only holds footage recorded after this one.
 pub fn save_gsr_replay(restart_on_save: bool, opts: &SaveOptions) -> Result<SaveReplayResult, SaveFailure> {
-    let game_title = crate::foreground::current_game_name();
+    // Only the focused-window query runs before the signal (focus may move
+    // right after the key press); resolving it to a name is slower and runs
+    // while GSR writes.
+    let window = crate::foreground::active_window();
     let pre_save_time = std::time::SystemTime::now();
 
-    let (pid, output_dir_exp, restart_params, audio_targets_ordered, limit) = {
+    let (pid, (output_dir_exp, before), restart_params, audio_targets_ordered, limit) = {
         let lock = gsr_process().lock().unwrap();
         let running = lock.is_some();
         let buffer = lock
@@ -439,22 +442,27 @@ pub fn save_gsr_replay(restart_on_save: bool, opts: &SaveOptions) -> Result<Save
         }
         let gsr_state = lock.as_ref().expect("running checked above");
         let pid = gsr_state.child.id();
+        let rp = restart_on_save.then(|| gsr_state.params.clone());
+        let dir = shexp(&gsr_state.params.output_dir);
+        // Everything already in the folder: the replay must be a NEW file,
+        // so a concurrent export renamed in here can never be taken for it.
+        let before = list_names(&dir);
         #[cfg(unix)]
         unsafe {
             libc::kill(pid as libc::pid_t, libc::SIGUSR1);
         }
         log::info!("GSR SIGUSR1 → pid {pid}");
-        let rp = restart_on_save.then(|| gsr_state.params.clone());
         (
             pid,
-            shexp(&gsr_state.params.output_dir),
+            (dir, before),
             rp,
             gsr_state.params.audio_targets.clone(),
             write_limit(buffer),
         )
     }; // lock dropped here
 
-    let outcome = finish_save(pid, &output_dir_exp, pre_save_time, limit, &game_title, &audio_targets_ordered, opts);
+    let game_title = crate::foreground::name_for(window);
+    let outcome = finish_save(pid, &output_dir_exp, &before, pre_save_time, limit, &game_title, &audio_targets_ordered, opts);
     save_gate().lock().unwrap().finished();
     let result = outcome?;
 
@@ -486,16 +494,18 @@ pub fn save_gsr_replay(restart_on_save: bool, opts: &SaveOptions) -> Result<Save
 const ASSUMED_KBPS: u32 = 50_000;
 
 /// Steps 3–5 of [`save_gsr_replay`], after the signal.
+#[allow(clippy::too_many_arguments)]
 fn finish_save(
     pid: u32,
     output_dir: &str,
+    before: &std::collections::HashSet<std::ffi::OsString>,
     after: std::time::SystemTime,
     limit: std::time::Duration,
     game_title: &str,
     audio_targets: &[String],
     opts: &SaveOptions,
 ) -> Result<SaveReplayResult, SaveFailure> {
-    let src_path = wait_for_finished_clip(pid, output_dir, after, limit).ok_or(SaveFailure::Timeout)?;
+    let src_path = wait_for_finished_clip(pid, output_dir, before, after, limit).ok_or(SaveFailure::Timeout)?;
     let root = std::path::Path::new(output_dir);
     let stamp = organizer::local_stamp(
         std::time::SystemTime::now()
@@ -524,14 +534,20 @@ fn finish_save(
 
     let bytes = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
     let free = save_watch::free_bytes(&target_dir);
-    match save_watch::verdict(bytes, free) {
-        SaveVerdict::Ok => {}
-        SaveVerdict::Empty => return Err(SaveFailure::Empty),
-        SaveVerdict::DiskFull => return Err(SaveFailure::DiskFull),
+    let verdict = save_watch::verdict(bytes, free);
+    if verdict == SaveVerdict::Empty {
+        // Nothing to keep: an empty file would only sit in the library as
+        // a broken card.
+        let _ = std::fs::remove_file(&dest);
+        return Err(SaveFailure::Empty);
     }
-
+    // Kept even when the disk filled up — a truncated clip can still hold
+    // the moment — and counted as OpenGG's so the size limit can free space.
     if let Ok(db) = crate::clips::open_db() {
         let _ = retention::record_owned(&db, &dest);
+    }
+    if verdict == SaveVerdict::DiskFull {
+        return Err(SaveFailure::DiskFull);
     }
     if opts.max_folder_gb > 0 {
         let gb = opts.max_folder_gb;
@@ -651,43 +667,73 @@ fn remux_with_track_titles(
     }
 }
 
+/// File names currently in `dir` (taken just before the save signal).
+fn list_names(dir: &str) -> std::collections::HashSet<std::ffi::OsString> {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default()
+}
+
 /// Wait for the clip GSR writes after a save signal to be *complete*.
 ///
-/// The candidate is the newest visible video in `dir` modified after
-/// `after_time`. It counts as finished once GSR (`pid`) no longer holds it
-/// open and its size is non-zero and unchanged across two polls — or, where
-/// `/proc` cannot tell (another user's process), once the size has been
-/// stable for a full second. Gives up after `limit`.
+/// Candidates are visible videos in `dir` that were not there before the
+/// signal (`before`) and were modified after it. A candidate is GSR's once
+/// GSR has been seen holding it open, or — if GSR wrote it faster than one
+/// poll — when it carries GSR's own `Replay_` prefix; this keeps an export
+/// renamed into the folder at the same moment from being taken (and then
+/// deleted) as the replay. It is finished once GSR no longer holds it open
+/// and its size is non-zero and unchanged across two polls; where `/proc`
+/// cannot tell (another user's process), a size stable for a second is
+/// accepted. Gives up after `limit`.
 fn wait_for_finished_clip(
     pid: u32,
     dir: &str,
+    before: &std::collections::HashSet<std::ffi::OsString>,
     after_time: std::time::SystemTime,
     limit: std::time::Duration,
 ) -> Option<std::path::PathBuf> {
     const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "ts", "flv"];
     let deadline = std::time::Instant::now() + limit;
+    let mut seen_open: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
     let mut last: Option<(std::path::PathBuf, u64)> = None;
     let mut stable_polls = 0u32;
     loop {
-        let found = std::fs::read_dir(dir).ok().and_then(|rd| {
-            rd.filter_map(|e| e.ok())
-                .filter(|e| !organizer::is_hidden(&e.file_name().to_string_lossy()))
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .and_then(|x| x.to_str())
-                        .map(|x| VIDEO_EXTS.contains(&x.to_lowercase().as_str()))
-                        .unwrap_or(false)
-                })
-                .filter(|e| {
-                    e.metadata()
-                        .and_then(|m| m.modified())
-                        .map(|t| t > after_time)
-                        .unwrap_or(false)
-                })
-                .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
-                .map(|e| e.path())
-        });
+        let fresh: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter(|e| !before.contains(&e.file_name()))
+                    .filter(|e| !organizer::is_hidden(&e.file_name().to_string_lossy()))
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .and_then(|x| x.to_str())
+                            .map(|x| VIDEO_EXTS.contains(&x.to_lowercase().as_str()))
+                            .unwrap_or(false)
+                    })
+                    .filter(|e| e.metadata().and_then(|m| m.modified()).map(|t| t > after_time).unwrap_or(false))
+                    .map(|e| e.path())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut proc_readable = true;
+        for p in &fresh {
+            match holds_open(pid, p) {
+                Some(true) => {
+                    seen_open.insert(p.clone());
+                }
+                Some(false) => {}
+                None => proc_readable = false,
+            }
+        }
+        let found = fresh
+            .iter()
+            .filter(|p| {
+                !proc_readable
+                    || seen_open.contains(*p)
+                    || p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("Replay_"))
+            })
+            .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+            .cloned();
         if let Some(path) = found {
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             if last.as_ref().is_some_and(|(p, s)| *p == path && *s == size) && size > 0 {
@@ -695,8 +741,7 @@ fn wait_for_finished_clip(
             } else {
                 stable_polls = 0;
             }
-            let open = holds_open(pid, &path);
-            let done = match open {
+            let done = match holds_open(pid, &path) {
                 Some(false) => stable_polls >= 1,
                 Some(true) => false,
                 None => stable_polls >= 5,
