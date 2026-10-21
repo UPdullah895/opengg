@@ -164,15 +164,21 @@ Rectangle {
         if (ScreenshotController.active && ScreenshotController.panel.length > 0)
             page.activeTab = ScreenshotController.panel
     }
-    Timer { interval: 2000; running: true; repeat: true; onTriggered: AudioController.refresh() }
+    // Poll only while visible (see HomePage's timer for why); the
+    // onVisibleChanged below refreshes on entry.
+    Timer { interval: 2000; running: page.visible; repeat: true; onTriggered: AudioController.refresh() }
 
     // The VU stream spawns a real pw-cat subprocess per channel — only run
     // it while this page is actually the visible one. StackLayout sets
     // `visible: false` on inactive children, so this is a cheap, correct
     // gate without reaching into Main.qml's currentPage.
     onVisibleChanged: {
-        if (visible) AudioController.startVuStream()
-        else AudioController.stopVuStream()
+        if (visible) {
+            AudioController.refresh()
+            AudioController.startVuStream()
+        } else {
+            AudioController.stopVuStream()
+        }
     }
 
     ColumnLayout {

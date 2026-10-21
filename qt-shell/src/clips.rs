@@ -302,6 +302,8 @@ pub struct ClipsControllerRust {
     game_counts_json: QString,
     /// Filepaths currently queued/generating on the thumbnail worker thread.
     thumbs_in_flight: HashSet<String>,
+    /// A thumbnail landed since the view was last re-applied.
+    thumbs_dirty: bool,
 }
 
 type ThumbJob = (String, cxx_qt::CxxQtThread<qobject::ClipsController>);
@@ -317,9 +319,28 @@ fn thumb_worker() -> &'static Sender<ThumbJob> {
             for (filepath, qt_thread) in rx {
                 let result = opengg_core::media::generate_thumbnail(filepath.clone(), None);
                 let _ = qt_thread.queue(move |mut controller| {
-                    controller.as_mut().rust_mut().thumbs_in_flight.remove(&filepath);
-                    if result.is_ok() {
-                        controller.reload();
+                    // Patch the one clip in memory instead of rescanning the
+                    // library: a full `reload()` per finished thumbnail meant
+                    // a filesystem walk + DB read + model reset for every
+                    // card, i.e. N rescans for a page of N new clips. The
+                    // view is re-applied once the queue drains, so a batch of
+                    // thumbnails costs one model reset, not one each.
+                    let mut changed = false;
+                    {
+                        let mut st = controller.as_mut().rust_mut();
+                        st.thumbs_in_flight.remove(&filepath);
+                        if let Ok(thumb) = &result {
+                            if let Some(c) = st.all_clips.iter_mut().find(|c| c.filepath == filepath) {
+                                c.thumbnail = thumb.clone();
+                                changed = true;
+                            }
+                        }
+                        st.thumbs_dirty |= changed;
+                    }
+                    let drained = controller.as_ref().rust().thumbs_in_flight.is_empty();
+                    if drained && controller.as_ref().rust().thumbs_dirty {
+                        controller.as_mut().rust_mut().thumbs_dirty = false;
+                        controller.apply_filter();
                     }
                 });
             }
