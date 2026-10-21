@@ -18,6 +18,11 @@ Rectangle {
     property real trimEnd: 0
     readonly property real outLength: Math.max(0, dlg.trimEnd - dlg.trimStart)
 
+    /// The editor's live track mix, by audio-track index: gain 0..1 and
+    /// mute. Only applied when the user opts in ("Use my track mix").
+    property var trackLevels: []
+    property var trackMuted: []
+
     signal closed()
 
     property string filename: ""
@@ -26,6 +31,25 @@ Rectangle {
     property real targetMb: 0
     property string codec: "copy"
     property bool advancedOpen: false
+
+    // ── Effects (opengg_core::edit) ──
+    property string look: "none"
+    property real speed: 1.0
+    property bool applyMix: false
+    property bool mixTrack: false
+    readonly property var lookIds: JSON.parse(EditorController.lookIds() || "[]")
+
+    /// The SimpleEdit + size/codec payload for `exportEdited`.
+    function editJson() {
+        return JSON.stringify({
+            look: dlg.look, speed: dlg.speed,
+            applyMix: dlg.applyMix, levels: dlg.trackLevels, muted: dlg.trackMuted,
+            mixTrack: dlg.mixTrack, targetMb: dlg.targetMb, codec: dlg.codec
+        })
+    }
+    /// {active, text}: whether the effects route is needed, and its summary.
+    readonly property var editInfo: JSON.parse(EditorController.describeEdit(dlg.editJson()) || "{}")
+    readonly property bool effectsActive: dlg.editInfo.active === true
 
     /// Recomputed explicitly rather than bound: exportSummary reads
     /// mediaInfoJson INSIDE the invokable, and QML's dependency tracker does
@@ -62,7 +86,23 @@ Rectangle {
         dlg.targetMb = 0
         dlg.codec = "copy"
         dlg.advancedOpen = false
+        dlg.look = "none"
+        dlg.speed = 1.0
+        dlg.applyMix = false
+        dlg.mixTrack = false
         dlg.refreshSummary()
+    }
+
+    // Effects need a re-encode; "keep original codec" would silently drop
+    // them, so switch to H.264 the moment one is turned on.
+    onEffectsActiveChanged: if (dlg.effectsActive && dlg.codec === "copy") dlg.codec = "h264"
+
+    /// A small uppercase section label, like the other dialog headings.
+    component SectionLabel: Text {
+        color: Theme.textMuted
+        font.pixelSize: 10
+        font.weight: Font.Bold
+        font.letterSpacing: 0.8
     }
 
     /// Absolute output path from the two fields, with the source's extension.
@@ -190,6 +230,71 @@ Rectangle {
                     }
                 }
 
+                // Effects
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 7
+                    SectionLabel { text: (I18n.language, I18n.t("editor.effects.look").toUpperCase()) }
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Repeater {
+                            model: dlg.lookIds
+                            ChoiceChip {
+                                required property string modelData
+                                text: (I18n.language, I18n.t("editor.looks." + modelData))
+                                selected: dlg.look === modelData
+                                onTriggered: dlg.look = modelData
+                            }
+                        }
+                    }
+                    SectionLabel { text: (I18n.language, I18n.t("editor.effects.speed").toUpperCase()) }
+                    RowLayout {
+                        spacing: 6
+                        Repeater {
+                            model: [0.5, 0.75, 1, 1.5, 2]
+                            ChoiceChip {
+                                required property real modelData
+                                text: modelData + "×"
+                                selected: Math.abs(dlg.speed - modelData) < 0.001
+                                onTriggered: dlg.speed = modelData
+                            }
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: dlg.trackLevels.length > 0
+                        spacing: 6
+                        Text {
+                            text: (I18n.language, I18n.t("editor.effects.applyMix"))
+                            color: Theme.text
+                            font.pixelSize: 12
+                        }
+                        InfoIcon { tooltipText: I18n.t("editor.effects.applyMixHint") }
+                        Item { Layout.fillWidth: true }
+                        ToggleSwitch {
+                            checked: dlg.applyMix
+                            onToggled: (v) => dlg.applyMix = v
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: dlg.trackLevels.length > 1
+                        spacing: 6
+                        Text {
+                            text: (I18n.language, I18n.t("editor.effects.mixTrack"))
+                            color: Theme.text
+                            font.pixelSize: 12
+                        }
+                        InfoIcon { tooltipText: I18n.t("editor.effects.mixTrackHint") }
+                        Item { Layout.fillWidth: true }
+                        ToggleSwitch {
+                            checked: dlg.mixTrack
+                            onToggled: (v) => dlg.mixTrack = v
+                        }
+                    }
+                }
+
                 // Advanced
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -267,7 +372,7 @@ Rectangle {
                                 selected: dlg.codec === "copy"
                                 // Only meaningful at original size; a target
                                 // size requires re-encoding to reach it.
-                                enabled: dlg.targetMb === 0
+                                enabled: dlg.targetMb === 0 && !dlg.effectsActive
                                 onTriggered: dlg.codec = "copy"
                             }
                         }
@@ -288,7 +393,7 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.rightMargin: 12
                         anchors.verticalCenter: parent.verticalCenter
-                        text: dlg.summary
+                        text: dlg.effectsActive ? dlg.summary + " • " + dlg.editInfo.text : dlg.summary
                         color: Theme.textDim
                         font.pixelSize: 11
                         font.family: "monospace"
@@ -357,7 +462,14 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: dlg.closed()
+                        onClicked: {
+                            // Cancel stops an effects export in flight (the
+                            // exporter removes its partial file); the plain
+                            // exports run to completion as before.
+                            if (dlg.running)
+                                EditorController.cancelExport()
+                            dlg.closed()
+                        }
                     }
                 }
 
@@ -381,10 +493,15 @@ Rectangle {
                         onClicked: {
                             EditorController.saveTrim(dlg.clip.filepath,
                                                       dlg.trimStart, dlg.trimEnd)
-                            EditorController.exportClip(dlg.clip.filepath,
-                                                        dlg.trimStart, dlg.trimEnd,
-                                                        dlg.targetMb, dlg.outputPath(),
-                                                        dlg.codec)
+                            if (dlg.effectsActive)
+                                EditorController.exportEdited(dlg.clip.filepath,
+                                                              dlg.trimStart, dlg.trimEnd,
+                                                              dlg.outputPath(), dlg.editJson())
+                            else
+                                EditorController.exportClip(dlg.clip.filepath,
+                                                            dlg.trimStart, dlg.trimEnd,
+                                                            dlg.targetMb, dlg.outputPath(),
+                                                            dlg.codec)
                         }
                     }
                 }

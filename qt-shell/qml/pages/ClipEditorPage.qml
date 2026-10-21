@@ -14,8 +14,9 @@ import com.opengg.app
 // plays SIMULTANEOUSLY through ClipAudioMixer's GStreamer pipeline, so each
 // lane's speaker button mutes that one track in the live mix. Qt Multimedia
 // only ever supplies the picture here — it can decode one audio stream at a
-// time and cannot mix. Export is a lossless stream copy and keeps every track
-// regardless of what is muted for monitoring.
+// time and cannot mix. Export keeps every track regardless of what is muted
+// for monitoring, unless the user opts into "Use my track mix" in the export
+// dialog's effects, which renders the levels and mutes into the file.
 Rectangle {
     id: page
     color: Theme.bg
@@ -176,7 +177,7 @@ Rectangle {
     /// Current game tag, seeded from the clip row and edited in the top bar.
     property string gameTag: ""
     /// Export settings dialog open?
-    property bool exportOpen: false
+    property bool exportOpen: ScreenshotController.active && ScreenshotController.dialog === "export"
 
     function toggleTrack(index) {
         if (!page.mixed)
@@ -1170,6 +1171,8 @@ Rectangle {
         clip: page.exportOpen ? page.clip : null
         trimStart: page.trimStart
         trimEnd: page.trimEnd
+        trackLevels: page.audioStreams.map((s, i) => page.trackGain(i))
+        trackMuted: page.audioStreams.map((s, i) => page.trackMuted[i] === true)
         z: 100
         onClosed: page.exportOpen = false
     }

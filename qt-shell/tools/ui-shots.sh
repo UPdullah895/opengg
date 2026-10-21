@@ -43,6 +43,7 @@ TARGETS=(
     clips:selection clips:filtered
     tour
     editor
+    editor:export
 )
 
 # The clip editor is only reachable by clicking a clip, so the harness opens
@@ -55,7 +56,7 @@ first_clip() {
 
 shot() {
     local target="$1" page panel name args=()
-    if [[ "$target" == editor ]]; then
+    if [[ "$target" == editor || "$target" == editor:* ]]; then
         local clip; clip=$(first_clip)
         if [[ -z "$clip" ]]; then
             printf '  skip %-28s no clip in ~/Videos/OpenGG\n' editor
@@ -63,6 +64,10 @@ shot() {
         fi
         # --panel doubles as the clip path for the editor (see Main.qml).
         page=editor; panel="$clip"; name=editor
+        # editor:<dialog> opens that dialog over the editor (--dialog).
+        if [[ "$target" == editor:* ]]; then
+            name="editor-${target#*:}"; args+=(--dialog "${target#*:}")
+        fi
     elif [[ "$target" == tour ]]; then
         # The tour overlay is suppressed in normal capture runs (it would cover
         # whatever page we asked for), so it needs an explicit opt-in.

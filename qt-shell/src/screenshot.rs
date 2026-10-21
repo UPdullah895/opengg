@@ -42,6 +42,10 @@ pub mod qobject {
         /// True for `--with-tour`: capture the guided-tour overlay instead of
         /// suppressing it (it would otherwise cover every other screenshot).
         #[qproperty(bool, with_tour, cxx_name = "withTour")]
+        /// `--dialog <name>`: open that dialog on the captured page (e.g.
+        /// "export" on the editor, "share" on clips) — dialogs are only
+        /// reachable by clicking, which a headless capture cannot do.
+        #[qproperty(QString, dialog)]
         type ScreenshotController = super::ScreenshotControllerRust;
 
         /// Log the outcome of a capture attempt (QML has no stderr of its own).
@@ -60,6 +64,7 @@ pub struct ScreenshotControllerRust {
     panel: QString,
     delay_ms: i32,
     with_tour: bool,
+    dialog: QString,
 }
 
 /// Value of `--flag <value>`, or None when absent/valueless.
@@ -84,6 +89,7 @@ impl Default for ScreenshotControllerRust {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(900),
             with_tour: args.iter().any(|a| a == "--with-tour"),
+            dialog: QString::from(flag_value(&args, "--dialog").unwrap_or_default().as_str()),
         }
     }
 }

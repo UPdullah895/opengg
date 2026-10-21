@@ -43,7 +43,30 @@
     "cancelExport": "Cancel Export",
     "targetSize": "Target Size",
     "original": "Original",
-    "frameSaved": "Frame saved"
+    "frameSaved": "Frame saved",
+    "effects": {
+      "look": "Look",
+      "speed": "Speed",
+      "applyMix": "Use my track mix",
+      "applyMixHint": "Bake the track volumes and mutes you set in the editor into the exported file. Off: every track is exported as recorded.",
+      "mixTrack": "Add a mixed track",
+      "mixTrackHint": "Adds all tracks mixed together as the first audio track, so players and websites that only play one track still play everything."
+    },
+    "looks": {
+      "none": "None",
+      "vivid": "Vivid",
+      "cinematic": "Cinematic",
+      "warm": "Warm",
+      "cool": "Cool",
+      "sharp": "Sharp",
+      "mono": "Mono",
+      "teal": "Teal",
+      "retro": "Retro",
+      "golden": "Golden",
+      "night": "Night",
+      "pop": "Pop",
+      "grain": "Grain"
+    }
   },
   "sidebar": {
     "tip": "Tip: You can customize your shortcuts from the settings page."
@@ -483,7 +506,13 @@
       "steamReadyTitle": "Steam library connected — {count} games",
       "steamReadyBody": "Your Steam library is available in game pickers and listed here with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images.",
       "steamTooltip": "Import your Steam library to OpenGG's game pickers and keep it visible here in Storage. After you allow access, OpenGG reads local Steam data and may request Steam Store metadata for names and artwork.",
-      "thumbsRemoved": "thumbnails removed — regenerating"
+      "thumbsRemoved": "thumbnails removed — regenerating",
+      "organizeTitle": "Clip Organization",
+      "perGameFolders": "A folder per game",
+      "perGameFoldersHint": "Save each new clip in a folder named after the game, inside your clip directory. Existing clips stay where they are.",
+      "sizeLimit": "Folder size limit",
+      "sizeLimitHint": "When OpenGG's clips exceed this size, the oldest ones are moved to the Trash after each save. The newest clip and files saved by other apps are never touched.",
+      "noLimit": "No limit"
     },
     "extensions": {
       "title": "Extensions",
