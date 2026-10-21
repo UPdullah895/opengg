@@ -728,7 +728,8 @@
       "rename": "Rename",
       "showInFolder": "Show in Folder",
       "copyPath": "Copy Path",
-      "delete": "Delete"
+      "delete": "Delete",
+      "share": "Share…"
     },
     "emptyTitle": "No clips yet",
     "emptyHint": "Records saved from the replay buffer will appear here.",
@@ -1086,5 +1087,27 @@
     "title": "Choose your language",
     "subtitle": "You can change this later in Settings.",
     "continue": "Continue"
+  },
+  "share": {
+    "title": "Share Clip",
+    "platform": "Where to",
+    "original": "Original",
+    "reading": "Reading the clip…",
+    "fits": "Fits this platform's limits.",
+    "tooBig": "Too long for this size limit even at the lowest quality — trim it shorter first.",
+    "trimmedToLimit": "This platform allows {secs} s — the end of the clip is used.",
+    "quality": "Resolution",
+    "auto": "Auto",
+    "vertical": "Vertical 9:16",
+    "verticalHint": "Crop to a phone-shaped frame. Move the slider to choose which part of the picture stays.",
+    "tracks": "Audio tracks",
+    "track": "Track {n}",
+    "caption": "Caption",
+    "encoding": "Encoding",
+    "makeFile": "Make file",
+    "copyFile": "Copy file",
+    "copied": "Copied — paste it anywhere",
+    "openUpload": "Open upload page",
+    "captionCopied": "Caption copied to the clipboard"
   }
 }

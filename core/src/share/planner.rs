@@ -223,6 +223,7 @@ pub fn scale_to_short_side(w: u32, h: u32, short_side: u32) -> (u32, u32) {
 /// One entry of the resolution picker. `original` marks the source's own
 /// short side (no resampling at all).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LadderStep {
     pub short_side: u32,
     pub original: bool,

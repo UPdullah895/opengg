@@ -11,6 +11,7 @@ mod i18n;
 mod recording;
 mod screenshot;
 mod settings;
+mod share;
 mod storage;
 mod system;
 mod theme;

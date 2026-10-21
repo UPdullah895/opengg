@@ -682,6 +682,13 @@ Rectangle {
                     }
                 }
 
+                // Share the trimmed window to a platform.
+                EditorButton {
+                    icon: "share"
+                    tooltip: (I18n.language, I18n.t("clips.contextMenu.share"))
+                    onTriggered: page.shareOpen = true
+                }
+
                 // Export
                 Rectangle {
                     Layout.preferredWidth: 108
@@ -1164,6 +1171,17 @@ Rectangle {
                 }
             }
         }
+    }
+
+    // ── Share sheet (uses the trim window) ───────────────────────────────
+    property bool shareOpen: false
+    ShareDialog {
+        clip: page.shareOpen ? { filepath: page.filepath, title: page.clip ? page.clip.title : "",
+                                 game: page.gameTag } : null
+        trimStart: page.trimStart
+        trimEnd: page.trimEnd
+        z: 100
+        onClosed: page.shareOpen = false
     }
 
     // ── Export settings dialog ────────────────────────────────────────────

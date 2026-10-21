@@ -40,7 +40,7 @@ TARGETS=(
     devices:buttons
     devices:list-many devices:grid-many devices:carousel-many
     devices:headset-many
-    clips:selection clips:filtered
+    clips:selection clips:filtered clips:share
     tour
     editor
     editor:export
@@ -68,6 +68,9 @@ shot() {
         if [[ "$target" == editor:* ]]; then
             name="editor-${target#*:}"; args+=(--dialog "${target#*:}")
         fi
+    elif [[ "$target" == clips:share ]]; then
+        # The share sheet opens over the first clip (--dialog, see ClipsPage).
+        page=clips; panel=""; name=clips-share; args+=(--dialog share)
     elif [[ "$target" == tour ]]; then
         # The tour overlay is suppressed in normal capture runs (it would cover
         # whatever page we asked for), so it needs an explicit opt-in.

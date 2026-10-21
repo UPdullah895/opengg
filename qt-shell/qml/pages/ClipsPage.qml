@@ -260,7 +260,10 @@ Rectangle {
             if (rows.length === 0)
                 return
             page.shotStateApplied = true
-            if (ScreenshotController.panel === "selection") {
+            if (ScreenshotController.dialog === "share") {
+                page.shareClip = { filepath: rows[0].filepath, title: rows[0].title || rows[0].filename,
+                                   game: rows[0].game }
+            } else if (ScreenshotController.panel === "selection") {
                 var next = ({})
                 for (var i = 0; i < Math.min(3, rows.length); i++)
                     next[rows[i].filepath] = true
@@ -1572,6 +1575,15 @@ Rectangle {
         onRevealRequested: SystemController.revealInFolder(clip.filepath)
         onCopyPathRequested: SystemController.writeClipboard(clip.filepath)
         onSelectRequested: page.toggleSelect(clip.filepath)
+        onShareRequested: page.shareClip = { filepath: clip.filepath, title: clip.title, game: clip.game }
+    }
+
+    // ── Share sheet ──
+    property var shareClip: null
+    ShareDialog {
+        clip: page.shareClip
+        z: 60
+        onClosed: page.shareClip = null
     }
 
     // ── Player overlay ────────────────────────────────────────────────────
