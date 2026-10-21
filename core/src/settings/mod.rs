@@ -67,30 +67,63 @@ pub fn load_theme() -> Result<String, String> {
 
 /// Write `theme.json` (creating the parent directory if needed).
 pub fn save_theme(theme_json: &str) -> Result<(), String> {
-    let p = theme_path();
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d).ok();
-    }
-    std::fs::write(&p, theme_json).map_err(|e| format!("{e}"))
+    write_atomic(&theme_path(), theme_json)
 }
 
 /// Write `ui-settings.json` (creating the parent directory if needed).
 pub fn save_ui_settings(settings_json: &str) -> Result<(), String> {
-    let p = settings_path();
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d).ok();
-    }
-    std::fs::write(&p, settings_json).map_err(|e| format!("{e}"))
+    write_atomic(&settings_path(), settings_json)
 }
 
 /// Read `ui-settings.json`, or the string `"null"` when absent.
+///
+/// A file that exists but is not valid JSON is copied to
+/// `ui-settings.bad.json` first and then reported as absent. Without the
+/// copy, the next `setValue` rebuilt the envelope from nothing and wrote it
+/// over the user's file — every setting lost with no way back.
 pub fn load_ui_settings() -> Result<String, String> {
-    let p = settings_path();
-    if p.exists() {
-        std::fs::read_to_string(&p).map_err(|e| format!("{e}"))
-    } else {
-        Ok("null".into())
+    load_json_guarded(&settings_path())
+}
+
+/// Replace `path` with `contents` atomically: write a sibling temp file,
+/// fsync it, rename over the target. A crash or a concurrent reader never
+/// sees a half-written file — the likely source of "corrupt" settings
+/// files, since the app, the daemon and the editor all read this one.
+pub fn write_atomic(path: &std::path::Path, contents: &str) -> Result<(), String> {
+    use std::io::Write;
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(dir).ok();
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let res = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
+    res.map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Read a JSON file, or `"null"` when absent; an unparseable file is
+/// backed up to `<stem>.bad.json` and reported as absent (see
+/// [`load_ui_settings`]).
+pub fn load_json_guarded(path: &std::path::Path) -> Result<String, String> {
+    if !path.exists() {
+        return Ok("null".into());
+    }
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("{e}"))?;
+    if raw.trim().is_empty() || serde_json::from_str::<Value>(&raw).is_ok() {
+        return Ok(raw);
+    }
+    let bad = path.with_extension("bad.json");
+    match std::fs::copy(path, &bad) {
+        Ok(_) => log::error!("{} is not valid JSON; kept a copy at {}", path.display(), bad.display()),
+        Err(e) => log::error!("{} is not valid JSON and could not be backed up: {e}", path.display()),
+    }
+    Ok("null".into())
 }
 
 /// Ensure `~/.config/opengg/locales/` exists, seed it with the bundled English
@@ -446,6 +479,39 @@ fn index_of_id(defs: &[Value], id: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("opengg-settings-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn atomic_write_replaces_and_leaves_no_temp() {
+        let d = tmpdir("atomic");
+        let p = d.join("ui-settings.json");
+        super::write_atomic(&p, "{\"a\":1}").unwrap();
+        super::write_atomic(&p, "{\"a\":2}").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"a\":2}");
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn corrupt_settings_are_backed_up_not_lost() {
+        let d = tmpdir("corrupt");
+        let p = d.join("ui-settings.json");
+        assert_eq!(super::load_json_guarded(&p).unwrap(), "null");
+        std::fs::write(&p, "{\"settings\": {\"gsrFps\": 60,").unwrap();
+        assert_eq!(super::load_json_guarded(&p).unwrap(), "null");
+        let bad = d.join("ui-settings.bad.json");
+        assert_eq!(std::fs::read_to_string(bad).unwrap(), "{\"settings\": {\"gsrFps\": 60,");
+        std::fs::write(&p, "{\"settings\":{}}").unwrap();
+        assert_eq!(super::load_json_guarded(&p).unwrap(), "{\"settings\":{}}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     use super::*;
 
     // ── runMigrations (mirrors stores/persistence.test.ts) ──

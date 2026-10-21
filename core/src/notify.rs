@@ -99,3 +99,13 @@ pub fn show_warning(summary: &str, body: &str) {
         log::warn!("notify-send failed: {e}");
     }
 }
+
+/// A plain informational toast (screenshot saved).
+pub fn show_info(summary: &str, body: &str) {
+    if let Err(e) = std::process::Command::new("notify-send")
+        .args(["--app-name=OpenGG", "--urgency=low", "--expire-time=3000", summary, body])
+        .spawn()
+    {
+        log::warn!("notify-send failed: {e}");
+    }
+}

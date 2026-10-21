@@ -54,6 +54,24 @@ pub mod qobject {
         #[qinvokable]
         fn save(self: Pin<&mut Self>);
 
+        /// Honour `gsrAutoStart` at app launch: start the buffer if the
+        /// recorder is enabled, waiting 15 s first when the machine booted
+        /// less than two minutes ago (GPU stack and portals still settling).
+        #[qinvokable]
+        #[cxx_name = "autoStart"]
+        fn auto_start(self: Pin<&mut Self>);
+
+        /// Periodic health check (QML ticks it every few seconds): restarts a
+        /// crashed recorder or one left stale by a suspend, per
+        /// `gsrAutoRestart`, within a retry budget.
+        #[qinvokable]
+        fn supervise(self: Pin<&mut Self>);
+
+        /// Take a desktop screenshot (Screenshot hotkey) into the first
+        /// screenshot directory, named after the game in front. Threaded.
+        #[qinvokable]
+        fn screenshot(self: Pin<&mut Self>);
+
         /// Stop (if running) and restart the replay buffer with the current
         /// ui-settings.json GSR config — called after a GSR setting changes.
         #[qinvokable]
@@ -93,6 +111,10 @@ pub struct RecordingControllerRust {
     saving: bool,
     last_save_json: QString,
     save_seq: u64,
+    /// The user wants the buffer on (they or auto-start started it, and
+    /// nobody stopped it) — what the supervisor restores after a crash.
+    wanted: bool,
+    supervisor: opengg_core::supervisor::Supervisor,
 }
 
 struct GsrParams {
@@ -182,6 +204,11 @@ impl qobject::RecordingController {
     }
 
     pub fn start(mut self: Pin<&mut Self>) {
+        {
+            let mut r = self.as_mut().rust_mut();
+            r.wanted = true;
+            r.supervisor.reset();
+        }
         let p = load_params();
         if let Err(e) = opengg_core::gsr::start_gsr_replay(
             p.output_dir,
@@ -199,6 +226,7 @@ impl qobject::RecordingController {
     }
 
     pub fn stop(mut self: Pin<&mut Self>) {
+        self.as_mut().rust_mut().wanted = false;
         if let Err(e) = opengg_core::gsr::stop_gsr_replay() {
             eprintln!("RecordingController::stop: {e}");
             self.as_mut().set_error(QString::from(&e));
@@ -258,7 +286,129 @@ impl qobject::RecordingController {
         });
     }
 
+    pub fn auto_start(self: Pin<&mut Self>) {
+        let raw = opengg_core::settings::load_ui_settings().unwrap_or_default();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+        let s = &v["settings"];
+        let enabled = s["gsrEnabled"].as_bool().unwrap_or(false);
+        let auto = s["gsrAutoStart"].as_bool().unwrap_or(false);
+        if !enabled || !auto || *self.running() {
+            return;
+        }
+        let delay = opengg_core::supervisor::uptime()
+            .map(opengg_core::supervisor::auto_start_delay)
+            .unwrap_or_default();
+        if delay.is_zero() {
+            self.start();
+            return;
+        }
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            let _ = qt_thread.queue(|mut c| {
+                if !*c.running() {
+                    c.as_mut().start();
+                }
+            });
+        });
+    }
+
+    pub fn supervise(mut self: Pin<&mut Self>) {
+        use opengg_core::supervisor::{Action, Observation};
+        // `is_gsr_running` hands over a crash exactly once; keep its stderr
+        // tail so the reason still reaches the UI when no restart follows.
+        let (alive, crash_tail) = match opengg_core::gsr::is_gsr_running() {
+            Ok(a) => (a, None),
+            Err(c) => (false, Some(c.stderr_tail)),
+        };
+        if let Some(tail) = &crash_tail {
+            self.as_mut().set_error(QString::from(tail));
+        }
+        let raw = opengg_core::settings::load_ui_settings().unwrap_or_default();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+        let obs = Observation {
+            wanted: self.as_ref().rust().wanted,
+            alive,
+            auto_restart: v["settings"]["gsrAutoRestart"].as_bool().unwrap_or(false),
+            suspended_total: opengg_core::supervisor::suspended_total(),
+        };
+        let action = self.as_mut().rust_mut().supervisor.tick(std::time::Instant::now(), obs);
+        match action {
+            Action::Nothing => {
+                // Keep the running flag honest when the process died
+                // without anyone asking (no auto-restart configured).
+                if *self.running() != alive {
+                    if alive {
+                        self.apply_status();
+                    } else {
+                        self.as_mut().set_running(false);
+                        let text = if crash_tail.is_some() { "Crashed" } else { "Idle" };
+                        self.as_mut().set_status_text(QString::from(text));
+                    }
+                }
+            }
+            Action::Restart => {
+                eprintln!("RecordingController: supervisor restarting gpu-screen-recorder");
+                let p = load_params();
+                if let Err(e) = opengg_core::gsr::restart_gsr_replay(
+                    p.output_dir,
+                    p.replay_secs,
+                    p.fps,
+                    p.quality,
+                    p.bitrate_kbps,
+                    p.monitor_target,
+                    p.audio_sources,
+                ) {
+                    self.as_mut().set_error(QString::from(&e));
+                }
+                self.apply_status();
+            }
+            Action::GiveUp => {
+                let msg = "The recorder keeps stopping — automatic restarts are paused. Check Capture & Sound diagnostics.";
+                opengg_core::notify::show_warning("Replay buffer stopped", msg);
+                self.as_mut().set_error(QString::from(msg));
+                self.apply_status();
+            }
+        }
+    }
+
+    pub fn screenshot(self: Pin<&mut Self>) {
+        let raw = opengg_core::settings::load_ui_settings().unwrap_or_default();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+        let s = &v["settings"];
+        let dir = s["screenshotDirs"][0]
+            .as_str()
+            .or_else(|| s["clip_directories"][0].as_str())
+            .filter(|d| !d.is_empty())
+            .unwrap_or("~/Videos/OpenGG")
+            .to_string();
+        let per_game = s["clipsPerGameFolder"].as_bool().unwrap_or(false);
+        let notify = s["enableClipNotifications"].as_bool().unwrap_or(true);
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let game = opengg_core::foreground::current_game_name();
+            let root = std::path::PathBuf::from(opengg_core::paths::shexp(&dir));
+            let res = opengg_core::desktop_shot::take(&root, &game, per_game);
+            match &res {
+                Ok(p) if notify => opengg_core::notify::show_info(
+                    "Screenshot saved",
+                    &p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                ),
+                Ok(_) => {}
+                Err(e) => opengg_core::notify::show_warning("Screenshot not saved", e),
+            }
+            if let Err(e) = res {
+                let _ = qt_thread.queue(move |mut c| c.as_mut().set_error(QString::from(&e)));
+            }
+        });
+    }
+
     pub fn restart(mut self: Pin<&mut Self>) {
+        {
+            let mut r = self.as_mut().rust_mut();
+            r.wanted = true;
+            r.supervisor.reset();
+        }
         let p = load_params();
         if let Err(e) = opengg_core::gsr::restart_gsr_replay(
             p.output_dir,
