@@ -46,7 +46,8 @@ cd opengg
 
 - **Audio Hub** — 5-channel PipeWire mixer (Game / Chat / Media / Aux / Mic), per-app routing, 10-band EQ, ChatMix.
 - **Device & RGB** — mouse DPI, polling rate and button mapping via ratbagd; headset controls; RGB via the OpenRGB SDK.
-- **Clipping & Replay** — gpu-screen-recorder replay buffer, global hotkeys, clip gallery, multi-track editor with FFmpeg export.
+- **Clipping & Replay** — gpu-screen-recorder replay buffer with a supervised, auto-restarting recorder; clips named after the game you are playing (Steam-aware, on X11 and Wayland), optional per-game folders and a folder size limit; desktop screenshots; global hotkeys; clip gallery; multi-track editor with looks, speed and track-mix export.
+- **Share** — one-click exports sized for Discord, X, TikTok, Instagram and YouTube Shorts (9:16 crop, size-capped encoding), copied to the clipboard as a file or sent to the upload page with a caption.
 
 ## Requirements
 

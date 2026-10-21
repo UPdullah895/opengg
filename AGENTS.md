@@ -309,6 +309,34 @@ QT_QPA_PLATFORM=offscreen ./target/debug/opengg-qt \
 
 Then inspect `/tmp/mixer.png` in an image viewer. This captures exactly what QML rendered, including any off-screen content.
 
+### 10. Dialogs in the Screenshot Harness
+
+Dialogs are only reachable by clicking, so the sweep opens them with
+`--dialog <name>` (`ScreenshotController.dialog`): `editor:export` opens the
+export dialog over the editor, `clips:share` opens the Share sheet over the
+first clip. A new dialog should get the same treatment — a dialog no target
+renders is a dialog nobody has seen.
+
+---
+
+## FFmpeg Rules
+
+Every ffmpeg call that copies or re-encodes a clip must:
+
+- **Map streams explicitly** — `-map 0:v:0 -map 0:a?` (or filter labels).
+  ffmpeg's default selection keeps ONE audio stream; OpenGG clips carry one
+  track per mixer channel, and the missing map silently deleted them.
+- **Seek before `-i`** (`-ss S -t D -i in`). Output-side `-ss` with `-c copy`
+  produced a file with no video at all on a multi-track clip, and with a
+  re-encode it decodes the file from 0.
+- **Write through a hidden part file and rename** on success
+  (`media::part_path_for`, or the `.part.mp4` helpers in `edit`/`share`). The
+  library and watcher skip dotfiles; the watcher picks up the rename
+  (`Modify(Name)`).
+- Add `-movflags +faststart` to MP4 outputs.
+
+See `docs/KAIROS_INTEGRATION.md` for where these rules came from.
+
 ---
 
 ## Theme & Icon Rules

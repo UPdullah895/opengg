@@ -6,6 +6,39 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-10-21] Claude (Claude Opus 5.5) — ccr-05fc126b-lm8sgg (Kairos-informed overhaul)
+
+**What Changed:**
+- `6298a8a`: `media.rs` trim/export keep every track (`-map 0:v:0 -map 0:a?`), input-side seek, part file + rename, `+faststart`; size targets budget audio per track and use MiB→kbit with 4% headroom.
+- `94175ef`: reliable replay saves — `clips/organizer` (names keep spaces, timestamp-anchored game parsing, " (n)", per-game folders), `foreground` (compositor + SteamAppId game detection), `clips/save_watch` (save gate, finished-file detection, verdicts), `clips/retention` (folder size limit over owned clips); save runs off the UI thread.
+- `762d442`: `core/src/edit` (multi-part edit model, undo history, ffmpeg graph builder, cancellable export) and `core/src/share` (platform planner, 9:16 crop, size-capped render, clipboard, hashtags) — written clean-room by agents from specs.
+- `f328130`: export-dialog Effects (look, speed, "Use my track mix", Mix track) via `edit::simple`; Storage panel organisation settings; `--dialog` harness flag + `editor:export` target.
+- `3907e25`: Share sheet (`ShareController` + `ShareDialog.qml`) from the clip context menu and the editor; `clips:share` target.
+- `3962ad2`: Screenshot hotkey handler (`desktop_shot`), recorder `supervisor` (auto-start with boot delay, crash restarts with budget, restart after suspend), atomic settings writes with `.bad.json` backup.
+- `051e8db`: thumbnails patched in memory (no rescan per thumbnail); Home/Mixer polling only while visible.
+- docs: `docs/KAIROS_INTEGRATION.md` (licence stance, comparison, roadmap), landmines in `AGENTS.md`.
+
+**Why:**
+The user asked for an in-depth study of BasilForge/Kairos (Windows instant replay, GPL-2.0+) and an integration of its strengths. Because OpenGG is MIT, everything was re-implemented from behavioural specs, never from Kairos code; the comparison surfaced several outright OpenGG bugs (dropped audio tracks on trim, "Elden Ring" → "Elden", Wayland clips named "Unknown", same-second overwrites, a UI-thread save, settings data loss, dead `gsrAutoStart`/`gsrAutoRestart`/Screenshot bindings) that were fixed first.
+
+**Landmines & Discoveries:**
+- ffmpeg's default stream selection keeps ONE audio stream; output-side `-ss` with `-c copy` produced a file with no video on a 3-stream test clip. Always `-map` explicitly and seek before `-i`.
+- The MP4 muxer may drop `title=` stream tags (keeps `handler_name`).
+- A `.part` → final rename is a `Modify(Name)` notify event; the clip watcher missed it.
+- In a QML `onXChanged` handler, a sibling binding on X may still be stale — read the new value directly.
+- `ui-shots.sh` happily screenshots a stale binary after a failed build (a duplicate `onVisibleChanged` failed qmlcachegen); always check `cargo build`'s result first.
+- This cloud container has Ubuntu's Qt 6.4, too old for the QML (6.7+ APIs: every page fails "is not a type"). Built against 6.4 headers, then ran with the PySide6 6.8 wheel's Qt libs via `LD_LIBRARY_PATH`/`QT_PLUGIN_PATH`/`QML_IMPORT_PATH` and a stub `org.freedesktop.gstreamer.Qt6GLVideoItem` module — enough for a warning-free offscreen sweep. The 4 `mixer_pipeline` tests fail here (and on the base branch) for lack of GStreamer plugins.
+
+**Verification:**
+- `cargo test` in `core/`: 197 passed (incl. real-ffmpeg tests: multi-track trims/exports, effects exports, size caps, cancel, share renders).
+- `cargo clippy --all-targets -- -D warnings` in `qt-shell/`: clean; core clippy: no new warnings (pre-existing ones in `audio.rs`, `clips/mod.rs`).
+- `qt-shell/tools/check-colors.sh`: clean.
+- `QT_FORCE_STDERR_LOGGING=1 qt-shell/tools/ui-shots.sh`: 26/26 captures, zero QML warnings; inspected Storage, editor, export dialog, Share sheet and Clips PNGs.
+- Desktop screenshots exercised for real on Xvfb (x11grab path, per-game folder, " (2)" collision).
+- Not exercised here: gpu-screen-recorder itself (not installable in this container) — the save path's pure logic is unit-tested, the GSR interaction is not.
+
+---
+
 ### [2026-09-25] Claude Opus 5 — qt6-gstreamer-player-b3 (audio-routing persistence + headset control surface)
 
 **What Changed:** Two user-reported faults, both of which turned out to be
