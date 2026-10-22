@@ -6,6 +6,38 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-10-22] Claude (Claude Code) — ccr-05fc126b-lm8sgg (Phase 2: timeouts, daemon EQ, mic processing)
+
+**What Changed:**
+- `44be659`: the daemon's `subprocess::command` returns a `Cmd` wrapper that pins the C locale and kills the command's process group after 8 s. Headset and audio D-Bus handlers now run on the blocking pool.
+- `dc89e2a`: the EQ moves into the daemon (`audio/eq.rs`): one filter-chain per channel with a real preamp, linked by the reconciler (`monitor → EQ → device`), restarted if it dies, and saved in `mixer.eq`. New D-Bus methods `SetEq`, `GetEq` and `Reconcile`. Related fixes:
+  - a picked output device is now saved (`mixer.devices`);
+  - startup hydration no longer links monitors directly;
+  - the current-device readout follows the path through the EQ;
+  - the output-device list is read from `pactl -f json`.
+- `450fb37`: mic processing (`audio/micfx.rs`): RNNoise, swh gate and swh SC4 compressor, each only when its plugin exists, in the path `loopback → chain → OpenGG_Mic`. New D-Bus methods `SetMicFx` and `GetMicFx`. DspControls drives it and is no longer shown on the Chat tab. Shared coalesced saver: `core::settings::save_mixer_later`.
+
+**Why:**
+These finish the critique's Phase 2 audio foundation. Before, the EQ died with the window and its dry path was put back by the reconciler (doubled audio); the mic cards had no engine; and one hung `pactl` or `headsetcontrol` could stall the daemon.
+
+**Landmines & Discoveries:**
+- **The reconciler and the old UI EQ conflicted.** The UI-hosted EQ removed the dry link; the reconciler restored it. Anything that changes links must go through the reconciler.
+- **The Qt UI never saved `mixer.devices`.** A picked device was lost on restart. With the reconciler running, it was also reverted at the next device event.
+- **Filter-chain ports:** with `node.autoconnect = false` the chain's ports are `<capture node>:input_FL/FR` and `<playback node>:output_FL/FR`. Controls are set by node name: `pw-cli set-param <capture node> Props '{ params = [ "eq0:Gain" 3.0 ] }'`.
+- **Module path check:** core's filter-chain check only looked in `/usr/lib/pipewire-0.3`, so it reported the module missing on Debian/Ubuntu (multiarch `/usr/lib/x86_64-linux-gnu/...`).
+- **Timeouts:** a timeout must kill the process group, not just the child; a grandchild holding the stdout pipe otherwise blocks the reader threads.
+- **Orphan chains:** `PR_SET_PDEATHSIG` in `pre_exec` stops chains from outliving a crashed daemon, whose node names would collide with the next one's.
+- **Mono plugins:** they are duplicated per channel by the filter-chain itself when `audio.channels = 2`.
+
+**Verification:**
+- clippy `-D warnings` (stable) is clean in core, daemon and qt-shell; `cargo test`: core 199, daemon 88.
+- `check-colors.sh` is clean; `ui-shots.sh` (`mixer:game`, `mixer:mic`) ran with zero QML warnings, both with and without a live daemon, and the screenshots were inspected.
+- Tested live in an isolated PipeWire session with fake speakers, a fake headset and a fake mic, plus RNNoise built from source and swh-plugins:
+  - EQ: enable; set gains in place; output follows a device change; the chain is killed and restored with its gains; disabling restores the dry path; chains die with the daemon; settings are restored when the daemon restarts.
+  - Device choice: a pick made through core is saved and kept across device events.
+  - Mic chain: inserted and removed; plugin controls read back after in-place updates.
+  - UI: renders the saved EQ and mic settings from the live daemon.
+
 ### [2026-10-22] Claude (Claude Code) — ccr-05fc126b-lm8sgg (critique + Phase 1 & the audio reconciler)
 
 **What Changed:**

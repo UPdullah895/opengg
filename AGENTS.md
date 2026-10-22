@@ -457,10 +457,20 @@ virtual audio), links each output channel's monitor to `mixer.devices[ch]`
 while that device exists and otherwise to the default output, and routes new
 streams by `mixer.appRules`.
 
-**Rule**: Don't add one-shot "fix the graph at startup" code. Put the intent in
-the reconciler's pure planners (`plan_links`, `rule_target`, `plan_work`) and
-test it there. Never link a monitor into an OpenGG sink — that is a feedback
-loop.
+The EQ (`audio/eq.rs`) and mic processing (`audio/micfx.rs`) are
+`pipewire -c` filter-chains the daemon hosts with `node.autoconnect = false`;
+the reconciler links them into the path (`monitor → EQ → device`,
+`mic loopback → chain → OpenGG_Mic`). The UI only sends state over D-Bus
+(`SetEq`, `SetMicFx`, `Reconcile`) and saves it under `mixer.*`.
+
+**Rule**: Don't add one-shot "fix the graph at startup" code, and never
+`pw-link` from the UI process. Put the intent in the reconciler's pure
+planners (`plan_links`, `plan_mic_links`, `rule_target`, `plan_work`) and test
+it there. Never link a monitor into an OpenGG sink — that is a feedback loop.
+
+**Rule**: Spawn helpers through `subprocess::command` in the daemon. It pins
+`LC_ALL=C` (pactl's text output is translated) and kills the command's process
+group after a timeout. Prefer `pactl -f json` to parsing the text form.
 
 ### 6. Testing Audio Changes Against Real PipeWire
 
@@ -482,6 +492,13 @@ pw-link -l | grep -A1 '^OpenGG_.*:monitor'
 
 Use `pkill -x openggd`, not `pkill -f`: the pattern also matches your own
 shell's command line.
+
+Mic processing needs plugins. On Debian and Ubuntu `swh-plugins` is in the
+archive; RNNoise is not, but it builds from source in a minute: `cmake` on
+werman/noise-suppression-for-voice with only `-DBUILD_LADSPA_PLUGIN=ON`, then
+copy `librnnoise_ladspa.so` to `/usr/lib/ladspa`. A virtual mic for the test:
+`pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=fakemic media.class=Audio/Source/Virtual object.linger=true audio.position=[MONO] }'`,
+then `pactl set-default-source fakemic` before starting the daemon.
 
 ---
 

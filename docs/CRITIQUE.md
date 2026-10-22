@@ -141,6 +141,21 @@ The UI then becomes presentation only, and the core pactl fallback is deleted.
 
 Ordered by risk removed per unit of work. Phase 1 is safety and honesty, Phase 2 is the audio foundation, Phase 3 is reach, Phase 4 is the missing headline features.
 
+### Status (2026-10-22)
+
+- **Phase 1: done.** Packaging, device permissions, extension consent, diagnostics, Recheck, the disabled mic cards, and the core CI job with `make test`.
+- **Phase 2: mostly done.**
+  - Done:
+    - the event-driven reconciler (`daemon/src/audio/reconcile.rs`);
+    - JSON parsing and the C locale everywhere;
+    - timeouts on every helper command;
+    - non-blocking D-Bus handlers;
+    - the trailing volume write;
+    - the EQ in the daemon (in the graph, saved);
+    - mic processing (RNNoise, gate, compressor) where the plugins exist.
+  - Open: replacing Ear Blast's volume ducking with a real limiter (swh `fast_lookahead_limiter` is the obvious engine), and a move from `pactl subscribe` to pipewire-rs.
+- **Phases 3–4: not started.**
+
 **Phase 1: make what ships correct and safe** (days)
 - Packaging: the packaged unit and D-Bus service run `/usr/bin/openggd`; `ReadWritePaths` uses `-` prefixes; release CI verifies the units.
 - Remove the world-writable udev rules and the dead polkit policy; cut the group list to `input`.

@@ -14,7 +14,9 @@ optdepends=('gpu-screen-recorder: instant replay and recording'
             'headsetcontrol: headset sidetone, ChatMix, battery'
             'openrgb: RGB lighting'
             'grim: screenshots on wlroots compositors'
-            'wl-clipboard: copying clips to the clipboard on Wayland')
+            'wl-clipboard: copying clips to the clipboard on Wayland'
+            'noise-suppression-for-voice: microphone noise suppression'
+            'swh-plugins: microphone noise gate and compressor')
 provides=('opengg')
 conflicts=('opengg')
 install=opengg.install
