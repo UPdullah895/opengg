@@ -6,6 +6,61 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v
+
+**What Changed:**
+- `d2c0777`: Montage builder (SteelSeries Moments parity)
+  - `core/src/montage.rs`: a pure planner (`plan`) that turns a `MontageSpec`
+    plus probed `SourceInfo` into the full ffmpeg argv/filtergraph, and a
+    runner (`run_plan`) with real progress (`-progress pipe:1`) and cancel
+  - `core/src/dialogs.rs`: `pick_file` (kdialog/zenity) for the music track
+  - `qt-shell/src/montage.rs`: `MontageController` QML singleton
+  - `qt-shell/qml/components/MontageDialog.qml` + a **Montage** button in
+    the Clips selection bar; `clips:montage` ui-shots target
+  - `docs/superpowers/plans/2026-10-22-gg-parity-montage.md`: GG feature
+    research, gap table, critique, and Phases 2–4 (Streamer Mode dual mix,
+    mic/loudness DSP, auto-clip)
+
+**Why:**
+Montage was the largest gap against GG Moments. It was built to improve on
+GG's version rather than copy it: it reuses the editor's saved trims, sums
+multi-track captures safely, ducks the music, and offers a vertical 9:16
+export.
+
+**Landmines & Discoveries:**
+- `xfade` refuses inputs whose frame rate or timebase differ, so every
+  segment is normalised with `fps=…,format=yuv420p,settb=AVTB` first.
+  `acrossfade` and `concat` desync unless each audio segment is exactly the
+  video length, hence `apad,atrim=duration=D` per clip, even when a track
+  ends early.
+- Captures have one audio stream per source and some have none. A clip with
+  zero streams needs a generated `anullsrc` bed, or the join filters see
+  mismatched inputs.
+- The dialog must not assign to its own `clips` input property. Reordering
+  that way severs the caller's binding and the dialog can never reopen, so
+  it works on an internal `order` copy instead (close then reopen was checked
+  in the harness).
+- Debian/Ubuntu Qt 6.4 builds qt-shell but cannot load the QML module: every
+  page is "not a type". The full sweep therefore could not run here. The
+  workaround is documented in AGENTS.md.
+
+**Verification:**
+- `cargo test` in `core/`: 14/14 montage tests pass, including a real
+  ffmpeg render (2-track + silent + 200x200 clip, blur fill, crossfade,
+  ducked looped music; output size, duration and track count checked;
+  cancel removes the file)
+- `cargo clippy -- -W clippy::all`: no new warnings in `core/` (same count
+  as base) and none in `qt-shell/`
+- `qt-shell/tools/check-colors.sh`: clean
+- `cargo build` in `qt-shell/` succeeds. `cargo test` there: 21 pass and 2
+  fail (`mixer_pipeline` seek/wall-clock timing). That file is untouched;
+  this container has no audio sink.
+- `ui-shots.sh` could NOT run (Qt 6.4, see above). Instead, MontageDialog
+  was rendered headless with stub singletons, and the form, rendering and
+  done states were inspected visually with zero QML warnings.
+- NOT verified: the full app on a real desktop, the kdialog/zenity music
+  picker, `make build` (release), daemon (untouched)
+
 ### [2026-09-25] Claude Opus 5 — qt6-gstreamer-player-b3 (audio-routing persistence + headset control surface)
 
 **What Changed:** Two user-reported faults, both of which turned out to be
