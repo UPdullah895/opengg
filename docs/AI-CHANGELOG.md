@@ -10,7 +10,7 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 **What Changed:**
 - `docs/RECORDING_STRATEGY.md`: a research note covering:
-  - software capture versus hardware recorders, with risks and mitigations;
+  - our own recording engine versus depending on gpu-screen-recorder, with risks and mitigations;
   - long-term benefits and the maintenance load;
   - the Linux-first then Windows question;
   - which projects to reuse, rebuild or study, with licences.
