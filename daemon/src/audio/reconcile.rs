@@ -27,7 +27,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::Notify;
 
+use super::eq::EqHost;
 use super::routing;
 use super::sinks::{self, SinkManager};
 use crate::subprocess;
@@ -155,47 +157,71 @@ pub struct LinkPlan {
     pub remove: Vec<(String, String)>,
 }
 
-/// Links to create and to remove so each output channel's monitor feeds
-/// exactly its target device. Only links into other real (non-OpenGG)
-/// playback ports are removed; captures reading a monitor are left alone.
-/// A link from a monitor into any OpenGG sink is always removed: it loops a
-/// channel into itself or doubles it into another. Otherwise a channel with
-/// no usable target is left as it is.
+/// Links to create and to remove so each output channel reaches exactly
+/// its target device: `monitor → device`, or with the channel's EQ live,
+/// `monitor → EQ input` and `EQ output → device`.
+///
+/// Only links into playback ports are ever removed, so captures reading a
+/// monitor are left alone. A link into an OpenGG sink is always removed (it
+/// loops a channel into itself or doubles it into another). Links into
+/// another device are removed when the channel has a target, or when its EQ
+/// is live (a direct link would bypass the EQ). Otherwise a channel with no
+/// usable target is left as it is.
 pub fn plan_links(
     overrides: &HashMap<String, String>,
     default_sink: Option<&str>,
     sinks: &HashSet<String>,
     links: &HashSet<(String, String)>,
+    eq_live: &HashSet<String>,
 ) -> LinkPlan {
     let mut plan = LinkPlan::default();
     for ch in OUTPUT_CHANNELS {
         let target = target_device(ch, overrides, default_sink, sinks);
+        let eq = eq_live.contains(*ch);
         for port in PORTS {
-            let src = format!("OpenGG_{ch}:monitor_{port}");
-            let want = target.map(|t| format!("{t}:playback_{port}"));
-            for (s, d) in links {
-                if s != &src || Some(d) == want.as_ref() {
-                    continue;
-                }
-                let Some((node, p)) = d.rsplit_once(':') else { continue };
-                if !p.starts_with("playback_") {
-                    continue;
-                }
-                let into_opengg = node.starts_with("OpenGG_");
-                let into_other_device = target.is_some() && sinks.contains(node);
-                if into_opengg || into_other_device {
-                    plan.remove.push((s.clone(), d.clone()));
-                }
-            }
-            if let Some(want) = want {
-                if !links.contains(&(src.clone(), want.clone())) {
-                    plan.add.push((src, want));
-                }
+            let monitor = format!("OpenGG_{ch}:monitor_{port}");
+            let device = target.map(|t| format!("{t}:playback_{port}"));
+            if eq {
+                let eq_in = format!("{}:input_{port}", super::eq::input_node(ch));
+                let eq_out = format!("{}:output_{port}", super::eq::output_node(ch));
+                route(&mut plan, links, sinks, &monitor, Some(eq_in), true);
+                route(&mut plan, links, sinks, &eq_out, device, target.is_some());
+            } else {
+                route(&mut plan, links, sinks, &monitor, device, target.is_some());
             }
         }
     }
     plan.remove.sort();
     plan
+}
+
+/// Make `src` feed `want` (if any) and no other playback port, per the
+/// rules on [`plan_links`]. `strict` also removes links into real devices.
+fn route(
+    plan: &mut LinkPlan,
+    links: &HashSet<(String, String)>,
+    sinks: &HashSet<String>,
+    src: &str,
+    want: Option<String>,
+    strict: bool,
+) {
+    for (s, d) in links {
+        if s != src || Some(d) == want.as_ref() {
+            continue;
+        }
+        let Some((node, p)) = d.rsplit_once(':') else { continue };
+        if !p.starts_with("playback_") {
+            continue;
+        }
+        if node.starts_with("OpenGG_") || (strict && sinks.contains(node)) {
+            plan.remove.push((s.clone(), d.clone()));
+        }
+    }
+    if let Some(want) = want {
+        if !links.contains(&(src.to_string(), want.clone())) {
+            plan.add.push((src.to_string(), want));
+        }
+    }
 }
 
 /// Saved preferences the reconciler applies. Both live in the UI's
@@ -206,6 +232,8 @@ pub struct Prefs {
     pub devices: HashMap<String, String>,
     /// `mixer.appRules`: lowercased binary or app name → channel.
     pub rules: HashMap<String, String>,
+    /// `mixer.eq`: channel → EQ state.
+    pub eq: HashMap<String, super::eq::EqState>,
 }
 
 pub fn parse_prefs(json: &str) -> Prefs {
@@ -226,7 +254,11 @@ pub fn parse_prefs(json: &str) -> Prefs {
             })
             .unwrap_or_default()
     };
-    Prefs { devices: strings(&v["mixer"]["devices"], false), rules: strings(&v["mixer"]["appRules"], true) }
+    Prefs {
+        devices: strings(&v["mixer"]["devices"], false),
+        rules: strings(&v["mixer"]["appRules"], true),
+        eq: super::eq::parse_saved(&v["mixer"]["eq"]),
+    }
 }
 
 fn load_prefs() -> Prefs {
@@ -257,9 +289,18 @@ fn sink_names() -> HashSet<String> {
     sinks::read_live_sink_state().into_keys().collect()
 }
 
+/// Everything a pass needs, shared by the event loop, the EQ watcher and
+/// the D-Bus handlers that ask for a pass.
+struct Ctx {
+    mgr: Arc<SinkManager>,
+    eq: Arc<EqHost>,
+    state: Mutex<State>,
+}
+
 /// Run one batch of work. Blocking (subprocesses); call off the runtime.
-fn apply(mgr: &SinkManager, state: &Mutex<State>, work: &Work) {
+fn apply(ctx: &Ctx, work: &Work) {
     let prefs = load_prefs();
+    ctx.eq.seed(&prefs.eq);
     if work.relink {
         let mut names = sink_names();
         let missing: Vec<&str> = sinks::SINK_CHANNELS
@@ -267,21 +308,22 @@ fn apply(mgr: &SinkManager, state: &Mutex<State>, work: &Work) {
             .copied()
             .filter(|ch| !names.contains(&format!("OpenGG_{ch}")))
             .collect();
-        if !missing.is_empty() && mgr.is_active() {
+        if !missing.is_empty() && ctx.mgr.is_active() {
             tracing::warn!("OpenGG sinks missing ({}) — recreating", missing.join(", "));
-            if let Err(e) = mgr.ensure_created() {
+            if let Err(e) = ctx.mgr.ensure_created() {
                 tracing::warn!("Recreating sinks failed: {e}");
             }
-            restore_levels(state, &missing);
+            restore_levels(&ctx.state, &missing);
             names = sink_names();
         }
-        if mgr.is_active() {
-            relink(&prefs, &names);
+        if ctx.mgr.is_active() {
+            let eq_live = live_eq_channels(&ctx.eq);
+            relink(&prefs, &names, &eq_live);
         }
     }
     if work.snapshot || work.relink {
         let live = sinks::read_live_sink_state();
-        let mut st = state.lock().unwrap();
+        let mut st = ctx.state.lock().unwrap();
         for ch in sinks::SINK_CHANNELS {
             let name = format!("OpenGG_{ch}");
             if let Some(l) = live.get(&name) {
@@ -294,7 +336,42 @@ fn apply(mgr: &SinkManager, state: &Mutex<State>, work: &Work) {
     }
 }
 
-fn relink(prefs: &Prefs, sinks: &HashSet<String>) {
+/// Start any EQ chains that should run, then return the channels whose
+/// chain has its ports up. A chain just started takes a moment to register,
+/// so this waits briefly; a channel whose ports never appear keeps its dry
+/// path rather than going silent.
+fn live_eq_channels(eq: &EqHost) -> HashSet<String> {
+    let running = eq.ensure();
+    if running.is_empty() {
+        return HashSet::new();
+    }
+    let ready = |ports: &HashSet<String>, ch: &str| {
+        ports.contains(&format!("{}:output_FL", super::eq::output_node(ch)))
+            && ports.contains(&format!("{}:input_FL", super::eq::input_node(ch)))
+    };
+    let mut ports = all_ports();
+    for _ in 0..20 {
+        if running.iter().all(|ch| ready(&ports, ch)) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        ports = all_ports();
+    }
+    running.into_iter().filter(|ch| ready(&ports, ch)).collect()
+}
+
+/// Every port name in the graph (`pw-link -i` and `-o`).
+fn all_ports() -> HashSet<String> {
+    let mut out = HashSet::new();
+    for flag in ["-i", "-o"] {
+        if let Ok(o) = subprocess::command("pw-link").arg(flag).output() {
+            out.extend(String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()));
+        }
+    }
+    out
+}
+
+fn relink(prefs: &Prefs, sinks: &HashSet<String>, eq_live: &HashSet<String>) {
     let default = sinks::get_default_sink_name();
     let links = match sinks::parse_pw_links() {
         Ok(l) => l,
@@ -303,7 +380,7 @@ fn relink(prefs: &Prefs, sinks: &HashSet<String>) {
             return;
         }
     };
-    let plan = plan_links(&prefs.devices, default.as_deref(), sinks, &links);
+    let plan = plan_links(&prefs.devices, default.as_deref(), sinks, &links, eq_live);
     for (s, d) in &plan.remove {
         let _ = subprocess::command("pw-link").args(["-d", s, d]).output();
         tracing::info!("Reconcile: unlinked {s} → {d}");
@@ -348,14 +425,33 @@ fn apply_rules(rules: &HashMap<String, String>, only: Option<&[u32]>) {
     }
 }
 
-/// Start the reconciler. Runs for the life of the daemon.
-pub fn spawn(mgr: Arc<SinkManager>) {
+/// Start the reconciler. Runs for the life of the daemon. The returned
+/// handle requests a relink pass (after an EQ change, for instance).
+pub fn spawn(mgr: Arc<SinkManager>, eq: Arc<EqHost>) -> Arc<Notify> {
+    let kick = Arc::new(Notify::new());
+    let ctx = Arc::new(Ctx { mgr, eq, state: Mutex::new(State::default()) });
+
+    // A chain that dies (PipeWire itself restarted, or a crash) produces no
+    // pactl event we act on, so look for one directly.
+    {
+        let (ctx, kick) = (Arc::clone(&ctx), Arc::clone(&kick));
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let c = Arc::clone(&ctx);
+                if tokio::task::spawn_blocking(move || c.eq.needs_attention()).await.unwrap_or(false) {
+                    kick.notify_one();
+                }
+            }
+        });
+    }
+
+    let k = Arc::clone(&kick);
     tokio::spawn(async move {
-        let state = Arc::new(Mutex::new(State::default()));
         let mut backoff = Duration::from_secs(1);
         loop {
             let started = Instant::now();
-            match subscribe_once(&mgr, &state).await {
+            match subscribe_once(&ctx, &k).await {
                 Ok(()) => tracing::warn!("pactl subscribe ended (sound server restarted?) — reconnecting"),
                 Err(e) => tracing::warn!("pactl subscribe failed: {e} — retrying"),
             }
@@ -366,16 +462,17 @@ pub fn spawn(mgr: Arc<SinkManager>) {
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
     });
+    kick
 }
 
-async fn run_work(mgr: &Arc<SinkManager>, state: &Arc<Mutex<State>>, work: Work) {
-    let (mgr, state) = (Arc::clone(mgr), Arc::clone(state));
-    if let Err(e) = tokio::task::spawn_blocking(move || apply(&mgr, &state, &work)).await {
+async fn run_work(ctx: &Arc<Ctx>, work: Work) {
+    let ctx = Arc::clone(ctx);
+    if let Err(e) = tokio::task::spawn_blocking(move || apply(&ctx, &work)).await {
         tracing::error!("Reconcile pass panicked: {e}");
     }
 }
 
-async fn subscribe_once(mgr: &Arc<SinkManager>, state: &Arc<Mutex<State>>) -> anyhow::Result<()> {
+async fn subscribe_once(ctx: &Arc<Ctx>, kick: &Notify) -> anyhow::Result<()> {
     let mut child = subprocess::tokio_command("pactl")
         .arg("subscribe")
         .env("LC_ALL", "C")
@@ -388,10 +485,18 @@ async fn subscribe_once(mgr: &Arc<SinkManager>, state: &Arc<Mutex<State>>) -> an
 
     // Anything may have changed while we were not listening — including a
     // restart that took our sinks with it.
-    run_work(mgr, state, Work::full()).await;
+    run_work(ctx, Work::full()).await;
 
-    while let Some(line) = lines.next_line().await? {
-        let mut events: Vec<Event> = parse_event(&line).into_iter().collect();
+    loop {
+        let mut events: Vec<Event> = Vec::new();
+        let mut kicked = false;
+        tokio::select! {
+            next = lines.next_line() => match next? {
+                Some(l) => events.extend(parse_event(&l)),
+                None => break,
+            },
+            _ = kick.notified() => kicked = true,
+        }
         let settle = tokio::time::sleep(SETTLE);
         tokio::pin!(settle);
         let mut ended = false;
@@ -404,9 +509,10 @@ async fn subscribe_once(mgr: &Arc<SinkManager>, state: &Arc<Mutex<State>>) -> an
                 },
             }
         }
-        let work = plan_work(&events);
+        let mut work = plan_work(&events);
+        work.relink |= kicked;
         if !work.is_empty() {
-            run_work(mgr, state, work).await;
+            run_work(ctx, work).await;
         }
         if ended {
             break;
@@ -487,7 +593,7 @@ mod tests {
         // A capture reading the Game monitor must be left alone.
         l.push(("OpenGG_Game:monitor_FL".into(), "gsr-capture:input_FL".into()));
         let existing: HashSet<(String, String)> = l.into_iter().collect();
-        let plan = plan_links(&HashMap::new(), Some("headset"), &sinks, &existing);
+        let plan = plan_links(&HashMap::new(), Some("headset"), &sinks, &existing, &HashSet::new());
         assert_eq!(plan.add.len(), 8);
         assert!(plan.add.iter().all(|(_, d)| d.starts_with("headset:playback_")));
         assert_eq!(plan.remove.len(), 8);
@@ -507,7 +613,26 @@ mod tests {
             }
         }
         let existing: HashSet<(String, String)> = l.into_iter().collect();
-        assert_eq!(plan_links(&o, Some("speakers"), &sinks, &existing), LinkPlan::default());
+        assert_eq!(plan_links(&o, Some("speakers"), &sinks, &existing, &HashSet::new()), LinkPlan::default());
+    }
+
+    #[test]
+    fn eq_path_replaces_the_direct_link() {
+        let sinks = set(&["speakers", "headset"]);
+        let existing = links(&[
+            ("OpenGG_Game:monitor_FL", "speakers:playback_FL"),
+            ("OpenGG_Game:monitor_FR", "speakers:playback_FR"),
+            ("opengg_eq_game:output_FL", "headset:playback_FL"),
+        ]);
+        let plan = plan_links(&HashMap::new(), Some("speakers"), &sinks, &existing, &set(&["Game"]));
+        let game_adds: Vec<_> = plan.add.iter().filter(|(s, _)| s.contains("game") || s.contains("Game")).collect();
+        assert!(game_adds.contains(&&("OpenGG_Game:monitor_FL".into(), "opengg_eq_game_in:input_FL".into())));
+        assert!(game_adds.contains(&&("opengg_eq_game:output_FR".into(), "speakers:playback_FR".into())));
+        // The dry links and the EQ's stale link to the old device go.
+        assert!(plan.remove.contains(&("OpenGG_Game:monitor_FL".into(), "speakers:playback_FL".into())));
+        assert!(plan.remove.contains(&("opengg_eq_game:output_FL".into(), "headset:playback_FL".into())));
+        // Other channels keep their plain path.
+        assert!(plan.add.contains(&("OpenGG_Chat:monitor_FL".into(), "speakers:playback_FL".into())));
     }
 
     #[test]
@@ -517,7 +642,7 @@ mod tests {
             ("OpenGG_Chat:monitor_FR", "OpenGG_Media:playback_FR"),
         ]);
         // Even with no device to link to.
-        let plan = plan_links(&HashMap::new(), Some("OpenGG_Game"), &set(&["OpenGG_Game", "OpenGG_Media"]), &existing);
+        let plan = plan_links(&HashMap::new(), Some("OpenGG_Game"), &set(&["OpenGG_Game", "OpenGG_Media"]), &existing, &HashSet::new());
         assert!(plan.add.is_empty());
         assert_eq!(plan.remove.len(), 2);
     }
@@ -526,7 +651,7 @@ mod tests {
     fn no_device_means_no_changes() {
         let existing = links(&[("OpenGG_Game:monitor_FL", "speakers:playback_FL")]);
         // "speakers" vanished and there is no default: leave the graph alone.
-        assert_eq!(plan_links(&HashMap::new(), None, &set(&[]), &existing), LinkPlan::default());
+        assert_eq!(plan_links(&HashMap::new(), None, &set(&[]), &existing, &HashSet::new()), LinkPlan::default());
     }
 
     #[test]

@@ -1032,7 +1032,8 @@
     "title": "Graphic EQ",
     "flat": "Flat",
     "enabled": "Enabled",
-    "preamp": "Preamp"
+    "preamp": "Preamp",
+    "unavailable": "Equaliser unavailable:"
   },
   "chatMix": {
     "title": "ChatMix",

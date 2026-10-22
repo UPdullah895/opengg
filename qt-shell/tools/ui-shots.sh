@@ -32,7 +32,7 @@ mkdir -p "$OUTDIR"
 # same generic ScreenshotController.panel property MixerPage.qml already
 # reuses for its own tab selection, not a settings-only concept).
 TARGETS=(
-    home mixer mixer:mic clips devices
+    home mixer mixer:game mixer:mic clips devices
     settings:general settings:language settings:shortcuts
     settings:mixerRouting settings:captureSound settings:trackManagement
     settings:storage settings:notifications settings:extensions

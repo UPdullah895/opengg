@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use super::eq::{EqHost, EqState};
 use super::routing;
 use super::sinks::{ChannelInfo, SinkManager};
 use crate::config::AudioConfig;
@@ -11,6 +12,9 @@ use crate::config::AudioConfig;
 pub struct AudioHub {
     sink_mgr: Arc<SinkManager>,
     streams: Arc<RwLock<Vec<routing::StreamInfo>>>,
+    eq: Arc<EqHost>,
+    /// Asks the reconciler for a relink pass.
+    reconcile: Arc<tokio::sync::Notify>,
 }
 
 impl AudioHub {
@@ -29,14 +33,17 @@ impl AudioHub {
         // reads them from ui-settings.json (the UI's source of truth).
         let _ = &config.default_volumes;
 
+        let eq = Arc::new(EqHost::default());
+        // Keeps sinks, links, EQ chains and app rules right as devices come
+        // and go and the sound server restarts.
+        let reconcile = super::reconcile::spawn(Arc::clone(&sink_mgr), Arc::clone(&eq));
         let hub = Self {
             sink_mgr,
             streams: Arc::new(RwLock::new(Vec::new())),
+            eq,
+            reconcile,
         };
         hub.start_stream_watcher();
-        // Keeps sinks, links and app rules right as devices come and go and
-        // the sound server restarts.
-        super::reconcile::spawn(Arc::clone(&hub.sink_mgr));
         Ok(hub)
     }
 
@@ -67,6 +74,26 @@ impl AudioHub {
     pub async fn route_app(&self, stream_id: u32, channel: &str) -> Result<()> {
         let channel = channel.to_string();
         blocking(move || routing::route_stream(stream_id, &channel)).await
+    }
+
+    /// Set a channel's EQ (JSON `EqState`), then have the reconciler route
+    /// the channel through or around it.
+    pub async fn set_eq(&self, channel: &str, state_json: &str) -> Result<()> {
+        let state: EqState = serde_json::from_str(state_json)?;
+        let (eq, channel) = (Arc::clone(&self.eq), channel.to_string());
+        blocking(move || eq.set(&channel, &state).map_err(anyhow::Error::msg)).await?;
+        self.reconcile.notify_one();
+        Ok(())
+    }
+
+    /// Ask for a relink pass (after the UI saved a device choice).
+    pub fn request_reconcile(&self) {
+        self.reconcile.notify_one();
+    }
+
+    pub async fn eq_status(&self) -> String {
+        let eq = Arc::clone(&self.eq);
+        blocking(move || Ok(eq.status_json())).await.unwrap_or_else(|_| "{}".into())
     }
 
     pub async fn remove_virtual_audio(&self) -> Result<()> {

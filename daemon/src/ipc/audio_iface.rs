@@ -73,6 +73,21 @@ impl AudioInterface {
         self.hub.route_app(app_id, channel).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
+    /// Set one channel's EQ: `{"enabled": bool, "bands": [dB x10], "preamp": dB}`.
+    async fn set_eq(&self, channel: &str, state_json: &str) -> zbus::fdo::Result<()> {
+        self.hub.set_eq(channel, state_json).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// `{"available", "reason", "channels": {ch: {enabled, bands, preamp, running}}}`
+    async fn get_eq(&self) -> String {
+        self.hub.eq_status().await
+    }
+
+    /// Re-link channels from the saved settings (`mixer.devices`, EQ) now.
+    async fn reconcile(&self) {
+        self.hub.request_reconcile();
+    }
+
     async fn remove_virtual_audio(&self) -> zbus::fdo::Result<()> {
         self.hub.remove_virtual_audio().await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
