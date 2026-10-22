@@ -1,7 +1,7 @@
 //! ratbagd D-Bus integration for mouse management (org.freedesktop.ratbag1).
 
 use anyhow::{Context, Result};
-use zbus::{proxy, zvariant, Connection};
+use zbus::{proxy, Connection, Variant};
 
 use super::identity_overrides::IdentityOverrides;
 use super::types::{DeviceInfo, DeviceType};
@@ -15,7 +15,7 @@ use super::types::{DeviceInfo, DeviceType};
 )]
 trait Manager {
     #[zbus(property)]
-    fn devices(&self) -> zbus::Result<Vec<zbus::zvariant::OwnedObjectPath>>;
+    fn devices(&self) -> zbus::Result<Vec<zbus::OwnedObjectPath>>;
 }
 
 #[proxy(
@@ -30,7 +30,7 @@ trait Device {
     fn model(&self) -> zbus::Result<String>;
 
     #[zbus(property)]
-    fn profiles(&self) -> zbus::Result<Vec<zbus::zvariant::OwnedObjectPath>>;
+    fn profiles(&self) -> zbus::Result<Vec<zbus::OwnedObjectPath>>;
 
     // NOTE: libratbag's own dbus.rst documents `Commit() → ()` (no return
     // value), but this installed ratbagd (0.18-1) actually replies with a
@@ -53,7 +53,7 @@ trait Device {
 )]
 trait Profile {
     #[zbus(property)]
-    fn resolutions(&self) -> zbus::Result<Vec<zbus::zvariant::OwnedObjectPath>>;
+    fn resolutions(&self) -> zbus::Result<Vec<zbus::OwnedObjectPath>>;
 
     #[zbus(property)]
     fn is_active(&self) -> zbus::Result<bool>;
@@ -81,7 +81,7 @@ trait Profile {
     /// know how many hotspots a device can have) and to reach each button's
     /// own object for reading/writing its `Mapping`.
     #[zbus(property)]
-    fn buttons(&self) -> zbus::Result<Vec<zbus::zvariant::OwnedObjectPath>>;
+    fn buttons(&self) -> zbus::Result<Vec<zbus::OwnedObjectPath>>;
 }
 
 #[proxy(
@@ -110,7 +110,7 @@ trait Button {
     /// i.e. type=1/BUTTON, payload=`u 1`) — unlike `Resolution`, there is
     /// no *extra* outer variant wrap to unwrap here.
     #[zbus(property)]
-    fn mapping(&self) -> zbus::Result<(u32, zbus::zvariant::OwnedValue)>;
+    fn mapping(&self) -> zbus::Result<(u32, zbus::OwnedVariant)>;
 }
 
 #[proxy(
@@ -129,7 +129,7 @@ trait Resolution {
     // Declared here as `OwnedValue` so `extract_dpi_x`/`set_resolution_value`
     // can branch on the real shape instead of assuming one.
     #[zbus(property)]
-    fn resolution(&self) -> zbus::Result<zbus::zvariant::OwnedValue>;
+    fn resolution(&self) -> zbus::Result<zbus::OwnedVariant>;
 
     #[zbus(property)]
     fn resolutions(&self) -> zbus::Result<Vec<u32>>;
@@ -318,9 +318,9 @@ pub enum ButtonAction {
 }
 
 /// Decode a raw `(action_type, payload)` `Mapping` value into a `ButtonAction`.
-fn decode_button_action(action_type: u32, payload: &zvariant::Value) -> ButtonAction {
+fn decode_button_action(action_type: u32, payload: &Variant) -> ButtonAction {
     let as_u32 = || match unwrap_nested_variant(payload) {
-        zvariant::Value::U32(v) => Some(*v),
+        Variant::U32(v) => Some(*v),
         _ => None,
     };
     match action_type {
@@ -354,21 +354,21 @@ fn decode_button_action(action_type: u32, payload: &zvariant::Value) -> ButtonAc
 /// Encode a `ButtonAction` into the `(action_type, payload)` pair to write
 /// to `Mapping`. Returns the numeric `ActionType` (to check against the
 /// button's advertised `ActionTypes` before writing) and the payload value.
-fn encode_button_action(action: &ButtonAction) -> Result<(u32, zvariant::Value<'static>)> {
+fn encode_button_action(action: &ButtonAction) -> Result<(u32, Variant<'static>)> {
     match action {
-        ButtonAction::None => Ok((ACTION_TYPE_NONE, zvariant::Value::U32(0))),
+        ButtonAction::None => Ok((ACTION_TYPE_NONE, Variant::U32(0))),
         ButtonAction::Button { target } => {
-            Ok((ACTION_TYPE_BUTTON, zvariant::Value::U32(*target)))
+            Ok((ACTION_TYPE_BUTTON, Variant::U32(*target)))
         }
         ButtonAction::Special { name } => SPECIAL_ACTIONS
             .iter()
             .find(|(n, _, _)| n == name)
-            .map(|(_, v, _)| (ACTION_TYPE_SPECIAL, zvariant::Value::U32(*v)))
+            .map(|(_, v, _)| (ACTION_TYPE_SPECIAL, Variant::U32(*v)))
             .ok_or_else(|| anyhow::anyhow!("unknown special action \"{name}\"")),
         ButtonAction::Key { name } => KEY_ACTIONS
             .iter()
             .find(|(n, _, _)| n == name)
-            .map(|(_, code, _)| (ACTION_TYPE_KEY, zvariant::Value::U32(*code)))
+            .map(|(_, code, _)| (ACTION_TYPE_KEY, Variant::U32(*code)))
             .ok_or_else(|| anyhow::anyhow!("unknown key \"{name}\"")),
         ButtonAction::Macro | ButtonAction::Unknown => {
             anyhow::bail!("this action type cannot be written by OpenGG yet")
@@ -421,20 +421,20 @@ pub fn button_action_catalog_json() -> String {
 
 /// Unwrap the one extra variant layer ratbagd's `Resolution` property adds on
 /// top of the real payload (see the `Resolution` proxy's doc comment above).
-fn unwrap_nested_variant<'a>(value: &'a zvariant::Value<'a>) -> &'a zvariant::Value<'a> {
+fn unwrap_nested_variant<'a>(value: &'a Variant<'a>) -> &'a Variant<'a> {
     match value {
-        zvariant::Value::Value(boxed) => boxed.as_ref(),
+        Variant::Variant(boxed) => boxed.as_ref(),
         other => other,
     }
 }
 
 /// Extract the x-axis DPI from a `Resolution` property value, regardless of
 /// whether it's currently shaped as a plain `u` or a `(uu)` pair.
-fn extract_dpi_x(value: &zvariant::Value) -> Option<u32> {
+fn extract_dpi_x(value: &Variant) -> Option<u32> {
     match unwrap_nested_variant(value) {
-        zvariant::Value::U32(x) => Some(*x),
-        zvariant::Value::Structure(s) => match s.fields().first() {
-            Some(zvariant::Value::U32(x)) => Some(*x),
+        Variant::U32(x) => Some(*x),
+        Variant::Structure(s) => match s.fields().first() {
+            Some(Variant::U32(x)) => Some(*x),
             _ => None,
         },
         _ => None,
@@ -445,12 +445,12 @@ fn extract_dpi_x(value: &zvariant::Value) -> Option<u32> {
 /// preserving whatever shape (`u` vs `(uu)`) it's currently using — libratbag
 /// explicitly documents that changing shape is invalid ("assigning a single
 /// u to a resolution object previously exporting (uu) is invalid").
-fn build_resolution_value(current: &zvariant::Value, dpi: u32) -> zvariant::Value<'static> {
+fn build_resolution_value(current: &Variant, dpi: u32) -> Variant<'static> {
     let new_inner = match unwrap_nested_variant(current) {
-        zvariant::Value::Structure(_) => zvariant::Value::new((dpi, dpi)),
-        _ => zvariant::Value::new(dpi),
+        Variant::Structure(_) => Variant::new((dpi, dpi)),
+        _ => Variant::new(dpi),
     };
-    zvariant::Value::Value(Box::new(new_inner))
+    Variant::Variant(Box::new(new_inner))
 }
 
 // ── Cross-transport identity ────────────────────────────────────────────────
@@ -775,10 +775,9 @@ impl RatbagManager {
         devices
     }
 
-    async fn read_raw_device(&self, path: &zbus::zvariant::OwnedObjectPath) -> Option<RawRatbagDevice> {
+    async fn read_raw_device(&self, path: &zbus::OwnedObjectPath) -> Option<RawRatbagDevice> {
         let dev = DeviceProxy::builder(&self.conn)
             .path(path.as_ref())
-            .ok()?
             .build()
             .await
             .ok()?;
@@ -832,7 +831,6 @@ impl RatbagManager {
         for profile_path in &profiles {
             let Ok(profile) = ProfileProxy::builder(&self.conn)
                 .path(profile_path.as_ref())
-                .unwrap()
                 .build()
                 .await
             else {
@@ -862,7 +860,6 @@ impl RatbagManager {
             for res_path in &res_paths {
                 let Ok(res) = ResolutionProxy::builder(&self.conn)
                     .path(res_path.as_ref())
-                    .unwrap()
                     .build()
                     .await
                 else {
@@ -937,7 +934,6 @@ impl RatbagManager {
         let path = format!("/org/freedesktop/ratbag1/device/{sysname}");
         let dev = DeviceProxy::builder(&self.conn)
             .path(path.as_str())
-            .context("invalid path")?
             .build()
             .await
             .context("DeviceProxy build failed")?;
@@ -946,7 +942,6 @@ impl RatbagManager {
         for profile_path in &profiles {
             let profile = ProfileProxy::builder(&self.conn)
                 .path(profile_path.as_ref())
-                .unwrap()
                 .build()
                 .await?;
             if !profile.is_active().await.unwrap_or(false) {
@@ -956,7 +951,6 @@ impl RatbagManager {
             for res_path in &res_paths {
                 let res = ResolutionProxy::builder(&self.conn)
                     .path(res_path.as_ref())
-                    .unwrap()
                     .build()
                     .await?;
                 if res.is_active().await.unwrap_or(false) {
@@ -1008,7 +1002,6 @@ impl RatbagManager {
         let path = format!("/org/freedesktop/ratbag1/device/{sysname}");
         let dev = DeviceProxy::builder(&self.conn)
             .path(path.as_str())
-            .context("invalid path")?
             .build()
             .await
             .context("DeviceProxy build failed")?;
@@ -1020,7 +1013,6 @@ impl RatbagManager {
         for profile_path in &profiles {
             let profile = ProfileProxy::builder(&self.conn)
                 .path(profile_path.as_ref())
-                .unwrap()
                 .build()
                 .await?;
             if !profile.is_active().await.unwrap_or(false) {
@@ -1060,7 +1052,6 @@ impl RatbagManager {
         let path = format!("/org/freedesktop/ratbag1/device/{sysname}");
         let dev = DeviceProxy::builder(&self.conn)
             .path(path.as_str())
-            .context("invalid path")?
             .build()
             .await
             .context("DeviceProxy build failed")?;
@@ -1069,7 +1060,6 @@ impl RatbagManager {
         for profile_path in &profiles {
             let profile = ProfileProxy::builder(&self.conn)
                 .path(profile_path.as_ref())
-                .unwrap()
                 .build()
                 .await?;
             if !profile.is_active().await.unwrap_or(false) {
@@ -1081,7 +1071,6 @@ impl RatbagManager {
             for button_path in &button_paths {
                 let button = ButtonProxy::builder(&self.conn)
                     .path(button_path.as_ref())
-                    .unwrap()
                     .build()
                     .await?;
                 let index = button.index().await.unwrap_or(0);
@@ -1116,7 +1105,6 @@ impl RatbagManager {
         let path = format!("/org/freedesktop/ratbag1/device/{sysname}");
         let dev = DeviceProxy::builder(&self.conn)
             .path(path.as_str())
-            .context("invalid path")?
             .build()
             .await
             .context("DeviceProxy build failed")?;
@@ -1127,7 +1115,6 @@ impl RatbagManager {
         for profile_path in &profiles {
             let profile = ProfileProxy::builder(&self.conn)
                 .path(profile_path.as_ref())
-                .unwrap()
                 .build()
                 .await?;
             if !profile.is_active().await.unwrap_or(false) {
@@ -1138,7 +1125,6 @@ impl RatbagManager {
             for button_path in &button_paths {
                 let button = ButtonProxy::builder(&self.conn)
                     .path(button_path.as_ref())
-                    .unwrap()
                     .build()
                     .await?;
                 if button.index().await.unwrap_or(u32::MAX) != button_index {
@@ -1153,7 +1139,7 @@ impl RatbagManager {
                     );
                 }
 
-                let value = zvariant::Value::new((type_num, payload));
+                let value = Variant::new((type_num, payload));
                 button
                     .inner()
                     .set_property("Mapping", value)
@@ -1241,7 +1227,7 @@ mod tests {
         let action = ButtonAction::Button { target: 3 };
         let (type_num, payload) = encode_button_action(&action).unwrap();
         assert_eq!(type_num, ACTION_TYPE_BUTTON);
-        assert_eq!(payload, zvariant::Value::U32(3));
+        assert_eq!(payload, Variant::U32(3));
         assert_eq!(decode_button_action(type_num, &payload), action);
     }
 
@@ -1252,7 +1238,7 @@ mod tests {
         assert_eq!(type_num, ACTION_TYPE_SPECIAL);
         // The wire value must be the real libratbag sentinel, not just any
         // number — this is the whole point of the round trip.
-        assert_eq!(payload, zvariant::Value::U32((1 << 30) + 4));
+        assert_eq!(payload, Variant::U32((1 << 30) + 4));
         assert_eq!(decode_button_action(type_num, &payload), action);
     }
 
@@ -1263,7 +1249,7 @@ mod tests {
         assert_eq!(type_num, ACTION_TYPE_KEY);
         // KEY_E from linux/input-event-codes.h on this machine — see the
         // module doc comment for where this number came from.
-        assert_eq!(payload, zvariant::Value::U32(18));
+        assert_eq!(payload, Variant::U32(18));
         assert_eq!(decode_button_action(type_num, &payload), action);
     }
 
@@ -1285,7 +1271,7 @@ mod tests {
 
     #[test]
     fn decode_reports_an_undecoded_macro_without_losing_that_something_is_bound() {
-        let payload = zvariant::Value::new(Vec::<(u32, u32)>::new());
+        let payload = Variant::new(Vec::<(u32, u32)>::new());
         assert_eq!(decode_button_action(ACTION_TYPE_MACRO, &payload), ButtonAction::Macro);
     }
 
@@ -1296,7 +1282,7 @@ mod tests {
         // enum member a factory-default profile can genuinely report, not
         // just a theoretical case — must decode to a recognized catalog
         // entry, not the "not in our table" fallback string.
-        let payload = zvariant::Value::U32(1 << 30);
+        let payload = Variant::U32(1 << 30);
         assert_eq!(
             decode_button_action(ACTION_TYPE_SPECIAL, &payload),
             ButtonAction::Special { name: "unknown".to_string() }
@@ -1309,7 +1295,7 @@ mod tests {
         // deliberately-non-exhaustive table -- must still show *something*
         // changed, not silently report ActionType::Unknown.
         let unrecognized: u32 = (1 << 30) + 999;
-        let payload = zvariant::Value::U32(unrecognized);
+        let payload = Variant::U32(unrecognized);
         match decode_button_action(ACTION_TYPE_SPECIAL, &payload) {
             ButtonAction::Special { name } => {
                 assert_eq!(name, format!("unknown_{unrecognized}"))
@@ -1371,34 +1357,34 @@ mod tests {
         // `busctl ... Properties Get ... Resolution Resolution` → "v v u 400"
         // — one level of Properties.Get's standard wrapper (already stripped
         // by the time this fn sees it) plus ratbagd's own declared `v` type.
-        let value = zvariant::Value::Value(Box::new(zvariant::Value::U32(400)));
+        let value = Variant::Variant(Box::new(Variant::U32(400)));
         assert_eq!(extract_dpi_x(&value), Some(400));
     }
 
     #[test]
     fn extract_dpi_x_reads_tuple_shape() {
-        let value = zvariant::Value::Value(Box::new(zvariant::Value::new((800u32, 800u32))));
+        let value = Variant::Variant(Box::new(Variant::new((800u32, 800u32))));
         assert_eq!(extract_dpi_x(&value), Some(800));
     }
 
     #[test]
     fn build_resolution_value_preserves_single_u_shape() {
-        let current = zvariant::Value::Value(Box::new(zvariant::Value::U32(400)));
+        let current = Variant::Variant(Box::new(Variant::U32(400)));
         let updated = build_resolution_value(&current, 1600);
         assert_eq!(extract_dpi_x(&updated), Some(1600));
         match unwrap_nested_variant(&updated) {
-            zvariant::Value::U32(_) => {}
+            Variant::U32(_) => {}
             other => panic!("expected the u32 shape to be preserved, got {other:?}"),
         }
     }
 
     #[test]
     fn build_resolution_value_preserves_tuple_shape() {
-        let current = zvariant::Value::Value(Box::new(zvariant::Value::new((800u32, 800u32))));
+        let current = Variant::Variant(Box::new(Variant::new((800u32, 800u32))));
         let updated = build_resolution_value(&current, 1600);
         assert_eq!(extract_dpi_x(&updated), Some(1600));
         match unwrap_nested_variant(&updated) {
-            zvariant::Value::Structure(_) => {}
+            Variant::Structure(_) => {}
             other => panic!("expected the (u,u) shape to be preserved, got {other:?}"),
         }
     }

@@ -130,7 +130,7 @@ impl ReplayInterface {
     /// belongs to the app, not to it; see `replay::recorder`.
     #[zbus(signal)]
     pub async fn hotkey_pressed(
-        ctxt: &zbus::object_server::SignalContext<'_>,
+        ctxt: &zbus::object_server::SignalEmitter<'_>,
         action: &str,
     ) -> zbus::Result<()>;
 

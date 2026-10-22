@@ -37,6 +37,29 @@ See the IPC map in [`CLAUDE.md`](CLAUDE.md) for the channel-by-channel picture.
 
 **Rule**: The Qt shell is **presentation glue only**. All business logic (daemon state queries, settings mutations, file operations) flows through `opengg-core` → daemon D-Bus interface. Never import `daemon/` types into `qt-shell/` or vice versa — use D-Bus bindings only.
 
+### zbus 6: `block_on` Must Never Nest
+
+zbus 6 removed its blocking API. `core/src/daemon.rs` is now a blocking facade
+in which every call is one `zbus::block_on(...)`. zbus **panics** if `block_on`
+runs inside another `block_on` or inside a zbus task (an interface method, a
+signal handler). So:
+
+- Never call `opengg_core::daemon::*` (or anything built on it, such as
+  `core::audio`) from code that is already running inside `zbus::block_on`.
+- Code that hands D-Bus data to a callback, like `core::hotkeys::listen`, must
+  pull the message inside `block_on` and run the callback **outside** it.
+  The callback may well call back into `core::daemon`.
+- The daemon is async (tokio) and uses `.await`, never `block_on`.
+- Use the root types (`zbus::Variant`, `zbus::OwnedObjectPath`, `zbus::Type`),
+  not `zbus::zvariant::*`. Those are deprecated aliases that zbus 7 removes.
+  Builder setters (`.path()`, `.name()`, `.serve_at()`) no longer return
+  `Result`; every error surfaces from `.build()`.
+
+`hotkeys::tests::blocking_facade_works_across_threads_and_from_the_listener`
+covers all of this against a real bus. Run it with a private session bus,
+e.g. `dbus-daemon --session --fork --print-address=1`, then export
+`DBUS_SESSION_BUS_ADDRESS`. It skips itself when there is no bus.
+
 ---
 
 ## Pre-Commit Verification (Mandatory)

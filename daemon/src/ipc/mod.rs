@@ -19,30 +19,26 @@ pub async fn serve(
     replay: Option<ReplayInterface>,
     extensions: Arc<ExtensionManager>,
 ) -> Result<Connection> {
-    let mut builder = Builder::session()
-        .context("Failed to connect to session D-Bus")?
-        .name("org.opengg.Daemon")
-        .context("Failed to acquire bus name")?;
+    // zbus 6 defers every builder error to `build()`, so a bad name or path
+    // and a missing session bus all surface from the one call at the end.
+    let mut builder = Builder::session().name("org.opengg.Daemon");
 
     if let Some(hub) = audio {
         let iface = audio_iface::AudioInterface::new(hub);
         builder = builder
-            .serve_at("/org/opengg/Daemon/Audio", iface)
-            .context("Failed to register Audio interface")?;
+            .serve_at("/org/opengg/Daemon/Audio", iface);
         tracing::info!("D-Bus: /org/opengg/Daemon/Audio");
     }
 
     if let Some(dev) = device {
         builder = builder
-            .serve_at("/org/opengg/Daemon/Device", dev)
-            .context("Failed to register Device interface")?;
+            .serve_at("/org/opengg/Daemon/Device", dev);
         tracing::info!("D-Bus: /org/opengg/Daemon/Device");
     }
 
     if let Some(rep) = replay {
         builder = builder
-            .serve_at("/org/opengg/Daemon/Replay", rep)
-            .context("Failed to register Replay interface")?;
+            .serve_at("/org/opengg/Daemon/Replay", rep);
         tracing::info!("D-Bus: /org/opengg/Daemon/Replay");
     }
 
@@ -50,10 +46,12 @@ pub async fn serve(
         .serve_at(
             "/org/opengg/Daemon/Extensions",
             extensions_iface::ExtensionsInterface::new(extensions),
-        )
-        .context("Failed to register Extensions interface")?;
+        );
     tracing::info!("D-Bus: /org/opengg/Daemon/Extensions");
 
-    let connection = builder.build().await?;
+    let connection = builder
+        .build()
+        .await
+        .context("Failed to connect to the session D-Bus and serve org.opengg.Daemon")?;
     Ok(connection)
 }
