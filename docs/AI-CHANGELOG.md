@@ -6,6 +6,26 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-10-22] Claude (Claude Code) — ccr-05fc126b-lm8sgg (recording strategy research)
+
+**What Changed:**
+- `docs/RECORDING_STRATEGY.md`: a research note covering:
+  - software capture versus hardware recorders, with risks and mitigations;
+  - long-term benefits and the maintenance load;
+  - the Linux-first then Windows question;
+  - which projects to reuse, rebuild or study, with licences.
+
+**Why:**
+The user asked whether the recording approach holds up long term and across platforms before more is built on it.
+
+**Landmines & Discoveries:**
+- The UI process, not the daemon, spawns gpu-screen-recorder (`core::gsr::start_gsr_replay`). The daemon's `Recorder` is a stub, so the replay buffer depends on the window process.
+- `core::gsr::kill_kms_server` runs `pkill -9 gsr-kms-server`, which also kills a gpu-screen-recorder the user runs separately.
+- The hardest part of a Windows port is the mixer's virtual sinks, which need a signed kernel audio driver; screen capture is the easier part. WASAPI process loopback gives per-app tracks without a driver.
+
+**Verification:**
+- Fast-moving facts were checked against current sources (cited in the doc): licences, NVENC session limits, portal restore tokens, `ext-image-copy-capture-v1`, WASAPI process loopback, and driver signing.
+
 ### [2026-10-22] Claude (Claude Code) — ccr-05fc126b-lm8sgg (Phase 2: timeouts, daemon EQ, mic processing)
 
 **What Changed:**
