@@ -69,10 +69,8 @@ ApplicationWindow {
         // instead of leaving PipeWire's real sink volume stuck at the
         // duck target forever.
         AudioController.stopVuStream()
-        // Each running EQ is a `pipewire -c` child holding a channel's
-        // routing. Quitting without stopping them would leave the channel
-        // pointing at an orphaned chain.
-        EqController.stopAll()
+        // The EQ runs in the daemon and deliberately keeps running after
+        // the window closes, so there is nothing to stop here.
     }
 
     Labs.SystemTrayIcon {

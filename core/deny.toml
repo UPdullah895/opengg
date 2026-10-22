@@ -1,0 +1,38 @@
+[advisories]
+# zbus 4's helper crates were marked unmaintained when zbus 6.0.0 folded them
+# in (2026-10-16). Unmaintained is not a vulnerability: no fix exists inside
+# zbus 4/5, and zbus 6 removed the blocking API opengg-core is built on, so
+# the migration is tracked as its own piece of work (docs/CRITIQUE.md,
+# "Dependencies"). Remove these when the zbus 6 migration lands.
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 4 unmaintained; needs zbus 6 migration" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 3 unmaintained; needs zbus 6 migration" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 4 unmaintained; needs zbus 6 migration" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Zlib",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "OpenSSL",
+    "BSL-1.0",
+]
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

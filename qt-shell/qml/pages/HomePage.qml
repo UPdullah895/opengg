@@ -194,9 +194,14 @@ Rectangle {
     }
 
     // Light polling so external volume/recording state changes show up live.
+    // Only while this page is showing: every page is instantiated at once
+    // (StackLayout), so an ungated timer kept spawning pactl every 2 s for
+    // the app's whole lifetime, minimised or not. Recorder liveness in the
+    // background is GlobalHotkeys' supervisor tick's job.
+    onVisibleChanged: if (visible) { AudioController.refresh(); RecordingController.refresh() }
     Timer {
         interval: 2000
-        running: true
+        running: page.visible
         repeat: true
         onTriggered: {
             AudioController.refresh()

@@ -52,7 +52,6 @@ pub fn get_channels() -> Result<String, String> {
     call_dbus("GetChannels", AU_PATH, AU_IFACE, ())
 }
 /// Volume control with pactl fallback — controls both sinks and sink-inputs
-
 pub fn set_volume(channel: String, volume: u32) -> Result<(), String> {
     // Try D-Bus first
     if call_dbus_void("SetVolume", AU_PATH, AU_IFACE, (channel.as_str(), volume))
@@ -83,7 +82,6 @@ pub fn set_mute(channel: String, muted: bool) -> Result<(), String> {
 /// Unmute any WebKit video/webaudio sink-inputs belonging to this app.
 /// Called whenever clip playback starts to counteract module-stream-restore
 /// auto-muting the media.role="video" stream.
-
 pub fn unmute_media_streams() -> Result<(), String> {
     let output = run_cmd_sync("pactl", &["list", "sink-inputs"])?;
 
@@ -119,7 +117,6 @@ pub fn unmute_media_streams() -> Result<(), String> {
 }
 
 /// Set volume for an individual app (sink-input) by its pactl index
-
 pub fn set_app_volume(app_index: u32, volume: u32) -> Result<(), String> {
     let pct = format!("{volume}%");
     run_cmd_sync(
@@ -130,7 +127,6 @@ pub fn set_app_volume(app_index: u32, volume: u32) -> Result<(), String> {
 }
 /// System-critical processes that must never be routed. They appear in the
 /// app list as "locked" so the user knows they cannot be moved.
-
 pub fn get_apps() -> Result<String, String> {
     match call_dbus::<String>("GetApps", AU_PATH, AU_IFACE, ()) {
         Ok(r) => {
@@ -166,7 +162,6 @@ pub fn get_apps() -> Result<String, String> {
 /// 2. Direct `pactl move-sink-input` by integer index (with retry)
 /// 3. PipeWire node ID → pactl sink-input index cross-reference
 /// 4. `pw-metadata target.node` (WirePlumber-native move, with verification)
-
 pub fn get_audio_devices() -> Result<Vec<AudioDevice>, String> {
     let mut d = Vec::new();
     let ds = run_cmd_sync("pactl", &["get-default-sink"]).unwrap_or_default();
@@ -219,7 +214,6 @@ pub fn get_audio_devices() -> Result<Vec<AudioDevice>, String> {
 /// Query `pw-link -l` to find which physical sink device a virtual sink's
 /// monitor port is currently linked to. Returns the device name (e.g.
 /// "alsa_output.usb-...") or an empty string if not linked to any playback port.
-
 pub fn set_channel_device(channel: String, device_name: String) -> Result<(), String> {
     if channel == "Mic" {
         let current = run_cmd_sync("pactl", &["get-default-source"])
@@ -242,49 +236,61 @@ pub fn set_channel_device(channel: String, device_name: String) -> Result<(), St
         return Ok(());
     }
 
-    let sink = format!("OpenGG_{channel}");
+    // Remember the choice: the daemon's reconciler re-applies it whenever
+    // devices change, and on the next start. Nothing in the Qt shell wrote
+    // `mixer.devices` before, so a picked device was forgotten on restart
+    // and, once the reconciler existed, reverted at the next device event.
+    save_channel_device(&channel, &device_name)?;
+    route_virtual_channel(&channel, &device_name);
+    Ok(())
+}
 
-    // ★ Idempotent: only modify links that are actually different.
-    //   Query current links, unlink from wrong devices, link to target if missing.
+/// Store `mixer.devices[channel]` (empty = follow the default output).
+fn save_channel_device(channel: &str, device: &str) -> Result<(), String> {
+    let raw = crate::settings::load_ui_settings()?;
+    let mut v: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    if !v.is_object() {
+        v = serde_json::json!({});
+    }
+    if !v["mixer"].is_object() {
+        v["mixer"] = serde_json::json!({});
+    }
+    if !v["mixer"]["devices"].is_object() {
+        v["mixer"]["devices"] = serde_json::json!({});
+    }
+    v["mixer"]["devices"][channel] = serde_json::json!(device);
+    crate::settings::save_ui_settings(&serde_json::to_string(&v).map_err(|e| e.to_string())?)
+}
+
+/// Have the daemon re-link a virtual channel per the saved settings — it
+/// knows whether the channel's EQ sits in the path. Only when the daemon is
+/// unreachable are the links made here, directly.
+fn route_virtual_channel(channel: &str, device: &str) {
+    if call_dbus_void("Reconcile", AU_PATH, AU_IFACE, ()).is_ok() {
+        return;
+    }
+    if device.is_empty() {
+        return;
+    }
+    let sink = format!("OpenGG_{channel}");
     for p in ["FL", "FR"] {
         let current = get_linked_device_for_monitor(&sink, p);
-        if current == device_name {
-            // Already linked to the target device — nothing to do.
+        if current == device {
             continue;
         }
-        // Unlink from the current wrong device if any.
         if !current.is_empty() {
             let _ = run_cmd_sync(
                 "pw-link",
-                &[
-                    "-d",
-                    &format!("{sink}:monitor_{p}"),
-                    &format!("{current}:playback_{p}"),
-                ],
-            )
-            ;
+                &["-d", &format!("{sink}:monitor_{p}"), &format!("{current}:playback_{p}")],
+            );
         }
-        // Create the new link.
-        match run_cmd_sync(
+        if let Err(err) = run_cmd_sync(
             "pw-link",
-            &[
-                &format!("{sink}:monitor_{p}"),
-                &format!("{device_name}:playback_{p}"),
-            ],
-        )
-        
-        {
-            Ok(_) => {
-                eprintln!(
-                    "set_channel_device: linked {sink}:monitor_{p} → {device_name}:playback_{p}"
-                );
-            }
-            Err(err) => {
-                eprintln!("set_channel_device: pw-link failed: {err}");
-            }
+            &[&format!("{sink}:monitor_{p}"), &format!("{device}:playback_{p}")],
+        ) {
+            eprintln!("set_channel_device: pw-link failed: {err}");
         }
     }
-    Ok(())
 }
 // ═══ VU ═══
 
@@ -342,7 +348,6 @@ pub fn create_virtual_audio() -> Result<(), String> {
 }
 
 /// Unload only the OpenGG virtual sinks without restarting PipeWire/WirePlumber.
-
 pub fn remove_virtual_audio() -> Result<(), String> {
     // Step 1: Try daemon-side teardown via D-Bus
     // This is the preferred path — the daemon owns the module_ids vec
@@ -562,37 +567,10 @@ pub fn hydrate_audio_routing() {
         } else if !VIRTUAL_CHANNELS.contains(&channel.as_str()) {
             continue;
         } else {
-            // Virtual sink (Game/Chat/Media/Aux): idempotent reconnection.
-            // Only unlink/link if the current device differs from the saved one.
-            let sink = format!("OpenGG_{channel}");
-            let mut changed = false;
-            for p in ["FL", "FR"] {
-                let current = get_linked_device_for_monitor(&sink, p);
-                if current == device {
-                    continue;
-                }
-                if !current.is_empty() {
-                    Command::new("pw-link")
-                        .args([
-                            "-d",
-                            &format!("{sink}:monitor_{p}"),
-                            &format!("{current}:playback_{p}"),
-                        ])
-                        .output()
-                        .ok();
-                }
-                Command::new("pw-link")
-                    .args([
-                        &format!("{sink}:monitor_{p}"),
-                        &format!("{device}:playback_{p}"),
-                    ])
-                    .output()
-                    .ok();
-                changed = true;
-            }
-            if changed {
-                eprintln!("hydrate: {channel} → {device}");
-            }
+            // Virtual sink (Game/Chat/Media/Aux): the daemon's reconciler
+            // links these from the same saved map (through the EQ when it
+            // is on). Linking here as well bypassed the EQ.
+            route_virtual_channel(channel, &device);
         }
     }
 
@@ -629,7 +607,6 @@ pub fn hydrate_audio_routing() {
 }
 
 /// Live volume percentage of a sink via `pactl get-sink-volume` (first channel's `%`).
-
 pub fn list_audio_sinks() -> Result<Vec<String>, String> {
     let output = std::process::Command::new("pactl")
         .args(["list", "sinks", "short"])
@@ -667,25 +644,11 @@ pub fn list_audio_sinks() -> Result<Vec<String>, String> {
 /// was never a real target. This is a new function rather than a change to
 /// `list_audio_sinks` so GSR's existing behavior is untouched.
 pub fn list_audio_sinks_friendly() -> Result<Vec<CaptureSource>, String> {
-    let output = std::process::Command::new("pactl")
-        .args(["list", "sinks"])
-        .output()
-        .map_err(|e| format!("pactl not found: {e}"))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-
-    let mut pairs: Vec<(String, String)> = Vec::new();
-    let mut cur_name: Option<String> = None;
-    for line in text.lines() {
-        let t = line.trim();
-        if let Some(rest) = t.strip_prefix("Name: ") {
-            cur_name = Some(rest.trim().to_string());
-        } else if let Some(rest) = t.strip_prefix("Description: ") {
-            if let Some(n) = cur_name.take() {
-                pairs.push((n, rest.trim().to_string()));
-            }
-        }
-    }
-
+    // JSON, not `pactl list sinks`: the text form is translated, and under
+    // a non-English locale its "Name:"/"Description:" labels never matched,
+    // so the device picker was empty.
+    let json = run_cmd_sync("pactl", &["-f", "json", "list", "sinks"])?;
+    let pairs = parse_sink_descriptions(&json);
     let out: Vec<CaptureSource> = pairs
         .into_iter()
         .filter(|(name, _)| !name.starts_with("OpenGG_"))
@@ -696,6 +659,23 @@ pub fn list_audio_sinks_friendly() -> Result<Vec<CaptureSource>, String> {
     } else {
         Ok(out)
     }
+}
+
+/// (node.name, description) for each sink in `pactl -f json list sinks`.
+fn parse_sink_descriptions(json: &str) -> Vec<(String, String)> {
+    let sinks: Vec<serde_json::Value> = serde_json::from_str(json).unwrap_or_default();
+    sinks
+        .iter()
+        .filter_map(|s| {
+            let name = s["name"].as_str()?.to_string();
+            let label = s["description"]
+                .as_str()
+                .or_else(|| s["properties"]["device.description"].as_str())
+                .unwrap_or(&name)
+                .to_string();
+            Some((name, label))
+        })
+        .collect()
 }
 
 /// The device currently in use for a channel, as a raw pactl node.name
@@ -717,13 +697,20 @@ pub fn current_channel_device(channel: &str) -> String {
             .map(|s| s.trim().to_string())
             .unwrap_or_default(),
         _ => {
+            // With the channel's EQ on, the monitor feeds the EQ and the
+            // EQ's output feeds the device.
             let sink = format!("OpenGG_{channel}");
-            let fl = get_linked_device_for_monitor(&sink, "FL");
-            if !fl.is_empty() {
-                fl
-            } else {
-                get_linked_device_for_monitor(&sink, "FR")
-            }
+            let eq_out = format!("opengg_eq_{}", channel.to_lowercase());
+            ["FL", "FR"]
+                .iter()
+                .flat_map(|p| {
+                    [
+                        get_linked_device(&format!("{sink}:monitor_{p}"), p),
+                        get_linked_device(&format!("{eq_out}:output_{p}"), p),
+                    ]
+                })
+                .find(|d| !d.is_empty())
+                .unwrap_or_default()
         }
     }
 }
@@ -859,7 +846,6 @@ pub fn get_sink_index_by_name(sink_name: &str) -> Result<u32, String> {
 }
 
 /// List all OpenGG PipeWire node IDs (from pactl list sinks/sources short)
-
 fn list_opengg_node_ids_async(sinks: &str, sources: &str) -> Vec<u32> {
     let mut ids = Vec::new();
     for line in sinks.lines() {
@@ -892,7 +878,6 @@ fn list_opengg_node_ids_async(sinks: &str, sources: &str) -> Vec<u32> {
 }
 
 /// Extended sink-input info for cross-referencing PipeWire IDs
-
 pub fn live_display_name(channel: &str) -> String {
     if matches!(channel, "Game" | "Chat" | "Media" | "Aux") {
         channel.to_string()
@@ -944,7 +929,6 @@ fn get_streams_from_pw_dump() -> Result<HashMap<u32, StreamInfo>, String> {
 /// The percent is calculated via cubic root: percent = round(cbrt(linear) * 100).
 /// Also checks the mute status — if muted, returns 0%.
 /// Verified empirically: pactl 57% = linear 0.19 (cbrt(0.19)*100 ≈ 57%), pactl 30% = 0.027 linear.
-
 fn extract_volume_from_pw_props(pw_props: &serde_json::Map<String, serde_json::Value>) -> u32 {
     // Check mute status first
     if let Some(mute) = pw_props.get("mute").and_then(|m| m.as_bool()) {
@@ -981,7 +965,6 @@ fn extract_volume_from_pw_props(pw_props: &serde_json::Map<String, serde_json::V
 ///
 /// pw-dump format: Array of objects with "type", "id", "info" { "props": {...}, "params": {"Props": [...]}} }
 /// Volumes are extracted from params.Props[0] using the cubic root formula verified against pactl.
-
 fn parse_pw_dump_streams(dump_json: &str) -> Result<HashMap<u32, StreamInfo>, String> {
     let data: Vec<serde_json::Value> =
         serde_json::from_str(dump_json).map_err(|e| format!("parse pw-dump: {e}"))?;
@@ -1078,7 +1061,6 @@ fn parse_pw_dump_streams(dump_json: &str) -> Result<HashMap<u32, StreamInfo>, St
 /// Scan sink-inputs — uses pw-dump for fast enumeration with pactl fallback.
 /// ★ FIX 2: Filters out streams going to OpenGG virtual sinks' monitors
 /// ★ MODERNIZATION: Try pw-dump first for ~single-process speed, fall back to pactl on error.
-
 fn scan_sink_inputs() -> Result<String, String> {
     let mut apps = Vec::new();
 
@@ -1212,7 +1194,6 @@ fn is_internal_stream(
 
 /// Suggest an OpenGG channel for an app based on PipeWire stream properties.
 /// Returns an empty string when no confident classification can be made.
-
 fn classify_channel(props: &serde_json::Value) -> &'static str {
     let role = props["media.role"].as_str().unwrap_or("").to_lowercase();
     let binary = props["application.process.binary"]
@@ -1314,13 +1295,17 @@ fn lookup_sink_channel(sink_idx: u32) -> String {
 /// This is reality-based: pactl's `sink` field reflects where the stream is *actually*
 /// linked (confirmed empirically), unlike a metadata write that may report success
 /// without moving anything. Polls a few times to absorb the brief settle after a move.
-
 pub fn get_linked_device_for_monitor(sink_name: &str, port: &str) -> String {
+    get_linked_device(&format!("{sink_name}:monitor_{port}"), port)
+}
+
+/// The device whose `playback_{port}` the output port `target_port` feeds,
+/// or "" if none.
+fn get_linked_device(target_port: &str, port: &str) -> String {
     let output = match run_cmd_sync("pw-link", &["-l"]) {
         Ok(o) => o,
         Err(_) => return String::new(),
     };
-    let target_port = format!("{sink_name}:monitor_{port}");
     let mut in_section = false;
     for line in output.lines() {
         // Section header: port name with no leading whitespace
@@ -1345,7 +1330,6 @@ pub fn get_linked_device_for_monitor(sink_name: &str, port: &str) -> String {
 /// Destroy every existing pw-link from `{sink_name}:monitor_FL/FR` to
 /// any physical sink that is currently listed by PulseAudio.
 /// If `preserve_device` is provided, links to that device are left intact.
-
 fn current_sink_volume_pct(sink: &str) -> Option<u32> {
     let out = run_cmd_sync("pactl", &["get-sink-volume", sink]).ok()?;
     out.split('%')
@@ -1355,7 +1339,6 @@ fn current_sink_volume_pct(sink: &str) -> Option<u32> {
 }
 
 /// Live mute state of a sink via `pactl get-sink-mute` ("Mute: yes/no").
-
 fn current_sink_muted(sink: &str) -> Option<bool> {
     let out = run_cmd_sync("pactl", &["get-sink-mute", sink]).ok()?;
     Some(out.trim().ends_with("yes"))
@@ -1423,9 +1406,18 @@ impl RouteState {
         self.fail_counts.lock().unwrap().remove(key);
     }
 
+    /// True only for a success *within the cooldown window*: that is what
+    /// absorbs a burst of short-lived streams from one app. The entry used
+    /// to count forever, so once (say) firefox had been routed to Chat, a
+    /// new firefox stream — or the same one moved away by another mixer —
+    /// was skipped with Ok(()) for the rest of the session.
     fn is_already_routed(&self, key: &str, channel: &str) -> bool {
         let map = self.routed.lock().unwrap();
-        map.get(key).is_some_and(|(ch, _)| ch == channel)
+        map.get(key).is_some_and(|(ch, t)| {
+            ch == channel
+                && SystemTime::now().duration_since(*t).unwrap_or(Duration::MAX)
+                    < Duration::from_secs(ROUTE_COOLDOWN_SECS)
+        })
     }
 
     /// Records a failure and returns `true` if the circuit breaker is now
@@ -1782,6 +1774,37 @@ pub fn unroute_app(app_id: u32, binary: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sink_descriptions_from_json() {
+        let pairs = parse_sink_descriptions(
+            r#"[{"name":"alsa_output.usb","description":"Arctis Nova 7"},
+                {"name":"hdmi","properties":{"device.description":"HDMI"}},
+                {"name":"bare"},{"nope":1}]"#,
+        );
+        assert_eq!(
+            pairs,
+            vec![
+                ("alsa_output.usb".to_string(), "Arctis Nova 7".to_string()),
+                ("hdmi".to_string(), "HDMI".to_string()),
+                ("bare".to_string(), "bare".to_string()),
+            ]
+        );
+        assert!(parse_sink_descriptions("not json").is_empty());
+    }
+
+    #[test]
+    fn routed_cache_expires() {
+        let st = RouteState::new();
+        st.record_success("firefox", "Chat".into());
+        assert!(st.is_already_routed("firefox", "Chat"));
+        assert!(!st.is_already_routed("firefox", "Game"));
+        st.routed.lock().unwrap().insert(
+            "firefox".into(),
+            ("Chat".into(), SystemTime::now() - Duration::from_secs(ROUTE_COOLDOWN_SECS + 1)),
+        );
+        assert!(!st.is_already_routed("firefox", "Chat"));
+    }
 
     #[test]
     fn json_u32_accepts_a_real_number() {

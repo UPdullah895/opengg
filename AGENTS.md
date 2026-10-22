@@ -309,6 +309,34 @@ QT_QPA_PLATFORM=offscreen ./target/debug/opengg-qt \
 
 Then inspect `/tmp/mixer.png` in an image viewer. This captures exactly what QML rendered, including any off-screen content.
 
+### 10. Dialogs in the Screenshot Harness
+
+Dialogs are only reachable by clicking, so the sweep opens them with
+`--dialog <name>` (`ScreenshotController.dialog`): `editor:export` opens the
+export dialog over the editor, `clips:share` opens the Share sheet over the
+first clip. A new dialog should get the same treatment — a dialog no target
+renders is a dialog nobody has seen.
+
+---
+
+## FFmpeg Rules
+
+Every ffmpeg call that copies or re-encodes a clip must:
+
+- **Map streams explicitly** — `-map 0:v:0 -map 0:a?` (or filter labels).
+  ffmpeg's default selection keeps ONE audio stream; OpenGG clips carry one
+  track per mixer channel, and the missing map silently deleted them.
+- **Seek before `-i`** (`-ss S -t D -i in`). Output-side `-ss` with `-c copy`
+  produced a file with no video at all on a multi-track clip, and with a
+  re-encode it decodes the file from 0.
+- **Write through a hidden part file and rename** on success
+  (`media::part_path_for`, or the `.part.mp4` helpers in `edit`/`share`). The
+  library and watcher skip dotfiles; the watcher picks up the rename
+  (`Modify(Name)`).
+- Add `-movflags +faststart` to MP4 outputs.
+
+See `docs/KAIROS_INTEGRATION.md` for where these rules came from.
+
 ---
 
 ## Theme & Icon Rules
@@ -413,13 +441,64 @@ Some settings are stored at the **top level** of `~/.config/opengg/ui-settings.j
 {
   "settings": { /* display theme, language, notification style */ },
   "modules": { /* enabled audio/device/replay modules */ },
-  "extensionConsents": { /* user approvals for ext permissions */ },
+  "extensionConsents": { /* UI-side record; the daemon enforces consent from its own extension-consents.json */ },
   "mixer": { /* app→channel routing, mutes, volumes */ },
   "macros": { /* custom hotkey sequences */ }
 }
 ```
 
 **Rule**: Before wiring any new top-level data through `SettingsController.setValue()`, inspect the **live file** and the daemon's settings loader to understand the schema. Mutations to `"settings"` go through the normal debounced save; top-level siblings may require different serialization logic.
+
+### 5. The Daemon Owns the Live Graph
+
+`daemon/src/audio/reconcile.rs` listens to `pactl subscribe` and keeps the
+graph as intended: it recreates missing OpenGG sinks (unless the user removed
+virtual audio), links each output channel's monitor to `mixer.devices[ch]`
+while that device exists and otherwise to the default output, and routes new
+streams by `mixer.appRules`.
+
+The EQ (`audio/eq.rs`) and mic processing (`audio/micfx.rs`) are
+`pipewire -c` filter-chains the daemon hosts with `node.autoconnect = false`;
+the reconciler links them into the path (`monitor → EQ → device`,
+`mic loopback → chain → OpenGG_Mic`). The UI only sends state over D-Bus
+(`SetEq`, `SetMicFx`, `Reconcile`) and saves it under `mixer.*`.
+
+**Rule**: Don't add one-shot "fix the graph at startup" code, and never
+`pw-link` from the UI process. Put the intent in the reconciler's pure
+planners (`plan_links`, `plan_mic_links`, `rule_target`, `plan_work`) and test
+it there. Never link a monitor into an OpenGG sink — that is a feedback loop.
+
+**Rule**: Spawn helpers through `subprocess::command` in the daemon. It pins
+`LC_ALL=C` (pactl's text output is translated) and kills the command's process
+group after a timeout. Prefer `pactl -f json` to parsing the text form.
+
+### 6. Testing Audio Changes Against Real PipeWire
+
+Unit tests cover the planners. To see the real effect, run an isolated session
+whose runtime dir and session bus are separate from the desktop. It also works
+in a container after `apt-get install pipewire pipewire-pulse wireplumber
+pulseaudio-utils`.
+
+```bash
+export XDG_RUNTIME_DIR=$(mktemp -d) HOME=$(mktemp -d)   # keep the path short: unix sockets cap at 108 chars
+export XDG_CONFIG_HOME=$HOME/.config
+export DBUS_SESSION_BUS_ADDRESS=$(dbus-daemon --session --fork --print-address=1)
+pipewire & sleep 1; wireplumber & pipewire-pulse & sleep 2
+# Fake "hardware" that survives a pipewire-pulse restart (a pactl null-sink would not):
+pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=speakers media.class=Audio/Sink object.linger=true audio.position=[FL FR] }'
+RUST_LOG=info daemon/target/debug/openggd &
+pw-link -l | grep -A1 '^OpenGG_.*:monitor'
+```
+
+Use `pkill -x openggd`, not `pkill -f`: the pattern also matches your own
+shell's command line.
+
+Mic processing needs plugins. On Debian and Ubuntu `swh-plugins` is in the
+archive; RNNoise is not, but it builds from source in a minute: `cmake` on
+werman/noise-suppression-for-voice with only `-DBUILD_LADSPA_PLUGIN=ON`, then
+copy `librnnoise_ladspa.so` to `/usr/lib/ladspa`. A virtual mic for the test:
+`pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=fakemic media.class=Audio/Source/Virtual object.linger=true audio.position=[MONO] }'`,
+then `pactl set-default-source fakemic` before starting the daemon.
 
 ---
 

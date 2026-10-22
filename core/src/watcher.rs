@@ -6,7 +6,7 @@
 //! (no live consumer in qt-shell yet — `ExtensionsPanel.qml` reads the
 //! manifest list on demand instead of needing push updates).
 
-use notify::event::{CreateKind, EventKind, RemoveKind};
+use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind};
 use notify::{Config, RecursiveMode, Watcher};
 use std::time::Duration;
 
@@ -51,17 +51,26 @@ where
 
         for res in rx {
             let Ok(event) = res else { continue };
+            // Hidden names are the `.part` files clips are written through;
+            // the clip appears when that file is *renamed* into place, which
+            // is a Modify(Name) event, not a Create — without it a finished
+            // save would never reach the library.
             let is_clip_event = event.paths.iter().any(|p| {
                 let ext = p
                     .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_lowercase();
-                VIDEO_WATCH_EXTS.contains(&ext.as_str())
+                let hidden = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().starts_with('.'))
+                    .unwrap_or(false);
+                VIDEO_WATCH_EXTS.contains(&ext.as_str()) && !hidden
             }) && matches!(
                 event.kind,
                 EventKind::Create(CreateKind::File)
                     | EventKind::Create(_)
+                    | EventKind::Modify(ModifyKind::Name(_))
                     | EventKind::Remove(RemoveKind::File)
                     | EventKind::Remove(_)
             );

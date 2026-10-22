@@ -252,6 +252,25 @@ ColumnLayout {
                 onClicked: SystemController.openCrashLogsFolder()
             }
         }
+
+        // Everything a bug report needs, copied as text the user can read
+        // before pasting it anywhere. Nothing is uploaded.
+        RowLayout {
+            spacing: 10
+            ClipsBarButton {
+                label: (I18n.language, I18n.t("settings.diagnostics.copy"))
+                icon: "copy"
+                onTriggered: SystemController.copyDiagnostics()
+            }
+            Text {
+                visible: SystemController.diagnosticsStatus.length > 0
+                text: (I18n.language, SystemController.diagnosticsStatus === "working" ? I18n.t("settings.diagnostics.working")
+                      : SystemController.diagnosticsStatus === "copied" ? I18n.t("settings.diagnostics.copied")
+                      : SystemController.diagnosticsStatus)
+                color: SystemController.diagnosticsStatus === "copied" ? Theme.success : Theme.textDim
+                font.pixelSize: 12
+            }
+        }
     }
 
     // ── Guided tour ──────────────────────────────────────────────────────

@@ -25,7 +25,7 @@ For detailed install instructions, see the [README](README.md) "Requirements" se
 git clone https://github.com/UPdullah895/opengg.git
 cd opengg
 
-# Run setup once (udev rules, groups, D-Bus policy, data dirs)
+# Run setup once (data dirs and the `input` group for global hotkeys)
 ./dev.sh setup
 ```
 

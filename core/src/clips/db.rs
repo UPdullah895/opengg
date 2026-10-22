@@ -35,6 +35,7 @@ pub fn init_clips_db() -> Result<(), String> {
     let db = open_db()?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS clip_meta(filepath TEXT PRIMARY KEY,custom_name TEXT DEFAULT '',favorite INTEGER DEFAULT 0,tags TEXT DEFAULT '',notes TEXT DEFAULT '');
      CREATE TABLE IF NOT EXISTS trim_state(filepath TEXT PRIMARY KEY,trim_start REAL DEFAULT 0,trim_end REAL DEFAULT 0);").map_err(|e| format!("{e}"))?;
+    super::retention::init_table(&db).map_err(|e| format!("{e}"))?;
     // Phase 3a: Add ffprobe cache columns (ALTER TABLE is a no-op if column already exists)
     let _ = db.execute(
         "ALTER TABLE clip_meta ADD COLUMN duration REAL DEFAULT 0",
@@ -231,6 +232,7 @@ pub fn delete_clip(filepath: &str) -> Result<(), String> {
     if let Ok(c) = open_db() {
         let _ = c.execute("DELETE FROM clip_meta WHERE filepath=?1", [&filepath]);
         let _ = c.execute("DELETE FROM trim_state WHERE filepath=?1", [&filepath]);
+        let _ = c.execute("DELETE FROM owned_clips WHERE filepath=?1", [&filepath]);
     }
     Ok(())
 }
@@ -274,6 +276,11 @@ pub fn rename_clip(old_path: &str, new_name: &str) -> Result<String, String> {
         );
         let _ = db.execute(
             "UPDATE trim_state SET filepath=?1 WHERE filepath=?2",
+            rusqlite::params![new_path.to_string_lossy().to_string(), old_path],
+        );
+        // A renamed save is still OpenGG's, so the size limit keeps managing it.
+        let _ = db.execute(
+            "UPDATE owned_clips SET filepath=?1 WHERE filepath=?2",
             rusqlite::params![new_path.to_string_lossy().to_string(), old_path],
         );
     }

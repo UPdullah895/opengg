@@ -53,17 +53,11 @@ jobs:
           cp qt-shell/target/release/opengg-qt "$ROOT/usr/bin/opengg"
           cp daemon/target/release/openggd "$ROOT/usr/bin/openggd"
 
-          mkdir -p "$ROOT/usr/lib/udev/rules.d"
-          cp packaging/99-opengg.rules "$ROOT/usr/lib/udev/rules.d/"
-
           mkdir -p "$ROOT/usr/share/dbus-1/services"
           cp packaging/org.opengg.Daemon.service "$ROOT/usr/share/dbus-1/services/"
 
           mkdir -p "$ROOT/usr/lib/systemd/user"
           cp packaging/openggd.service "$ROOT/usr/lib/systemd/user/"
-
-          mkdir -p "$ROOT/usr/share/polkit-1/actions"
-          cp packaging/org.opengg.setup.policy "$ROOT/usr/share/polkit-1/actions/"
 
           mkdir -p "$ROOT/usr/share/applications"
           cp packaging/opengg.desktop "$ROOT/usr/share/applications/"
@@ -78,7 +72,20 @@ jobs:
           mkdir -p "$ROOT/usr/share/icons/hicolor/256x256/apps"
           cp packaging/icons/256x256.png "$ROOT/usr/share/icons/hicolor/256x256/apps/opengg.png"
 
+          # Every Exec in the shipped units must name a binary this tarball
+          # installs. v0.2.x shipped units pointing at ~/.local/bin/openggd
+          # (a source-install path), so the AUR package's daemon never ran.
+          for unit in "$ROOT/usr/lib/systemd/user/openggd.service" \
+                      "$ROOT/usr/share/dbus-1/services/org.opengg.Daemon.service"; do
+            exe=$(sed -n 's/^Exec\(Start\)\?=//p' "$unit")
+            case "$exe" in
+              /usr/bin/*) test -x "$ROOT$exe" || { echo "::error::$unit runs $exe, which is not packaged"; exit 1; } ;;
+              *) echo "::error::$unit runs '$exe', not a packaged /usr/bin path"; exit 1 ;;
+            esac
+          done
+
           tar -czf "$TARBALL" "$ROOT"
+          sha256sum "$TARBALL" > "$TARBALL.sha256"
           echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release and upload tarball
@@ -89,6 +96,8 @@ jobs:
             See the [README](https://github.com/UPdullah895/opengg#readme) for installation instructions.
           draft: false
           prerelease: false
-          files: ${{ env.TARBALL }}
+          files: |
+            ${{ env.TARBALL }}
+            ${{ env.TARBALL }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -44,6 +44,8 @@ QtObject {
         "x": { d: "M 6 6L 18 18M 18 6L 6 18", sw: 2 },
 
         // ── Actions ──
+        "share": { d: "M 4 12v 7a 2 2 0 0 0 2 2h 12a 2 2 0 0 0 2 -2v -7M 16 6l -4 -4 -4 4M 12 2v 13", sw: 1.75 },
+        "external-link": { d: "M 15 3h 6v 6M 10 14L 21 3M 18 13v 6a 2 2 0 0 1 -2 2H 5a 2 2 0 0 1 -2 -2V 8a 2 2 0 0 1 2 -2h 6", sw: 1.75 },
         // ICON_DELETE (deviceAssets.ts)
         "trash": { d: "M 3 6L 5 6L 21 6M 19 6l -1 14a 2 2 0 0 1 -2 2 H 8a 2 2 0 0 1 -2 -2 L 5 6M 10 11v 6M 14 11v 6M 9 6V 4a 1 1 0 0 1 1 -1 h 4a 1 1 0 0 1 1 1 v 2", sw: 2 },
         // ClipsPage.vue rename

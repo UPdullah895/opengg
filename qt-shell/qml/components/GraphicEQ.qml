@@ -3,24 +3,13 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import com.opengg.app
 
-// Per-channel 10-band graphic EQ. QML port of GraphicEQ.vue, simplified:
-// the Vue version renders an interactive draggable SVG curve through the
-// 10 band points; that depends on multi-point cubic-bezier <path> data and
-// drag-to-SVG-coordinate math. QML's Shape/PathSvg has already proven
-// fragile in this app for far simpler paths (see the IconPicker glyph
-// investigation — abandoned Shape/PathSvg for a plain Rectangle+Text after
-// it rendered distorted). A bank of discrete vertical sliders is the
-// "boring primitive" substitute: same underlying 10-value band-gain model,
-// same live jalv apply-on-change behavior, just discrete controls instead
-// of a continuous curve.
+// Per-channel 10-band graphic EQ. A bank of vertical sliders over the
+// same 10-value band model the daemon's filter-chain uses.
 //
-// State here is deliberately NOT persisted anywhere (no ui-settings.json
-// key) — frontend/src/stores/dsp.ts isn't persisted either (plain in-memory
-// Pinia store), so both apps reset EQ state to defaults on restart alike.
-// Each channel gets its own GraphicEQ instance kept alive for the whole
-// session (MixerPage.qml uses a StackLayout, not a Loader, for the tab
-// panels) so enabling EQ on one channel and switching tabs doesn't tear
-// down its jalv engine or lose its band values.
+// The engine runs in the daemon (see qt-shell/src/eq.rs): it keeps working
+// with the window closed, and the state is saved in ui-settings.json
+// (`mixer.eq`) and restored here on load. Each channel gets its own
+// instance for the whole session (MixerPage.qml uses a StackLayout).
 ColumnLayout {
     id: root
     spacing: 16
@@ -42,53 +31,63 @@ ColumnLayout {
     })
     readonly property var presetNames: ["Default", "Gaming", "Movies", "Music"]
 
-    function applyToEngine() {
-        if (root.eqEnabled) EqController.applyEq(root.channel, JSON.stringify(root.bands))
-    }
     /// True when this machine cannot host the EQ at all; the reason is
     /// shown in the card rather than letting the toggle look functional.
     readonly property string eqUnavailable: EqController.unavailableReason
 
+    /// Send the whole state. The daemon is told even while the EQ is off,
+    /// so the saved bands are what comes back when it is turned on.
+    function push() {
+        return EqController.setEq(root.channel, root.eqEnabled, JSON.stringify(root.bands), root.preamp)
+    }
     function setEnabled(v) {
-        if (v) {
-            // Honour the engine's answer instead of assuming it started.
-            // The old code set eqEnabled unconditionally, which is how a
-            // dead engine still presented as an active EQ.
-            const ok = EqController.startEngine(root.channel)
-            root.eqEnabled = ok
-            if (ok)
-                root.applyToEngine()
-        } else {
+        // Honour the daemon's answer instead of assuming it started.
+        root.eqEnabled = v
+        if (!root.push())
             root.eqEnabled = false
-            EqController.stopEngine(root.channel)
-        }
     }
     function setBand(i, val) {
         var arr = root.bands.slice()
         arr[i] = val
         root.bands = arr
         root.activePreset = "Custom"
-        root.applyToEngine()
+        root.push()
     }
     function setPreamp(val) {
-        // Matches upstream: preamp is not sent to the jalv engine (the Vue
-        // store's setPreamp() never includes it in the apply_eq payload
-        // either) — purely a UI-level value for now.
         root.preamp = val
         root.activePreset = "Custom"
+        root.push()
     }
     function resetEq() {
         root.bands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         root.preamp = 0
         root.activePreset = "Default"
-        root.applyToEngine()
+        root.push()
     }
     function applyPreset(name) {
         if (!(name in root.presets)) return
         root.bands = root.presets[name].slice()
         root.preamp = 0
         root.activePreset = name
-        root.applyToEngine()
+        root.push()
+    }
+    /// The preset these values match, or "Custom".
+    function presetFor(bands, preamp) {
+        if (preamp !== 0) return "Custom"
+        for (const name of root.presetNames) {
+            if (JSON.stringify(root.presets[name]) === JSON.stringify(bands)) return name
+        }
+        return "Custom"
+    }
+
+    Component.onCompleted: {
+        const s = JSON.parse(EqController.savedState(root.channel) || "{}")
+        if (Array.isArray(s.bands) && s.bands.length === 10)
+            root.bands = s.bands.map(v => Math.round(v))
+        root.preamp = Math.round(s.preamp || 0)
+        root.eqEnabled = !!s.enabled
+        root.activePreset = root.presetFor(root.bands, root.preamp)
+        EqController.refresh()
     }
 
     // Whole EQ (header + bands + preamp) in one bordered card — matching
@@ -129,7 +128,7 @@ ColumnLayout {
                         id: eqMsg
                         Layout.fillWidth: true
                         text: root.eqUnavailable.length > 0
-                              ? "Equaliser unavailable: " + root.eqUnavailable
+                              ? (I18n.language, I18n.t("eq.unavailable")) + " " + root.eqUnavailable
                               : EqController.lastError
                         color: Theme.overdrive
                         font.pixelSize: 11
@@ -150,8 +149,7 @@ ColumnLayout {
                 }
                 Text {
                     // root.channel is the identifier passed to EqController
-                    // (applyEq/startEngine/stopEngine) — only this label
-                    // is translated, not the property itself.
+                    // (setEq) — only this label is translated.
                     text: (I18n.language, I18n.t("mixer.channels." + root.channel.toLowerCase()))
                     color: root.accentColor
                     font.pixelSize: 13
@@ -247,6 +245,13 @@ ColumnLayout {
                                 value: root.bands[bandCol.index]
                                 enabled: root.eqEnabled
                                 onMoved: root.setBand(bandCol.index, Math.round(value))
+                                // The value binding is cut by the first drag
+                                // (AGENTS.md landmine 5); presets, Flat and the
+                                // saved state still have to move the slider.
+                                Connections {
+                                    target: root
+                                    function onBandsChanged() { bandSlider.value = root.bands[bandCol.index] }
+                                }
 
                                 background: Rectangle {
                                     x: bandSlider.leftPadding + bandSlider.availableWidth / 2 - width / 2

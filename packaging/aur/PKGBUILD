@@ -9,7 +9,14 @@ license=('MIT')
 depends=('pipewire' 'wireplumber' 'ffmpeg' 'gstreamer' 'gst-plugins-base' 'gst-plugins-good'
          'gst-plugins-bad' 'gst-plugin-qml6' 'qt6-base' 'qt6-declarative' 'qt6-multimedia'
          'qt6-shadertools')
-optdepends=('polkit: for privileged device setup')
+optdepends=('gpu-screen-recorder: instant replay and recording'
+            'libratbag: mouse DPI, polling rate and buttons'
+            'headsetcontrol: headset sidetone, ChatMix, battery'
+            'openrgb: RGB lighting'
+            'grim: screenshots on wlroots compositors'
+            'wl-clipboard: copying clips to the clipboard on Wayland'
+            'noise-suppression-for-voice: microphone noise suppression'
+            'swh-plugins: microphone noise gate and compressor')
 provides=('opengg')
 conflicts=('opengg')
 install=opengg.install
