@@ -59,7 +59,7 @@ GG is an Electron shell over three engines: **Engine** (device config and RGB),
 | 5 virtual channels + app routing | ✅ null-sinks + `move-sink-input`, persisted | — |
 | Per-channel EQ, ChatMix | ✅ 10-band EQ, ChatMix | — |
 | Mic noise suppression / gate / compressor | ⚠️ `effects.rs` scaffolding (rnnoise / LSP URIs) not wired to the UI | Phase 3 |
-| **Streamer Mode (dual mix)** | ❌ one mix only | **Phase 2** |
+| **Streamer Mode (dual mix)** | ✅ (was ❌ in v0.2.1) | **Phase 2, implemented** |
 | Smart Volume (loudness) | ❌ | Phase 3 (an LSP loudness compressor in the same filter chain) |
 | Spatial audio | ❌ | Phase 3, optional (needs an HRTF convolver such as `filter-chain` with a SOFA file) |
 
@@ -140,24 +140,67 @@ GG is an Electron shell over three engines: **Engine** (device config and RGB),
   render against real ffmpeg (2-track + silent + differently-sized clips,
   blur fill, crossfade, ducked music, then cancel).
 
-### Phase 2: Streamer Mode (dual mix)
+### Phase 2: Streamer Mode (dual mix) ✅
 
-1. Daemon `sinks.rs`: create an `OpenGG_Stream` null-sink. For each channel,
-   `module-loopback` from `OpenGG_<ch>.monitor` → `OpenGG_Stream`, with
-   `sink_input_properties=media.name=OpenGG stream <ch>`.
-2. Track the loopback sink-input IDs per channel. Stream-mix volume and mute
-   become `set-sink-input-volume/mute` on those. Personal-mix volume stays on
-   the channel sink, exactly as today.
-3. D-Bus: `SetStreamVolume(channel, vol)`, `SetStreamMute(channel, bool)`,
-   `SetStreamerMode(bool)` (loads or unloads the loopbacks). Persist under
-   `mixer.stream` in `ui-settings.json`, read-modify-write like
-   `mixer.appRules`.
-4. UI: a Personal / Stream toggle in the mixer header. The channel strips
-   rebind to the selected mix, and the stream mix shows a "Use
-   `OpenGG_Stream.monitor` in OBS" hint.
-5. Verification needs a real PipeWire session. It cannot be done headless,
-   and AGENTS.md forbids restarting PipeWire, so test with `pw-dump` before
-   and after.
+**The original plan was wrong, and measuring showed why.** It assumed a loopback
+from `OpenGG_<ch>.monitor` would give an independent Stream tap. But a null-sink's
+monitor is **post-fader**. Measured on PipeWire 1.0 with a test tone: the monitor
+drops ~18 dB at 50% and goes silent when muted. A Stream tap there would follow
+the Personal fader and mute, so the two mixes would not be independent.
+
+PipeWire's `monitor.channel-volumes=false` makes the monitor pre-fader, and it can
+be switched on a live node and back (`pw-cli set-param … Props`). But a sink has
+only one set of monitor ports, and the classic Personal path (a direct `pw-link`
+from the monitor to the device) needs them post-fader. So while Streamer Mode is
+on, the daemon (`daemon/src/audio/streamer.rs`) rewires each output channel:
+
+```text
+apps → OpenGG_<ch>  (monitor now pre-fader)
+         └ monitor ┬ loopback OpenGG_Personal_<ch>   → the channel's device
+                   │   (volume/mute mirror the sink's, so the sink stays
+                   │    the one Personal fader for UI, hydrate, Ear Blast)
+                   └ loopback OpenGG_StreamFeed_<ch> → OpenGG_Stream
+OpenGG_Mic.monitor (post-fader: "my mic level") → OpenGG_StreamFeed_Mic ┘
+OpenGG_Stream.monitor → remap source OpenGG_Stream_Mix ("OpenGG Stream Mix", for OBS)
+```
+
+- **Off, and every daemon exit, restore the classic graph exactly.** The graph
+  outside a running daemon is always the classic one.
+- **A SIGKILL leaves the Personal loopbacks playing**, so nobody goes silent. The
+  next start clears the leftovers and rebuilds the graph.
+- **Toggling is ordered to fail quiet:** the new path is built muted and opens
+  last, so the worst case is a few ms of silence, never a jump to unity gain.
+- **Loopbacks add 10 ms**, only while Streamer Mode is on. PipeWire's default
+  of 200 ms would make the Personal mix unusable for gaming.
+- **Stream "Master" is the `OpenGG_Stream` sink volume:** the level of the whole
+  mix OBS receives.
+- **D-Bus (`org.opengg.Daemon.Audio`):** `GetStreamerState`,
+  `SetStreamerMode`, `SetStreamVolume`, `SetStreamMute`, `SetPersonalDevice`.
+- **`core::audio`:** `set_channel_device`, `current_channel_device` and
+  `hydrate_audio_routing` go through the daemon while Streamer Mode is on. A
+  direct `pw-link` from the now pre-fader monitor would add an unfaded copy of
+  the channel to the headset.
+- **Persistence:** the UI writes `mixer.stream` `{enabled, volumes, mutes}`
+  (the only writer of `ui-settings.json`), and the daemon seeds from it at
+  start.
+- **UI:** a Streamer Mode toggle in the Mixer header. While it is on, a
+  Personal / Stream switch rebinds the six strips. The Stream view replaces
+  ChatMix (a Personal control) with the OBS hint. There is a `mixer:stream`
+  ui-shots target.
+
+Side effects, by design:
+- **Ear Blast** ducks the sink, so it now protects the headset without dipping
+  the stream.
+- **Recordings and VU meters** read the pre-fader monitor while Streamer Mode
+  is on, so they show what the channel carries, independent of headset volume.
+
+Verified against an isolated PipeWire 1.0 session (null sinks standing in for
+headphones, speakers and a mic, with test tones measured by level). Personal
+and Stream volume and mute are independent in both directions. Personal
+changes made outside OpenGG are mirrored. The mic and Stream Master work.
+Device changes in Streamer Mode leave no pre-fader leak. Off, SIGTERM, and
+SIGKILL followed by a restart all leave a clean graph (11 modules on, 0 off).
+Not verified on real hardware or with OBS itself.
 
 ### Phase 3: Mic and output processing
 

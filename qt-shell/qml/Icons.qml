@@ -142,7 +142,9 @@ QtObject {
         // ClipCard.vue favourite (filled when active)
         "heart": { d: "M 20.84 4.61a 5.5 5.5 0 0 0 -7.78 0 L 12 5.67l -1.06 -1.06a 5.5 5.5 0 0 0 -7.78 7.78 l 1.06 1.06L 12 21.23l 7.78 -7.78 1.06 -1.06a 5.5 5.5 0 0 0 0 -7.78 z", sw: 2 },
         // MixerPage.vue's Ear Blast Protection toggle icon.
-        "ear": { d: "M 12 2C 7 2 3 6 3 11v 3a 3 3 0 0 0 3 3h 1a 2 2 0 0 0 2 -2v -3a 2 2 0 0 0 -2 -2H 6a 5 5 0 0 1 5 -5 5 5 0 0 1 5 5h -1a 2 2 0 0 0 -2 2v 3a 2 2 0 0 0 2 2h 1a 3 3 0 0 0 3 -3v -3C 21 6 17 2 12 2z", sw: 2 }
+        "ear": { d: "M 12 2C 7 2 3 6 3 11v 3a 3 3 0 0 0 3 3h 1a 2 2 0 0 0 2 -2v -3a 2 2 0 0 0 -2 -2H 6a 5 5 0 0 1 5 -5 5 5 0 0 1 5 5h -1a 2 2 0 0 0 -2 2v 3a 2 2 0 0 0 2 2h 1a 3 3 0 0 0 3 -3v -3C 21 6 17 2 12 2z", sw: 2 },
+        // Streamer Mode (lucide "cast": a screen with broadcast arcs)
+        "cast": { d: "M 2 8V 6a 2 2 0 0 1 2 -2h 16a 2 2 0 0 1 2 2v 12a 2 2 0 0 1 -2 2h -6 M 2 12a 9 9 0 0 1 8 8 M 2 16a 5 5 0 0 1 4 4 M 2 20h 0.01", sw: 2 }
     })
 
     function path(name) {

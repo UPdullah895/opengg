@@ -44,7 +44,7 @@ cd opengg
 
 ## Modules
 
-- **Audio Hub** — 5-channel PipeWire mixer (Game / Chat / Media / Aux / Mic), per-app routing, 10-band EQ, ChatMix.
+- **Audio Hub** — 5-channel PipeWire mixer (Game / Chat / Media / Aux / Mic), per-app routing, 10-band EQ, ChatMix, and Streamer Mode (a separate Stream mix for OBS, leveled independently of what you hear).
 - **Device & RGB** — mouse DPI, polling rate and button mapping via ratbagd; headset controls; RGB via the OpenRGB SDK.
 - **Clipping & Replay** — gpu-screen-recorder replay buffer, global hotkeys, clip gallery, multi-track editor with FFmpeg export, and a montage builder (transitions, ducked music bed, vertical 9:16 export).
 

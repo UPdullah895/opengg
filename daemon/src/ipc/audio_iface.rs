@@ -80,4 +80,40 @@ impl AudioInterface {
     async fn create_virtual_audio(&self) -> zbus::fdo::Result<()> {
         self.hub.create_virtual_audio().await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
+
+    /// Streamer Mode state as JSON: `{enabled, sink, source, channels:
+    /// {ch: {volume, muted}}, devices: {ch: device}}`.
+    async fn get_streamer_state(&self) -> String {
+        serde_json::to_string(&self.hub.streamer_state()).unwrap_or_else(|_| "{}".into())
+    }
+
+    async fn set_streamer_mode(&self, enabled: bool) -> zbus::fdo::Result<()> {
+        self.hub
+            .set_streamer_mode(enabled)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
+    }
+
+    async fn set_stream_volume(&self, channel: &str, volume: u32) -> zbus::fdo::Result<()> {
+        self.hub
+            .set_stream_level(channel.to_string(), Some(volume), None)
+            .await
+            .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("{e:#}")))
+    }
+
+    async fn set_stream_mute(&self, channel: &str, muted: bool) -> zbus::fdo::Result<()> {
+        self.hub
+            .set_stream_level(channel.to_string(), None, Some(muted))
+            .await
+            .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("{e:#}")))
+    }
+
+    /// Point a channel's Personal path at `device` while Streamer Mode is on
+    /// (the classic graph's `pw-link` would add a pre-fader leak instead).
+    async fn set_personal_device(&self, channel: &str, device: &str) -> zbus::fdo::Result<()> {
+        self.hub
+            .set_personal_device(channel.to_string(), device.to_string())
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
+    }
 }

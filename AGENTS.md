@@ -110,15 +110,26 @@ on the first four clips — so the bulk action bar, the clear-filters control
 and the montage builder are covered by the sweep instead of being signed off
 unseen.
 
-**The full app needs a recent Qt 6 (Arch ships 6.8+).** On Debian/Ubuntu's Qt
-6.4 the binary builds, but every type in the `com.opengg.app` module fails to
-resolve at load time ("HomePage is not a type", "GlobalHotkeys is not a type"),
-so the sweep cannot run there. In that case, render the component you changed
-on its own: copy it, its sub-components and `Theme.qml`/`Icons.qml` into a
-scratch `com/opengg/app/` directory with a `qmldir`, stub the Rust singletons
-as QML `QtObject` singletons, and drive it from a `Window` that calls
-`contentItem.grabToImage()` under `QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qml`.
+**The full app needs Qt 6.7+ (Arch ships 6.8+).** On Debian/Ubuntu's Qt 6.4
+the binary builds, but QML loading fails with "HomePage is not a type",
+"GlobalHotkeys is not a type" and so on. The cause is the per-corner
+`topLeftRadius`/`topRightRadius`/… properties in `ChannelStrip.qml` and
+`SegmentedToggle.qml`, which only exist from Qt 6.7. One unloadable component
+makes every type that depends on it unresolvable. The sweep cannot run there.
+In that case, render the page or component you changed on its own:
+
+1. Copy the QML files (`Theme.qml`, `Icons.qml`, `components/*.qml`, the page)
+   flat into a scratch `com/opengg/app/` with a `qmldir`.
+2. Strip the per-corner radius lines **in those scratch copies only**.
+3. Stub the Rust singletons the page touches as QML `QtObject` singletons.
+   `grep -oh "[A-Z][a-zA-Z]*Controller\.[a-zA-Z]*"` lists them.
+4. Drive it from a `Window` that calls `contentItem.grabToImage()` under
+   `QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qml`.
+
 This is a fallback, not a replacement for the sweep: say which one you ran.
+
+`mixer:stream` renders the Mixer's Stream view (Streamer Mode on) with sample
+state, since a headless run has no daemon to turn Streamer Mode on.
 
 The harness CANNOT capture QQC2 `Popup`s: they render in their own overlay
 window, and the sweep grabs `captureRoot`. To check one, open it in a capture
@@ -408,7 +419,23 @@ Virtual audio sinks are created via `pactl load-module module-null-sink`. App ro
 
 **Why**: Restarting PipeWire disconnects all existing audio clients and loses all user routing decisions. Users expect their mixer state to persist across daemon/app restarts.
 
-### 2. Daemon Binary Can Be Stale
+### 2. Streamer Mode Owns the Personal Path
+
+While Streamer Mode is on (`daemon/src/audio/streamer.rs`), each output
+channel's monitor is **pre-fader**. The headset hears a daemon-owned loopback,
+`OpenGG_Personal_<ch>`, instead of the classic `pw-link`. So:
+
+- **Never `pw-link` `OpenGG_<ch>:monitor_*` to a device yourself.** It would
+  play an unfaded copy of the channel on top of the Personal mix. Use
+  `core::audio::set_channel_device`, which routes through the daemon
+  (`SetPersonalDevice`) while Streamer Mode is on.
+- **The sink volume is still the Personal fader.** The daemon mirrors it onto
+  the loopback, so anything that sets sink volume (the mixer, Ear Blast,
+  hydrate) keeps working.
+- **Every way out restores the classic graph** (off, SIGTERM, `Drop`), and the
+  next start cleans up after a SIGKILL. Keep it that way.
+
+### 3. Daemon Binary Can Be Stale
 
 After pulling new code, the installed `~/.local/bin/openggd` might be outdated. Before debugging daemon behavior:
 
@@ -425,7 +452,7 @@ fi
 
 This catches cases where a previous session built the daemon but didn't reinstall.
 
-### 3. Replace Running Binaries Safely
+### 4. Replace Running Binaries Safely
 
 If you need to replace a running binary (daemon, Qt app), use atomic move-to-temp-then-replace:
 
@@ -440,7 +467,7 @@ mv /tmp/opengg.new ~/.local/bin/opengg  # atomic rename
 
 This ensures the running process doesn't keep the old binary's file handle.
 
-### 4. `ui-settings.json` Top-Level Keys
+### 5. `ui-settings.json` Top-Level Keys
 
 Some settings are stored at the **top level** of `~/.config/opengg/ui-settings.json`, as siblings of `"settings"`:
 

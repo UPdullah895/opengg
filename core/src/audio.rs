@@ -211,6 +211,44 @@ pub fn get_audio_devices() -> Result<Vec<AudioDevice>, String> {
 //  pw-link -d is a no-op when no link exists, so it's safe to spam.
 // ══════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════
+//  Streamer Mode (daemon: audio/streamer.rs)
+//
+//  While it is on, each output channel's monitor is pre-fader and its
+//  Personal path is a daemon-owned loopback instead of a `pw-link`. Code
+//  here that links `OpenGG_<ch>:monitor_*` to a device must therefore ask
+//  the daemon instead — a direct link would add a second, unfaded copy of
+//  the channel to the headphones.
+// ══════════════════════════════════════════════════════════════
+
+/// Streamer Mode state JSON from the daemon (see `GetStreamerState`).
+pub fn get_streamer_state() -> Result<String, String> {
+    call_dbus("GetStreamerState", AU_PATH, AU_IFACE, ())
+}
+
+pub fn set_streamer_mode(enabled: bool) -> Result<(), String> {
+    call_dbus_void("SetStreamerMode", AU_PATH, AU_IFACE, (enabled,))
+}
+
+pub fn set_stream_volume(channel: &str, volume: u32) -> Result<(), String> {
+    call_dbus_void("SetStreamVolume", AU_PATH, AU_IFACE, (channel, volume.min(150)))
+}
+
+pub fn set_stream_mute(channel: &str, muted: bool) -> Result<(), String> {
+    call_dbus_void("SetStreamMute", AU_PATH, AU_IFACE, (channel, muted))
+}
+
+/// The Personal-path device per output channel while Streamer Mode is on;
+/// `None` when it is off or the daemon is unreachable (the classic graph,
+/// where `pw-link` is the source of truth).
+fn streamer_personal_devices() -> Option<HashMap<String, String>> {
+    let v: serde_json::Value = serde_json::from_str(&get_streamer_state().ok()?).ok()?;
+    if v["enabled"].as_bool() != Some(true) {
+        return None;
+    }
+    serde_json::from_value(v["devices"].clone()).ok()
+}
+
 /// Query `pw-link -l` to find which physical sink device a virtual sink's
 /// monitor port is currently linked to. Returns the device name (e.g.
 /// "alsa_output.usb-...") or an empty string if not linked to any playback port.
@@ -234,6 +272,10 @@ pub fn set_channel_device(channel: String, device_name: String) -> Result<(), St
             eprintln!("set_channel_device: Master sink → {device_name}");
         }
         return Ok(());
+    }
+
+    if streamer_personal_devices().is_some() {
+        return call_dbus_void("SetPersonalDevice", AU_PATH, AU_IFACE, (channel.as_str(), device_name.as_str()));
     }
 
     let sink = format!("OpenGG_{channel}");
@@ -533,6 +575,7 @@ pub fn hydrate_audio_routing() {
         None => return,
     };
 
+    let streamer = streamer_personal_devices();
     for (channel, device_val) in &devices {
         let device = match device_val.as_str() {
             Some(d) if !d.is_empty() => d.to_string(),
@@ -554,6 +597,9 @@ pub fn hydrate_audio_routing() {
             // call set_channel_device if the user actively changes it.
         } else if !VIRTUAL_CHANNELS.contains(&channel.as_str()) {
             continue;
+        } else if streamer.is_some() {
+            // Streamer Mode owns the Personal path (see set_channel_device).
+            let _ = call_dbus_void("SetPersonalDevice", AU_PATH, AU_IFACE, (channel.as_str(), device.as_str()));
         } else {
             // Virtual sink (Game/Chat/Media/Aux): idempotent reconnection.
             // Only unlink/link if the current device differs from the saved one.
@@ -709,6 +755,9 @@ pub fn current_channel_device(channel: &str) -> String {
             .map(|s| s.trim().to_string())
             .unwrap_or_default(),
         _ => {
+            if let Some(dev) = streamer_personal_devices().and_then(|d| d.get(channel).cloned()) {
+                return dev;
+            }
             let sink = format!("OpenGG_{channel}");
             let fl = get_linked_device_for_monitor(&sink, "FL");
             if !fl.is_empty() {

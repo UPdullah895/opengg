@@ -329,7 +329,7 @@ impl SinkManager {
 }
 
 /// Resolve the current default sink's node name via `pactl get-default-sink`.
-fn get_default_sink_name() -> Option<String> {
+pub(crate) fn get_default_sink_name() -> Option<String> {
     let out = subprocess::command("pactl")
         .args(["get-default-sink"])
         .output()
@@ -340,7 +340,7 @@ fn get_default_sink_name() -> Option<String> {
 
 /// Parse one `pactl list sinks` pass into name → (volume 0.0–1.5, muted).
 /// Volume is taken from the first channel's percentage; mute from the `Mute:` line.
-fn read_live_sink_state() -> HashMap<String, (f32, bool)> {
+pub(crate) fn read_live_sink_state() -> HashMap<String, (f32, bool)> {
     let mut map = HashMap::new();
     let out = match subprocess::command("pactl").args(["list", "sinks"]).output() {
         Ok(o) => o,
@@ -528,10 +528,12 @@ impl Drop for SinkManager {
 }
 
 /// Check if a PipeWire sink with this name already exists.
-fn sink_exists(name: &str) -> bool {
+pub(crate) fn sink_exists(name: &str) -> bool {
     if let Ok(output) = subprocess::command("pactl").args(["list", "sinks", "short"]).output() {
         let text = String::from_utf8_lossy(&output.stdout);
-        return text.lines().any(|line| line.contains(name));
+        // Exact name match: a substring test made "OpenGG_Stream" look present
+        // whenever any longer OpenGG_Stream… name was.
+        return text.lines().any(|line| line.split_whitespace().nth(1) == Some(name));
     }
     false
 }
@@ -742,7 +744,7 @@ fn virtual_mic_wired_correctly() -> bool {
 ///   SourcePort
 ///     |-> DestPort
 ///     |-> DestPort2
-fn parse_pw_links() -> Result<std::collections::HashSet<(String, String)>> {
+pub(crate) fn parse_pw_links() -> Result<std::collections::HashSet<(String, String)>> {
     use std::collections::HashSet;
 
     let output = subprocess::command("pw-link")
