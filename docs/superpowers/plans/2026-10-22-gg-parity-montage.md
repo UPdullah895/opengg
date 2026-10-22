@@ -161,6 +161,11 @@ GG is an Electron shell over three engines: **Engine** (device config and RGB),
 
 ### Phase 3: Mic and output processing
 
+> **Update:** open PR #62 already implements the mic half of this phase:
+> RNNoise noise suppression, gate and compressor in a daemon-owned
+> filter-chain, persisted in `mixer.micfx`. Build Smart Volume on that chain
+> instead of the `effects.rs` scaffolding described below.
+
 Wire the existing `effects.rs` `FilterGraph` to real PipeWire `filter-chain`
 modules: rnnoise noise suppression, an LSP gate and compressor on Mic, and an
 LSP loudness compressor as "Smart Volume" on Media and Chat. Each is a toggle

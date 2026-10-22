@@ -6,6 +6,58 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (CI: zbus 6, advisories, Rust 1.99)
+
+**What Changed:**
+- `9687b44`: Fix the three lints clippy 1.99 turned into errors in `core`
+  (17x `empty_line_after_doc_comments`, which also hid those functions'
+  docs; `manual_pattern_char_comparison`; `chunks_exact_to_as_chunks`).
+- `9e8f8a7`: zbus 4 → 6 in `core` and `daemon`; patch bumps for `rustls`,
+  `rustls-webpki`, `webpki-roots`, `quinn-proto` and the yanked `chacha20`;
+  `async-trait` 0.1.92.
+
+**Why:**
+On the same day, every crate's cargo-deny and cargo-audit jobs went red. New
+RustSec advisories mark zvariant, zvariant_derive and zbus_names
+unmaintained, and there were real TLS/QUIC advisories. CI's stable toolchain
+also moved to 1.99, whose new clippy lints failed `core` and `daemon`. The
+user asked for the long-term fix: migrate rather than ignore advisories, and
+stay on stable rather than pin the toolchain.
+
+**Landmines & Discoveries:**
+- zbus 6 removed `zbus::blocking`. `zbus::block_on` panics when nested, so a
+  callback fed from inside `block_on` must run outside it. Documented in
+  AGENTS.md ("zbus 6: `block_on` Must Never Nest").
+- A zbus 6 connection outlives the `block_on` call and thread that made it:
+  a helper thread services it between calls. The cached session in
+  `core::daemon` therefore still works from any thread (tested).
+- zbus 5 is no escape from these advisories: they cover every standalone
+  zvariant release.
+- The daemon builds zbus with `default-features = false` plus
+  `tokio, proxy, service, tracing`. Otherwise it would build zbus's own
+  zruntime as well.
+- Builder setters no longer return `Result`; errors surface from `build()`.
+  The old `.path(..).unwrap()` calls in `ratbag.rs` are gone with them, so a
+  bad object path is now an error rather than a panic.
+- The `double_must_use` errors came from the `async-trait` macro, not from
+  our code. 0.1.92 fixes it upstream, so no `#[allow]` was needed.
+
+**Verification:**
+- Rust 1.99.1 (CI's stable): `cargo clippy --all-targets -- -D warnings` is
+  clean in `core`, `daemon` and `qt-shell`.
+- `cargo deny check advisories bans`: "advisories ok, bans ok" in all three.
+  `cargo audit`: no vulnerabilities and no warnings in all three.
+- `cargo test` on a private `dbus-daemon --session`: core 98/98 (including
+  the new cross-thread/listener test) and daemon 61/61. qt-shell 21/23; the
+  2 failures are the same `mixer_pipeline` timing tests as before, which need
+  an audio sink.
+- `openggd` run on a private session bus: Audio, Device, Replay and
+  Extensions all introspect, and `GetDevices`, `GetChannels` and `GetStatus`
+  answer over `dbus-send`.
+- NOT verified: ratbagd (system bus) paths against real hardware, and the
+  daemon's `HotkeyPressed` emit from a real key press. The core side of
+  that signal is covered by the test above.
+
 ### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v
 
 **What Changed:**
