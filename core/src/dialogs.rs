@@ -69,6 +69,51 @@ pub fn pick_folder(title: &str, start_dir: &str) -> Result<Option<String>, Strin
     Ok(Some(path))
 }
 
+/// Ask the desktop for one existing file. `patterns` are glob patterns such
+/// as `["*.mp3", "*.ogg"]`; `filter_name` labels them in the picker. Same
+/// blocking and `Ok(None)`-on-cancel contract as [`pick_folder`].
+pub fn pick_file(
+    title: &str,
+    start_dir: &str,
+    filter_name: &str,
+    patterns: &[&str],
+) -> Result<Option<String>, String> {
+    let Some(bin) = native_picker() else {
+        return Err("no native file picker (kdialog/zenity) on PATH".into());
+    };
+
+    let globs = patterns.join(" ");
+    let args: Vec<String> = match bin {
+        "kdialog" => vec![
+            "--title".into(),
+            title.into(),
+            "--getopenfilename".into(),
+            start_dir.into(),
+            format!("{globs}|{filter_name}"),
+        ],
+        _ => vec![
+            "--file-selection".into(),
+            format!("--title={title}"),
+            format!("--filename={}/", start_dir.trim_end_matches('/')),
+            format!("--file-filter={filter_name} | {globs}"),
+        ],
+    };
+
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = command(bin)
+        .args(&argv)
+        .output()
+        .map_err(|e| format!("{bin}: {e}"))?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if path.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -40,7 +40,7 @@ TARGETS=(
     devices:buttons
     devices:list-many devices:grid-many devices:carousel-many
     devices:headset-many
-    clips:selection clips:filtered
+    clips:selection clips:filtered clips:montage
     tour
     editor
 )

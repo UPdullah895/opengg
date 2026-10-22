@@ -24,6 +24,8 @@ Rectangle {
     property var deleteTarget: null
     /// Set to a filepath list to confirm a bulk delete (null = dialog closed).
     property var bulkDeleteTarget: null
+    /// Clips handed to the montage dialog, [{filepath, title}] (null = closed).
+    property var montageClips: null
 
     // ── Multi-select ──────────────────────────────────────────────────────
     // A plain JS object used as a set (filepath -> true). QML can't observe
@@ -183,6 +185,23 @@ Rectangle {
         return out
     }
 
+    /// The selection as montage input, oldest capture first — a highlight
+    /// reel reads in the order things happened, whatever order the clicks
+    /// came in. Reordering is the dialog's job.
+    function montageSelection() {
+        const rows = page.visibleByPath()
+        var out = []
+        const paths = page.selectedList()
+        for (var i = 0; i < paths.length; i++) {
+            const r = rows[paths[i]]
+            out.push({ filepath: paths[i],
+                       title: r ? r.title : paths[i].split("/").pop(),
+                       created: r ? String(r.created || "") : "" })
+        }
+        out.sort(function (a, b) { return a.created < b.created ? -1 : a.created > b.created ? 1 : 0 })
+        return out
+    }
+
     /// True when every selected clip is already favourited — the bulk button
     /// then un-favourites instead, matching the single-clip heart's behaviour.
     readonly property bool allSelectedFavorited: {
@@ -248,7 +267,7 @@ Rectangle {
 
     // Dev-only capture hooks. The selection bar and the "filters active"
     // toolbar only exist in states a headless run cannot click its way into,
-    // so `--page clips --panel selection|filtered` puts the page there. Same
+    // so `--page clips --panel selection|filtered|montage` puts the page there. Same
     // trick as the editor's `--panel <clip path>`; never runs otherwise.
     Connections {
         target: ClipsController
@@ -265,6 +284,12 @@ Rectangle {
                 for (var i = 0; i < Math.min(3, rows.length); i++)
                     next[rows[i].filepath] = true
                 page.selected = next
+            } else if (ScreenshotController.panel === "montage") {
+                var pick = ({})
+                for (var j = 0; j < Math.min(4, rows.length); j++)
+                    pick[rows[j].filepath] = true
+                page.selected = pick
+                page.montageClips = page.montageSelection()
             } else if (ScreenshotController.panel === "filtered") {
                 searchField.text = "re"
                 page.favoritesOnly = true
@@ -1196,6 +1221,11 @@ Rectangle {
                 }
 
                 ClipsBarButton {
+                    label: "Montage"
+                    icon: "film"
+                    onTriggered: page.montageClips = page.montageSelection()
+                }
+                ClipsBarButton {
                     label: "Delete"
                     icon: "trash"
                     danger: true
@@ -1838,6 +1868,18 @@ Rectangle {
                     }
                 }
             }
+        }
+    }
+
+    // ── Montage builder ───────────────────────────────────────────────────
+    MontageDialog {
+        clips: page.montageClips
+        onClosed: {
+            // Keep the selection on cancel so the user can adjust and retry;
+            // a finished montage clears it like the other bulk tools do.
+            if (MontageController.result.length > 0)
+                page.clearSelection()
+            page.montageClips = null
         }
     }
 }

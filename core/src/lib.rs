@@ -24,6 +24,7 @@ pub mod extensions;
 pub mod gsr;
 pub mod hotkeys;
 pub mod media;
+pub mod montage;
 pub mod notify;
 pub mod paths;
 pub mod recording;

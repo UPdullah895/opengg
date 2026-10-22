@@ -80,10 +80,22 @@ qt-shell/tools/ui-shots.sh
 Run `cargo build` in `qt-shell/` first, or you will screenshot a stale binary
 and sign off on changes that were never compiled.
 
-The `clips:selection` and `clips:filtered` targets put the Clips page into
-states a headless run cannot click into — a multi-clip selection and an active
-search + favourites filter — so the bulk action bar and the clear-filters
-control are covered by the sweep instead of being signed off unseen.
+The `clips:selection`, `clips:filtered` and `clips:montage` targets put the
+Clips page into states a headless run cannot click into — a multi-clip
+selection, an active search + favourites filter, and the montage dialog open
+on the first four clips — so the bulk action bar, the clear-filters control
+and the montage builder are covered by the sweep instead of being signed off
+unseen.
+
+**The full app needs a recent Qt 6 (Arch ships 6.8+).** On Debian/Ubuntu's Qt
+6.4 the binary builds, but every type in the `com.opengg.app` module fails to
+resolve at load time ("HomePage is not a type", "GlobalHotkeys is not a type"),
+so the sweep cannot run there. In that case, render the component you changed
+on its own: copy it, its sub-components and `Theme.qml`/`Icons.qml` into a
+scratch `com/opengg/app/` directory with a `qmldir`, stub the Rust singletons
+as QML `QtObject` singletons, and drive it from a `Window` that calls
+`contentItem.grabToImage()` under `QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qml`.
+This is a fallback, not a replacement for the sweep: say which one you ran.
 
 The harness CANNOT capture QQC2 `Popup`s: they render in their own overlay
 window, and the sweep grabs `captureRoot`. To check one, open it in a capture
