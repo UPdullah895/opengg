@@ -6,6 +6,70 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (Phase 3: merge #62, one path owner, Smart Volume)
+
+**What Changed:**
+- `ec51e3c`: Merged #62 (`ccr-05fc126b-lm8sgg`) into this branch, at the
+  user's choice, and unified the two audio designs. The reconciler now owns
+  every channel's Personal path through `PathMode` (`Direct` / `Chain` /
+  `Loopback`). Streamer Mode keeps only the Stream side. #62's EQ chain
+  became the per-channel FX chain (explicit stereo
+  `pre → 10 bands → [SC4] → fader`). The `pw-cli` payload overflow is fixed.
+  The zbus deny ignores are gone.
+- `db16705`: Smart Volume client side and UI (`SmartVolumeCard`), Streamer
+  Mode strings through `I18n` (en and ar), AGENTS.md audio rules rewritten,
+  plan doc Phase 3.
+
+**Why:**
+Phase 3 (mic processing and Smart Volume) had to sit in #62's chain, and #62's
+reconciler and Phase 2's Streamer Mode fought over the same links. A
+direct `monitor → device` link in Streamer Mode plays an unfaded copy. One
+owner, the reconciler, is the long-term fix.
+
+**Landmines & Discoveries:**
+- **`pw-cli set-param … Props` has a ~1 KiB pod buffer.** Past it, pw-cli
+  sends an empty object (`Object: size 8,`) and exits 0. The stereo EQ plus
+  SC4 payload (~1.3 KiB) hit this: changing the Smart Volume level did
+  nothing. Bisected. Payloads are now split per side and stage, and
+  `set_params` fails on an empty object. Recorded in AGENTS.md.
+- **A compressor after the fader fights the fader.** So whenever a chain
+  runs, the monitor goes pre-fader and the Personal fader moves into the
+  chain (`fader*:Mult` = pactl volume³, mute = 0). The fader measures a full
+  −18 dB at 50% after Smart Volume.
+- **ffmpeg's `sine` source defaults to 1/8 amplitude.** My first Smart Volume
+  test sat below every threshold and "showed" no compression. Test with
+  `volume=7` (about −6 dBFS RMS).
+- **Measurement scripts:** `[-0-9.inf]+` matches letters inside
+  "mean_volume". Use `-?[0-9.]+ dB`. `pgrep -f` can count itself.
+
+**Verification:**
+- Isolated PipeWire 1.0 session, levels measured at the headset and the
+  Stream source:
+  - classic −48.2 dB at Game 50%;
+  - chain takes over at the same −48.2 dB;
+  - chain fader 25% gives −66.2 dB, mute gives silence;
+  - fader after Smart Volume gives a full −18 dB;
+  - Streamer Mode with a chain: headset unchanged, Stream clean −30.1 dB;
+  - a channel on the loopback path at 50% gives −72.4 dB, Stream −54.1 dB;
+  - chain off moves the channel to its loopback (−48.3 dB);
+  - Streamer Mode off restores classic with 0 modules;
+  - SIGTERM leaves 0 Streamer modules and 0 chains.
+- **Smart Volume spread:** 28.9 / 22.3 / 16.1 / 8.9 dB (Off / Light / Medium
+  / Strong).
+- **Rust 1.99.1:** clippy `--all-targets -D warnings` is clean in all three
+  crates. Tests: core 215/215, daemon 100/100, qt-shell 23/25 (the same two
+  `mixer_pipeline` timing tests, which need an audio sink). `cargo deny` reports
+  advisories ok and bans ok with no ignores; `cargo audit` is clean.
+  `check-colors.sh` is clean; en/ar locale keys are at parity.
+- **UI:** the stub harness (Qt 6.4, not the sweep) rendered the merged
+  `MixerPage.qml` with its real English and Arabic strings: Media tab with
+  Smart Volume on, Game tab with the plugin missing, Mic tab, Stream view.
+  Zero QML warnings; screenshots inspected. CI's sweep covers `mixer:game`
+  (Smart Volume card) and `mixer:stream`.
+- **NOT verified:** real hardware; #62's own features beyond what its tests
+  and this audio pass cover (share sheet, edit engine, packaging); it
+  arrives as its author left it.
+
 ### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (Phase 2: Streamer Mode)
 
 **What Changed:**
