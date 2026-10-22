@@ -651,7 +651,7 @@
       }
     },
     "installHint": {
-      "gsrNote": "gpu-screen-recorder غير موجود في معظم مستودعات التوزيعات. Flatpak هو طريقة التثبيت الموصى بها.",
+      "gsrNote": "يجب تثبيت gpu-screen-recorder كبرنامج أصلي ضمن PATH — لا يستطيع OpenGG استخدام نسخة Flatpak منه. يتوفر حزمة لـ Arch؛ وفي التوزيعات الأخرى ابنِه من صفحة المشروع.",
       "ffmpegNote": "ffprobe مضمن مع ffmpeg.",
       "ffprobeNote": "ffprobe مضمن مع ffmpeg."
     },
@@ -670,8 +670,7 @@
     },
     "accessFixHint": {
       "ratbagdNote": "بعد التثبيت، يمكنك تكوين إعدادات الفأرة في صفحة الأجهزة.",
-      "reloginNote": "قم بتسجيل الخروج وتسجيل الدخول مرة أخرى لتطبيق تغييرات المجموعة.",
-      "udevNote": "تسمح قواعد udev بالوصول المباشر للأجهزة لسماعات الرأس وأجهزة RGB دون الحاجة إلى sudo."
+      "reloginNote": "قم بتسجيل الخروج وتسجيل الدخول مرة أخرى لتطبيق تغييرات المجموعة."
     },
     "captureGsr": {
       "title": "مسجل شاشة GPU",

@@ -689,7 +689,7 @@
       }
     },
     "installHint": {
-      "gsrNote": "gpu-screen-recorder is not in most distro repos. Flatpak is the recommended installation method.",
+      "gsrNote": "gpu-screen-recorder must be installed as a native program on your PATH — OpenGG cannot use its Flatpak build. Arch has a package; elsewhere, build it from the project page.",
       "ffmpegNote": "ffprobe is included with ffmpeg.",
       "ffprobeNote": "ffprobe is included with ffmpeg."
     },
@@ -708,8 +708,7 @@
     },
     "accessFixHint": {
       "ratbagdNote": "After install, you can configure mouse settings in the Devices page.",
-      "reloginNote": "Log out and log back in for the group changes to take effect.",
-      "udevNote": "udev rules allow direct hardware access for headsets and RGB devices without sudo."
+      "reloginNote": "Log out and log back in for the group changes to take effect."
     },
     "recorderInstall": {
       "installed": "gpu-screen-recorder is installed.",

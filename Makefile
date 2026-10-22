@@ -88,7 +88,12 @@ install: build install-service
 # No sudo needed — this is a `--user` unit.
 install-service:
 	@mkdir -p $(HOME)/.config/systemd/user
-	cp $(ROOT)/packaging/openggd.service $(HOME)/.config/systemd/user/
+	@# The packaged units name /usr/bin/openggd; a source install lives in ~/.local/bin.
+	sed "s|/usr/bin/openggd|$(HOME)/.local/bin/openggd|" $(ROOT)/packaging/openggd.service \
+		> $(HOME)/.config/systemd/user/openggd.service
+	@mkdir -p $(HOME)/.local/share/dbus-1/services
+	sed "s|/usr/bin/openggd|$(HOME)/.local/bin/openggd|" $(ROOT)/packaging/org.opengg.Daemon.service \
+		> $(HOME)/.local/share/dbus-1/services/org.opengg.Daemon.service
 	@systemctl --user daemon-reload
 	@systemctl --user enable --now openggd.service && \
 		echo "✓ openggd.service enabled (auto-starts at login)" || \

@@ -22,18 +22,17 @@ ColumnLayout {
     readonly property var accessItems: [
         { id: "ratbagd", label: "ratbagd", status: !!root.access.ratbagd_available },
         { id: "inputGroup", label: "input group", status: !!root.access.in_input_group },
-        { id: "audioGroup", label: "audio group", status: !!root.access.in_audio_group },
         { id: "videoGroup", label: "video group", status: !!root.access.in_video_group },
-        { id: "udevRules", label: "udev rules", status: !!root.access.udev_rules_present },
     ]
 
     readonly property var packageMaps: ({
-        "gpu-screen-recorder": { arch: "pacman -S gpu-screen-recorder", debian: "flatpak install flathub com.dec05eba.gpu_screen_recorder", fedora: "flatpak install flathub com.dec05eba.gpu_screen_recorder", note: "installHint.gsrNote" },
+        // The Flatpak build of gpu-screen-recorder is not on $PATH, which is what
+        // OpenGG runs — recommending it could never satisfy this check.
+        "gpu-screen-recorder": { arch: "pacman -S gpu-screen-recorder", debian: "# Native build: https://git.dec05eba.com/gpu-screen-recorder/about/", fedora: "# Native build: https://git.dec05eba.com/gpu-screen-recorder/about/", note: "installHint.gsrNote" },
         "ffmpeg": { arch: "pacman -S ffmpeg", debian: "apt install ffmpeg", fedora: "dnf install ffmpeg", note: "installHint.ffmpegNote" },
         "ffprobe": { arch: "pacman -S ffmpeg", debian: "apt install ffmpeg", fedora: "dnf install ffmpeg", note: "installHint.ffprobeNote" },
         "pactl": { arch: "pacman -S libpulse", debian: "apt install pulseaudio-utils", fedora: "dnf install pulseaudio-utils" },
         "pw-link": { arch: "pacman -S pipewire", debian: "apt install pipewire", fedora: "dnf install pipewire" },
-        "jalv": { arch: "pacman -S jalv", debian: "apt install jalv", fedora: "dnf install jalv" },
         "headsetcontrol": { arch: "pacman -S headsetcontrol", debian: "apt install headsetcontrol", fedora: "dnf install headsetcontrol" },
         "xdotool": { arch: "pacman -S xdotool", debian: "apt install xdotool", fedora: "dnf install xdotool" },
     })
@@ -41,9 +40,7 @@ ColumnLayout {
     readonly property var accessFixMaps: ({
         ratbagd: { commands: ["sudo pacman -S libratbag / apt install ratbagd / dnf install libratbag-ratbagd", "sudo systemctl enable --now ratbagd"], note: "accessFixHint.ratbagdNote" },
         inputGroup: { commands: ["sudo usermod -aG input $USER"], note: "accessFixHint.reloginNote" },
-        audioGroup: { commands: ["sudo usermod -aG audio $USER"], note: "accessFixHint.reloginNote" },
         videoGroup: { commands: ["sudo usermod -aG video $USER"], note: "accessFixHint.reloginNote" },
-        udevRules: { commands: ["./dev.sh setup  # From the OpenGG repository root"], note: "accessFixHint.udevNote" },
     })
 
     function distroFamily() {
