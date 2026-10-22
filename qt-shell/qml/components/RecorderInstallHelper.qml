@@ -26,10 +26,13 @@ ColumnLayout {
         return "unknown"
     }
 
+    // OpenGG runs the `gpu-screen-recorder` binary from $PATH; its Flatpak
+    // build is not on $PATH, so it is not offered here — it would never pass
+    // the Recheck below. Debian/Fedora have no official package.
     readonly property var gsrPkg: ({
         arch: "sudo pacman -S gpu-screen-recorder",
-        debian: "flatpak install flathub com.dec05eba.gpu_screen_recorder",
-        fedora: "flatpak install flathub com.dec05eba.gpu_screen_recorder",
+        debian: "# Build natively: https://git.dec05eba.com/gpu-screen-recorder/about/",
+        fedora: "# Build natively: https://git.dec05eba.com/gpu-screen-recorder/about/",
     })
 
     function installCommand() {

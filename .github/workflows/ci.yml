@@ -29,6 +29,32 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
+  # The shared library: clip naming, the edit engine, share planning,
+  # settings, diagnostics. Most of the logic and most of the tests live here,
+  # and it was not built by CI at all before. ffmpeg is installed so the
+  # export tests run real encodes instead of skipping.
+  rust-core:
+    name: Rust Core
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./core
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ffmpeg
+        working-directory: .
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./core"
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
+
   # The Qt6/QML shell — the only UI OpenGG ships. The old Tauri + Vue
   # frontend/ was removed entirely (it had been archived, kept only for
   # reference, and was never built or launched by default).

@@ -96,6 +96,39 @@ pub mod qobject {
             codec: QString,
         );
 
+        /// Export with editor effects applied (look, speed, the track mix
+        /// the user hears, an optional pre-mixed track). `edit_json` is a
+        /// `SimpleEdit` (see `opengg_core::edit::simple`) plus `targetMb`
+        /// and `codec`, which work as in `exportClip`. Cancellable via
+        /// `cancelExport`.
+        #[qinvokable]
+        #[cxx_name = "exportEdited"]
+        fn export_edited(
+            self: Pin<&mut Self>,
+            filepath: QString,
+            start: f64,
+            end: f64,
+            output_path: QString,
+            edit_json: QString,
+        );
+
+        /// Stop a running `exportEdited` (no-op otherwise). The partial file
+        /// is removed by the exporter.
+        #[qinvokable]
+        #[cxx_name = "cancelExport"]
+        fn cancel_export(self: Pin<&mut Self>);
+
+        /// Whether `edit_json` changes anything (else the plain export runs),
+        /// and its one-line description, as `{active, text}` JSON.
+        #[qinvokable]
+        #[cxx_name = "describeEdit"]
+        fn describe_edit(self: &Self, edit_json: QString) -> QString;
+
+        /// Colour look ids, in display order (first is "none").
+        #[qinvokable]
+        #[cxx_name = "lookIds"]
+        fn look_ids(self: &Self) -> QString;
+
         /// Default export directory (the first configured clip directory).
         #[qinvokable]
         #[cxx_name = "defaultExportDir"]
@@ -138,6 +171,8 @@ pub struct EditorControllerRust {
     /// re-evaluates its binding cannot spawn a second ffmpeg for the same
     /// track. Cleared by `loadClip`.
     waveforms_inflight: std::collections::HashSet<String>,
+    /// Set by `cancelExport`; a fresh flag per `exportEdited` run.
+    export_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl qobject::EditorController {
@@ -390,6 +425,79 @@ impl qobject::EditorController {
                 }
             });
         });
+    }
+
+    pub fn export_edited(
+        mut self: Pin<&mut Self>,
+        filepath: QString,
+        start: f64,
+        end: f64,
+        output_path: QString,
+        edit_json: QString,
+    ) {
+        self.as_mut().set_export_running(true);
+        self.as_mut().set_export_progress(0.0);
+        self.as_mut().set_export_stage(QString::from("starting"));
+        self.as_mut().set_export_error(QString::default());
+        self.as_mut().set_export_result(QString::default());
+
+        let raw: serde_json::Value = serde_json::from_str(&edit_json.to_string()).unwrap_or_default();
+        let target_mb = raw["targetMb"].as_f64().unwrap_or(0.0);
+        let codec = raw["codec"].as_str().unwrap_or("h264").to_string();
+        let edit: opengg_core::edit::SimpleEdit = serde_json::from_value(raw).unwrap_or_default();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.as_mut().rust_mut().export_cancel = cancel.clone();
+        let fp = filepath.to_string();
+        let out = output_path.to_string();
+        let qt_thread = self.qt_thread();
+        let progress_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = opengg_core::edit::export_simple(
+                std::path::Path::new(&fp),
+                start,
+                end,
+                &edit,
+                target_mb,
+                &codec,
+                std::path::Path::new(&out),
+                &cancel,
+                move |pct, stage| {
+                    let stage = stage.to_string();
+                    let _ = progress_thread.queue(move |mut c| {
+                        c.as_mut().set_export_progress(pct);
+                        c.as_mut().set_export_stage(QString::from(&stage));
+                    });
+                },
+            );
+            let _ = qt_thread.queue(move |mut c| {
+                c.as_mut().set_export_running(false);
+                match result {
+                    Ok(o) => c.as_mut().set_export_result(QString::from(&o.to_string_lossy().to_string())),
+                    // A user cancel is not an error worth showing.
+                    Err(e) if e == "cancelled" => c.as_mut().set_export_stage(QString::default()),
+                    Err(e) => c.as_mut().set_export_error(QString::from(&e)),
+                }
+            });
+        });
+    }
+
+    pub fn cancel_export(self: Pin<&mut Self>) {
+        self.rust()
+            .export_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn describe_edit(&self, edit_json: QString) -> QString {
+        let edit: opengg_core::edit::SimpleEdit =
+            serde_json::from_str(&edit_json.to_string()).unwrap_or_default();
+        QString::from(
+            &serde_json::json!({ "active": edit.is_active(), "text": edit.describe() }).to_string(),
+        )
+    }
+
+    pub fn look_ids(&self) -> QString {
+        let ids: Vec<&str> = opengg_core::edit::Look::all().iter().map(|l| l.id()).collect();
+        QString::from(&serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()))
     }
 
     pub fn export_trim(mut self: Pin<&mut Self>, filepath: QString, start: f64, end: f64) {

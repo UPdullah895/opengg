@@ -37,7 +37,10 @@ ColumnLayout {
     }
 
     function setExtEnabled(p) {
-        if (root.needsConsent(p)) {
+        // Consent is asked only when turning an extension ON. Turning one
+        // off must always work — the dialog's only action was "grant", so an
+        // extension running without a consent record could not be stopped.
+        if (!p.enabled && root.needsConsent(p)) {
             root.consentExt = p
             root.consentOpen = true
             return

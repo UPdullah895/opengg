@@ -11,22 +11,23 @@
 //!   4. On daemon exit, sinks stay alive (object.linger) — no disruption
 
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::env;
 use std::path::PathBuf;
 use crate::subprocess;
 
 /// Minimum interval between `pactl` spawns for the same channel.
 /// Prevents process storm during slider drags (≤10 spawns/sec instead of 60+).
-const VOLUME_DEBOUNCE_MS: u128 = 100;
+const VOLUME_DEBOUNCE: Duration = Duration::from_millis(100);
 
 pub const CHANNEL_NAMES: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
 /// All channels get virtual null-sinks, including Mic.
 /// The Mic sink is fed by a loopback from the hardware source — its monitor
 /// port becomes the capturable "OpenGG_Mic" node for GSR and DSP chains.
-const SINK_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
+pub(crate) const SINK_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
 const RELABEL_CHANNELS: &[&str] = &["Game", "Chat", "Media", "Aux", "Mic"];
 
 fn remove_legacy_sink_config() {
@@ -143,6 +144,11 @@ pub struct SinkManager {
     module_ids: Arc<Mutex<Vec<u32>>>,
     /// Last time `pactl set-sink-volume` was spawned per channel.
     last_volume_spawn: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Channels with a trailing volume write scheduled.
+    pending_volume: Arc<Mutex<HashSet<String>>>,
+    /// False after the user removed virtual audio, so the reconciler does
+    /// not bring back sinks they asked to be rid of.
+    active: Arc<AtomicBool>,
 }
 
 /// Create (idempotently) every OpenGG virtual sink and its loopbacks, and
@@ -223,6 +229,8 @@ impl SinkManager {
             channels,
             module_ids: Arc::new(Mutex::new(module_ids)),
             last_volume_spawn: Arc::new(Mutex::new(HashMap::new())),
+            pending_volume: Arc::new(Mutex::new(HashSet::new())),
+            active: Arc::new(AtomicBool::new(true)),
         })
     }
 
@@ -237,6 +245,7 @@ impl SinkManager {
     pub fn ensure_created(&self) -> Result<()> {
         let new_ids = create_sinks_and_loopbacks();
         self.module_ids.lock().unwrap().extend(new_ids);
+        self.active.store(true, Ordering::Relaxed);
 
         // Re-seed channel state for any channel that isn't already tracked
         // (fresh SinkManager instances always have all of them; this only
@@ -259,26 +268,48 @@ impl SinkManager {
             info.volume = volume;
         }
 
-        // Debounce: skip pactl spawn if this channel was touched <100ms ago.
+        // Throttle: at most one pactl spawn per channel per window during a
+        // slider drag. A throttled value is not dropped: a trailing write
+        // lands the latest one when the window closes, or the end of a drag
+        // (the value the user let go at) would be lost.
         let now = Instant::now();
-        {
+        let wait = {
             let mut last_map = self.last_volume_spawn.lock().unwrap();
-            if let Some(last) = last_map.get(channel) {
-                if now.duration_since(*last).as_millis() < VOLUME_DEBOUNCE_MS {
-                    return Ok(());
+            match last_map.get(channel) {
+                Some(last) if now.duration_since(*last) < VOLUME_DEBOUNCE => {
+                    Some(VOLUME_DEBOUNCE - now.duration_since(*last))
+                }
+                _ => {
+                    last_map.insert(channel.to_string(), now);
+                    None
                 }
             }
-            last_map.insert(channel.to_string(), now);
+        };
+        if let Some(wait) = wait {
+            if self.pending_volume.lock().unwrap().insert(channel.to_string()) {
+                let channels = Arc::clone(&self.channels);
+                let pending = Arc::clone(&self.pending_volume);
+                let last = Arc::clone(&self.last_volume_spawn);
+                let channel = channel.to_string();
+                std::thread::spawn(move || {
+                    std::thread::sleep(wait);
+                    pending.lock().unwrap().remove(&channel);
+                    last.lock().unwrap().insert(channel.clone(), Instant::now());
+                    let latest = channels.lock().unwrap().get(&channel).map(|c| c.volume);
+                    if let Some(v) = latest {
+                        write_sink_volume(&channel, v);
+                    }
+                });
+            }
+            return Ok(());
         }
-
-        let vol_pct = (volume * 100.0) as u32;
-        let pct_str = format!("{vol_pct}%");
-        // Master has no virtual sink — it controls the hardware default output directly.
-        let sink_name = if channel == "Master" { "@DEFAULT_SINK@".to_string() } else { format!("OpenGG_{channel}") };
-        let _ = subprocess::command("pactl")
-            .args(["set-sink-volume", &sink_name, &pct_str])
-            .output();
+        write_sink_volume(channel, volume);
         Ok(())
+    }
+
+    /// False once the user removed virtual audio (until they create it again).
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
     }
 
     pub fn set_mute(&self, channel: &str, muted: bool) -> Result<()> {
@@ -328,6 +359,15 @@ impl SinkManager {
     }
 }
 
+/// `pactl set-sink-volume` for a channel (Master = the hardware default).
+pub(crate) fn write_sink_volume(channel: &str, volume: f32) {
+    let pct_str = format!("{}%", (volume * 100.0) as u32);
+    let sink_name = if channel == "Master" { "@DEFAULT_SINK@".to_string() } else { format!("OpenGG_{channel}") };
+    let _ = subprocess::command("pactl")
+        .args(["set-sink-volume", &sink_name, &pct_str])
+        .output();
+}
+
 /// Resolve the current default sink's node name via `pactl get-default-sink`.
 pub(crate) fn get_default_sink_name() -> Option<String> {
     let out = subprocess::command("pactl")
@@ -338,43 +378,39 @@ pub(crate) fn get_default_sink_name() -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
-/// Parse one `pactl list sinks` pass into name → (volume 0.0–1.5, muted).
-/// Volume is taken from the first channel's percentage; mute from the `Mute:` line.
+/// Every sink's name → (volume 0.0–1.5, muted), from one
+/// `pactl -f json list sinks`. The JSON form is used because the text form
+/// is translated: under a non-English locale its "Name:"/"Mute:" labels
+/// never matched and the mixer silently showed cached values.
 pub(crate) fn read_live_sink_state() -> HashMap<String, (f32, bool)> {
-    let mut map = HashMap::new();
-    let out = match subprocess::command("pactl").args(["list", "sinks"]).output() {
-        Ok(o) => o,
-        Err(_) => return map,
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-
-    let mut cur_name: Option<String> = None;
-    let mut cur_muted = false;
-    let mut cur_vol: Option<f32> = None;
-    let flush = |name: &mut Option<String>, vol: &mut Option<f32>, muted: &mut bool, map: &mut HashMap<String, (f32, bool)>| {
-        if let (Some(n), Some(v)) = (name.take(), vol.take()) {
-            map.insert(n, (v, *muted));
-        }
-        *muted = false;
-    };
-
-    for line in text.lines() {
-        let t = line.trim();
-        if let Some(rest) = t.strip_prefix("Name: ") {
-            // New block starts at "Name:" — flush the previous one first.
-            flush(&mut cur_name, &mut cur_vol, &mut cur_muted, &mut map);
-            cur_name = Some(rest.trim().to_string());
-        } else if let Some(rest) = t.strip_prefix("Mute: ") {
-            cur_muted = rest.trim() == "yes";
-        } else if t.starts_with("Volume:") && cur_vol.is_none() {
-            // e.g. "Volume: front-left: 39322 /  60% / -13.40 dB,  front-right: ..."
-            if let Some(pct) = t.split('%').next().and_then(|s| s.rsplit('/').next()).and_then(|s| s.trim().parse::<f32>().ok()) {
-                cur_vol = Some((pct / 100.0).clamp(0.0, 1.5));
-            }
-        }
+    match subprocess::command("pactl").args(["-f", "json", "list", "sinks"]).output() {
+        Ok(o) => parse_sink_levels(&o.stdout),
+        Err(_) => HashMap::new(),
     }
-    flush(&mut cur_name, &mut cur_vol, &mut cur_muted, &mut map);
-    map
+}
+
+/// Parse `pactl -f json list sinks`. Volume is the first channel's percentage.
+pub(crate) fn parse_sink_levels(json: &[u8]) -> HashMap<String, (f32, bool)> {
+    let Ok(sinks) = serde_json::from_slice::<Vec<serde_json::Value>>(json) else {
+        return HashMap::new();
+    };
+    sinks
+        .iter()
+        .filter_map(|s| {
+            let name = s["name"].as_str()?.to_string();
+            let pct = s["volume"]
+                .as_object()?
+                .values()
+                .next()?["value_percent"]
+                .as_str()?
+                .trim()
+                .trim_end_matches('%')
+                .parse::<f32>()
+                .ok()?;
+            let muted = s["mute"].as_bool().unwrap_or(false);
+            Some((name, ((pct / 100.0).clamp(0.0, 1.5), muted)))
+        })
+        .collect()
 }
 
 impl SinkManager {
@@ -389,15 +425,29 @@ impl SinkManager {
     /// 6. Restore OS defaults
     /// 7. Verify no OpenGG nodes remain
     pub fn teardown_all(&self) -> anyhow::Result<()> {
+        self.active.store(false, Ordering::Relaxed);
         // Step 1: Remove legacy config file
         remove_legacy_sink_config();
 
-        // Step 2: Unload all tracked module IDs
+        // Step 2: Unload tracked module IDs — only those that are still
+        // OpenGG's. IDs are reused after the sound server restarts (which
+        // the reconciler recovers from), so a remembered ID can by now
+        // belong to another program's module.
         if let Ok(mut ids) = self.module_ids.lock() {
+            let live = subprocess::command("pactl")
+                .args(["list", "modules", "short"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
             for id in ids.drain(..) {
-                let _ = subprocess::command("pactl")
-                    .args(["unload-module", &id.to_string()])
-                    .status();
+                let ours = live.lines().any(|l| {
+                    l.split_whitespace().next() == Some(id.to_string().as_str()) && l.contains("OpenGG_")
+                });
+                if ours {
+                    let _ = subprocess::command("pactl")
+                        .args(["unload-module", &id.to_string()])
+                        .status();
+                }
             }
         }
 
@@ -796,6 +846,13 @@ pub fn setup_loopbacks() -> Result<()> {
 
     if default_sink.is_empty() {
         tracing::warn!("No default audio output detected — loopbacks skipped");
+        return Ok(());
+    }
+    // With no hardware output present (or after a sound-server restart)
+    // the session manager can make an OpenGG sink the default. Linking the
+    // monitors into it would feed a channel back into itself.
+    if default_sink.starts_with("OpenGG_") {
+        tracing::warn!("Default output is {default_sink}, an OpenGG sink — loopbacks skipped");
         return Ok(());
     }
 

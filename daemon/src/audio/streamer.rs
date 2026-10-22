@@ -25,15 +25,26 @@
 //!   OpenGG_Stream.monitor → remap source OpenGG_Stream_Mix ("OpenGG Stream Mix")
 //! ```
 //!
-//! Turning it off restores the classic graph exactly (post-fader monitor,
-//! direct `pw-link` to the same device), and so does dropping the daemon —
-//! the graph outside a running daemon is always the classic one, so a crash
-//! or upgrade never leaves the user without their Personal mix.
+//! Ownership: this module owns the Stream side — the `OpenGG_Stream` bus,
+//! its OBS-facing source, the per-channel feeds and the Stream levels. The
+//! Personal side (which path each channel takes to the headset, and the
+//! pre/post-fader switch) belongs to the reconciler (`reconcile.rs`), which
+//! also routes channels through their FX chain (`eq.rs`) when one runs: a
+//! channel with a chain plays `monitor → chain (fader inside) → device` and
+//! needs no Personal loopback. This module only provides the primitives it
+//! uses ([`ensure_personal`], [`remove_personal`], [`set_personal_level`],
+//! [`set_monitor_pre_fader`]).
+//!
+//! Turning it off makes the next reconciler pass restore the classic graph
+//! (post-fader monitor, direct `pw-link` to the same device), and so does
+//! dropping the daemon — the graph outside a running daemon is always the
+//! classic one, so a crash or upgrade never leaves the user without their
+//! Personal mix.
 //!
 //! Everything is `pactl load-module` / `pw-link` / `pw-cli set-param` at
 //! runtime; PipeWire is never restarted.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
@@ -169,22 +180,7 @@ pub fn parse_sink_inputs(json: &str) -> Vec<SinkInput> {
         .collect()
 }
 
-/// The physical device `OpenGG_<ch>`'s monitor is linked to in the classic
-/// graph, read from `pw-link -l` pairs. Our own loopback inputs are ignored
-/// so a half-built Streamer graph never reports itself as the device.
-pub fn linked_device(links: &HashSet<(String, String)>, channel: &str) -> Option<String> {
-    let src = format!("OpenGG_{channel}:monitor_FL");
-    let mut found: Vec<&str> = links
-        .iter()
-        .filter(|(s, _)| *s == src)
-        .filter_map(|(_, d)| d.strip_suffix(":playback_FL"))
-        .filter(|node| !node.starts_with("OpenGG_"))
-        .collect();
-    found.sort();
-    found.first().map(|s| s.to_string())
-}
-
-// ── pactl / pw-link / pw-cli plumbing ──────────────────────────────────────
+// ── pactl / pw-cli plumbing ────────────────────────────────────────────────
 
 fn pactl(args: &[&str]) -> Result<String> {
     let out = subprocess::command("pactl")
@@ -222,22 +218,18 @@ fn set_sink_input_level(node: &str, volume: u32, muted: bool) {
     }
 }
 
-fn set_sink_input_mute(node: &str, muted: bool) {
-    if let Some(si) = find_sink_input(node) {
-        let _ = pactl(&["set-sink-input-mute", &si.index.to_string(), if muted { "1" } else { "0" }]);
-    }
-}
-
-/// Flip whether a sink's monitor carries its volume/mute. Runtime-settable
-/// and reversible (verified against PipeWire 1.0); this is the switch
-/// between the classic graph and the Streamer one.
-fn set_monitor_post_fader(sink: &str, post_fader: bool) -> Result<()> {
+/// Flip whether a channel sink's monitor carries its volume/mute.
+/// Runtime-settable and reversible (verified against PipeWire 1.0); the
+/// switch between the classic graph and a pre-fader one (Streamer Mode, or
+/// an FX chain that holds the fader itself).
+pub fn set_monitor_pre_fader(channel: &str, pre_fader: bool) -> Result<()> {
+    let sink = format!("OpenGG_{channel}");
     let out = subprocess::command("pw-cli")
         .args([
             "set-param",
-            sink,
+            &sink,
             "Props",
-            &format!("{{ params = [ \"monitor.channel-volumes\" {post_fader} ] }}"),
+            &format!("{{ params = [ \"monitor.channel-volumes\" {} ] }}", !pre_fader),
         ])
         .output()
         .context("pw-cli not found")?;
@@ -245,16 +237,6 @@ fn set_monitor_post_fader(sink: &str, post_fader: bool) -> Result<()> {
         anyhow::bail!("pw-cli set-param {sink}: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(())
-}
-
-fn pw_link(src: &str, dst: &str, unlink: bool) {
-    let mut args = Vec::with_capacity(3);
-    if unlink {
-        args.push("-d");
-    }
-    args.push(src);
-    args.push(dst);
-    let _ = subprocess::command("pw-link").args(&args).output();
 }
 
 /// Load a 10 ms loopback `source → sink` whose playback stream is named
@@ -274,8 +256,8 @@ fn load_loopback(source: &str, sink: &str, node: &str) -> Result<()> {
     ])?;
     // The playback stream registers asynchronously; wait for it, then mute.
     for _ in 0..20 {
-        if find_sink_input(node).is_some() {
-            set_sink_input_mute(node, true);
+        if let Some(si) = find_sink_input(node) {
+            let _ = pactl(&["set-sink-input-mute", &si.index.to_string(), "1"]);
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
@@ -297,6 +279,11 @@ fn unload_modules_where(pred: impl Fn(&str) -> bool) {
 fn unload_loopback(node: &str) {
     let needle = format!("node.name={node} ");
     unload_modules_where(|l| l.contains("module-loopback") && l.contains(&needle));
+}
+
+/// The Stream side only: bus, OBS source and feeds — not Personal loopbacks.
+fn is_stream_module(line: &str) -> bool {
+    is_streamer_module(line) && !line.contains("OpenGG_Personal_")
 }
 
 fn ensure_stream_bus() -> Result<()> {
@@ -326,6 +313,39 @@ fn ensure_stream_bus() -> Result<()> {
     Ok(())
 }
 
+// ── Personal path primitives (driven by the reconciler) ────────────────────
+
+/// The device a channel's Personal loopback plays to, if it has one.
+pub fn personal_device(channel: &str) -> Option<String> {
+    find_sink_input(&personal_node(channel)).and_then(|si| sink_of_sink_input(si.index))
+}
+
+/// Make the channel's Personal loopback exist and play to `device`. A new
+/// or retargeted loopback starts muted; the caller opens it with
+/// [`set_personal_level`] once the old path is gone.
+pub fn ensure_personal(channel: &str, device: &str) -> Result<()> {
+    match personal_device(channel) {
+        Some(d) if d == device => Ok(()),
+        Some(_) => {
+            unload_loopback(&personal_node(channel));
+            load_loopback(&format!("OpenGG_{channel}.monitor"), device, &personal_node(channel))
+        }
+        None => load_loopback(&format!("OpenGG_{channel}.monitor"), device, &personal_node(channel)),
+    }
+}
+
+pub fn remove_personal(channel: &str) {
+    if find_sink_input(&personal_node(channel)).is_some() {
+        unload_loopback(&personal_node(channel));
+    }
+}
+
+/// Mirror the channel's Personal fader (sink volume 0.0–1.5, mute) onto its
+/// loopback. pactl percentages are cubic on both, so they copy across 1:1.
+pub fn set_personal_level(channel: &str, volume: f32, muted: bool) {
+    set_sink_input_level(&personal_node(channel), (volume * 100.0).round() as u32, muted);
+}
+
 // ── Streamer ───────────────────────────────────────────────────────────────
 
 pub struct Streamer {
@@ -340,42 +360,34 @@ impl Streamer {
     }
 
     pub fn state(&self) -> StreamerState {
-        self.state.lock().unwrap().clone()
+        let mut st = self.state.lock().unwrap().clone();
+        if st.enabled {
+            for ch in OUTPUT_CHANNELS {
+                if let Some(d) = personal_device(ch) {
+                    st.devices.insert(ch.to_string(), d);
+                }
+            }
+        }
+        st
     }
 
     pub fn is_enabled(&self) -> bool {
         self.state.lock().unwrap().enabled
     }
 
-    /// Build the Streamer graph. Idempotent: any leftovers of an earlier
-    /// run (a killed daemon) are cleared first, then the graph is rebuilt
-    /// from the live classic one. Blocking — call off the async runtime.
+    /// Build the Stream side: bus, OBS source and one feed per channel.
+    /// Idempotent (any leftovers of an earlier run are cleared first). The
+    /// Personal side follows on the reconciler's next pass. Blocking — call
+    /// off the async runtime.
     pub fn enable(&self) -> Result<()> {
         let mut state = self.state.lock().unwrap();
         let live = sinks::read_live_sink_state();
-        let links = sinks::parse_pw_links().unwrap_or_default();
-        let default_sink = sinks::get_default_sink_name().unwrap_or_default();
-
-        // Recover the device of a channel whose classic link a previous
-        // (killed) run already replaced, before clearing that run away.
-        let stale_devices: BTreeMap<String, String> = list_sink_inputs()
-            .into_iter()
-            .filter_map(|si| {
-                let ch = si.node_name.strip_prefix("OpenGG_Personal_")?.to_string();
-                Some((ch, si.index))
-            })
-            .filter_map(|(ch, idx)| {
-                let sink = sink_of_sink_input(idx)?;
-                Some((ch, sink))
-            })
-            .collect();
-        unload_modules_where(is_streamer_module);
-
         // Without the channel sinks there is nothing to mix: say so rather
         // than report success with an empty Stream bus.
         if !OUTPUT_CHANNELS.iter().any(|ch| live.contains_key(&format!("OpenGG_{ch}"))) {
             anyhow::bail!("OpenGG's virtual audio channels are not set up — create virtual audio first");
         }
+        unload_modules_where(is_stream_module);
 
         ensure_stream_bus().context("creating the Stream bus")?;
         let master = state.channels.get("Master").copied().unwrap_or_default();
@@ -383,43 +395,13 @@ impl Streamer {
         let _ = pactl(&["set-sink-mute", STREAM_SINK, if master.muted { "1" } else { "0" }]);
 
         for ch in OUTPUT_CHANNELS {
-            let sink = format!("OpenGG_{ch}");
-            if !live.contains_key(&sink) {
-                continue; // virtual audio not created (or removed)
-            }
-            let device = state
-                .devices
-                .get(ch)
-                .cloned()
-                .or_else(|| linked_device(&links, ch))
-                .or_else(|| stale_devices.get(ch).cloned())
-                .unwrap_or_else(|| default_sink.clone());
-            if device.is_empty() {
-                tracing::warn!("Streamer: no output device for {ch} — skipping");
+            if !live.contains_key(&format!("OpenGG_{ch}")) {
                 continue;
             }
-            let (vol, muted) = live.get(&sink).copied().unwrap_or((1.0, false));
-            let monitor = format!("{sink}.monitor");
-
-            // Order matters for what the user hears during the switch: the
-            // new path is built muted, the old one is removed, the monitor
-            // goes pre-fader, and only then does the new path open. The
-            // worst case is a few ms of silence — never a jump to unity.
-            load_loopback(&monitor, &device, &personal_node(ch))?;
-            set_sink_input_level(&personal_node(ch), (vol * 100.0).round() as u32, true);
-            for p in ["FL", "FR"] {
-                pw_link(&format!("{sink}:monitor_{p}"), &format!("{device}:playback_{p}"), true);
-            }
-            set_monitor_post_fader(&sink, false)?;
-            set_sink_input_mute(&personal_node(ch), muted);
-
             let level = state.channels.get(ch).copied().unwrap_or_default();
-            load_loopback(&monitor, STREAM_SINK, &stream_feed_node(ch))?;
+            load_loopback(&format!("OpenGG_{ch}.monitor"), STREAM_SINK, &stream_feed_node(ch))?;
             set_sink_input_level(&stream_feed_node(ch), level.volume, level.muted);
-
-            state.devices.insert(ch.to_string(), device);
         }
-
         // Mic joins the Stream mix post-fader: the Mic fader is "my mic
         // level" for every consumer, the stream included.
         if live.contains_key("OpenGG_Mic") {
@@ -433,32 +415,14 @@ impl Streamer {
         Ok(())
     }
 
-    /// Restore the classic graph. Safe to call when already off.
+    /// Tear down the Stream side. Safe to call when already off; the
+    /// reconciler's next pass takes the Personal side back to classic.
     pub fn disable(&self) -> Result<()> {
         let mut state = self.state.lock().unwrap();
-        for ch in OUTPUT_CHANNELS {
-            let sink = format!("OpenGG_{ch}");
-            let device = state.devices.get(ch).cloned().or_else(|| {
-                find_sink_input(&personal_node(ch)).and_then(|si| sink_of_sink_input(si.index))
-            });
-            // Mirror image of `enable`: close the loopback, put the monitor
-            // back post-fader, then relink.
-            set_sink_input_mute(&personal_node(ch), true);
-            if sinks::sink_exists(&sink) {
-                if let Err(e) = set_monitor_post_fader(&sink, true) {
-                    tracing::warn!("Streamer: {e}");
-                }
-                if let Some(device) = &device {
-                    for p in ["FL", "FR"] {
-                        pw_link(&format!("{sink}:monitor_{p}"), &format!("{device}:playback_{p}"), false);
-                    }
-                }
-            }
-        }
-        unload_modules_where(is_streamer_module);
+        unload_modules_where(is_stream_module);
         state.devices.clear();
         if state.enabled {
-            tracing::info!("Streamer Mode off — classic graph restored");
+            tracing::info!("Streamer Mode off");
         }
         state.enabled = false;
         Ok(())
@@ -489,61 +453,21 @@ impl Streamer {
         }
         Ok(())
     }
-
-    /// Point a channel's Personal path at another device while enabled.
-    pub fn set_personal_device(&self, channel: &str, device: &str) -> Result<()> {
-        if !OUTPUT_CHANNELS.contains(&channel) {
-            anyhow::bail!("{channel} has no personal output path");
-        }
-        let mut state = self.state.lock().unwrap();
-        if !state.enabled {
-            anyhow::bail!("Streamer Mode is off");
-        }
-        if state.devices.get(channel).map(String::as_str) == Some(device) {
-            return Ok(());
-        }
-        let sink = format!("OpenGG_{channel}");
-        let (vol, muted) = sinks::read_live_sink_state().get(&sink).copied().unwrap_or((1.0, false));
-        unload_loopback(&personal_node(channel));
-        load_loopback(&format!("{sink}.monitor"), device, &personal_node(channel))?;
-        set_sink_input_level(&personal_node(channel), (vol * 100.0).round() as u32, muted);
-        state.devices.insert(channel.to_string(), device.to_string());
-        Ok(())
-    }
-
-    /// Copy each channel sink's live volume/mute onto its Personal loopback,
-    /// so the sink stays the single Personal fader — whoever moved it (the
-    /// mixer, Ear Blast's ducking, pavucontrol).
-    pub fn sync_personal(&self) {
-        if !self.is_enabled() {
-            return;
-        }
-        let live = sinks::read_live_sink_state();
-        let inputs = list_sink_inputs();
-        for ch in OUTPUT_CHANNELS {
-            let Some(&(vol, muted)) = live.get(&format!("OpenGG_{ch}")) else {
-                continue;
-            };
-            let want = (vol * 100.0).round() as u32;
-            let node = personal_node(ch);
-            if let Some(si) = inputs.iter().find(|s| s.node_name == node) {
-                let idx = si.index.to_string();
-                if si.volume_pct != want {
-                    let _ = pactl(&["set-sink-input-volume", &idx, &format!("{want}%")]);
-                }
-                if si.muted != muted {
-                    let _ = pactl(&["set-sink-input-mute", &idx, if muted { "1" } else { "0" }]);
-                }
-            }
-        }
-    }
 }
 
 impl Drop for Streamer {
-    /// Leave the classic graph behind on shutdown (see the module docs).
+    /// Leave no Streamer modules behind on shutdown (see the module docs):
+    /// the Stream side and any Personal loopbacks, with every monitor back
+    /// to post-fader for the channels the loopbacks served.
     fn drop(&mut self) {
-        if self.is_enabled() {
-            let _ = self.disable();
+        let had_personal: Vec<&str> = OUTPUT_CHANNELS
+            .iter()
+            .copied()
+            .filter(|ch| find_sink_input(&personal_node(ch)).is_some())
+            .collect();
+        unload_modules_where(is_streamer_module);
+        for ch in had_personal {
+            let _ = set_monitor_pre_fader(ch, false);
         }
     }
 }
@@ -615,23 +539,6 @@ mod tests {
         let (enabled, levels) = seed_from_settings(&serde_json::json!({}));
         assert!(!enabled);
         assert_eq!(levels.len(), STREAM_CHANNELS.len());
-    }
-
-    #[test]
-    fn finds_the_linked_device_and_ignores_our_loopbacks() {
-        let links: HashSet<(String, String)> = [
-            ("OpenGG_Game:monitor_FL", "alsa_output.usb:playback_FL"),
-            ("OpenGG_Game:monitor_FR", "alsa_output.usb:playback_FR"),
-            ("OpenGG_Chat:monitor_FL", "OpenGG_Personal_Chat_in:input_FL"),
-            ("OpenGG_Media:monitor_FL", "OpenGG_Stream:playback_FL"),
-        ]
-        .iter()
-        .map(|(a, b)| (a.to_string(), b.to_string()))
-        .collect();
-        assert_eq!(linked_device(&links, "Game").as_deref(), Some("alsa_output.usb"));
-        assert_eq!(linked_device(&links, "Chat"), None);
-        assert_eq!(linked_device(&links, "Media"), None);
-        assert_eq!(linked_device(&links, "Aux"), None);
     }
 
     #[test]

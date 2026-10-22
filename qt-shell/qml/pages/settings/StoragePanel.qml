@@ -268,6 +268,52 @@ ColumnLayout {
         }
     }
 
+    // ── Clip organisation card ──
+    // Both settings are read by RecordingController at save time
+    // (`load_save_options`), so they apply from the next save without a
+    // recorder restart.
+    SettingsCard {
+        title: (I18n.language, I18n.t("settings.storage.organizeTitle"))
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            Text {
+                text: (I18n.language, I18n.t("settings.storage.perGameFolders"))
+                color: Theme.text
+                font.pixelSize: 13
+            }
+            InfoIcon { tooltipText: I18n.t("settings.storage.perGameFoldersHint") }
+            Item { Layout.fillWidth: true }
+            ToggleSwitch {
+                checked: root.s.clipsPerGameFolder || false
+                onToggled: (v) => SettingsController.setValue("clipsPerGameFolder", JSON.stringify(v))
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            Text {
+                text: (I18n.language, I18n.t("settings.storage.sizeLimit"))
+                color: Theme.text
+                font.pixelSize: 13
+            }
+            InfoIcon { tooltipText: I18n.t("settings.storage.sizeLimitHint") }
+            Item { Layout.fillWidth: true }
+            SelectField {
+                Layout.preferredWidth: 180
+                options: [0, 25, 50, 100, 200, 500, 1000].map(gb => ({
+                    value: gb,
+                    label: gb === 0 ? I18n.t("settings.storage.noLimit")
+                         : gb >= 1000 ? (gb / 1000) + " TB" : gb + " GB"
+                }))
+                value: root.s.maxClipFolderGb || 0
+                onPicked: (v) => SettingsController.setValue("maxClipFolderGb", JSON.stringify(v))
+            }
+        }
+    }
+
     // ── Disk usage card ──
     Rectangle {
         Layout.fillWidth: true

@@ -14,8 +14,9 @@ SHELL := /bin/bash
 ROOT    := $(shell pwd)
 DAEMON  := $(ROOT)/daemon
 QT_SHELL := $(ROOT)/qt-shell
+CORE    := $(ROOT)/core
 
-.PHONY: dev daemon ui build setup clean install install-service install-desktop lint check help new-extension validate-extension ui-shots lint-qml
+.PHONY: dev daemon ui build setup clean install install-service install-desktop lint check test help new-extension validate-extension ui-shots lint-qml
 
 # ── Default ──────────────────────────────────────────────────────
 help:
@@ -31,6 +32,7 @@ help:
 	@echo "  make install   Install daemon to ~/.local/bin"
 	@echo "  make check     Type-check everything"
 	@echo "  make lint      Clippy + check-colors.sh"
+	@echo "  make test      cargo test in core, daemon and qt-shell"
 	@echo "  make new-extension NAME=<id>          Scaffold a new extension"
 	@echo "  make validate-extension DIR=<path>   Validate extension manifest & files"
 	@echo ""
@@ -88,7 +90,12 @@ install: build install-service
 # No sudo needed — this is a `--user` unit.
 install-service:
 	@mkdir -p $(HOME)/.config/systemd/user
-	cp $(ROOT)/packaging/openggd.service $(HOME)/.config/systemd/user/
+	@# The packaged units name /usr/bin/openggd; a source install lives in ~/.local/bin.
+	sed "s|/usr/bin/openggd|$(HOME)/.local/bin/openggd|" $(ROOT)/packaging/openggd.service \
+		> $(HOME)/.config/systemd/user/openggd.service
+	@mkdir -p $(HOME)/.local/share/dbus-1/services
+	sed "s|/usr/bin/openggd|$(HOME)/.local/bin/openggd|" $(ROOT)/packaging/org.opengg.Daemon.service \
+		> $(HOME)/.local/share/dbus-1/services/org.opengg.Daemon.service
 	@systemctl --user daemon-reload
 	@systemctl --user enable --now openggd.service && \
 		echo "✓ openggd.service enabled (auto-starts at login)" || \
@@ -105,10 +112,18 @@ install-desktop:
 
 # ── Code Quality ─────────────────────────────────────────────────
 check:
+	cd $(CORE) && cargo check
 	cd $(DAEMON) && cargo check
 	cd $(QT_SHELL) && cargo check
 
+# The crates are not a workspace, so each is tested from its own directory.
+test:
+	cd $(CORE) && cargo test
+	cd $(DAEMON) && cargo test
+	cd $(QT_SHELL) && cargo test
+
 lint:
+	cd $(CORE) && cargo clippy -- -W clippy::all
 	cd $(DAEMON) && cargo clippy -- -W clippy::all
 	cd $(QT_SHELL) && cargo clippy -- -W clippy::all
 	$(MAKE) lint-qml

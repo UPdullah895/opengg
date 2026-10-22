@@ -1,4 +1,5 @@
 [advisories]
+# zbus 6 (zvariant merged into it) cleared RUSTSEC-2026-0370/0371/0372.
 ignore = []
 
 [bans]

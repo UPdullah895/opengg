@@ -20,6 +20,9 @@ pub mod qobject {
         #[qproperty(QString, deps_json, cxx_name = "depsJson")]
         #[qproperty(QString, distro_json, cxx_name = "distroJson")]
         #[qproperty(QString, access_json, cxx_name = "accessJson")]
+        /// Outcome of the last `copyDiagnostics`: "" while idle, "working",
+        /// "copied", or an error message.
+        #[qproperty(QString, diagnostics_status, cxx_name = "diagnosticsStatus")]
         type SystemController = super::SystemControllerRust;
 
         /// True if the XDG autostart `.desktop` entry exists.
@@ -36,6 +39,14 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "openCrashLogsFolder"]
         fn open_crash_logs_folder(self: &Self);
+
+        /// Build the diagnostics report (versions, tools, access, daemon
+        /// reachability, latest crash report, log tail) off the UI thread
+        /// and put it on the clipboard for a bug report. Nothing is sent
+        /// anywhere; the user pastes it where they choose.
+        #[qinvokable]
+        #[cxx_name = "copyDiagnostics"]
+        fn copy_diagnostics(self: Pin<&mut Self>);
 
         /// Re-run the dependency/distro/device-access probes and refresh
         /// `depsJson`/`distroJson`/`accessJson`.
@@ -57,6 +68,8 @@ pub mod qobject {
         #[cxx_name = "appVersion"]
         fn app_version(self: &Self) -> QString;
     }
+
+    impl cxx_qt::Threading for SystemController {}
 }
 
 use core::pin::Pin;
@@ -67,6 +80,7 @@ pub struct SystemControllerRust {
     deps_json: QString,
     distro_json: QString,
     access_json: QString,
+    diagnostics_status: QString,
 }
 
 impl qobject::SystemController {
@@ -78,6 +92,20 @@ impl qobject::SystemController {
         if let Err(e) = opengg_core::system::set_autostart(enable) {
             eprintln!("SystemController::set_autostart: {e}");
         }
+    }
+
+    pub fn copy_diagnostics(mut self: Pin<&mut Self>) {
+        use cxx_qt::Threading;
+        self.as_mut().set_diagnostics_status(QString::from("working"));
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let report = opengg_core::diagnostics::report();
+            let status = match opengg_core::system::write_clipboard(&report) {
+                Ok(()) => "copied".to_string(),
+                Err(e) => e,
+            };
+            let _ = qt_thread.queue(move |mut c| c.as_mut().set_diagnostics_status(QString::from(&status)));
+        });
     }
 
     pub fn open_crash_logs_folder(&self) {

@@ -29,6 +29,11 @@ pub mod qobject {
         /// will not fire, and `error` says why.
         #[qproperty(bool, active)]
         #[qproperty(QString, error)]
+        /// True while Settings → Shortcuts is recording a new combination.
+        /// Presses still arrive (the daemon's listener cannot be told which
+        /// window has focus), but GlobalHotkeys drops them: typing the
+        /// current save key into the recorder must not save a clip.
+        #[qproperty(bool, suppressed)]
         type HotkeyController = super::HotkeyControllerRust;
 
         /// Begin receiving presses. Idempotent — a second call is ignored,
@@ -63,6 +68,7 @@ pub struct HotkeyControllerRust {
     press_count: i32,
     active: bool,
     error: QString,
+    suppressed: bool,
     listening: bool,
 }
 

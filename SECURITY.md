@@ -40,7 +40,7 @@ Security reports are in-scope for the following components:
 - **Daemon** (`daemon/src/`) — D-Bus service, device access (ratbagd, OpenRGB SDK), audio routing (PipeWire), extension loading
 - **Qt6/QML Shell** (`qt-shell/src/`) — cxx-qt controllers, file operations (clip export, editor), system integrations, GPU/GStreamer access
 - **opengg-core** (`core/src/`) — shared PipeWire/SQLite/media/subprocess logic called directly by the Qt shell and the daemon; clip file handling (`core/src/clips/`, `core/src/media.rs`) in particular
-- **Extension System** (`daemon/src/extensions/`) — Plugin loading, sandboxing, manifest parsing
+- **Extension System** (`daemon/src/extensions/`) — Extension discovery, consent, process spawning, manifest parsing (extensions are not sandboxed)
 
 ## Out of Scope
 
@@ -54,13 +54,13 @@ Security reports are in-scope for the following components:
 
 ### No Runtime Privilege Escalation
 
-OpenGG operates entirely unprivileged. The daemon runs as the current user. Sensitive operations (udev rules, D-Bus activation, polkit) are configured at install time only and are managed by the system. At runtime, membership in standard Linux groups (`audio`, `input`, `video`) grants all necessary access — **no sudo is ever required or used**.
+OpenGG operates entirely unprivileged. The daemon runs as the current user; **no sudo is ever required or used**, and OpenGG installs no udev rules or polkit actions. The one privilege it asks for is the `input` group, so the daemon can read keyboards for global hotkeys. Be aware that this lets any process running as you read keystrokes; the daemon only matches configured combinations in memory and logs action names, never keys. Extensions run as child processes of the daemon and inherit that access, which is why they start only after you have explicitly enabled them.
 
 ### Fixed Security Issues (Conceptual Examples)
 
 Recent work has addressed:
 - Media server symlink/path traversal hardening
-- Extension manifest parsing and sandboxing design
+- Extension manifest parsing and the consent model (extensions run unsandboxed as your user)
 - IPC boundary validation and capability separation
 
 All future security patches will follow the same strict validation and least-privilege principles.

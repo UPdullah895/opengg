@@ -10,15 +10,13 @@ use serde::Serialize;
 
 use crate::subprocess;
 
-/// Directory where per-session log files live (matches `main::LOGS_DIR`).
+/// Where logs and crash reports live: `$XDG_STATE_HOME/opengg`. (This used to
+/// be `CARGO_MANIFEST_DIR/../Logs` — a path on the machine that *built* the
+/// binary, so the button opened nothing on users' machines.)
 pub fn crash_log_dir() -> PathBuf {
-    const LOGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../Logs");
-    let p = PathBuf::from(LOGS_DIR);
-    let _ = std::fs::create_dir_all(&p);
-    p.canonicalize().unwrap_or(p)
+    crate::diagnostics::log_dir()
 }
 
-/// Opens the OS file manager at the crash-log directory.
 pub fn open_crash_logs_folder() -> Result<(), String> {
     let dir = crash_log_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("{e}"))?;
@@ -151,6 +149,8 @@ pub fn get_dependency_status() -> Vec<DependencyStatus> {
         ("xdotool", "windowTools"),
     ];
 
+    // This backs the UI's Recheck: always look again.
+    subprocess::forget_availability();
     let mut results = Vec::new();
     for (binary, feature) in deps {
         if on_wayland && X11_ONLY.contains(&binary) {
@@ -207,22 +207,28 @@ pub fn get_distro_info() -> DistroInfo {
 pub struct DeviceAccessStatus {
     pub ratbagd_available: bool,
     pub in_input_group: bool,
-    pub in_audio_group: bool,
     pub in_video_group: bool,
-    pub udev_rules_present: bool,
 }
 
-/// Probes ratbagd (device manager D-Bus service) availability, `input`/
-/// `audio`/`video` group membership, and whether OpenGG's udev rules are
-/// installed — surfaced in Settings → About so users can self-diagnose
-/// permission issues without reading logs.
+/// Whether `group` is one of the whitespace-separated names `id -Gn` printed.
+/// Exact match: a substring test counted e.g. `input-devs` as `input`.
+fn has_group(id_gn: &str, group: &str) -> bool {
+    id_gn.split_whitespace().any(|g| g == group)
+}
+
+/// Probes ratbagd (device manager D-Bus service) availability and the group
+/// memberships OpenGG relies on — surfaced in Settings → About so users can
+/// self-diagnose permission issues without reading logs.
+///
+/// Only `input` is required (global hotkeys read /dev/input). `video` is
+/// reported because some GPU capture setups need it. The old `audio` group
+/// and udev-rule checks are gone: PipeWire/logind grant audio access per
+/// seat, and OpenGG no longer ships udev rules (see docs/CRITIQUE.md, C3).
 pub fn get_device_access_status() -> DeviceAccessStatus {
     let mut status = DeviceAccessStatus {
         ratbagd_available: false,
         in_input_group: false,
-        in_audio_group: false,
         in_video_group: false,
-        udev_rules_present: false,
     };
 
     match subprocess::run("busctl", &["--system", "list", "--no-pager"]) {
@@ -237,13 +243,21 @@ pub fn get_device_access_status() -> DeviceAccessStatus {
 
     if let Ok(output) = std::process::Command::new("id").args(["-Gn"]).output() {
         let group_str = String::from_utf8_lossy(&output.stdout);
-        status.in_input_group = group_str.contains("input");
-        status.in_audio_group = group_str.contains("audio");
-        status.in_video_group = group_str.contains("video");
+        status.in_input_group = has_group(&group_str, "input");
+        status.in_video_group = has_group(&group_str, "video");
     }
 
-    status.udev_rules_present = std::path::Path::new("/etc/udev/rules.d/99-opengg.rules").exists()
-        || std::path::Path::new("/usr/lib/udev/rules.d/99-opengg.rules").exists();
-
     status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_group;
+
+    #[test]
+    fn group_membership_is_exact() {
+        assert!(has_group("user wheel input video\n", "input"));
+        assert!(!has_group("user input-devs", "input"));
+        assert!(!has_group("", "input"));
+    }
 }
