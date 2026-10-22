@@ -34,6 +34,9 @@ impl AudioHub {
             streams: Arc::new(RwLock::new(Vec::new())),
         };
         hub.start_stream_watcher();
+        // Keeps sinks, links and app rules right as devices come and go and
+        // the sound server restarts.
+        super::reconcile::spawn(Arc::clone(&hub.sink_mgr));
         Ok(hub)
     }
 

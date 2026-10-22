@@ -1406,9 +1406,18 @@ impl RouteState {
         self.fail_counts.lock().unwrap().remove(key);
     }
 
+    /// True only for a success *within the cooldown window*: that is what
+    /// absorbs a burst of short-lived streams from one app. The entry used
+    /// to count forever, so once (say) firefox had been routed to Chat, a
+    /// new firefox stream — or the same one moved away by another mixer —
+    /// was skipped with Ok(()) for the rest of the session.
     fn is_already_routed(&self, key: &str, channel: &str) -> bool {
         let map = self.routed.lock().unwrap();
-        map.get(key).is_some_and(|(ch, _)| ch == channel)
+        map.get(key).is_some_and(|(ch, t)| {
+            ch == channel
+                && SystemTime::now().duration_since(*t).unwrap_or(Duration::MAX)
+                    < Duration::from_secs(ROUTE_COOLDOWN_SECS)
+        })
     }
 
     /// Records a failure and returns `true` if the circuit breaker is now
@@ -1765,6 +1774,19 @@ pub fn unroute_app(app_id: u32, binary: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routed_cache_expires() {
+        let st = RouteState::new();
+        st.record_success("firefox", "Chat".into());
+        assert!(st.is_already_routed("firefox", "Chat"));
+        assert!(!st.is_already_routed("firefox", "Game"));
+        st.routed.lock().unwrap().insert(
+            "firefox".into(),
+            ("Chat".into(), SystemTime::now() - Duration::from_secs(ROUTE_COOLDOWN_SECS + 1)),
+        );
+        assert!(!st.is_already_routed("firefox", "Chat"));
+    }
 
     #[test]
     fn json_u32_accepts_a_real_number() {

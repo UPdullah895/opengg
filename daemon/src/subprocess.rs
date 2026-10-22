@@ -95,7 +95,12 @@ fn is_executable(path: &Path) -> bool {
 /// the caller.
 pub fn command(bin: &str) -> Command {
     debug!("subprocess: invoking {}", bin);
-    Command::new(bin)
+    let mut cmd = Command::new(bin);
+    // Every caller (pactl, pw-link, pw-cli, headsetcontrol) parses the
+    // output, and pactl's text output and error messages are translated.
+    // Pin the C locale so the parsers see the strings they were written for.
+    cmd.env("LC_ALL", "C");
+    cmd
 }
 
 /// Run a command synchronously and return its output.
