@@ -6,7 +6,38 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
-### [2026-10-21] Claude (Claude Opus 5.5) — ccr-05fc126b-lm8sgg (Kairos-informed overhaul)
+### [2026-10-22] Claude (Claude Code) — ccr-05fc126b-lm8sgg (critique + Phase 1 & the audio reconciler)
+
+**What Changed:**
+- `4f5fdd3`: CI green again — TLS advisories patched via `cargo update` in all three lockfiles; per-crate `deny.toml` for core and qt-shell; the three zbus-4 helper advisories ignored with a reason (zbus 6 dropped the blocking API core uses — a real migration, deferred); `async-trait` removed from the daemon.
+- `eff7eee`: global shortcuts no longer fire while a new key is being recorded (`HotkeyController.suppressed`).
+- `101b961`: `docs/CRITIQUE.md` — whole-program review: critical findings C1–C8, module reviews, what the program lacks, a four-phase plan.
+- `3b4367a`: packaging — units run `/usr/bin/openggd` (the Makefile rewrites for `~/.local/bin`), `ReadWritePaths` with `-` prefixes, release CI verifies the shipped units; world-writable udev rules and the dead polkit policy removed; setup only adds the `input` group; "Recheck" really rechecks.
+- `2eef15f`: extensions — off by default, the daemon enforces consent bound to the executable's SHA-256, disabling always works, the bare-executable path is gone.
+- `0dc373b`: diagnostics — log file and crash reports under `$XDG_STATE_HOME/opengg`, panic hook, Settings › General › "Copy diagnostics".
+- `d07fe36`: inert mic DSP cards shown disabled under a notice (`EqController.dspAvailable`); CI "Rust Core" job; `make test`; core's 19 clippy findings fixed so it runs with `-D warnings`; ui-shots target `mixer:mic`.
+- `1ef8fa1`: `daemon/src/audio/reconcile.rs` — `pactl subscribe`-driven reconciler: relinks channels to the saved device or the current default, recreates sinks after a sound-server restart (restoring levels), applies `mixer.appRules` to new streams. Plus: trailing volume write, JSON sink levels, `LC_ALL=C` for daemon subprocesses, safe teardown after module-ID reuse, monitor→OpenGG feedback loop prevented, core's routed cache expires.
+
+**Why:**
+The user asked for a critique and then its implementation. Phase 1 makes what ships safe and honest; the reconciler is the foundation of Phase 2 — audio that keeps working when devices or the sound server change.
+
+**Landmines & Discoveries:**
+- Removing `#[async_trait]` exposed latent infinite recursion: `platform/linux.rs` called D-Bus methods that were private, so the call resolved to the trait method itself. Fixed by `pub(crate)` on the inherent methods.
+- `check-colors.sh` must run under a UTF-8 locale (`LC_ALL=C.UTF-8`); under plain `C`, `grep -P` mis-handles the emoji ranges and the result differs from CI.
+- `log`'s `set_boxed_logger` needs the `std` feature; `set_logger(Box::leak(..))` doesn't.
+- Crash-report names need sub-second precision to sort chronologically; `free_path`'s " (2)" suffix sorts *before* the bare name.
+- `setup_loopbacks` would link channel monitors into an OpenGG sink once it became the default (no hardware output, or right after a restart) — a feedback loop. Guarded in both setup and the reconciler.
+- Module IDs are reused after pipewire-pulse restarts; never unload a remembered ID without checking it is still OpenGG's.
+- The daemon can be tested against real PipeWire in a container — see AGENTS.md "Testing audio changes".
+- `pkill -f <pattern>` kills your own shell when the pattern is in the command line; use `pkill -x <name>`.
+
+**Verification:**
+- clippy `-D warnings` (stable 1.99) clean in core, daemon and qt-shell; `cargo test` passes in all three (core 202, daemon 72).
+- `cargo audit` / `cargo deny check` clean in all three crates.
+- `ui-shots.sh` (`settings:general`, `mixer:mic`) with zero QML warnings; screenshots inspected.
+- Reconciler exercised live in an isolated PipeWire session: default-output change, saved-device hot-plug and unplug, rule applied to a new stream, pipewire-pulse kill + restart (sinks, levels, links restored), RemoveVirtualAudio respected, CreateVirtualAudio restores.
+
+### [2026-10-21] Claude (Claude Code) — ccr-05fc126b-lm8sgg (Kairos-informed overhaul)
 
 **What Changed:**
 - `6298a8a`: `media.rs` trim/export keep every track (`-map 0:v:0 -map 0:a?`), input-side seek, part file + rename, `+faststart`; size targets budget audio per track and use MiB→kbit with 4% headroom.
