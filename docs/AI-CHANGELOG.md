@@ -6,6 +6,76 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (Phase 2: Streamer Mode)
+
+**What Changed:**
+- `0bc6a81`: Streamer Mode, an independent Stream mix for OBS.
+  - **daemon:** new `audio/streamer.rs` plus five D-Bus methods.
+  - **core:** the device-routing paths are Streamer-aware.
+  - **qt-shell:** Mixer toggle, Personal/Stream switch, OBS hint,
+    `mixer.stream` persistence, a `cast` icon and the `mixer:stream`
+    ui-shots target.
+  - **docs:** an AGENTS.md audio rule, and the corrected Qt 6.4 cause.
+
+**Why:**
+This is Phase 2 of the GG-parity plan, the Sonar Streamer Mode equivalent:
+viewers get their own mix, and the headset keeps the Personal one.
+
+**Landmines & Discoveries:**
+- **A null-sink monitor is post-fader.** Measured with a test tone: −18 dB at
+  50%, silent when muted. So the plan's "loopback the monitor into a Stream
+  bus" would have tied the Stream mix to the Personal fader.
+  `monitor.channel-volumes=false` makes it pre-fader and can be flipped live
+  with `pw-cli set-param <node> Props '{ params = [ "monitor.channel-volumes"
+  false ] }'`. But one monitor can't be both, so the Personal path moves to a
+  loopback while Streamer Mode is on.
+- **The sink volume stays the Personal fader** (mirrored onto the loopback),
+  so the mixer, hydrate, Ear Blast and pavucontrol all keep working untouched.
+- **Any direct `pw-link` from a channel monitor in Streamer Mode leaks
+  unfaded audio.** `core::audio` routes device changes through the daemon.
+  Recorded in AGENTS.md.
+- **pulse `module-loopback` streams can be found by `node.name`** set through
+  `sink_input_properties`. `pw-cli set-param` accepts a node name.
+- **Loopbacks default to 200 ms latency.** 10 ms keeps the Personal mix usable.
+- **`sinks::sink_exists` was a substring match;** made exact. Found because
+  "OpenGG_Stream" collides with the "OpenGG_StreamFeed_…" prefix used for the
+  Stream feed nodes.
+- **Qt 6.4's "X is not a type" has a known cause:** per-corner
+  `topRightRadius` etc. (Qt 6.7+) in `ChannelStrip.qml` and
+  `SegmentedToggle.qml`. Stripping them in scratch copies let the real
+  `MixerPage.qml` render under the stub harness.
+- **Shell slip:** `touch src/main.rs src/lib.rs` in a crate loop creates the
+  file that doesn't exist; an empty `daemon/src/lib.rs` nearly landed. Touch
+  only files you know exist.
+
+**Verification:**
+- Isolated PipeWire 1.0 session (own runtime dir and D-Bus; null sinks for
+  headphones and speakers; a tone-fed mic), measuring levels at each step:
+  - classic Game at 50% gives −48.2 dB at the headphones; Streamer on keeps
+    −48.2 dB at the headphones and the Stream gets −30.1 dB (pre-fader);
+  - Personal mute silences the headphones only; Stream at 50% or muted
+    changes the Stream only;
+  - mic present in the Stream; Stream Master works;
+  - a Personal change made with `pactl` is mirrored (25% gives −66.2 dB);
+  - off restores −48.2 dB and the classic `pw-link` with 0 leftover modules;
+    SIGTERM while on leaves 0 leftovers;
+  - seeded from `mixer.stream` at start; SIGKILL keeps the headphones
+    playing; restart rebuilds exactly 11 modules; off is clean.
+- **`core` driven against the live daemon:** in Streamer Mode a device change
+  goes through the daemon (speakers −30.1 dB, headphones silent: no leak),
+  survives turning it off, and classic routing still uses `pw-link`. Turning
+  it on without virtual audio returns "create virtual audio first".
+- `cargo clippy --all-targets -- -D warnings` (Rust 1.99.1) is clean in all
+  three crates. `cargo test`: daemon 66/66 (5 new), core 98/98, qt-shell
+  21/23 (the same 2 `mixer_pipeline` timing tests that need an audio sink).
+  `check-colors.sh` is clean.
+- **UI:** the real `MixerPage.qml` rendered under the Qt 6.4 stub harness
+  (not the sweep) in four states: off, on/Personal, on/Stream, error. Zero
+  QML warnings; screenshots inspected. CI's Arch job runs the real sweep,
+  including the new `mixer:stream` target.
+- **NOT verified:** real audio hardware, OBS itself, and the per-app routing
+  UI while in the Stream view.
+
 ### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (CI: zbus 6, advisories, Rust 1.99)
 
 **What Changed:**
