@@ -164,7 +164,8 @@ pub fn extensions_dir() -> PathBuf {
         .join("opengg/extensions")
 }
 
-/// Shared enable-state file (`{ "<id>": bool }`, absent ⇒ enabled). Read and
+/// Shared enable-state file (`{ "<id>": bool }`, absent ⇒ disabled — the
+/// daemon only runs what the user explicitly enabled). Read and
 /// written by both this Tauri layer and the daemon's `ExtensionManager`.
 fn ext_state_path() -> PathBuf {
     dirs::config_dir()
@@ -194,7 +195,7 @@ pub struct ExtensionInfo {
     pub main: Option<String>,
     #[serde(default)]
     pub ui: Option<String>,
-    /// Whether the extension is enabled (per the shared state file; default true).
+    /// Whether the extension is enabled (per the shared state file; default false).
     #[serde(default)]
     pub enabled: bool,
     /// True if the manifest declares a `daemon` (background) executable part.
@@ -260,7 +261,7 @@ pub fn scan_extensions() -> Result<Vec<ExtensionInfo>, String> {
             continue;
         }
 
-        let enabled = *enabled_map.get(&id).unwrap_or(&true);
+        let enabled = enabled_map.get(&id).copied().unwrap_or(false);
         let has_daemon = v["daemon"].as_str().map(|s| !s.is_empty()).unwrap_or(false);
 
         // Extract permissions array from manifest (optional field; empty = legacy behavior)
