@@ -41,7 +41,8 @@ impl AudioHub {
     }
 
     pub async fn get_channels(&self) -> Vec<ChannelInfo> {
-        let mut channels = self.sink_mgr.get_channels();
+        let sink_mgr = Arc::clone(&self.sink_mgr);
+        let mut channels = blocking(move || Ok(sink_mgr.get_channels())).await.unwrap_or_default();
         let streams = self.streams.read().await;
         for ch in &mut channels {
             ch.assigned_apps = routing::apps_for_channel(&streams, &ch.name);
@@ -53,16 +54,19 @@ impl AudioHub {
         self.streams.read().await.clone()
     }
 
-    pub fn set_volume(&self, channel: &str, volume: u32) -> Result<()> {
-        self.sink_mgr.set_volume(channel, volume as f32 / 100.0)
+    pub async fn set_volume(&self, channel: &str, volume: u32) -> Result<()> {
+        let (sink_mgr, channel) = (Arc::clone(&self.sink_mgr), channel.to_string());
+        blocking(move || sink_mgr.set_volume(&channel, volume as f32 / 100.0)).await
     }
 
-    pub fn set_mute(&self, channel: &str, muted: bool) -> Result<()> {
-        self.sink_mgr.set_mute(channel, muted)
+    pub async fn set_mute(&self, channel: &str, muted: bool) -> Result<()> {
+        let (sink_mgr, channel) = (Arc::clone(&self.sink_mgr), channel.to_string());
+        blocking(move || sink_mgr.set_mute(&channel, muted)).await
     }
 
-    pub fn route_app(&self, stream_id: u32, channel: &str) -> Result<()> {
-        routing::route_stream(stream_id, channel)
+    pub async fn route_app(&self, stream_id: u32, channel: &str) -> Result<()> {
+        let channel = channel.to_string();
+        blocking(move || routing::route_stream(stream_id, &channel)).await
     }
 
     pub async fn remove_virtual_audio(&self) -> Result<()> {
@@ -92,4 +96,10 @@ impl AudioHub {
             }
         });
     }
+}
+
+/// Run subprocess-bound work off the async runtime, so one slow `pactl`
+/// does not stall every other D-Bus request on the same worker.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f).await.map_err(|e| anyhow::anyhow!("audio task failed: {e}"))?
 }
