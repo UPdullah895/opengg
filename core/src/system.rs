@@ -10,15 +10,13 @@ use serde::Serialize;
 
 use crate::subprocess;
 
-/// Directory where per-session log files live (matches `main::LOGS_DIR`).
+/// Where logs and crash reports live: `$XDG_STATE_HOME/opengg`. (This used to
+/// be `CARGO_MANIFEST_DIR/../Logs` — a path on the machine that *built* the
+/// binary, so the button opened nothing on users' machines.)
 pub fn crash_log_dir() -> PathBuf {
-    const LOGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../Logs");
-    let p = PathBuf::from(LOGS_DIR);
-    let _ = std::fs::create_dir_all(&p);
-    p.canonicalize().unwrap_or(p)
+    crate::diagnostics::log_dir()
 }
 
-/// Opens the OS file manager at the crash-log directory.
 pub fn open_crash_logs_folder() -> Result<(), String> {
     let dir = crash_log_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("{e}"))?;

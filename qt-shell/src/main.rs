@@ -24,6 +24,10 @@ extern "C" {
 }
 
 fn main() {
+    // Logs and crash reports under $XDG_STATE_HOME/opengg — without this,
+    // every log::warn!/error! from opengg-core went nowhere.
+    opengg_core::diagnostics::init("opengg-qt");
+
     // ── Clip video prerequisites, in this order ───────────────────────────
     // Both were established by the qml6glsink spike (qt-shell/spikes/), and
     // both are silent failures if skipped or reordered.

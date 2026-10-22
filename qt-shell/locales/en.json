@@ -561,7 +561,10 @@
     "diagnostics": {
       "title": "Diagnostics",
       "hint": "Crash and error logs are stored locally for debugging. Share them when reporting issues.",
-      "openCrashLogs": "Open Crash Logs Folder"
+      "openCrashLogs": "Open Crash Logs Folder",
+      "copy": "Copy diagnostics",
+      "working": "Collecting…",
+      "copied": "Copied — paste it into your bug report"
     },
     "dangerZone": {
       "title": "Danger Zone",
