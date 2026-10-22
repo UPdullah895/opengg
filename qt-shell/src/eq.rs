@@ -10,9 +10,10 @@
 //! reflects what really happened. Band and preamp changes arrive at slider
 //! rate; they are coalesced per channel on a worker thread.
 //!
-//! `applyNoiseGate`/`applyCompressor`/`applyNoiseReduction` remain no-ops:
-//! there is still no engine for them. `dspAvailable` reports false so the
-//! UI says so rather than implying they work.
+//! It also drives the microphone processing chain (noise suppression,
+//! gate, compressor), which runs in the daemon too
+//! (`daemon/src/audio/micfx.rs`); `micFxCapsJson` says which stages this
+//! system has plugins for.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -30,9 +31,9 @@ pub mod qobject {
         #[qproperty(QString, unavailable_reason, cxx_name = "unavailableReason")]
         /// JSON array of channels whose EQ the daemon reports running.
         #[qproperty(QString, active_channels_json, cxx_name = "activeChannelsJson")]
-        /// Whether the noise gate / compressor / noise reduction controls
-        /// do anything. They do not.
-        #[qproperty(bool, dsp_available, cxx_name = "dspAvailable")]
+        /// `{"nr", "gate", "comp"}` booleans: which mic processing stages
+        /// this system can run.
+        #[qproperty(QString, mic_fx_caps_json, cxx_name = "micFxCapsJson")]
         type EqController = super::EqControllerRust;
 
         /// Set a channel's EQ. Returns false (and sets `lastError`) if
@@ -50,17 +51,16 @@ pub mod qobject {
         #[qinvokable]
         fn refresh(self: Pin<&mut Self>);
 
+        /// Set microphone processing (JSON `{nr, gate, comp}`); saved, and
+        /// sent to the daemon off the UI thread.
         #[qinvokable]
-        #[cxx_name = "applyNoiseGate"]
-        fn apply_noise_gate(self: &Self, channel: &QString, enabled: bool, threshold: f32, auto_detect: bool);
+        #[cxx_name = "setMicFx"]
+        fn set_mic_fx(self: Pin<&mut Self>, json: &QString);
 
+        /// The saved microphone processing settings as JSON.
         #[qinvokable]
-        #[cxx_name = "applyCompressor"]
-        fn apply_compressor(self: &Self, channel: &QString, enabled: bool, level: f32);
-
-        #[qinvokable]
-        #[cxx_name = "applyNoiseReduction"]
-        fn apply_noise_reduction(self: &Self, channel: &QString, enabled: bool, intensity: f32);
+        #[cxx_name = "savedMicFx"]
+        fn saved_mic_fx(self: &Self) -> QString;
     }
 
     impl cxx_qt::Threading for EqController {}
@@ -81,10 +81,12 @@ pub struct EqControllerRust {
     last_error: QString,
     unavailable_reason: QString,
     active_channels_json: QString,
-    dsp_available: bool,
+    mic_fx_caps_json: QString,
     /// What the daemon was last told about each channel's on/off state.
     enabled: HashMap<String, bool>,
     outbox: Outbox,
+    /// Mic settings waiting to be sent, and whether a sender is running.
+    mic_pending: Arc<Mutex<(Option<String>, bool)>>,
 }
 
 impl Default for EqControllerRust {
@@ -93,9 +95,10 @@ impl Default for EqControllerRust {
             last_error: QString::default(),
             unavailable_reason: QString::default(),
             active_channels_json: QString::from("[]"),
-            dsp_available: false,
+            mic_fx_caps_json: QString::from("{}"),
             enabled: opengg_core::eq::saved().into_iter().map(|(k, v)| (k, v.enabled)).collect(),
             outbox: Arc::default(),
+            mic_pending: Arc::default(),
         }
     }
 }
@@ -180,16 +183,58 @@ impl qobject::EqController {
                 Err(_) => ("the OpenGG daemon is not running".to_string(), Vec::new()),
             };
             let active = serde_json::to_string(&active).unwrap_or_else(|_| "[]".into());
+            let caps = opengg_core::micfx::status()
+                .ok()
+                .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+                .map(|v| v["caps"].to_string())
+                .unwrap_or_else(|| "{}".into());
             let _ = qt_thread.queue(move |mut c| {
                 c.as_mut().set_unavailable_reason(QString::from(&reason));
                 c.as_mut().set_active_channels_json(QString::from(&active));
+                c.as_mut().set_mic_fx_caps_json(QString::from(&caps));
             });
         });
     }
 
-    pub fn apply_noise_gate(&self, _channel: &QString, _enabled: bool, _threshold: f32, _auto_detect: bool) {}
-    pub fn apply_compressor(&self, _channel: &QString, _enabled: bool, _level: f32) {}
-    pub fn apply_noise_reduction(&self, _channel: &QString, _enabled: bool, _intensity: f32) {}
+    pub fn set_mic_fx(self: Pin<&mut Self>, json: &QString) {
+        let json = json.to_string();
+        opengg_core::micfx::save(&json);
+        let qt_thread = self.qt_thread();
+        let pending = Arc::clone(&self.as_ref().rust().mic_pending);
+        // Latest wins; one sender at a time.
+        let start = {
+            let mut p = pending.lock().unwrap();
+            let idle = p.0.is_none() && !p.1;
+            p.0 = Some(json);
+            if idle {
+                p.1 = true;
+            }
+            idle
+        };
+        if !start {
+            return;
+        }
+        std::thread::spawn(move || loop {
+            let next = {
+                let mut p = pending.lock().unwrap();
+                match p.0.take() {
+                    Some(j) => j,
+                    None => {
+                        p.1 = false;
+                        return;
+                    }
+                }
+            };
+            let res = opengg_core::micfx::apply(&next);
+            let _ = qt_thread.queue(move |mut c| {
+                c.as_mut().set_last_error(QString::from(&res.err().unwrap_or_default()));
+            });
+        });
+    }
+
+    pub fn saved_mic_fx(&self) -> QString {
+        QString::from(&opengg_core::micfx::saved())
+    }
 }
 
 /// (unavailable reason, running channels) from the daemon's GetEq JSON.

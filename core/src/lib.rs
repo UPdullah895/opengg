@@ -23,6 +23,7 @@ pub mod diagnostics;
 pub mod ear_blast;
 pub mod edit;
 pub mod eq;
+pub mod micfx;
 pub mod extensions;
 pub mod foreground;
 pub mod gsr;

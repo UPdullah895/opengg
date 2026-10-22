@@ -184,10 +184,26 @@ fn module_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn config_path(channel: &str) -> PathBuf {
+/// Write `conf` and run it in its own `pipewire -c` process, which dies
+/// with the daemon. Shared by the EQ and the mic chain.
+pub(crate) fn spawn_chain(name: &str, conf: &str) -> Result<Child, String> {
     let dir = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("opengg");
     let _ = std::fs::create_dir_all(&dir);
-    dir.join(format!("eq-{}.conf", channel.to_lowercase()))
+    let path = dir.join(format!("{name}.conf"));
+    std::fs::write(&path, conf).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let mut cmd = Command::new("pipewire");
+    cmd.arg("-c").arg(&path).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // SAFETY: prctl is async-signal-safe; this runs in the forked child
+    // before exec and only asks the kernel to SIGTERM it when the daemon
+    // dies, so a crashed daemon never leaves orphan chains whose node names
+    // collide with the next daemon's.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+    cmd.spawn().map_err(|e| format!("spawn pipewire: {e}"))
 }
 
 struct Running {
@@ -296,21 +312,7 @@ impl EqHost {
     }
 
     fn start(&self, channel: &str, state: &EqState) -> Result<(), String> {
-        let path = config_path(channel);
-        std::fs::write(&path, build_config(channel, state)).map_err(|e| format!("write {}: {e}", path.display()))?;
-        let mut cmd = Command::new("pipewire");
-        cmd.arg("-c").arg(&path).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-        // SAFETY: prctl is async-signal-safe; this runs in the forked child
-        // before exec and only asks the kernel to SIGTERM it when the
-        // daemon dies, so a crashed daemon never leaves orphan chains whose
-        // node names collide with the next daemon's.
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                Ok(())
-            });
-        }
-        let child = cmd.spawn().map_err(|e| format!("spawn pipewire: {e}"))?;
+        let child = spawn_chain(&format!("eq-{}", channel.to_lowercase()), &build_config(channel, state))?;
         tracing::info!("EQ chain for {channel} started (pid {})", child.id());
         self.running.lock().unwrap().insert(channel.to_string(), Running { child });
         Ok(())
@@ -355,21 +357,24 @@ impl Drop for EqHost {
     }
 }
 
-/// Send gains to a running chain. The node can take a moment to appear
-/// after a start, so a miss is retried briefly.
+/// Send gains to a running chain.
 fn push_gains(channel: &str, state: &EqState) -> Result<(), String> {
-    let payload = props_payload(state);
-    let node = input_node(channel);
+    set_params(&input_node(channel), &props_payload(state))
+}
+
+/// `pw-cli set-param <node> Props <payload>`, by node name. A chain just
+/// started takes a moment to appear, so a miss is retried briefly.
+pub(crate) fn set_params(node: &str, payload: &str) -> Result<(), String> {
     let mut last = String::new();
     for _ in 0..10 {
-        match subprocess::command("pw-cli").args(["set-param", &node, "Props", &payload]).output() {
+        match subprocess::command("pw-cli").args(["set-param", node, "Props", payload]).output() {
             Ok(o) if o.status.success() && !String::from_utf8_lossy(&o.stderr).contains("unknown") => return Ok(()),
             Ok(o) => last = String::from_utf8_lossy(&o.stderr).trim().to_string(),
             Err(e) => last = e.to_string(),
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    Err(format!("could not set EQ gains on {node}: {last}"))
+    Err(format!("could not set parameters on {node}: {last}"))
 }
 
 /// `mixer.eq` from ui-settings.json.

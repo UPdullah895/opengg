@@ -30,6 +30,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Notify;
 
 use super::eq::EqHost;
+use super::micfx::MicFxHost;
 use super::routing;
 use super::sinks::{self, SinkManager};
 use crate::subprocess;
@@ -234,6 +235,8 @@ pub struct Prefs {
     pub rules: HashMap<String, String>,
     /// `mixer.eq`: channel → EQ state.
     pub eq: HashMap<String, super::eq::EqState>,
+    /// `mixer.micfx`: microphone processing.
+    pub micfx: Option<super::micfx::MicFx>,
 }
 
 pub fn parse_prefs(json: &str) -> Prefs {
@@ -258,6 +261,7 @@ pub fn parse_prefs(json: &str) -> Prefs {
         devices: strings(&v["mixer"]["devices"], false),
         rules: strings(&v["mixer"]["appRules"], true),
         eq: super::eq::parse_saved(&v["mixer"]["eq"]),
+        micfx: super::micfx::parse_saved(&v["mixer"]["micfx"]),
     }
 }
 
@@ -294,6 +298,7 @@ fn sink_names() -> HashSet<String> {
 struct Ctx {
     mgr: Arc<SinkManager>,
     eq: Arc<EqHost>,
+    micfx: Arc<MicFxHost>,
     state: Mutex<State>,
 }
 
@@ -301,6 +306,7 @@ struct Ctx {
 fn apply(ctx: &Ctx, work: &Work) {
     let prefs = load_prefs();
     ctx.eq.seed(&prefs.eq);
+    ctx.micfx.seed(prefs.micfx.as_ref());
     if work.relink {
         let mut names = sink_names();
         let missing: Vec<&str> = sinks::SINK_CHANNELS
@@ -319,6 +325,7 @@ fn apply(ctx: &Ctx, work: &Work) {
         if ctx.mgr.is_active() {
             let eq_live = live_eq_channels(&ctx.eq);
             relink(&prefs, &names, &eq_live);
+            relink_mic(&ctx.micfx);
         }
     }
     if work.snapshot || work.relink {
@@ -380,7 +387,38 @@ fn relink(prefs: &Prefs, sinks: &HashSet<String>, eq_live: &HashSet<String>) {
             return;
         }
     };
-    let plan = plan_links(&prefs.devices, default.as_deref(), sinks, &links, eq_live);
+    execute(&plan_links(&prefs.devices, default.as_deref(), sinks, &links, eq_live));
+}
+
+/// Route the microphone through its processing chain while one runs.
+fn relink_mic(micfx: &MicFxHost) {
+    let live = match micfx.ensure() {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!("Mic processing could not start: {e}");
+            false
+        }
+    };
+    let ready = |ports: &HashSet<String>| {
+        ports.contains(&format!("{}:input_FL", super::micfx::INPUT_NODE))
+            && ports.contains(&format!("{}:output_FL", super::micfx::OUTPUT_NODE))
+    };
+    let mut ports = all_ports();
+    if live {
+        for _ in 0..20 {
+            if ready(&ports) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            ports = all_ports();
+        }
+    }
+    let Ok(links) = sinks::parse_pw_links() else { return };
+    // A chain whose ports never appeared keeps the dry path.
+    execute(&super::micfx::plan_mic_links(&links, &ports, live && ready(&ports)));
+}
+
+fn execute(plan: &LinkPlan) {
     for (s, d) in &plan.remove {
         let _ = subprocess::command("pw-link").args(["-d", s, d]).output();
         tracing::info!("Reconcile: unlinked {s} → {d}");
@@ -427,9 +465,9 @@ fn apply_rules(rules: &HashMap<String, String>, only: Option<&[u32]>) {
 
 /// Start the reconciler. Runs for the life of the daemon. The returned
 /// handle requests a relink pass (after an EQ change, for instance).
-pub fn spawn(mgr: Arc<SinkManager>, eq: Arc<EqHost>) -> Arc<Notify> {
+pub fn spawn(mgr: Arc<SinkManager>, eq: Arc<EqHost>, micfx: Arc<MicFxHost>) -> Arc<Notify> {
     let kick = Arc::new(Notify::new());
-    let ctx = Arc::new(Ctx { mgr, eq, state: Mutex::new(State::default()) });
+    let ctx = Arc::new(Ctx { mgr, eq, micfx, state: Mutex::new(State::default()) });
 
     // A chain that dies (PipeWire itself restarted, or a crash) produces no
     // pactl event we act on, so look for one directly.
@@ -439,7 +477,10 @@ pub fn spawn(mgr: Arc<SinkManager>, eq: Arc<EqHost>) -> Arc<Notify> {
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 let c = Arc::clone(&ctx);
-                if tokio::task::spawn_blocking(move || c.eq.needs_attention()).await.unwrap_or(false) {
+                if tokio::task::spawn_blocking(move || c.eq.needs_attention() || c.micfx.needs_attention())
+                    .await
+                    .unwrap_or(false)
+                {
                     kick.notify_one();
                 }
             }

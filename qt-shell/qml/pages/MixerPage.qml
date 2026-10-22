@@ -723,7 +723,6 @@ Rectangle {
                     visible: page.activeTab === "chat"
                     spacing: 24
                     GraphicEQ { Layout.fillWidth: true; channel: "Chat"; accentColor: page.channelColors.Chat }
-                    DspControls { Layout.fillWidth: true; channel: "Chat"; accentColor: page.channelColors.Chat }
                 }
                 DspControls {
                     Layout.fillWidth: true

@@ -107,6 +107,66 @@ pub fn write_atomic(path: &std::path::Path, contents: &str) -> Result<(), String
     res.map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Set `mixer.<path...>` to `value` in ui-settings.json soon, off the
+/// caller's thread. Calls within half a second are coalesced into one
+/// read-modify-write, so a slider drag doesn't rewrite (and fsync) the file
+/// at slider rate. Used for the EQ and mic processing state.
+pub fn save_mixer_later(path: &[&str], value: Value) {
+    use std::sync::{Mutex, OnceLock};
+    type Pending = Mutex<(Vec<(Vec<String>, Value)>, bool)>;
+    static PENDING: OnceLock<Pending> = OnceLock::new();
+    let pending = PENDING.get_or_init(|| Mutex::new((Vec::new(), false)));
+
+    let mut p = pending.lock().unwrap();
+    let key: Vec<String> = path.iter().map(|s| s.to_string()).collect();
+    p.0.retain(|(k, _)| *k != key);
+    p.0.push((key, value));
+    if p.1 {
+        return;
+    }
+    p.1 = true;
+    drop(p);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let batch = {
+            let mut p = pending.lock().unwrap();
+            p.1 = false;
+            std::mem::take(&mut p.0)
+        };
+        let res = load_ui_settings().and_then(|raw| {
+            let mut v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+            for (k, val) in batch {
+                set_mixer_path(&mut v, &k, val);
+            }
+            save_ui_settings(&serde_json::to_string(&v).map_err(|e| e.to_string())?)
+        });
+        if let Err(e) = res {
+            log::warn!("Saving mixer settings failed: {e}");
+        }
+    });
+}
+
+/// `v.mixer.<path...> = value`, creating objects on the way.
+pub fn set_mixer_path(v: &mut Value, path: &[String], value: Value) {
+    if !v.is_object() {
+        *v = json!({});
+    }
+    let mut cur = &mut v["mixer"];
+    if !cur.is_object() {
+        *cur = json!({});
+    }
+    for (i, k) in path.iter().enumerate() {
+        if i + 1 == path.len() {
+            cur[k.as_str()] = value;
+            return;
+        }
+        if !cur[k.as_str()].is_object() {
+            cur[k.as_str()] = json!({});
+        }
+        cur = &mut cur[k.as_str()];
+    }
+}
+
 /// Read a JSON file, or `"null"` when absent; an unparseable file is
 /// backed up to `<stem>.bad.json` and reported as absent (see
 /// [`load_ui_settings`]).
@@ -484,6 +544,20 @@ fn index_of_id(defs: &[Value], id: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mixer_paths_are_created_and_siblings_kept() {
+        let mut v = serde_json::json!({"settings": {"a": 1}, "mixer": {"appRules": {"vlc": "Media"}}});
+        super::set_mixer_path(&mut v, &["eq".into(), "Game".into()], serde_json::json!({"enabled": true}));
+        super::set_mixer_path(&mut v, &["micfx".into()], serde_json::json!({"nr": {}}));
+        assert_eq!(v["settings"]["a"], 1);
+        assert_eq!(v["mixer"]["appRules"]["vlc"], "Media");
+        assert_eq!(v["mixer"]["eq"]["Game"]["enabled"], true);
+        assert!(v["mixer"]["micfx"]["nr"].is_object());
+        let mut n = serde_json::Value::Null;
+        super::set_mixer_path(&mut n, &["eq".into(), "Chat".into()], serde_json::json!(1));
+        assert_eq!(n["mixer"]["eq"]["Chat"], 1);
+    }
+
 
     fn tmpdir(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("opengg-settings-{tag}-{}", std::process::id()));

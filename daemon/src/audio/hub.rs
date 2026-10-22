@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::eq::{EqHost, EqState};
+use super::micfx::{MicFx, MicFxHost};
 use super::routing;
 use super::sinks::{ChannelInfo, SinkManager};
 use crate::config::AudioConfig;
@@ -13,6 +14,7 @@ pub struct AudioHub {
     sink_mgr: Arc<SinkManager>,
     streams: Arc<RwLock<Vec<routing::StreamInfo>>>,
     eq: Arc<EqHost>,
+    micfx: Arc<MicFxHost>,
     /// Asks the reconciler for a relink pass.
     reconcile: Arc<tokio::sync::Notify>,
 }
@@ -34,13 +36,15 @@ impl AudioHub {
         let _ = &config.default_volumes;
 
         let eq = Arc::new(EqHost::default());
+        let micfx = Arc::new(MicFxHost::default());
         // Keeps sinks, links, EQ chains and app rules right as devices come
         // and go and the sound server restarts.
-        let reconcile = super::reconcile::spawn(Arc::clone(&sink_mgr), Arc::clone(&eq));
+        let reconcile = super::reconcile::spawn(Arc::clone(&sink_mgr), Arc::clone(&eq), Arc::clone(&micfx));
         let hub = Self {
             sink_mgr,
             streams: Arc::new(RwLock::new(Vec::new())),
             eq,
+            micfx,
             reconcile,
         };
         hub.start_stream_watcher();
@@ -84,6 +88,20 @@ impl AudioHub {
         blocking(move || eq.set(&channel, &state).map_err(anyhow::Error::msg)).await?;
         self.reconcile.notify_one();
         Ok(())
+    }
+
+    /// Set microphone processing (JSON `MicFx`), then relink the mic.
+    pub async fn set_micfx(&self, json: &str) -> Result<()> {
+        let fx: MicFx = serde_json::from_str(json)?;
+        let host = Arc::clone(&self.micfx);
+        blocking(move || host.set(&fx).map_err(anyhow::Error::msg)).await?;
+        self.reconcile.notify_one();
+        Ok(())
+    }
+
+    pub async fn micfx_status(&self) -> String {
+        let host = Arc::clone(&self.micfx);
+        blocking(move || Ok(host.status_json())).await.unwrap_or_else(|_| "{}".into())
     }
 
     /// Ask for a relink pass (after the UI saved a device choice).

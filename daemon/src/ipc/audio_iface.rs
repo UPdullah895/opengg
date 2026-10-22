@@ -83,6 +83,17 @@ impl AudioInterface {
         self.hub.eq_status().await
     }
 
+    /// Set microphone processing:
+    /// `{"nr": {enabled, intensity}, "gate": {enabled, threshold}, "comp": {enabled, level}}`.
+    async fn set_mic_fx(&self, json: &str) -> zbus::fdo::Result<()> {
+        self.hub.set_micfx(json).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// `{"caps": {nr, gate, comp}, "state": {...}, "running": bool}`
+    async fn get_mic_fx(&self) -> String {
+        self.hub.micfx_status().await
+    }
+
     /// Re-link channels from the saved settings (`mixer.devices`, EQ) now.
     async fn reconcile(&self) {
         self.hub.request_reconcile();
