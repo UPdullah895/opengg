@@ -447,21 +447,62 @@ Virtual audio sinks are created via `pactl load-module module-null-sink`. App ro
 
 **Why**: Restarting PipeWire disconnects all existing audio clients and loses all user routing decisions. Users expect their mixer state to persist across daemon/app restarts.
 
-### 2. Streamer Mode Owns the Personal Path
+### 2. The Daemon Owns the Live Graph
 
-While Streamer Mode is on (`daemon/src/audio/streamer.rs`), each output
-channel's monitor is **pre-fader**. The headset hears a daemon-owned loopback,
-`OpenGG_Personal_<ch>`, instead of the classic `pw-link`. So:
+`daemon/src/audio/reconcile.rs` listens to `pactl subscribe` and keeps the
+graph as intended. It:
 
-- **Never `pw-link` `OpenGG_<ch>:monitor_*` to a device yourself.** It would
-  play an unfaded copy of the channel on top of the Personal mix. Use
-  `core::audio::set_channel_device`, which routes through the daemon
-  (`SetPersonalDevice`) while Streamer Mode is on.
-- **The sink volume is still the Personal fader.** The daemon mirrors it onto
-  the loopback, so anything that sets sink volume (the mixer, Ear Blast,
-  hydrate) keeps working.
-- **Every way out restores the classic graph** (off, SIGTERM, `Drop`), and the
-  next start cleans up after a SIGKILL. Keep it that way.
+- recreates missing OpenGG sinks (unless the user removed virtual audio);
+- routes new streams by `mixer.appRules`;
+- puts every output channel (Game/Chat/Media/Aux) on exactly one Personal
+  (headset) path, chosen per channel by `path_modes`, to `mixer.devices[ch]`
+  while that device exists and otherwise to the default output.
+
+| PathMode | When | Monitor | Personal path | Fader |
+|---|---|---|---|---|
+| `Direct` | no FX chain, Streamer Mode off | post-fader | `monitor → device` (`pw-link`) | the sink |
+| `Chain` | EQ or Smart Volume on | pre-fader | `monitor → FX chain → device` | `fader*:Mult` inside the chain |
+| `Loopback` | Streamer Mode on, no chain | pre-fader | `OpenGG_Personal_<ch>` loopback | the loopback's volume |
+
+The sink volume stays the one Personal fader in every mode: `sync_faders`
+mirrors it to the chain or loopback, on mixer calls and on each sink-change
+event. So the mixer, Ear Blast, hydrate and pavucontrol keep working. Streamer
+Mode (`audio/streamer.rs`) owns only the Stream side: the `OpenGG_Stream` bus,
+its `OpenGG_Stream_Mix` source and the per-channel feeds. Those take the clean,
+pre-FX monitor.
+
+The FX chain (`audio/eq.rs`: preamp → 10-band EQ → optional Smart Volume
+(swh SC4) → fader, explicit stereo) and mic processing (`audio/micfx.rs`) are
+`pipewire -c` filter-chains the daemon hosts with `node.autoconnect = false`;
+the reconciler links them in. The UI only sends state over D-Bus (`SetEq`,
+`SetSmartVolume`, `SetMicFx`, `SetStreamerMode`, `Reconcile`) and saves it
+under `mixer.*`.
+
+**Rule**: Don't add one-shot "fix the graph at startup" code, and never
+`pw-link` from the UI process. A direct link from a channel monitor is worse
+than a duplicate: in `Chain`/`Loopback` mode the monitor is pre-fader, so it
+plays an unfaded copy. Device choices go through
+`core::audio::set_channel_device` (`mixer.devices` + `Reconcile`). Put the
+intent in the reconciler's pure planners (`path_modes`, `plan_links`,
+`plan_mic_links`, `rule_target`, `plan_work`) and test it there. Never link a
+monitor into an OpenGG sink: that is a feedback loop.
+
+**Rule**: A pass switches paths in the order *build new loopback muted →
+remove links → flip pre/post-fader → add links → open the level*. A switch
+then costs a few ms of silence, never an unfaded burst. Keep that order.
+
+**Rule**: Every way out restores the classic graph (Streamer Mode off,
+SIGTERM, `Drop`), and the next start cleans up after a SIGKILL.
+
+**Rule**: Spawn helpers through `subprocess::command` in the daemon. It pins
+`LC_ALL=C` (pactl's text output is translated) and kills the command's process
+group after a timeout. Prefer `pactl -f json` to parsing the text form.
+
+**Landmine**: `pw-cli set-param … Props '{ params = [ … ] }'` builds the
+object in a ~1 KiB buffer. Past that it sends an **empty** object and still
+exits 0, so the change silently does nothing. Keep each payload small (see
+`eq::props_payloads`, which splits per side and stage); `eq::set_params`
+treats `Object: size 8,` as a failure.
 
 ### 3. Daemon Binary Can Be Stale
 
@@ -510,29 +551,6 @@ Some settings are stored at the **top level** of `~/.config/opengg/ui-settings.j
 ```
 
 **Rule**: Before wiring any new top-level data through `SettingsController.setValue()`, inspect the **live file** and the daemon's settings loader to understand the schema. Mutations to `"settings"` go through the normal debounced save; top-level siblings may require different serialization logic.
-
-### 5. The Daemon Owns the Live Graph
-
-`daemon/src/audio/reconcile.rs` listens to `pactl subscribe` and keeps the
-graph as intended: it recreates missing OpenGG sinks (unless the user removed
-virtual audio), links each output channel's monitor to `mixer.devices[ch]`
-while that device exists and otherwise to the default output, and routes new
-streams by `mixer.appRules`.
-
-The EQ (`audio/eq.rs`) and mic processing (`audio/micfx.rs`) are
-`pipewire -c` filter-chains the daemon hosts with `node.autoconnect = false`;
-the reconciler links them into the path (`monitor → EQ → device`,
-`mic loopback → chain → OpenGG_Mic`). The UI only sends state over D-Bus
-(`SetEq`, `SetMicFx`, `Reconcile`) and saves it under `mixer.*`.
-
-**Rule**: Don't add one-shot "fix the graph at startup" code, and never
-`pw-link` from the UI process. Put the intent in the reconciler's pure
-planners (`plan_links`, `plan_mic_links`, `rule_target`, `plan_work`) and test
-it there. Never link a monitor into an OpenGG sink — that is a feedback loop.
-
-**Rule**: Spawn helpers through `subprocess::command` in the daemon. It pins
-`LC_ALL=C` (pactl's text output is translated) and kills the command's process
-group after a timeout. Prefer `pactl -f json` to parsing the text form.
 
 ### 6. Testing Audio Changes Against Real PipeWire
 

@@ -1036,6 +1036,15 @@
     "preamp": "Preamp",
     "unavailable": "Equaliser unavailable:"
   },
+  "smartVolume": {
+    "title": "Smart Volume",
+    "hint": "Evens out loud and quiet moments on this channel before your fader, so callouts and quiet dialogue stay audible without blasts. Applies to what you hear, not to the Stream mix.",
+    "off": "Off",
+    "light": "Light",
+    "medium": "Medium",
+    "strong": "Strong",
+    "unavailable": "Smart Volume unavailable:"
+  },
   "chatMix": {
     "title": "ChatMix",
     "game": "Game",
@@ -1057,6 +1066,15 @@
       "media": "Media",
       "aux": "Aux",
       "mic": "Mic"
+    },
+    "streamer": {
+      "personal": "Personal",
+      "stream": "Stream",
+      "on": "Streamer Mode ON — separate Stream mix for OBS",
+      "off": "Enable Streamer Mode (separate Stream mix for OBS)",
+      "error": "Streamer Mode:",
+      "streamMix": "Stream mix",
+      "obsHint": "<b>Stream mix</b> — in OBS, add an <i>Audio Input Capture</i> and pick <b>OpenGG Stream Mix</b>. These faders only change what your viewers hear; your headset keeps the Personal mix."
     }
   },
   "videoPlayer": {

@@ -58,9 +58,9 @@ GG is an Electron shell over three engines: **Engine** (device config and RGB),
 | Cloud share links | ❌ | Out of scope on purpose (no first-party service; see §3) |
 | 5 virtual channels + app routing | ✅ null-sinks + `move-sink-input`, persisted | — |
 | Per-channel EQ, ChatMix | ✅ 10-band EQ, ChatMix | — |
-| Mic noise suppression / gate / compressor | ⚠️ `effects.rs` scaffolding (rnnoise / LSP URIs) not wired to the UI | Phase 3 |
+| Mic noise suppression / gate / compressor | ✅ (from #62, merged here) | Phase 3, implemented |
 | **Streamer Mode (dual mix)** | ✅ (was ❌ in v0.2.1) | **Phase 2, implemented** |
-| Smart Volume (loudness) | ❌ | Phase 3 (an LSP loudness compressor in the same filter chain) |
+| Smart Volume (loudness) | ✅ | Phase 3, implemented (swh SC4 in the per-channel FX chain) |
 | Spatial audio | ❌ | Phase 3, optional (needs an HRTF convolver such as `filter-chain` with a SOFA file) |
 
 ---
@@ -175,7 +175,8 @@ OpenGG_Stream.monitor → remap source OpenGG_Stream_Mix ("OpenGG Stream Mix", f
 - **Stream "Master" is the `OpenGG_Stream` sink volume:** the level of the whole
   mix OBS receives.
 - **D-Bus (`org.opengg.Daemon.Audio`):** `GetStreamerState`,
-  `SetStreamerMode`, `SetStreamVolume`, `SetStreamMute`, `SetPersonalDevice`.
+  `SetStreamerMode`, `SetStreamVolume`, `SetStreamMute`. (`SetPersonalDevice`
+  went away in Phase 3, when the reconciler took over every Personal path.)
 - **`core::audio`:** `set_channel_device`, `current_channel_device` and
   `hydrate_audio_routing` go through the daemon while Streamer Mode is on. A
   direct `pw-link` from the now pre-fader monitor would add an unfaded copy of
@@ -202,18 +203,43 @@ Device changes in Streamer Mode leave no pre-fader leak. Off, SIGTERM, and
 SIGKILL followed by a restart all leave a clean graph (11 modules on, 0 off).
 Not verified on real hardware or with OBS itself.
 
-### Phase 3: Mic and output processing
+### Phase 3: Mic and output processing ✅
 
-> **Update:** open PR #62 already implements the mic half of this phase:
-> RNNoise noise suppression, gate and compressor in a daemon-owned
-> filter-chain, persisted in `mixer.micfx`. Build Smart Volume on that chain
-> instead of the `effects.rs` scaffolding described below.
+**Merged #62 rather than rebuilding it.** #62 already had mic processing
+(RNNoise, gate, compressor) and a daemon-hosted EQ, linked in by a reconciler
+that owns the live graph. It also conflicted with Phase 2 by design: its
+reconciler re-links every channel's monitor straight to the device, which in
+Streamer Mode (pre-fader monitor) plays an unfaded copy into the headset. So
+#62 was merged into this branch and the two were made one design:
 
-Wire the existing `effects.rs` `FilterGraph` to real PipeWire `filter-chain`
-modules: rnnoise noise suppression, an LSP gate and compressor on Mic, and an
-LSP loudness compressor as "Smart Volume" on Media and Chat. Each is a toggle
-in the channel's DSP flyout, and each degrades to hidden when the plugin is
-not installed.
+- **One owner per path.** The reconciler picks a `PathMode` per output
+  channel: `Direct` (classic), `Chain` (an FX chain is live) or `Loopback`
+  (Streamer Mode without a chain). It builds that path, with the
+  silence-not-burst switch order from Phase 2. Streamer Mode now owns only
+  the Stream side.
+- **One FX chain per channel.** #62's EQ chain grew into an explicit stereo
+  graph: `pre → 10 bands → [Smart Volume] → fader`. The fader is the Personal
+  volume (the sink's, mirrored), because Smart Volume has to see the signal
+  *before* the user's fader. A compressor after the fader would compress away
+  part of every fader move, so the slider would feel dead above the threshold.
+- **Smart Volume** is swh's SC4, stereo-linked so it never pumps one side of
+  the image. It is an RMS compressor with makeup gain, in four steps:
+
+  | Level | Threshold | Ratio | Makeup | Spread, loud vs quiet tone (measured) |
+  |---|---|---|---|---|
+  | Off | — | — | — | 28.9 dB |
+  | Light | −18 dB | 2.5:1 | +4 dB | 22.3 dB |
+  | Medium | −24 dB | 4:1 | +8 dB | 16.1 dB |
+  | Strong | −30 dB (SC4's floor) | 8:1 | +13 dB | 8.9 dB |
+
+  Loud content comes down (−7.2 → −14.3 dB) and quiet content comes up
+  (−36.1 → −23.2 dB). It is per channel (Game/Chat/Media/Aux), applies to the
+  Personal mix only (the Stream mix stays clean), persists as
+  `mixer.smartVolume`, and reports "install swh-plugins" when the plugin is
+  missing.
+- **Spatial audio stays out of scope.** It needs an HRTF dataset (SOFA) that
+  OpenGG would have to ship or ask for, and the FX chain is where it would go
+  when that is decided.
 
 ### Phase 4: Auto-clip
 

@@ -152,7 +152,7 @@ Rectangle {
     }
     // One fixed entry so the strip's device row keeps its place (and says
     // where this fader goes) instead of collapsing in the Stream view.
-    readonly property var streamDevices: [{ value: "OpenGG_Stream", label: "Stream mix" }]
+    readonly property var streamDevices: [{ value: "OpenGG_Stream", label: (I18n.language, I18n.t("mixer.streamer.streamMix")) }]
 
     readonly property var channelColors: ({
         Master: "#94A3B8", Game: "#E94560", Chat: "#3B82F6",
@@ -363,12 +363,12 @@ Rectangle {
                 visible: page.activeTab === "mixer" && page.streamerOn
                 spacing: 6
                 ChoiceChip {
-                    text: "PERSONAL"
+                    text: (I18n.language, I18n.t("mixer.streamer.personal")).toUpperCase()
                     selected: page.mixView === "personal"
                     onTriggered: page.mixView = "personal"
                 }
                 ChoiceChip {
-                    text: "STREAM"
+                    text: (I18n.language, I18n.t("mixer.streamer.stream")).toUpperCase()
                     selected: page.mixView === "stream"
                     onTriggered: page.mixView = "stream"
                 }
@@ -412,8 +412,8 @@ Rectangle {
                 Tip {
                     visible: streamerArea.containsMouse
                     text: page.streamerOn
-                        ? "Streamer Mode ON — separate Stream mix for OBS"
-                        : "Enable Streamer Mode (separate Stream mix for OBS)"
+                        ? (I18n.language, I18n.t("mixer.streamer.on"))
+                        : (I18n.language, I18n.t("mixer.streamer.off"))
                     delay: 300
                 }
             }
@@ -653,10 +653,8 @@ Rectangle {
                     font.pixelSize: 12
                     textFormat: Text.StyledText
                     text: AudioController.streamerError.length > 0
-                        ? "Streamer Mode: " + AudioController.streamerError
-                        : "<b>Stream mix</b> — in OBS, add an <i>Audio Input Capture</i> and pick "
-                          + "<b>OpenGG Stream Mix</b>. These faders only change what your viewers hear; "
-                          + "your headset keeps the Personal mix."
+                        ? (I18n.language, I18n.t("mixer.streamer.error")) + " " + AudioController.streamerError
+                        : (I18n.language, I18n.t("mixer.streamer.obsHint"))
                 }
             }
         }
@@ -862,6 +860,14 @@ Rectangle {
                     visible: page.activeTab === "chat"
                     spacing: 24
                     GraphicEQ { Layout.fillWidth: true; channel: "Chat"; accentColor: page.channelColors.Chat }
+                }
+                // One card for whichever output channel's tab is showing;
+                // its state lives in the daemon, so nothing per tab to keep.
+                SmartVolumeCard {
+                    readonly property string tabChannel: page.activeTab.charAt(0).toUpperCase() + page.activeTab.slice(1)
+                    visible: ["game", "chat", "media", "aux"].indexOf(page.activeTab) >= 0
+                    channel: tabChannel
+                    accentColor: page.channelColors[tabChannel] || Theme.accent
                 }
                 DspControls {
                     Layout.fillWidth: true

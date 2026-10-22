@@ -74,6 +74,7 @@ fn main() {
         QmlFile::from("qml/components/WheelScroller.qml"),
         QmlFile::from("qml/components/GraphicEQ.qml"),
         QmlFile::from("qml/components/DspControls.qml"),
+        QmlFile::from("qml/components/SmartVolumeCard.qml"),
         QmlFile::from("qml/components/GlobalHotkeys.qml"),
     ];
 

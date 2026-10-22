@@ -63,6 +63,44 @@ fn parse_saved(v: &serde_json::Value) -> HashMap<String, EqState> {
         .unwrap_or_default()
 }
 
+/// Smart Volume levels, as the daemon and `mixer.smartVolume` spell them.
+pub const SMART_LEVELS: [&str; 4] = ["off", "light", "medium", "strong"];
+
+/// Set `channel`'s Smart Volume in the daemon (runs it through the channel's
+/// FX chain; see `daemon/src/audio/eq.rs`). Errors carry the daemon's
+/// reason, e.g. swh-plugins missing.
+pub fn apply_smart(channel: &str, level: &str) -> Result<(), String> {
+    if !SMART_LEVELS.contains(&level) {
+        return Err(format!("unknown Smart Volume level {level:?}"));
+    }
+    call_dbus_void("SetSmartVolume", AU_PATH, AU_IFACE, (channel, level))
+}
+
+/// Saved Smart Volume level per channel, from `mixer.smartVolume`.
+pub fn saved_smart() -> HashMap<String, String> {
+    let raw = crate::settings::load_ui_settings().unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    parse_saved_smart(&v["mixer"]["smartVolume"])
+}
+
+fn parse_saved_smart(v: &serde_json::Value) -> HashMap<String, String> {
+    v.as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| {
+                    let l = v.as_str()?;
+                    SMART_LEVELS.contains(&l).then(|| (k.clone(), l.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Remember `channel`'s Smart Volume level (`mixer.smartVolume.<channel>`).
+pub fn save_smart(channel: &str, level: &str) {
+    crate::settings::save_mixer_later(&["smartVolume", channel], serde_json::json!(level));
+}
+
 /// Remember `state` for `channel` (`mixer.eq.<channel>`). Coalesced and
 /// off-thread, so slider drags can call it freely.
 pub fn save(channel: &str, state: &EqState) {
@@ -72,6 +110,14 @@ pub fn save(channel: &str, state: &EqState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_smart_keeps_only_known_levels() {
+        let m = parse_saved_smart(&serde_json::json!({"Media": "strong", "Chat": "loud", "Aux": 2}));
+        assert_eq!(m.len(), 1);
+        assert_eq!(m["Media"], "strong");
+        assert!(apply_smart("Media", "loud").is_err());
+    }
 
     #[test]
     fn partial_saved_state_fills_defaults() {

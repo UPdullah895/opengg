@@ -184,4 +184,4 @@ Ordered by risk removed per unit of work. Phase 1 is safety and honesty, Phase 2
 - Battery notices.
 - Accessibility pass.
 
-**Later:** the zbus 6 migration. The `deny.toml` ignores for the zbus helper crates are marked for removal when it lands.
+**Done:** the zbus 6 migration (PR #64). The `deny.toml` ignores for the zbus helper crates are gone.

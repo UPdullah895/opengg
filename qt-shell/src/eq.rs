@@ -34,7 +34,21 @@ pub mod qobject {
         /// `{"nr", "gate", "comp"}` booleans: which mic processing stages
         /// this system can run.
         #[qproperty(QString, mic_fx_caps_json, cxx_name = "micFxCapsJson")]
+        /// Smart Volume level per output channel (`{"Media": "medium", …}`;
+        /// "off" for the rest): the daemon's, else the saved one.
+        #[qproperty(QString, smart_json, cxx_name = "smartJson")]
+        /// Empty when this system can run Smart Volume (swh-plugins
+        /// present), else why it cannot.
+        #[qproperty(QString, smart_unavailable_reason, cxx_name = "smartUnavailableReason")]
         type EqController = super::EqControllerRust;
+
+        /// Set a channel's Smart Volume ("off", "light", "medium",
+        /// "strong"). Waits for the daemon so the control shows what really
+        /// happened; returns false (and sets `lastError`) on failure.
+        /// Always remembers the choice.
+        #[qinvokable]
+        #[cxx_name = "setSmartVolume"]
+        fn set_smart_volume(self: Pin<&mut Self>, channel: &QString, level: &QString) -> bool;
 
         /// Set a channel's EQ. Returns false (and sets `lastError`) if
         /// turning it on failed. Always remembers the state.
@@ -82,6 +96,8 @@ pub struct EqControllerRust {
     unavailable_reason: QString,
     active_channels_json: QString,
     mic_fx_caps_json: QString,
+    smart_json: QString,
+    smart_unavailable_reason: QString,
     /// What the daemon was last told about each channel's on/off state.
     enabled: HashMap<String, bool>,
     outbox: Outbox,
@@ -96,6 +112,10 @@ impl Default for EqControllerRust {
             unavailable_reason: QString::default(),
             active_channels_json: QString::from("[]"),
             mic_fx_caps_json: QString::from("{}"),
+            smart_json: QString::from(
+                &serde_json::to_string(&opengg_core::eq::saved_smart()).unwrap_or_else(|_| "{}".into()),
+            ),
+            smart_unavailable_reason: QString::default(),
             enabled: opengg_core::eq::saved().into_iter().map(|(k, v)| (k, v.enabled)).collect(),
             outbox: Arc::default(),
             mic_pending: Arc::default(),
@@ -170,6 +190,17 @@ impl qobject::EqController {
         });
     }
 
+    pub fn set_smart_volume(mut self: Pin<&mut Self>, channel: &QString, level: &QString) -> bool {
+        let (channel, level) = (channel.to_string(), level.to_string());
+        let res = opengg_core::eq::apply_smart(&channel, &level);
+        // Remember what is actually in effect: the choice when it applied,
+        // "off" when it could not.
+        opengg_core::eq::save_smart(&channel, if res.is_ok() { &level } else { "off" });
+        self.as_mut().set_last_error(QString::from(&res.clone().err().unwrap_or_default()));
+        self.as_mut().refresh();
+        res.is_ok()
+    }
+
     pub fn saved_state(&self, channel: &QString) -> QString {
         let st = opengg_core::eq::saved().remove(&channel.to_string()).unwrap_or_default();
         QString::from(&serde_json::to_string(&st).unwrap_or_else(|_| "{}".into()))
@@ -178,9 +209,17 @@ impl qobject::EqController {
     pub fn refresh(self: Pin<&mut Self>) {
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
-            let (reason, active) = match opengg_core::eq::status() {
-                Ok(json) => parse_status(&json),
+            let status = opengg_core::eq::status();
+            let (reason, active) = match &status {
+                Ok(json) => parse_status(json),
                 Err(_) => ("the OpenGG daemon is not running".to_string(), Vec::new()),
+            };
+            let (smart_reason, smart) = match &status {
+                Ok(json) => parse_smart(json),
+                Err(_) => (
+                    "the OpenGG daemon is not running".to_string(),
+                    serde_json::to_string(&opengg_core::eq::saved_smart()).unwrap_or_else(|_| "{}".into()),
+                ),
             };
             let active = serde_json::to_string(&active).unwrap_or_else(|_| "[]".into());
             let caps = opengg_core::micfx::status()
@@ -192,6 +231,8 @@ impl qobject::EqController {
                 c.as_mut().set_unavailable_reason(QString::from(&reason));
                 c.as_mut().set_active_channels_json(QString::from(&active));
                 c.as_mut().set_mic_fx_caps_json(QString::from(&caps));
+                c.as_mut().set_smart_unavailable_reason(QString::from(&smart_reason));
+                c.as_mut().set_smart_json(QString::from(&smart));
             });
         });
     }
@@ -258,9 +299,41 @@ fn parse_status(json: &str) -> (String, Vec<String>) {
     (reason, active)
 }
 
+/// (Smart Volume unavailable reason, `{channel: level}` JSON) from GetEq.
+fn parse_smart(json: &str) -> (String, String) {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+    let reason = if v["smartAvailable"].as_bool().unwrap_or(false) {
+        String::new()
+    } else {
+        v["smartReason"].as_str().unwrap_or("unavailable").to_string()
+    };
+    let levels: serde_json::Map<String, serde_json::Value> = v["channels"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .map(|(k, s)| (k.clone(), serde_json::json!(s["smart"].as_str().unwrap_or("off"))))
+                .collect()
+        })
+        .unwrap_or_default();
+    (reason, serde_json::Value::Object(levels).to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_status;
+    use super::{parse_smart, parse_status};
+
+    #[test]
+    fn smart_parsing() {
+        let (r, l) = parse_smart(
+            r#"{"smartAvailable":true,"smartReason":"","channels":{"Media":{"smart":"medium"},"Game":{}}}"#,
+        );
+        assert_eq!(r, "");
+        let l: serde_json::Value = serde_json::from_str(&l).unwrap();
+        assert_eq!(l["Media"], "medium");
+        assert_eq!(l["Game"], "off");
+        let (r, _) = parse_smart(r#"{"smartAvailable":false,"smartReason":"install swh-plugins"}"#);
+        assert_eq!(r, "install swh-plugins");
+    }
 
     #[test]
     fn status_parsing() {
