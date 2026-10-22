@@ -43,6 +43,10 @@ QtObject {
     }
 
     function dispatch(action) {
+        // The Shortcuts panel is recording a key: the press is the user
+        // typing a combination, not asking for the action.
+        if (HotkeyController.suppressed)
+            return
         switch (action) {
         case "saveReplay":
             // Already notifies on the desktop, which matters here: the window

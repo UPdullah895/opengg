@@ -12,6 +12,11 @@ ColumnLayout {
 
     property var s: JSON.parse(SettingsController.settingsJson || "{}")
     property string recordingKey: ""
+    // Silence global actions while a key is being recorded, and never leave
+    // them silenced: recording ends on a combo, Esc, or the panel going away.
+    onRecordingKeyChanged: HotkeyController.suppressed = root.recordingKey !== ""
+    onVisibleChanged: if (!visible) root.cancelRecord()
+    Component.onDestruction: HotkeyController.suppressed = false
 
     Connections {
         target: SettingsController
@@ -35,20 +40,19 @@ ColumnLayout {
     /// nothing. Flagged rather than hidden: the settings are real, the
     /// wiring is not.
     ///
-    /// `saveReplay` and `toggleRecording` left this list once the daemon's
-    /// evdev listener became real (daemon/src/replay/hotkey.rs) and
-    /// `GlobalHotkeys.qml` started acting on its signals. `screenshot` is
-    /// carried end to end but still has nothing to run — no part of this
-    /// project takes a desktop screenshot. The rest are editor-local
-    /// shortcuts with no dispatcher.
+    /// `saveReplay`, `toggleRecording` and `screenshot` left this list once
+    /// the daemon's evdev listener became real (daemon/src/replay/hotkey.rs)
+    /// and `GlobalHotkeys.qml` started acting on its signals (`screenshot`
+    /// runs core::desktop_shot). The rest are editor-local shortcuts with no
+    /// dispatcher.
     readonly property var inactive: [
-        "screenshot", "toggleEarBlast",
+        "toggleEarBlast",
         "splitClip", "exportClip", "toggleMic", "undo", "redo",
     ]
 
     /// The daemon's global listener, for the two bindings that depend on it.
     readonly property bool globalActive: HotkeyController.active
-    readonly property var global: ["saveReplay", "toggleRecording"]
+    readonly property var global: ["saveReplay", "toggleRecording", "screenshot"]
 
     readonly property var actions: [
         "saveReplay", "toggleRecording", "screenshot", "toggleEarBlast",
