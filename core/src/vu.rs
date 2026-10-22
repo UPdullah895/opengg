@@ -108,8 +108,8 @@ fn run_reader(
                     continue;
                 }
                 let mut sum_sq = 0.0f32;
-                for chunk in buf[..whole].chunks_exact(4) {
-                    let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                for chunk in buf[..whole].as_chunks::<4>().0 {
+                    let sample = f32::from_le_bytes(*chunk);
                     sum_sq += sample * sample;
                 }
                 let rms = (sum_sq / (whole / 4) as f32).sqrt().min(1.0);

@@ -1025,7 +1025,8 @@
     "autoDetect": "Auto-detect threshold",
     "compressor": "Compressor",
     "compressorDesc": "Evens out loud and quiet parts of the signal",
-    "level": "Level"
+    "level": "Level",
+    "unavailable": "Noise reduction, noise gate and compressor are not available yet — OpenGG has no audio engine for them, so these controls are disabled instead of pretending to work."
   },
   "eq": {
     "title": "Graphic EQ",

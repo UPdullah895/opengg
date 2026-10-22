@@ -3,12 +3,11 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import com.opengg.app
 
-// Per-channel Noise Reduction / Noise Gate / Compressor controls. QML port
-// of DspControls.vue. All three EqController.applyX() calls are genuine
-// no-ops on the Rust side (matching the Tauri host's own apply_noise_gate/
-// apply_compressor/apply_noise_reduction, which are also no-ops today —
-// see the header comment in qt-shell/src/eq.rs) — this ships the same
-// inert-but-present UI as the shipping app, not a stub ahead of it.
+// Per-channel Noise Reduction / Noise Gate / Compressor controls.
+// There is no engine behind these yet: the EqController.applyX() calls are
+// no-ops (see qt-shell/src/eq.rs). Until one exists the cards are shown
+// disabled under a notice saying so, keyed off EqController.dspAvailable,
+// rather than offering switches that change nothing.
 ColumnLayout {
     id: root
     spacing: 16
@@ -24,6 +23,7 @@ ColumnLayout {
     property bool compEnabled: false
     property real compLevel: 50
     property string activePreset: "Default"
+    readonly property bool live: EqController.dspAvailable
 
     readonly property var presets: ({
         "Default":   { nr: { enabled: false, intensity: 50 }, gate: { enabled: false, threshold: -40, auto: false }, comp: { enabled: false, level: 50 } },
@@ -88,6 +88,7 @@ ColumnLayout {
         ComboBox {
             id: presetCombo
             Layout.preferredWidth: 180
+            enabled: root.live
             model: root.activePreset === "Custom" ? root.presetNames.concat(["Custom"]) : root.presetNames
             currentIndex: model.indexOf(root.activePreset)
             onActivated: root.applyPreset(model[currentIndex])
@@ -125,9 +126,35 @@ ColumnLayout {
         }
     }
 
+    Rectangle {
+        Layout.fillWidth: true
+        visible: !root.live
+        radius: Theme.radius
+        color: Theme.bg
+        border.width: 1
+        border.color: Theme.border
+        implicitHeight: notRow.implicitHeight + 20
+        RowLayout {
+            id: notRow
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 8
+            Icon { name: "info"; size: 14; color: Theme.textDim; Layout.alignment: Qt.AlignTop }
+            Text {
+                Layout.fillWidth: true
+                text: (I18n.language, I18n.t("dsp.unavailable"))
+                color: Theme.text
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+        }
+    }
+
     // ── Noise Reduction ──
     Rectangle {
         Layout.fillWidth: true
+        enabled: root.live
+        opacity: root.live ? 1 : 0.45
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -171,6 +198,8 @@ ColumnLayout {
     // ── Noise Gate ──
     Rectangle {
         Layout.fillWidth: true
+        enabled: root.live
+        opacity: root.live ? 1 : 0.45
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
@@ -228,6 +257,8 @@ ColumnLayout {
     // ── Compressor ──
     Rectangle {
         Layout.fillWidth: true
+        enabled: root.live
+        opacity: root.live ? 1 : 0.45
         radius: Theme.radius
         color: Theme.surface
         border.width: 1
