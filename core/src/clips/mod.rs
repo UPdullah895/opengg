@@ -71,7 +71,7 @@ pub fn parse_search_query(q: &str, date_format: DateFormat) -> Vec<String> {
             out.push(format!("__m{mm}"));
             continue;
         }
-        let parts: Vec<&str> = tok.split(|c| c == '/' || c == '-').collect();
+        let parts: Vec<&str> = tok.split(['/', '-']).collect();
         // ^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$
         if parts.len() == 3
             && is_year(parts[0])
