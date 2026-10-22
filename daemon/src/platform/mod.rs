@@ -12,7 +12,6 @@
 //! additive scaffolding; the facades continue to be used directly by the daemon.
 
 use anyhow::Result;
-use async_trait::async_trait;
 
 // Re-export domain types used in trait methods
 pub use crate::audio::sinks::ChannelInfo;
@@ -81,7 +80,6 @@ impl std::fmt::Display for Platform {
 /// platform-specific audio routing and mixing APIs.
 /// Port scaffolding — implemented per-OS in Phase 4-5.
 #[allow(dead_code)]
-#[async_trait]
 pub trait AudioBackend: Send + Sync {
     /// Get all audio channels and their current state.
     async fn get_channels(&self) -> Vec<ChannelInfo>;
@@ -109,7 +107,6 @@ pub trait AudioBackend: Send + Sync {
 /// screen recording, replay buffer, and clip saving.
 /// Port scaffolding — implemented per-OS in Phase 4-5.
 #[allow(dead_code)]
-#[async_trait]
 pub trait CaptureBackend: Send + Sync {
     /// Get current recorder state (Idle, Replay, or Recording).
     async fn status(&self) -> RecordMode;
@@ -137,7 +134,6 @@ pub trait CaptureBackend: Send + Sync {
 /// mice, headsets, and other input/output devices.
 /// Port scaffolding — implemented per-OS in Phase 4-5.
 #[allow(dead_code)]
-#[async_trait]
 pub trait DeviceBackend: Send + Sync {
     /// List all connected devices.
     async fn list_devices(&self) -> Result<Vec<DeviceInfo>>;

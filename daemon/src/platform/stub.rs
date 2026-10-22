@@ -10,7 +10,6 @@
 
 #![cfg(not(target_os = "linux"))]
 
-use async_trait::async_trait;
 use anyhow::{anyhow, Result};
 
 use super::{AudioBackend, CaptureBackend, DeviceBackend, ChannelInfo, StreamInfo, RecordMode, DeviceInfo};
@@ -22,7 +21,6 @@ use super::{AudioBackend, CaptureBackend, DeviceBackend, ChannelInfo, StreamInfo
 /// Stub for audio operations on non-Linux platforms.
 pub struct StubAudioBackend;
 
-#[async_trait]
 impl AudioBackend for StubAudioBackend {
     async fn get_channels(&self) -> Vec<ChannelInfo> {
         vec![]
@@ -52,7 +50,6 @@ impl AudioBackend for StubAudioBackend {
 /// Stub for capture/replay operations on non-Linux platforms.
 pub struct StubCaptureBackend;
 
-#[async_trait]
 impl CaptureBackend for StubCaptureBackend {
     async fn status(&self) -> RecordMode {
         RecordMode::Idle
@@ -82,7 +79,6 @@ impl CaptureBackend for StubCaptureBackend {
 /// Stub for device operations on non-Linux platforms.
 pub struct StubDeviceBackend;
 
-#[async_trait]
 impl DeviceBackend for StubDeviceBackend {
     async fn list_devices(&self) -> Result<Vec<DeviceInfo>> {
         Ok(vec![])

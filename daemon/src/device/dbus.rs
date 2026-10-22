@@ -71,7 +71,7 @@ impl DeviceInterface {
         self.get_devices_json().await
     }
 
-    async fn set_dpi(&self, device_id: &str, dpi: u32) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_dpi(&self, device_id: &str, dpi: u32) -> zbus::fdo::Result<()> {
         let id_body = device_id
             .strip_prefix("ratbag:")
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("not a mouse device id".into()))?;
@@ -86,7 +86,7 @@ impl DeviceInterface {
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn set_polling_rate(&self, device_id: &str, rate: u32) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_polling_rate(&self, device_id: &str, rate: u32) -> zbus::fdo::Result<()> {
         let id_body = device_id
             .strip_prefix("ratbag:")
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("not a mouse device id".into()))?;
@@ -197,63 +197,63 @@ impl DeviceInterface {
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn set_sidetone(&self, device_id: &str, level: u32) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_sidetone(&self, device_id: &str, level: u32) -> zbus::fdo::Result<()> {
         let (vid, pid) = parse_headset_id(device_id)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("invalid headset device id".into()))?;
         HeadsetManager::set_sidetone(vid, pid, level)
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn set_chatmix(&self, device_id: &str, level: u32) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_chatmix(&self, device_id: &str, level: u32) -> zbus::fdo::Result<()> {
         let (vid, pid) = parse_headset_id(device_id)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("invalid headset device id".into()))?;
         HeadsetManager::set_chatmix(vid, pid, level)
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn set_inactive_time(&self, device_id: &str, minutes: u32) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_inactive_time(&self, device_id: &str, minutes: u32) -> zbus::fdo::Result<()> {
         let (vid, pid) = parse_headset_id(device_id)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("invalid headset device id".into()))?;
         HeadsetManager::set_inactive_time(vid, pid, minutes)
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn set_microphone_volume(&self, device_id: &str, level: u32) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_microphone_volume(&self, device_id: &str, level: u32) -> zbus::fdo::Result<()> {
         let (vid, pid) = parse_headset_id(device_id)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("invalid headset device id".into()))?;
         HeadsetManager::set_microphone_volume(vid, pid, level)
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn set_mic_mute_led_brightness(&self, device_id: &str, brightness: u32) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_mic_mute_led_brightness(&self, device_id: &str, brightness: u32) -> zbus::fdo::Result<()> {
         let (vid, pid) = parse_headset_id(device_id)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("invalid headset device id".into()))?;
         HeadsetManager::set_mic_mute_led_brightness(vid, pid, brightness)
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn set_volume_limiter(&self, device_id: &str, enabled: bool) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_volume_limiter(&self, device_id: &str, enabled: bool) -> zbus::fdo::Result<()> {
         let (vid, pid) = parse_headset_id(device_id)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("invalid headset device id".into()))?;
         HeadsetManager::set_volume_limiter(vid, pid, enabled)
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn set_bt_when_powered_on(&self, device_id: &str, enabled: bool) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_bt_when_powered_on(&self, device_id: &str, enabled: bool) -> zbus::fdo::Result<()> {
         let (vid, pid) = parse_headset_id(device_id)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("invalid headset device id".into()))?;
         HeadsetManager::set_bt_when_powered_on(vid, pid, enabled)
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn set_bt_call_volume(&self, device_id: &str, level: u32) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_bt_call_volume(&self, device_id: &str, level: u32) -> zbus::fdo::Result<()> {
         let (vid, pid) = parse_headset_id(device_id)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("invalid headset device id".into()))?;
         HeadsetManager::set_bt_call_volume(vid, pid, level)
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn set_eq_preset(&self, device_id: &str, preset_idx: u32) -> zbus::fdo::Result<()> {
+    pub(crate) async fn set_eq_preset(&self, device_id: &str, preset_idx: u32) -> zbus::fdo::Result<()> {
         let (vid, pid) = parse_headset_id(device_id)
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs("invalid headset device id".into()))?;
         HeadsetManager::set_eq_preset(vid, pid, preset_idx)

@@ -5,7 +5,6 @@
 
 #![cfg(target_os = "linux")]
 
-use async_trait::async_trait;
 use anyhow::Result;
 
 use super::{AudioBackend, CaptureBackend, DeviceBackend, ChannelInfo, StreamInfo, RecordMode, DeviceInfo};
@@ -17,7 +16,6 @@ use crate::device::DeviceInterface;
 // Audio Backend for Linux
 // ─────────────────────────────────────────────────────────────────────────
 
-#[async_trait]
 impl AudioBackend for AudioHub {
     /// port scaffolding — implemented per-OS in Phase 4-5
     async fn get_channels(&self) -> Vec<ChannelInfo> {
@@ -49,7 +47,6 @@ impl AudioBackend for AudioHub {
 // Capture Backend for Linux
 // ─────────────────────────────────────────────────────────────────────────
 
-#[async_trait]
 impl CaptureBackend for Recorder {
     /// port scaffolding — implemented per-OS in Phase 4-5
     async fn status(&self) -> RecordMode {
@@ -81,7 +78,6 @@ impl CaptureBackend for Recorder {
 // Device Backend for Linux
 // ─────────────────────────────────────────────────────────────────────────
 
-#[async_trait]
 impl DeviceBackend for DeviceInterface {
     /// port scaffolding — implemented per-OS in Phase 4-5
     async fn list_devices(&self) -> Result<Vec<DeviceInfo>> {
