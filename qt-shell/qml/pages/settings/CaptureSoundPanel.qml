@@ -444,6 +444,9 @@ ColumnLayout {
         }
     }
 
+    // ── Auto-clip card ──
+    AutoClipCard { s: root.s }
+
     // ── Capture devices card ──
     Rectangle {
         Layout.fillWidth: true

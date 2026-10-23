@@ -3,8 +3,9 @@
 //! The daemon does the evdev listening (it is the part that works without
 //! window focus on both X11 and Wayland); this controller pushes the user's
 //! bindings down to it and turns each press back into something QML can act
-//! on. The actions themselves run in this process because the
-//! `gpu-screen-recorder` child does — see `core/src/hotkeys.rs`.
+//! on, and does the same for auto-clip moments. The actions themselves run
+//! in this process because the `gpu-screen-recorder` child does — see
+//! `core/src/hotkeys.rs`.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -34,6 +35,10 @@ pub mod qobject {
         /// window has focus), but GlobalHotkeys drops them: typing the
         /// current save key into the recorder must not save a clip.
         #[qproperty(bool, suppressed)]
+        /// The most recent auto-clip moment, as the daemon's JSON. QML
+        /// dispatches on `momentCount`, for the same reason as `pressCount`.
+        #[qproperty(QString, last_moment, cxx_name = "lastMoment")]
+        #[qproperty(i32, moment_count, cxx_name = "momentCount")]
         type HotkeyController = super::HotkeyControllerRust;
 
         /// Begin receiving presses. Idempotent — a second call is ignored,
@@ -61,6 +66,7 @@ use core::pin::Pin;
 use cxx_qt::CxxQtType;
 use cxx_qt::Threading;
 use cxx_qt_lib::QString;
+use opengg_core::hotkeys::ReplaySignal;
 
 #[derive(Default)]
 pub struct HotkeyControllerRust {
@@ -69,6 +75,8 @@ pub struct HotkeyControllerRust {
     active: bool,
     error: QString,
     suppressed: bool,
+    last_moment: QString,
+    moment_count: i32,
     listening: bool,
 }
 
@@ -83,11 +91,18 @@ impl qobject::HotkeyController {
         std::thread::Builder::new()
             .name("hotkey-signals".into())
             .spawn(move || {
-                let result = opengg_core::hotkeys::listen(|action| {
-                    let _ = qt_thread.queue(move |mut c| {
-                        let n = *c.as_ref().press_count() + 1;
-                        c.as_mut().set_last_action(QString::from(&action));
-                        c.as_mut().set_press_count(n);
+                let result = opengg_core::hotkeys::listen(|signal| {
+                    let _ = qt_thread.queue(move |mut c| match signal {
+                        ReplaySignal::Hotkey(action) => {
+                            let n = *c.as_ref().press_count() + 1;
+                            c.as_mut().set_last_action(QString::from(&action));
+                            c.as_mut().set_press_count(n);
+                        }
+                        ReplaySignal::Moment(json) => {
+                            let n = *c.as_ref().moment_count() + 1;
+                            c.as_mut().set_last_moment(QString::from(&json));
+                            c.as_mut().set_moment_count(n);
+                        }
                     });
                 });
                 if let Err(e) = result {

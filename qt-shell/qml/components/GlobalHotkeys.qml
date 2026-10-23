@@ -86,6 +86,13 @@ QtObject {
         // pressCount, not lastAction: pressing the same hotkey twice leaves
         // lastAction unchanged and emits no change signal.
         function onPressCountChanged() { hk.dispatch(HotkeyController.lastAction) }
+        // Auto-clip: the daemon saw a highlight (CS2 Game State Integration)
+        // and already applied the user's event filter. Saving here, like the
+        // hotkey, because the replay buffer is this app's process.
+        function onMomentCountChanged() {
+            if (!ScreenshotController.active)
+                RecordingController.saveMoment(HotkeyController.lastMoment)
+        }
     }
 
     /// Re-push whenever the user edits a binding, so the daemon never runs on

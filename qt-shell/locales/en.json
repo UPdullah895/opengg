@@ -1132,5 +1132,28 @@
     "copied": "Copied — paste it anywhere",
     "openUpload": "Open upload page",
     "captionCopied": "Caption copied to the clipboard"
+  },
+  "autoClip": {
+    "title": "Auto-clip",
+    "info": "Saves a clip by itself when you pull off something worth keeping, and names it after the play. Streaks are merged: a quad kill followed by an MVP is one clip.",
+    "enable": "Clip highlights automatically",
+    "eventsLabel": "Clip when I get",
+    "events": {
+      "ace": "Ace",
+      "multikill": "Triple & quad kills",
+      "mvp": "Round MVP",
+      "headshot": "Headshot",
+      "kill": "Any kill",
+      "death": "Death"
+    },
+    "cs2": {
+      "notFound": "Not found in your Steam libraries.",
+      "notSetUp": "Not set up yet. Setting up adds a game-state file to CS2's cfg folder.",
+      "waiting": "Set up. Start CS2 (or restart it if it is running) to connect.",
+      "connected": "Connected: CS2 is sending game state.",
+      "setUp": "Set up",
+      "remove": "Remove"
+    },
+    "needsBuffer": "Auto-clips are saved from the replay buffer, so it needs to be running."
   }
 }

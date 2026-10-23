@@ -1,4 +1,5 @@
 mod audio;
+mod autoclip;
 mod audio_mixer;
 mod mixer_pipeline;
 mod montage;

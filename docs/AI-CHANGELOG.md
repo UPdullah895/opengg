@@ -6,6 +6,77 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-10-23] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (Phase 4: auto-clip, CS2)
+
+**What Changed:**
+- `f7696d0`: Auto-clip from Counter-Strike 2's Game State Integration.
+  - **daemon:** `daemon/src/autoclip/` holds four pieces:
+    - an HTTP POST listener on `127.0.0.1:37820` that checks a token;
+    - `cs2::Tracker`, which diffs the local player's snapshots;
+    - `coalesce::Coalescer`, a 4 s post-roll extended up to a 12 s cap, best event wins;
+    - the `MomentDetected(json)` signal and `GetAutoClipStatus` on the Replay interface.
+
+    `config::load_ui_settings` is now shared, moved out of `audio::hub`.
+  - **core:** `hotkeys::listen` now delivers `ReplaySignal::{Hotkey, Moment}`
+    from one stream. New `core::autoclip` installs the cfg into every Steam
+    library with CS2, manages the token, and has `tag_clip` / `clip_name`
+    (`CS2 – Quad Kill – Mirage`). `steam::steam_library_dirs` was factored out
+    of `get_steam_games`.
+  - **qt-shell:**
+    - HotkeyController gains `lastMoment` and `momentCount`;
+    - `RecordingController.saveMoment` names the clip and stays silent when the buffer is off;
+    - new `AutoClipController` and `AutoClipCard`, the card shown in Settings → Capture & Sound;
+    - en/ar strings.
+  - **Docs:** plan doc Phase 4.
+
+**Why:**
+Phase 4 of the GG-parity plan: clips that save and name themselves. CS2 GSI
+first because it needs nothing but a cfg file, and it is the biggest title
+that GG auto-clips and that also runs on Linux.
+
+**Landmines & Discoveries:**
+- **GSI sends snapshots, not events.** The `player` block follows whoever
+  you spectate after dying, so diff only when `player.steamid ==
+  provider.steamid`, and leave the baseline alone otherwise. Otherwise a
+  teammate's ace is credited to you.
+- **The first snapshot is a baseline.** A daemon restart mid-round would
+  otherwise report every kill already on the board.
+- **The loopback port needs auth.** Any local process can POST a fake "ace".
+  The token is 0600 in `~/.config/opengg/cs2-gsi.token` and inside the cfg
+  (also written 0600).
+- **`~/.steam/root` is a symlink** to `~/.local/share/Steam`, so the cfg dirs
+  are deduplicated after `canonicalize`, or the cfg would be written twice.
+- **`hotkeys::listen`'s match rule has no member filter any more.** Both
+  signals come through one stream in order. It still filters on interface
+  and path, so `PropertiesChanged` is not delivered.
+- **The daemon reads `settings.autoClip` from ui-settings.json** whenever its
+  mtime changes. There is no D-Bus setter to keep in sync, and the listener
+  runs even when auto-clip is off, so Settings can show "connected" before
+  the user turns it on.
+
+**Verification:**
+- `cargo clippy -- -W clippy::all` is clean in daemon, core and qt-shell.
+  `cargo test`:
+  - daemon: 116/116, 16 of them new;
+  - core: all pass, including the real-bus `hotkeys` test (with a private
+    `dbus-daemon`), now also covering `MomentDetected`;
+  - qt-shell: 23/25; the 2 `mixer_pipeline` timing tests fail here because
+    the container has no audio sink. They failed before this work too.
+- `qt-shell/tools/check-colors.sh` is clean, and en/ar have key parity.
+- **End to end, on a private session bus:** openggd in a temp HOME, with
+  synthetic GSI payloads from curl.
+  - A wrong token got a 403.
+  - Kills 1–4 followed by an MVP in one round gave exactly one
+    `MomentDetected` in `dbus-monitor`: `{"kind":"quad","map":"de_mirage","round":3,"kills":4}`.
+    It arrived 4 s after the MVP.
+  - `GetAutoClipStatus` reported `moments: 1` and the last payload time.
+- **Card rendering:** done with the stub harness, not the full sweep (Qt 6.4
+  here). Three states (not set up, connected, off/not found with a port
+  error) in en and ar (RTL), with no QML warnings; the screenshots were
+  inspected.
+- **Not verified:** against a real CS2 client (none in this container). The
+  payload shape follows Valve's documented GSI fields.
+
 ### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (Phase 3: merge #62, one path owner, Smart Volume)
 
 **What Changed:**

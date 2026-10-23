@@ -45,7 +45,7 @@ impl AudioHub {
         // survives a daemon restart (the UI is that file's only writer).
         // Its Stream bus is built here; the Personal paths are the
         // reconciler's job, done on its first pass.
-        let (stream_on, levels) = streamer::seed_from_settings(&load_ui_settings());
+        let (stream_on, levels) = streamer::seed_from_settings(&crate::config::load_ui_settings());
         let streamer = Arc::new(Streamer::new(levels));
         if stream_on {
             let s = Arc::clone(&streamer);
@@ -222,11 +222,3 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
     tokio::task::spawn_blocking(f).await.map_err(|e| anyhow::anyhow!("audio task failed: {e}"))?
 }
 
-/// `~/.config/opengg/ui-settings.json`, or `{}` when absent or unreadable.
-fn load_ui_settings() -> serde_json::Value {
-    dirs::config_dir()
-        .map(|d| d.join("opengg/ui-settings.json"))
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({}))
-}

@@ -54,6 +54,14 @@ pub mod qobject {
         #[qinvokable]
         fn save(self: Pin<&mut Self>);
 
+        /// Save for an auto-clip moment (`HotkeyController.lastMoment`) and
+        /// name the clip after it. A buffer that is off or starting is not
+        /// an error here: auto-clip fires whether or not the user is
+        /// recording, so that case stays silent.
+        #[qinvokable]
+        #[cxx_name = "saveMoment"]
+        fn save_moment(self: Pin<&mut Self>, moment_json: &QString);
+
         /// Honour `gsrAutoStart` at app launch: start the buffer if the
         /// recorder is enabled, waiting 15 s first when the machine booted
         /// less than two minutes ago (GPU stack and portals still settling).
@@ -236,7 +244,15 @@ impl qobject::RecordingController {
         self.apply_status();
     }
 
-    pub fn save(mut self: Pin<&mut Self>) {
+    pub fn save(self: Pin<&mut Self>) {
+        self.save_with(None);
+    }
+
+    pub fn save_moment(self: Pin<&mut Self>, moment_json: &QString) {
+        self.save_with(Some(moment_json.to_string()));
+    }
+
+    fn save_with(mut self: Pin<&mut Self>, moment: Option<String>) {
         // A save waits for gpu-screen-recorder to finish writing (seconds on
         // a long buffer) and remuxes the file, so it must not run on the UI
         // thread. The core gate refuses overlapping saves on its own; this
@@ -249,6 +265,14 @@ impl qobject::RecordingController {
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
             let outcome = opengg_core::gsr::save_gsr_replay(false, &opts);
+            // Name it before anything shows it, so the library and the toast
+            // both read the moment's name rather than the timestamp.
+            let name = match (&outcome, &moment) {
+                (Ok(r), Some(m)) => opengg_core::autoclip::tag_clip(&r.filepath, m)
+                    .map_err(|e| eprintln!("RecordingController::save_moment: {e}"))
+                    .ok(),
+                _ => None,
+            };
             let json = match &outcome {
                 Ok(r) => serde_json::json!({
                     "ok": true,
@@ -256,6 +280,8 @@ impl qobject::RecordingController {
                     "message": "",
                     "game": r.game_title,
                     "filename": r.filename,
+                    "name": name.clone().unwrap_or_default(),
+                    "moment": moment.is_some(),
                     "filepath": r.filepath,
                     "sizeMb": r.filesize_mb,
                     "lowDiskFreeBytes": r.low_disk_free_bytes,
@@ -268,8 +294,16 @@ impl qobject::RecordingController {
             };
             // Own thread: the low-disk toast waits for the "saved" one, and
             // that wait must not hold up `saving` going false.
-            std::thread::spawn(move || notify_save_outcome(&outcome));
+            let quiet = moment.is_some()
+                && matches!(&outcome, Err(opengg_core::gsr::SaveFailure::Refused(_)));
+            if !quiet {
+                std::thread::spawn(move || notify_save_outcome(&outcome, name.as_deref()));
+            }
             let _ = qt_thread.queue(move |mut c| {
+                if quiet {
+                    c.as_mut().set_saving(false);
+                    return;
+                }
                 let seq = c.as_ref().rust().save_seq + 1;
                 c.as_mut().rust_mut().save_seq = seq;
                 let mut json = json;
@@ -480,7 +514,11 @@ fn load_save_options() -> opengg_core::gsr::SaveOptions {
 /// missing — so failures always notify (they are rare and actionable),
 /// even with clip notifications turned off. A "busy" refusal stays quiet:
 /// the save already in flight will report.
-fn notify_save_outcome(outcome: &Result<opengg_core::gsr::SaveReplayResult, opengg_core::gsr::SaveFailure>) {
+/// `name` is the auto-clip name, shown in place of the file name.
+fn notify_save_outcome(
+    outcome: &Result<opengg_core::gsr::SaveReplayResult, opengg_core::gsr::SaveFailure>,
+    name: Option<&str>,
+) {
     let raw = opengg_core::settings::load_ui_settings().unwrap_or_default();
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
     let s = &v["settings"];
@@ -493,7 +531,7 @@ fn notify_save_outcome(outcome: &Result<opengg_core::gsr::SaveReplayResult, open
         Ok(r) => {
             opengg_core::notify::show_clip_notification(
                 &r.game_title,
-                &r.filename,
+                name.unwrap_or(&r.filename),
                 r.filesize_mb,
                 true,
                 enabled,

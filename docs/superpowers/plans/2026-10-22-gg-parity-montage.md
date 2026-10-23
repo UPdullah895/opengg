@@ -54,7 +54,7 @@ GG is an Electron shell over three engines: **Engine** (device config and RGB),
 | Clip editor: trim, tracks, export to size | ✅ | — |
 | **Montage** | ❌ none | **Phase 1, implemented here** |
 | **Vertical / mobile export** | ❌ | **Phase 1, folded into the montage formats** |
-| Auto-clip on game events | ❌ | Phase 4 (needs per-game integrations) |
+| Auto-clip on game events | ✅ CS2 (Game State Integration) | Phase 4 |
 | Cloud share links | ❌ | Out of scope on purpose (no first-party service; see §3) |
 | 5 virtual channels + app routing | ✅ null-sinks + `move-sink-input`, persisted | — |
 | Per-channel EQ, ChatMix | ✅ 10-band EQ, ChatMix | — |
@@ -241,12 +241,56 @@ Streamer Mode (pre-fader monitor) plays an unfaded copy into the headset. So
   OpenGG would have to ship or ask for, and the FX chain is where it would go
   when that is decided.
 
-### Phase 4: Auto-clip
+### Phase 4: Auto-clip ✅ (CS2)
 
 Event sources per game: CS2 Game State Integration (HTTP POST, which needs
 nothing else) first, then log tailers. Each event calls the existing
 "save replay" path with a tag, so clips arrive pre-named
 (`CS2 – Ace – Mirage`).
+
+**Done for CS2:**
+
+- **Listener in the daemon** (`daemon/src/autoclip/`). A small HTTP/1.1 POST
+  reader on `127.0.0.1:37820`, with bounded head and body sizes. Each payload
+  must carry the token from `~/.config/opengg/cs2-gsi.token` (0600), because
+  anything on the machine can reach a loopback port. A wrong token gets a 403
+  and shows up in Settings.
+- **Tracker.** CS2 sends snapshots, not events, so `cs2::Tracker` diffs the
+  local player's snapshots:
+  - `round_kills` going up means kills, and reaching 3, 4 or 5 means a triple,
+    a quad or an ace;
+  - `round_killhs` going up means a headshot;
+  - `match_stats.mvps` going up means an MVP;
+  - health falling to 0 means a death.
+
+  Snapshots of a spectated teammate are ignored without moving the baseline.
+  Warmup is skipped. The first snapshot after a (re)start is only a baseline,
+  so joining mid-round credits nothing.
+- **Coalescer.** A qualifying event opens a 4 s post-roll. Each further event
+  extends it, up to a 12 s cap, and one moment comes out named after the best
+  event (Ace > Quad > Triple > MVP > Headshot > Kill > Death). A triple, then
+  a quad, then an MVP is one clip called "Quad".
+- **Signal, not save.** The moment goes out as `MomentDetected(json)` on the
+  Replay interface, beside `HotkeyPressed`. The app saves through the same
+  `save_gsr_replay` path, then `core::autoclip::tag_clip` sets the clip's
+  name (`CS2 – Quad Kill – Mirage`) and a note. A buffer that is off stays
+  silent, because auto-clip fires whether or not the user is recording.
+- **Settings → Capture & Sound → Auto-clip:**
+  - the on/off switch and the event chips, saved as `settings.autoClip`
+    (`{enabled, events}`), which the daemon re-reads when the file changes;
+  - "Set up" writes `gamestate_integration_opengg.cfg` into every Steam
+    library that has CS2;
+  - a live status line: not found, not set up, waiting, or connected (from
+    the last payload's time; CS2 sends a heartbeat every 30 s).
+
+**Defaults:** off, with Ace, multi-kills and MVP picked.
+
+**Not done:**
+
+- **Log tailers for other games.** Several of the titles GG supports
+  (Valorant, LoL, Fortnite, Apex) do not run on Linux, or ship anti-cheat that
+  blocks them under Proton, so CS2 covers most of what Linux players can use.
+- **Dota 2 GSI.** It is the same protocol and the natural next source.
 
 ---
 

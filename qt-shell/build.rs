@@ -75,6 +75,7 @@ fn main() {
         QmlFile::from("qml/components/GraphicEQ.qml"),
         QmlFile::from("qml/components/DspControls.qml"),
         QmlFile::from("qml/components/SmartVolumeCard.qml"),
+        QmlFile::from("qml/components/AutoClipCard.qml"),
         QmlFile::from("qml/components/GlobalHotkeys.qml"),
     ];
 
@@ -83,6 +84,7 @@ fn main() {
         .files([
             "src/i18n.rs",
             "src/audio.rs",
+            "src/autoclip.rs",
             "src/audio_mixer.rs",
             "src/device.rs",
             "src/clips.rs",
