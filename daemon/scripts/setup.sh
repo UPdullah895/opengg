@@ -12,49 +12,30 @@ echo "╚═══════════════════════�
 echo ""
 
 USER_NAME="${SUDO_USER:-$USER}"
-USER_HOME=$(eval echo "~$USER_NAME")
+USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
 
-# ── 1. Install udev rules ───────────────────────────────────────
-echo "→ Installing udev rules..."
-if [ -f "$PROJECT_DIR/packaging/99-opengg.rules" ]; then
-    cp "$PROJECT_DIR/packaging/99-opengg.rules" /etc/udev/rules.d/
-    udevadm control --reload-rules
-    udevadm trigger
-    echo "  ✓ udev rules installed"
-else
-    echo "  ⚠ udev rules file not found, skipping"
-fi
-
-# ── 2. Add user to required groups ──────────────────────────────
+# ── 1. Group for global hotkeys ─────────────────────────────────
+# Only `input` is needed: the daemon reads /dev/input/event* for system-wide
+# hotkeys. No udev rules are installed — OpenGG never opens hidraw/usbfs
+# itself (ratbagd, headsetcontrol and OpenRGB ship their own rules), and the
+# old vendor-wide MODE=0666 rules made every gaming peripheral writable by
+# any local process. `audio`, `video` and `i2c` are not needed by OpenGG.
 echo "→ Configuring user groups for $USER_NAME..."
-
-for group in audio input video; do
-    if getent group "$group" > /dev/null 2>&1; then
-        if id -nG "$USER_NAME" | grep -qw "$group"; then
-            echo "  ✓ $USER_NAME already in '$group' group"
-        else
-            usermod -aG "$group" "$USER_NAME"
-            echo "  ✓ Added $USER_NAME to '$group' group"
-        fi
-    else
-        echo "  ⚠ Group '$group' does not exist, skipping"
-    fi
-done
-
-# i2c group for OpenRGB (create if missing)
-if ! getent group "i2c" > /dev/null 2>&1; then
-    groupadd i2c
-    echo "  ✓ Created 'i2c' group"
+if id -nG "$USER_NAME" | tr ' ' '\n' | grep -qx input; then
+    echo "  ✓ $USER_NAME already in 'input' group"
+else
+    usermod -aG input "$USER_NAME"
+    echo "  ✓ Added $USER_NAME to 'input' group"
 fi
-usermod -aG i2c "$USER_NAME" 2>/dev/null || true
-echo "  ✓ $USER_NAME added to 'i2c' group"
 
 # ── 3. Install systemd user service ─────────────────────────────
 echo "→ Installing systemd user service..."
 SYSTEMD_DIR="$USER_HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_DIR"
 
-cp "$PROJECT_DIR/packaging/openggd.service" "$SYSTEMD_DIR/"
+# The packaged unit names /usr/bin/openggd; this source install uses ~/.local/bin.
+sed "s|/usr/bin/openggd|$USER_HOME/.local/bin/openggd|" "$PROJECT_DIR/packaging/openggd.service" \
+    > "$SYSTEMD_DIR/openggd.service"
 echo "  ✓ Service installed to $SYSTEMD_DIR/openggd.service"
 
 # ── 4. Install D-Bus activation file ────────────────────────────
@@ -62,17 +43,9 @@ echo "→ Installing D-Bus activation..."
 DBUS_DIR="$USER_HOME/.local/share/dbus-1/services"
 mkdir -p "$DBUS_DIR"
 
-# Replace %h with actual home directory
-sed "s|%h|$USER_HOME|g" "$PROJECT_DIR/packaging/org.opengg.Daemon.service" \
+sed "s|/usr/bin/openggd|$USER_HOME/.local/bin/openggd|" "$PROJECT_DIR/packaging/org.opengg.Daemon.service" \
     > "$DBUS_DIR/org.opengg.Daemon.service"
 echo "  ✓ D-Bus activation installed"
-
-# ── 5. Install polkit policy ────────────────────────────────────
-echo "→ Installing polkit policy..."
-if [ -f "$PROJECT_DIR/packaging/org.opengg.setup.policy" ]; then
-    cp "$PROJECT_DIR/packaging/org.opengg.setup.policy" /usr/share/polkit-1/actions/ 2>/dev/null || true
-    echo "  ✓ polkit policy installed"
-fi
 
 # ── 6. Enable the service ───────────────────────────────────────
 echo "→ Enabling systemd service..."

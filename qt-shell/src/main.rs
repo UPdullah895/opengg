@@ -1,6 +1,8 @@
 mod audio;
+mod autoclip;
 mod audio_mixer;
 mod mixer_pipeline;
+mod montage;
 mod clips;
 mod device;
 mod editor;
@@ -11,6 +13,7 @@ mod i18n;
 mod recording;
 mod screenshot;
 mod settings;
+mod share;
 mod storage;
 mod system;
 mod theme;
@@ -23,6 +26,10 @@ extern "C" {
 }
 
 fn main() {
+    // Logs and crash reports under $XDG_STATE_HOME/opengg — without this,
+    // every log::warn!/error! from opengg-core went nowhere.
+    opengg_core::diagnostics::init("opengg-qt");
+
     // ── Clip video prerequisites, in this order ───────────────────────────
     // Both were established by the qml6glsink spike (qt-shell/spikes/), and
     // both are silent failures if skipped or reordered.

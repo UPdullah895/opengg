@@ -43,7 +43,30 @@
     "cancelExport": "Cancel Export",
     "targetSize": "Target Size",
     "original": "Original",
-    "frameSaved": "Frame saved"
+    "frameSaved": "Frame saved",
+    "effects": {
+      "look": "Look",
+      "speed": "Speed",
+      "applyMix": "Use my track mix",
+      "applyMixHint": "Bake the track volumes and mutes you set in the editor into the exported file. Off: every track is exported as recorded.",
+      "mixTrack": "Add a mixed track",
+      "mixTrackHint": "Adds all tracks mixed together as the first audio track, so players and websites that only play one track still play everything."
+    },
+    "looks": {
+      "none": "None",
+      "vivid": "Vivid",
+      "cinematic": "Cinematic",
+      "warm": "Warm",
+      "cool": "Cool",
+      "sharp": "Sharp",
+      "mono": "Mono",
+      "teal": "Teal",
+      "retro": "Retro",
+      "golden": "Golden",
+      "night": "Night",
+      "pop": "Pop",
+      "grain": "Grain"
+    }
   },
   "sidebar": {
     "tip": "Tip: You can customize your shortcuts from the settings page."
@@ -483,7 +506,13 @@
       "steamReadyTitle": "Steam library connected — {count} games",
       "steamReadyBody": "Your Steam library is available in game pickers and listed here with artwork where available. OpenGG uses local Steam data plus Steam Store metadata for names and images.",
       "steamTooltip": "Import your Steam library to OpenGG's game pickers and keep it visible here in Storage. After you allow access, OpenGG reads local Steam data and may request Steam Store metadata for names and artwork.",
-      "thumbsRemoved": "thumbnails removed — regenerating"
+      "thumbsRemoved": "thumbnails removed — regenerating",
+      "organizeTitle": "Clip Organization",
+      "perGameFolders": "A folder per game",
+      "perGameFoldersHint": "Save each new clip in a folder named after the game, inside your clip directory. Existing clips stay where they are.",
+      "sizeLimit": "Folder size limit",
+      "sizeLimitHint": "When OpenGG's clips exceed this size, the oldest ones are moved to the Trash after each save. The newest clip and files saved by other apps are never touched.",
+      "noLimit": "No limit"
     },
     "extensions": {
       "title": "Extensions",
@@ -532,7 +561,10 @@
     "diagnostics": {
       "title": "Diagnostics",
       "hint": "Crash and error logs are stored locally for debugging. Share them when reporting issues.",
-      "openCrashLogs": "Open Crash Logs Folder"
+      "openCrashLogs": "Open Crash Logs Folder",
+      "copy": "Copy diagnostics",
+      "working": "Collecting…",
+      "copied": "Copied — paste it into your bug report"
     },
     "dangerZone": {
       "title": "Danger Zone",
@@ -660,7 +692,7 @@
       }
     },
     "installHint": {
-      "gsrNote": "gpu-screen-recorder is not in most distro repos. Flatpak is the recommended installation method.",
+      "gsrNote": "gpu-screen-recorder must be installed as a native program on your PATH — OpenGG cannot use its Flatpak build. Arch has a package; elsewhere, build it from the project page.",
       "ffmpegNote": "ffprobe is included with ffmpeg.",
       "ffprobeNote": "ffprobe is included with ffmpeg."
     },
@@ -679,8 +711,7 @@
     },
     "accessFixHint": {
       "ratbagdNote": "After install, you can configure mouse settings in the Devices page.",
-      "reloginNote": "Log out and log back in for the group changes to take effect.",
-      "udevNote": "udev rules allow direct hardware access for headsets and RGB devices without sudo."
+      "reloginNote": "Log out and log back in for the group changes to take effect."
     },
     "recorderInstall": {
       "installed": "gpu-screen-recorder is installed.",
@@ -699,7 +730,8 @@
       "rename": "Rename",
       "showInFolder": "Show in Folder",
       "copyPath": "Copy Path",
-      "delete": "Delete"
+      "delete": "Delete",
+      "share": "Share…"
     },
     "emptyTitle": "No clips yet",
     "emptyHint": "Records saved from the replay buffer will appear here.",
@@ -990,16 +1022,28 @@
     "noiseGate": "Noise Gate",
     "noiseGateDesc": "Silences signal below a threshold level",
     "threshold": "Threshold",
-    "autoDetect": "Auto-detect threshold",
     "compressor": "Compressor",
     "compressorDesc": "Evens out loud and quiet parts of the signal",
-    "level": "Level"
+    "level": "Level",
+    "unavailable": "Microphone processing is unavailable:",
+    "missingNr": "Noise suppression needs the RNNoise plugin — install noise-suppression-for-voice.",
+    "missingSwh": "The gate and compressor need swh-plugins."
   },
   "eq": {
     "title": "Graphic EQ",
     "flat": "Flat",
     "enabled": "Enabled",
-    "preamp": "Preamp"
+    "preamp": "Preamp",
+    "unavailable": "Equaliser unavailable:"
+  },
+  "smartVolume": {
+    "title": "Smart Volume",
+    "hint": "Evens out loud and quiet moments on this channel before your fader, so callouts and quiet dialogue stay audible without blasts. Applies to what you hear, not to the Stream mix.",
+    "off": "Off",
+    "light": "Light",
+    "medium": "Medium",
+    "strong": "Strong",
+    "unavailable": "Smart Volume unavailable:"
   },
   "chatMix": {
     "title": "ChatMix",
@@ -1022,6 +1066,15 @@
       "media": "Media",
       "aux": "Aux",
       "mic": "Mic"
+    },
+    "streamer": {
+      "personal": "Personal",
+      "stream": "Stream",
+      "on": "Streamer Mode ON — separate Stream mix for OBS",
+      "off": "Enable Streamer Mode (separate Stream mix for OBS)",
+      "error": "Streamer Mode:",
+      "streamMix": "Stream mix",
+      "obsHint": "<b>Stream mix</b> — in OBS, add an <i>Audio Input Capture</i> and pick <b>OpenGG Stream Mix</b>. These faders only change what your viewers hear; your headset keeps the Personal mix."
     }
   },
   "videoPlayer": {
@@ -1057,5 +1110,50 @@
     "title": "Choose your language",
     "subtitle": "You can change this later in Settings.",
     "continue": "Continue"
+  },
+  "share": {
+    "title": "Share Clip",
+    "platform": "Where to",
+    "original": "Original",
+    "reading": "Reading the clip…",
+    "fits": "Fits this platform's limits.",
+    "tooBig": "Too long for this size limit even at the lowest quality — trim it shorter first.",
+    "trimmedToLimit": "This platform allows {secs} s — the end of the clip is used.",
+    "quality": "Resolution",
+    "auto": "Auto",
+    "vertical": "Vertical 9:16",
+    "verticalHint": "Crop to a phone-shaped frame. Move the slider to choose which part of the picture stays.",
+    "tracks": "Audio tracks",
+    "track": "Track {n}",
+    "caption": "Caption",
+    "encoding": "Encoding",
+    "makeFile": "Make file",
+    "copyFile": "Copy file",
+    "copied": "Copied — paste it anywhere",
+    "openUpload": "Open upload page",
+    "captionCopied": "Caption copied to the clipboard"
+  },
+  "autoClip": {
+    "title": "Auto-clip",
+    "info": "Saves a clip by itself when you pull off something worth keeping, and names it after the play. Streaks are merged: a quad kill followed by an MVP is one clip.",
+    "enable": "Clip highlights automatically",
+    "eventsLabel": "Clip when I get",
+    "events": {
+      "ace": "Ace",
+      "multikill": "Triple & quad kills",
+      "mvp": "Round MVP",
+      "headshot": "Headshot",
+      "kill": "Any kill",
+      "death": "Death"
+    },
+    "cs2": {
+      "notFound": "Not found in your Steam libraries.",
+      "notSetUp": "Not set up yet. Setting up adds a game-state file to CS2's cfg folder.",
+      "waiting": "Set up. Start CS2 (or restart it if it is running) to connect.",
+      "connected": "Connected: CS2 is sending game state.",
+      "setUp": "Set up",
+      "remove": "Remove"
+    },
+    "needsBuffer": "Auto-clips are saved from the replay buffer, so it needs to be running."
   }
 }

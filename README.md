@@ -27,7 +27,7 @@
 
 ## Install
 
-**Arch / CachyOS** — installs the binary plus udev rules, D-Bus policy and systemd units:
+**Arch / CachyOS** — installs the binaries, the D-Bus activation file and the systemd user unit:
 
 ```bash
 yay -S opengg-bin
@@ -44,9 +44,10 @@ cd opengg
 
 ## Modules
 
-- **Audio Hub** — 5-channel PipeWire mixer (Game / Chat / Media / Aux / Mic), per-app routing, 10-band EQ, ChatMix.
+- **Audio Hub** — 5-channel PipeWire mixer (Game / Chat / Media / Aux / Mic), per-app routing, 10-band EQ, ChatMix, and Streamer Mode (a separate Stream mix for OBS, leveled independently of what you hear).
 - **Device & RGB** — mouse DPI, polling rate and button mapping via ratbagd; headset controls; RGB via the OpenRGB SDK.
-- **Clipping & Replay** — gpu-screen-recorder replay buffer, global hotkeys, clip gallery, multi-track editor with FFmpeg export.
+- **Clipping & Replay** — gpu-screen-recorder replay buffer with a supervised, auto-restarting recorder; clips named after the game you are playing (Steam-aware, on X11 and Wayland), optional per-game folders and a folder size limit; desktop screenshots; global hotkeys; clip gallery; multi-track editor with looks, speed and track-mix export; a montage builder (transitions, ducked music bed, vertical 9:16).
+- **Share** — one-click exports sized for Discord, X, TikTok, Instagram and YouTube Shorts (9:16 crop, size-capped encoding), copied to the clipboard as a file or sent to the upload page with a caption.
 
 ## Requirements
 
@@ -93,11 +94,11 @@ Working on the UI? Read [`AGENTS.md`](AGENTS.md) first — it carries the QML la
 
 **Global hotkeys do nothing** — they read `/dev/input` directly, which needs the `input` group. `./dev.sh setup` adds you; log out and back in.
 
-**No virtual sinks / routing fails** — check you are in the `audio` group and that `systemctl --user status pipewire wireplumber` are running. **Settings → Danger Zone → Remove Virtual Audio** resets routing.
+**No virtual sinks / routing fails** — check that `systemctl --user status pipewire pipewire-pulse wireplumber` are all running. **Settings → Danger Zone → Remove Virtual Audio** resets routing.
 
 ## Security model
 
-No sudo at runtime — the daemon is unprivileged and gets what it needs from the `audio`, `input` and `video` groups. It auto-activates over D-Bus rather than being launched by hand.
+No sudo at runtime — the daemon runs as you and needs only the `input` group (for global hotkeys, which read the keyboard directly). OpenGG installs no udev rules: ratbagd, headsetcontrol and OpenRGB ship their own. It auto-activates over D-Bus rather than being launched by hand.
 
 ## License
 

@@ -1,0 +1,305 @@
+# SteelSeries GG parity review + Montage builder
+
+**Date:** 2026-10-22 · **Status:** Phase 1 implemented (this branch), Phases 2–4 planned
+
+This doc does four things: it summarises how SteelSeries GG's capture and audio
+features work, maps them against what OpenGG v0.2.1 already ships, critiques
+the "clone GG" idea to find where OpenGG should do better instead of copying,
+and gives the build order. Phase 1, the montage builder, is implemented in the
+same branch.
+
+---
+
+## 1. How SteelSeries GG works (the parts that matter here)
+
+GG is an Electron shell over three engines: **Engine** (device config and RGB),
+**Sonar** (audio) and **Moments** (capture). Only Sonar and Moments are in scope.
+
+### 1.1 Moments: capture → clip → edit → montage → share
+
+| Stage | What GG does |
+|---|---|
+| **Replay buffer** | Encodes the game in the background (NVENC/AMF/QSV) into a rolling RAM/disk buffer, 15 s to 20 min. A hotkey saves the last *N* seconds as a clip. |
+| **Auto-clip** | For supported titles (CS2, Valorant, LoL, Fortnite, Apex …) it reads game events (kills, wins, aces) from game integrations and saves clips with no hotkey press. |
+| **Full-session recording** | Optional continuous recording next to the buffer. |
+| **Audio tracks** | Records game audio and microphone; with Sonar it can capture per-channel audio, so mic and game can be balanced after the fact. |
+| **Library** | Clips are grouped by game, with favourites, search, and thumbnails. |
+| **Clip editor** | Trim in/out, per-track audio balance, a frame screenshot, and export at a target size or quality. |
+| **Montage** | Pick several clips → arrange them on a timeline → transitions → optional music → render one video. This is the "highlight reel" flow. |
+| **Share** | Upload to a SteelSeries share link, or push to Discord / YouTube / social; a *mobile/vertical* export crops the clip to 9:16. |
+
+### 1.2 Sonar: virtual devices + routing + mixing
+
+| Feature | What GG does |
+|---|---|
+| **Virtual devices** | Five virtual outputs/inputs (*Gaming, Chat, Media, Aux, Microphone*). Apps send audio to one of them, and Sonar mixes them into the real headset. |
+| **App routing** | Each app picks its Sonar device, either in Windows' per-app output setting or by dragging it in Sonar. |
+| **Per-channel EQ** | A 10-band parametric EQ per channel, with presets (and game-specific presets for footsteps and so on). |
+| **ChatMix** | One balance control between Game and Chat, available on the headset dial too. |
+| **Spatial audio** | Virtual 7.1 HRTF on the Game channel. |
+| **Mic processing** | ClearCast AI noise cancellation, noise gate, compressor, impact-noise reduction, plus mic EQ. |
+| **Smart Volume** | Loudness normalisation so a loud media source and quiet chat land at similar levels. |
+| **Streamer Mode** | **Two independent mixes**: a *Personal* (monitor) mix for the headset and a *Stream* mix exposed as a separate virtual device for OBS. Each channel has its own volume and mute in each mix. |
+| **Per-channel output device** | Any channel can go to a different physical device. |
+
+---
+
+## 2. Gap analysis: OpenGG v0.2.1 vs GG
+
+| GG feature | OpenGG today | Gap |
+|---|---|---|
+| Replay buffer + hotkey | ✅ gpu-screen-recorder, evdev hotkeys | — |
+| Multi-track audio capture | ✅ one stream per source, titled Game/Chat/Mic | — |
+| Clip library, favourites, game tags, search | ✅ | — |
+| Clip editor: trim, tracks, export to size | ✅ | — |
+| **Montage** | ❌ none | **Phase 1, implemented here** |
+| **Vertical / mobile export** | ❌ | **Phase 1, folded into the montage formats** |
+| Auto-clip on game events | ✅ CS2 (Game State Integration) | Phase 4 |
+| Cloud share links | ❌ | Out of scope on purpose (no first-party service; see §3) |
+| 5 virtual channels + app routing | ✅ null-sinks + `move-sink-input`, persisted | — |
+| Per-channel EQ, ChatMix | ✅ 10-band EQ, ChatMix | — |
+| Mic noise suppression / gate / compressor | ✅ (from #62, merged here) | Phase 3, implemented |
+| **Streamer Mode (dual mix)** | ✅ (was ❌ in v0.2.1) | **Phase 2, implemented** |
+| Smart Volume (loudness) | ✅ | Phase 3, implemented (swh SC4 in the per-channel FX chain) |
+| Spatial audio | ❌ | Phase 3, optional (needs an HRTF convolver such as `filter-chain` with a SOFA file) |
+
+---
+
+## 3. Critique: where copying GG would be the wrong call
+
+1. **GG's montage throws away your trims.** Clips enter the montage timeline
+   untrimmed, so you cut the same moment twice. OpenGG already stores a trim
+   window per clip (`clips.trim_state`), so **the montage uses it by
+   default.** The editor is where you cut; the montage is where you sequence.
+2. **Multi-track audio is a liability in a montage.** Each OpenGG capture has
+   N audio streams (Game, Chat, Mic …), and some clips have none.
+   `concat`/`acrossfade` need every segment to have the same layout. **Each
+   clip's tracks are summed into one stereo bed, and silent clips get
+   generated silence**, so a clip without audio never breaks the render.
+3. **A flat music bed fights the gameplay.** GG mixes music at a fixed level,
+   which either drowns the callouts or vanishes in quiet moments. **OpenGG
+   ducks the music with a sidechain compressor keyed on the clip audio**,
+   which is what a human editor would do by hand.
+4. **Vertical export shouldn't need a second tool.** A 16:9 capture
+   letterboxed into 9:16 looks bad. The **"Vertical 9:16" format uses a
+   blurred, cropped copy of the frame as the background**, the standard look
+   for Shorts and TikTok.
+5. **No cloud dependency.** GG's share links route through SteelSeries
+   servers. OpenGG writes a local MP4 (`+faststart`, so it streams when
+   uploaded anywhere) and offers *Show in folder* / *Copy path*. Uploading
+   belongs in an extension, not core.
+6. **No timeline UI for v1.** GG's montage has a full drag timeline. For a
+   highlight reel the decisions are *which clips*, *what order*, *how they
+   join* and *what music*. A reorderable list plus the existing per-clip
+   trims covers that without a second NLE to maintain. A timeline can come
+   later, but only if users ask for per-clip in/out edits *inside* the
+   montage.
+7. **Streamer Mode should not double the PipeWire graph blindly.** Sonar
+   implements the stream mix as a second set of virtual devices. On PipeWire
+   the cheaper equivalent is **one extra `OpenGG_Stream` null-sink fed by a
+   per-channel loopback with its own volume**. That adds 5 loopbacks rather
+   than 5 more sinks, and it respects the "never restart PipeWire" rule
+   because everything is still `pactl load-module` at runtime.
+
+---
+
+## 4. Plan
+
+### Phase 1: Montage builder ✅ (this branch)
+
+- **`core/src/montage.rs`**, split in two halves:
+  - `plan(spec, sources) -> MontagePlan` is **pure**: segment resolution
+    (explicit window → saved trim → whole clip, clamped), transition clamping
+    (≤ half the shortest segment), output sizing (even sides), and the full
+    ffmpeg `filter_complex`:
+    - per clip: `scale`+`pad` (letterbox) or `split`/`boxblur`/`overlay`
+      (blur fill), then `fps`, `format=yuv420p` and `settb=AVTB` so every
+      pair is `xfade`-compatible;
+    - per clip audio: `amix normalize=0` across tracks / passthrough /
+      `anullsrc`, then `apad,atrim` to pin the exact segment length;
+    - joins: `concat` (cut) or chained `xfade` + `acrossfade` with
+      accumulated offsets (crossfade / dip-to-black);
+    - optional reel fade in/out; optional music (`-stream_loop -1`, trimmed
+      to length, faded out, optionally `sidechaincompress`-ducked, then
+      `alimiter`).
+  - `run_plan` runs ffmpeg with `-progress pipe:1` for real progress, a
+    cancel flag (kills ffmpeg, removes the partial file), and the stderr tail
+    in the error message.
+- **`core/src/dialogs.rs`**: `pick_file` (kdialog / zenity) for the music track.
+- **`qt-shell/src/montage.rs`**: `MontageController` singleton
+  (`probeClips`, `build`, `cancel`, `reset`, `pickMusic`, `defaultOutput`,
+  progress qproperties).
+- **`qt-shell/qml/components/MontageDialog.qml`**: a reorderable clip list
+  with trimmed lengths, transition and length chips, format (Source / 1080p /
+  720p / Vertical 9:16), codec, a fade toggle, music path, volume and duck
+  toggle, output path, progress, Stop, and a done state.
+- **Clips page**: a **Montage** button in the selection bar. Clips open
+  oldest-first, since a reel reads in the order things happened.
+- **Harness**: a `clips:montage` screenshot target.
+- **Tests**: 13 unit tests on the planner and progress parser, plus one end-to-end
+  render against real ffmpeg (2-track + silent + differently-sized clips,
+  blur fill, crossfade, ducked music, then cancel).
+
+### Phase 2: Streamer Mode (dual mix) ✅
+
+**The original plan was wrong, and measuring showed why.** It assumed a loopback
+from `OpenGG_<ch>.monitor` would give an independent Stream tap. But a null-sink's
+monitor is **post-fader**. Measured on PipeWire 1.0 with a test tone: the monitor
+drops ~18 dB at 50% and goes silent when muted. A Stream tap there would follow
+the Personal fader and mute, so the two mixes would not be independent.
+
+PipeWire's `monitor.channel-volumes=false` makes the monitor pre-fader, and it can
+be switched on a live node and back (`pw-cli set-param … Props`). But a sink has
+only one set of monitor ports, and the classic Personal path (a direct `pw-link`
+from the monitor to the device) needs them post-fader. So while Streamer Mode is
+on, the daemon (`daemon/src/audio/streamer.rs`) rewires each output channel:
+
+```text
+apps → OpenGG_<ch>  (monitor now pre-fader)
+         └ monitor ┬ loopback OpenGG_Personal_<ch>   → the channel's device
+                   │   (volume/mute mirror the sink's, so the sink stays
+                   │    the one Personal fader for UI, hydrate, Ear Blast)
+                   └ loopback OpenGG_StreamFeed_<ch> → OpenGG_Stream
+OpenGG_Mic.monitor (post-fader: "my mic level") → OpenGG_StreamFeed_Mic ┘
+OpenGG_Stream.monitor → remap source OpenGG_Stream_Mix ("OpenGG Stream Mix", for OBS)
+```
+
+- **Off, and every daemon exit, restore the classic graph exactly.** The graph
+  outside a running daemon is always the classic one.
+- **A SIGKILL leaves the Personal loopbacks playing**, so nobody goes silent. The
+  next start clears the leftovers and rebuilds the graph.
+- **Toggling is ordered to fail quiet:** the new path is built muted and opens
+  last, so the worst case is a few ms of silence, never a jump to unity gain.
+- **Loopbacks add 10 ms**, only while Streamer Mode is on. PipeWire's default
+  of 200 ms would make the Personal mix unusable for gaming.
+- **Stream "Master" is the `OpenGG_Stream` sink volume:** the level of the whole
+  mix OBS receives.
+- **D-Bus (`org.opengg.Daemon.Audio`):** `GetStreamerState`,
+  `SetStreamerMode`, `SetStreamVolume`, `SetStreamMute`. (`SetPersonalDevice`
+  went away in Phase 3, when the reconciler took over every Personal path.)
+- **`core::audio`:** `set_channel_device`, `current_channel_device` and
+  `hydrate_audio_routing` go through the daemon while Streamer Mode is on. A
+  direct `pw-link` from the now pre-fader monitor would add an unfaded copy of
+  the channel to the headset.
+- **Persistence:** the UI writes `mixer.stream` `{enabled, volumes, mutes}`
+  (the only writer of `ui-settings.json`), and the daemon seeds from it at
+  start.
+- **UI:** a Streamer Mode toggle in the Mixer header. While it is on, a
+  Personal / Stream switch rebinds the six strips. The Stream view replaces
+  ChatMix (a Personal control) with the OBS hint. There is a `mixer:stream`
+  ui-shots target.
+
+Side effects, by design:
+- **Ear Blast** ducks the sink, so it now protects the headset without dipping
+  the stream.
+- **Recordings and VU meters** read the pre-fader monitor while Streamer Mode
+  is on, so they show what the channel carries, independent of headset volume.
+
+Verified against an isolated PipeWire 1.0 session (null sinks standing in for
+headphones, speakers and a mic, with test tones measured by level). Personal
+and Stream volume and mute are independent in both directions. Personal
+changes made outside OpenGG are mirrored. The mic and Stream Master work.
+Device changes in Streamer Mode leave no pre-fader leak. Off, SIGTERM, and
+SIGKILL followed by a restart all leave a clean graph (11 modules on, 0 off).
+Not verified on real hardware or with OBS itself.
+
+### Phase 3: Mic and output processing ✅
+
+**Merged #62 rather than rebuilding it.** #62 already had mic processing
+(RNNoise, gate, compressor) and a daemon-hosted EQ, linked in by a reconciler
+that owns the live graph. It also conflicted with Phase 2 by design: its
+reconciler re-links every channel's monitor straight to the device, which in
+Streamer Mode (pre-fader monitor) plays an unfaded copy into the headset. So
+#62 was merged into this branch and the two were made one design:
+
+- **One owner per path.** The reconciler picks a `PathMode` per output
+  channel: `Direct` (classic), `Chain` (an FX chain is live) or `Loopback`
+  (Streamer Mode without a chain). It builds that path, with the
+  silence-not-burst switch order from Phase 2. Streamer Mode now owns only
+  the Stream side.
+- **One FX chain per channel.** #62's EQ chain grew into an explicit stereo
+  graph: `pre → 10 bands → [Smart Volume] → fader`. The fader is the Personal
+  volume (the sink's, mirrored), because Smart Volume has to see the signal
+  *before* the user's fader. A compressor after the fader would compress away
+  part of every fader move, so the slider would feel dead above the threshold.
+- **Smart Volume** is swh's SC4, stereo-linked so it never pumps one side of
+  the image. It is an RMS compressor with makeup gain, in four steps:
+
+  | Level | Threshold | Ratio | Makeup | Spread, loud vs quiet tone (measured) |
+  |---|---|---|---|---|
+  | Off | — | — | — | 28.9 dB |
+  | Light | −18 dB | 2.5:1 | +4 dB | 22.3 dB |
+  | Medium | −24 dB | 4:1 | +8 dB | 16.1 dB |
+  | Strong | −30 dB (SC4's floor) | 8:1 | +13 dB | 8.9 dB |
+
+  Loud content comes down (−7.2 → −14.3 dB) and quiet content comes up
+  (−36.1 → −23.2 dB). It is per channel (Game/Chat/Media/Aux), applies to the
+  Personal mix only (the Stream mix stays clean), persists as
+  `mixer.smartVolume`, and reports "install swh-plugins" when the plugin is
+  missing.
+- **Spatial audio stays out of scope.** It needs an HRTF dataset (SOFA) that
+  OpenGG would have to ship or ask for, and the FX chain is where it would go
+  when that is decided.
+
+### Phase 4: Auto-clip ✅ (CS2)
+
+Event sources per game: CS2 Game State Integration (HTTP POST, which needs
+nothing else) first, then log tailers. Each event calls the existing
+"save replay" path with a tag, so clips arrive pre-named
+(`CS2 – Ace – Mirage`).
+
+**Done for CS2:**
+
+- **Listener in the daemon** (`daemon/src/autoclip/`). A small HTTP/1.1 POST
+  reader on `127.0.0.1:37820`, with bounded head and body sizes. Each payload
+  must carry the token from `~/.config/opengg/cs2-gsi.token` (0600), because
+  anything on the machine can reach a loopback port. A wrong token gets a 403
+  and shows up in Settings.
+- **Tracker.** CS2 sends snapshots, not events, so `cs2::Tracker` diffs the
+  local player's snapshots:
+  - `round_kills` going up means kills, and reaching 3, 4 or 5 means a triple,
+    a quad or an ace;
+  - `round_killhs` going up means a headshot;
+  - `match_stats.mvps` going up means an MVP;
+  - health falling to 0 means a death.
+
+  Snapshots of a spectated teammate are ignored without moving the baseline.
+  Warmup is skipped. The first snapshot after a (re)start is only a baseline,
+  so joining mid-round credits nothing.
+- **Coalescer.** A qualifying event opens a 4 s post-roll. Each further event
+  extends it, up to a 12 s cap, and one moment comes out named after the best
+  event (Ace > Quad > Triple > MVP > Headshot > Kill > Death). A triple, then
+  a quad, then an MVP is one clip called "Quad".
+- **Signal, not save.** The moment goes out as `MomentDetected(json)` on the
+  Replay interface, beside `HotkeyPressed`. The app saves through the same
+  `save_gsr_replay` path, then `core::autoclip::tag_clip` sets the clip's
+  name (`CS2 – Quad Kill – Mirage`) and a note. A buffer that is off stays
+  silent, because auto-clip fires whether or not the user is recording.
+- **Settings → Capture & Sound → Auto-clip:**
+  - the on/off switch and the event chips, saved as `settings.autoClip`
+    (`{enabled, events}`), which the daemon re-reads when the file changes;
+  - "Set up" writes `gamestate_integration_opengg.cfg` into every Steam
+    library that has CS2;
+  - a live status line: not found, not set up, waiting, or connected (from
+    the last payload's time; CS2 sends a heartbeat every 30 s).
+
+**Defaults:** off, with Ace, multi-kills and MVP picked.
+
+**Not done:**
+
+- **Log tailers for other games.** Several of the titles GG supports
+  (Valorant, LoL, Fortnite, Apex) do not run on Linux, or ship anti-cheat that
+  blocks them under Proton, so CS2 covers most of what Linux players can use.
+- **Dota 2 GSI.** It is the same protocol and the natural next source.
+
+---
+
+## 5. Verification done for Phase 1
+
+- `cargo test` in `core/`: 14/14 montage tests, including the real ffmpeg render.
+- `cargo clippy -- -W clippy::all` in `core/` and `qt-shell/`: no new warnings.
+- `qt-shell/tools/check-colors.sh`: clean.
+- `cargo build` in `qt-shell/` against Qt 6.4: succeeds.
+- The dialog was rendered headless with stub controllers (form, rendering and
+  done states, plus reorder, total-length maths and close/reopen); see
+  AI-CHANGELOG for why the full-app sweep could not run in this environment.

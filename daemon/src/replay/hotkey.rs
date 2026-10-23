@@ -428,7 +428,7 @@ pub fn spawn(conn: &zbus::Connection, bindings: Bindings) -> Option<HotkeyHandle
 }
 
 async fn emit(conn: &zbus::Connection, action: HotkeyAction) -> Result<()> {
-    let ctxt = zbus::object_server::SignalContext::new(conn, super::dbus::REPLAY_PATH)
+    let ctxt = zbus::object_server::SignalEmitter::new(conn, super::dbus::REPLAY_PATH)
         .context("signal context")?;
     super::dbus::ReplayInterface::hotkey_pressed(&ctxt, action.as_str()).await?;
     Ok(())

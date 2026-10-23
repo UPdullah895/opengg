@@ -43,6 +43,14 @@ pub fn is_available(bin: &str) -> bool {
     found
 }
 
+/// Forget every cached availability result, so the next [`is_available`]
+/// re-probes `$PATH`. Called before user-triggered dependency checks: without
+/// it, a tool installed while the app runs stayed "missing" until restart and
+/// the UI's Recheck button could never succeed.
+pub fn forget_availability() {
+    get_cache().lock().unwrap().clear();
+}
+
 /// Require a binary to be available, returning an error if it is not.
 pub fn require(bin: &str) -> Result<(), String> {
     if is_available(bin) {

@@ -181,6 +181,16 @@ fn default_screenshot_key() -> String { "Alt+F12".into() }
 
 // ── Load / Save ─────────────────────────────────────────────────
 
+/// `~/.config/opengg/ui-settings.json`, or `{}` when absent or unreadable.
+/// The UI owns that file; the daemon only reads it.
+pub fn load_ui_settings() -> serde_json::Value {
+    dirs::config_dir()
+        .map(|d| d.join("opengg/ui-settings.json"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
 /// Get the config file path.
 pub fn config_path() -> PathBuf {
     dirs::config_dir()

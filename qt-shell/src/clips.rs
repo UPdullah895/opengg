@@ -302,6 +302,10 @@ pub struct ClipsControllerRust {
     game_counts_json: QString,
     /// Filepaths currently queued/generating on the thumbnail worker thread.
     thumbs_in_flight: HashSet<String>,
+    /// A thumbnail landed since the view was last re-applied.
+    thumbs_dirty: bool,
+    /// When finished thumbnails were last pushed to the view.
+    thumbs_applied_at: Option<std::time::Instant>,
 }
 
 type ThumbJob = (String, cxx_qt::CxxQtThread<qobject::ClipsController>);
@@ -317,9 +321,42 @@ fn thumb_worker() -> &'static Sender<ThumbJob> {
             for (filepath, qt_thread) in rx {
                 let result = opengg_core::media::generate_thumbnail(filepath.clone(), None);
                 let _ = qt_thread.queue(move |mut controller| {
-                    controller.as_mut().rust_mut().thumbs_in_flight.remove(&filepath);
-                    if result.is_ok() {
-                        controller.reload();
+                    // Patch the one clip in memory instead of rescanning the
+                    // library: a full `reload()` per finished thumbnail meant
+                    // a filesystem walk + DB read + model reset for every
+                    // card, i.e. N rescans for a page of N new clips.
+                    let mut changed = false;
+                    {
+                        let mut st = controller.as_mut().rust_mut();
+                        st.thumbs_in_flight.remove(&filepath);
+                        if let Ok(thumb) = &result {
+                            if let Some(c) = st.all_clips.iter_mut().find(|c| c.filepath == filepath) {
+                                c.thumbnail = thumb.clone();
+                                changed = true;
+                            }
+                        }
+                        st.thumbs_dirty |= changed;
+                    }
+                    // Re-apply when the queue drains, or at most every
+                    // 400 ms while a long queue (first launch, a big
+                    // library) is still working — thumbnails keep appearing
+                    // without one model reset per thumbnail.
+                    let (due, dirty) = {
+                        let pinned = controller.as_ref();
+                        let st = pinned.rust();
+                        let due = st.thumbs_in_flight.is_empty()
+                            || st
+                                .thumbs_applied_at
+                                .is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(400));
+                        (due, st.thumbs_dirty)
+                    };
+                    if due && dirty {
+                        {
+                            let mut st = controller.as_mut().rust_mut();
+                            st.thumbs_dirty = false;
+                            st.thumbs_applied_at = Some(std::time::Instant::now());
+                        }
+                        controller.apply_filter();
                     }
                 });
             }

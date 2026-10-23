@@ -37,6 +37,29 @@ See the IPC map in [`CLAUDE.md`](CLAUDE.md) for the channel-by-channel picture.
 
 **Rule**: The Qt shell is **presentation glue only**. All business logic (daemon state queries, settings mutations, file operations) flows through `opengg-core` → daemon D-Bus interface. Never import `daemon/` types into `qt-shell/` or vice versa — use D-Bus bindings only.
 
+### zbus 6: `block_on` Must Never Nest
+
+zbus 6 removed its blocking API. `core/src/daemon.rs` is now a blocking facade
+in which every call is one `zbus::block_on(...)`. zbus **panics** if `block_on`
+runs inside another `block_on` or inside a zbus task (an interface method, a
+signal handler). So:
+
+- Never call `opengg_core::daemon::*` (or anything built on it, such as
+  `core::audio`) from code that is already running inside `zbus::block_on`.
+- Code that hands D-Bus data to a callback, like `core::hotkeys::listen`, must
+  pull the message inside `block_on` and run the callback **outside** it.
+  The callback may well call back into `core::daemon`.
+- The daemon is async (tokio) and uses `.await`, never `block_on`.
+- Use the root types (`zbus::Variant`, `zbus::OwnedObjectPath`, `zbus::Type`),
+  not `zbus::zvariant::*`. Those are deprecated aliases that zbus 7 removes.
+  Builder setters (`.path()`, `.name()`, `.serve_at()`) no longer return
+  `Result`; every error surfaces from `.build()`.
+
+`hotkeys::tests::blocking_facade_works_across_threads_and_from_the_listener`
+covers all of this against a real bus. Run it with a private session bus,
+e.g. `dbus-daemon --session --fork --print-address=1`, then export
+`DBUS_SESSION_BUS_ADDRESS`. It skips itself when there is no bus.
+
 ---
 
 ## Pre-Commit Verification (Mandatory)
@@ -80,10 +103,33 @@ qt-shell/tools/ui-shots.sh
 Run `cargo build` in `qt-shell/` first, or you will screenshot a stale binary
 and sign off on changes that were never compiled.
 
-The `clips:selection` and `clips:filtered` targets put the Clips page into
-states a headless run cannot click into — a multi-clip selection and an active
-search + favourites filter — so the bulk action bar and the clear-filters
-control are covered by the sweep instead of being signed off unseen.
+The `clips:selection`, `clips:filtered` and `clips:montage` targets put the
+Clips page into states a headless run cannot click into — a multi-clip
+selection, an active search + favourites filter, and the montage dialog open
+on the first four clips — so the bulk action bar, the clear-filters control
+and the montage builder are covered by the sweep instead of being signed off
+unseen.
+
+**The full app needs Qt 6.7+ (Arch ships 6.8+).** On Debian/Ubuntu's Qt 6.4
+the binary builds, but QML loading fails with "HomePage is not a type",
+"GlobalHotkeys is not a type" and so on. The cause is the per-corner
+`topLeftRadius`/`topRightRadius`/… properties in `ChannelStrip.qml` and
+`SegmentedToggle.qml`, which only exist from Qt 6.7. One unloadable component
+makes every type that depends on it unresolvable. The sweep cannot run there.
+In that case, render the page or component you changed on its own:
+
+1. Copy the QML files (`Theme.qml`, `Icons.qml`, `components/*.qml`, the page)
+   flat into a scratch `com/opengg/app/` with a `qmldir`.
+2. Strip the per-corner radius lines **in those scratch copies only**.
+3. Stub the Rust singletons the page touches as QML `QtObject` singletons.
+   `grep -oh "[A-Z][a-zA-Z]*Controller\.[a-zA-Z]*"` lists them.
+4. Drive it from a `Window` that calls `contentItem.grabToImage()` under
+   `QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qml`.
+
+This is a fallback, not a replacement for the sweep: say which one you ran.
+
+`mixer:stream` renders the Mixer's Stream view (Streamer Mode on) with sample
+state, since a headless run has no daemon to turn Streamer Mode on.
 
 The harness CANNOT capture QQC2 `Popup`s: they render in their own overlay
 window, and the sweep grabs `captureRoot`. To check one, open it in a capture
@@ -309,6 +355,34 @@ QT_QPA_PLATFORM=offscreen ./target/debug/opengg-qt \
 
 Then inspect `/tmp/mixer.png` in an image viewer. This captures exactly what QML rendered, including any off-screen content.
 
+### 10. Dialogs in the Screenshot Harness
+
+Dialogs are only reachable by clicking, so the sweep opens them with
+`--dialog <name>` (`ScreenshotController.dialog`): `editor:export` opens the
+export dialog over the editor, `clips:share` opens the Share sheet over the
+first clip. A new dialog should get the same treatment — a dialog no target
+renders is a dialog nobody has seen.
+
+---
+
+## FFmpeg Rules
+
+Every ffmpeg call that copies or re-encodes a clip must:
+
+- **Map streams explicitly** — `-map 0:v:0 -map 0:a?` (or filter labels).
+  ffmpeg's default selection keeps ONE audio stream; OpenGG clips carry one
+  track per mixer channel, and the missing map silently deleted them.
+- **Seek before `-i`** (`-ss S -t D -i in`). Output-side `-ss` with `-c copy`
+  produced a file with no video at all on a multi-track clip, and with a
+  re-encode it decodes the file from 0.
+- **Write through a hidden part file and rename** on success
+  (`media::part_path_for`, or the `.part.mp4` helpers in `edit`/`share`). The
+  library and watcher skip dotfiles; the watcher picks up the rename
+  (`Modify(Name)`).
+- Add `-movflags +faststart` to MP4 outputs.
+
+See `docs/KAIROS_INTEGRATION.md` for where these rules came from.
+
 ---
 
 ## Theme & Icon Rules
@@ -373,7 +447,64 @@ Virtual audio sinks are created via `pactl load-module module-null-sink`. App ro
 
 **Why**: Restarting PipeWire disconnects all existing audio clients and loses all user routing decisions. Users expect their mixer state to persist across daemon/app restarts.
 
-### 2. Daemon Binary Can Be Stale
+### 2. The Daemon Owns the Live Graph
+
+`daemon/src/audio/reconcile.rs` listens to `pactl subscribe` and keeps the
+graph as intended. It:
+
+- recreates missing OpenGG sinks (unless the user removed virtual audio);
+- routes new streams by `mixer.appRules`;
+- puts every output channel (Game/Chat/Media/Aux) on exactly one Personal
+  (headset) path, chosen per channel by `path_modes`, to `mixer.devices[ch]`
+  while that device exists and otherwise to the default output.
+
+| PathMode | When | Monitor | Personal path | Fader |
+|---|---|---|---|---|
+| `Direct` | no FX chain, Streamer Mode off | post-fader | `monitor → device` (`pw-link`) | the sink |
+| `Chain` | EQ or Smart Volume on | pre-fader | `monitor → FX chain → device` | `fader*:Mult` inside the chain |
+| `Loopback` | Streamer Mode on, no chain | pre-fader | `OpenGG_Personal_<ch>` loopback | the loopback's volume |
+
+The sink volume stays the one Personal fader in every mode: `sync_faders`
+mirrors it to the chain or loopback, on mixer calls and on each sink-change
+event. So the mixer, Ear Blast, hydrate and pavucontrol keep working. Streamer
+Mode (`audio/streamer.rs`) owns only the Stream side: the `OpenGG_Stream` bus,
+its `OpenGG_Stream_Mix` source and the per-channel feeds. Those take the clean,
+pre-FX monitor.
+
+The FX chain (`audio/eq.rs`: preamp → 10-band EQ → optional Smart Volume
+(swh SC4) → fader, explicit stereo) and mic processing (`audio/micfx.rs`) are
+`pipewire -c` filter-chains the daemon hosts with `node.autoconnect = false`;
+the reconciler links them in. The UI only sends state over D-Bus (`SetEq`,
+`SetSmartVolume`, `SetMicFx`, `SetStreamerMode`, `Reconcile`) and saves it
+under `mixer.*`.
+
+**Rule**: Don't add one-shot "fix the graph at startup" code, and never
+`pw-link` from the UI process. A direct link from a channel monitor is worse
+than a duplicate: in `Chain`/`Loopback` mode the monitor is pre-fader, so it
+plays an unfaded copy. Device choices go through
+`core::audio::set_channel_device` (`mixer.devices` + `Reconcile`). Put the
+intent in the reconciler's pure planners (`path_modes`, `plan_links`,
+`plan_mic_links`, `rule_target`, `plan_work`) and test it there. Never link a
+monitor into an OpenGG sink: that is a feedback loop.
+
+**Rule**: A pass switches paths in the order *build new loopback muted →
+remove links → flip pre/post-fader → add links → open the level*. A switch
+then costs a few ms of silence, never an unfaded burst. Keep that order.
+
+**Rule**: Every way out restores the classic graph (Streamer Mode off,
+SIGTERM, `Drop`), and the next start cleans up after a SIGKILL.
+
+**Rule**: Spawn helpers through `subprocess::command` in the daemon. It pins
+`LC_ALL=C` (pactl's text output is translated) and kills the command's process
+group after a timeout. Prefer `pactl -f json` to parsing the text form.
+
+**Landmine**: `pw-cli set-param … Props '{ params = [ … ] }'` builds the
+object in a ~1 KiB buffer. Past that it sends an **empty** object and still
+exits 0, so the change silently does nothing. Keep each payload small (see
+`eq::props_payloads`, which splits per side and stage); `eq::set_params`
+treats `Object: size 8,` as a failure.
+
+### 3. Daemon Binary Can Be Stale
 
 After pulling new code, the installed `~/.local/bin/openggd` might be outdated. Before debugging daemon behavior:
 
@@ -390,7 +521,7 @@ fi
 
 This catches cases where a previous session built the daemon but didn't reinstall.
 
-### 3. Replace Running Binaries Safely
+### 4. Replace Running Binaries Safely
 
 If you need to replace a running binary (daemon, Qt app), use atomic move-to-temp-then-replace:
 
@@ -405,7 +536,7 @@ mv /tmp/opengg.new ~/.local/bin/opengg  # atomic rename
 
 This ensures the running process doesn't keep the old binary's file handle.
 
-### 4. `ui-settings.json` Top-Level Keys
+### 5. `ui-settings.json` Top-Level Keys
 
 Some settings are stored at the **top level** of `~/.config/opengg/ui-settings.json`, as siblings of `"settings"`:
 
@@ -413,13 +544,41 @@ Some settings are stored at the **top level** of `~/.config/opengg/ui-settings.j
 {
   "settings": { /* display theme, language, notification style */ },
   "modules": { /* enabled audio/device/replay modules */ },
-  "extensionConsents": { /* user approvals for ext permissions */ },
+  "extensionConsents": { /* UI-side record; the daemon enforces consent from its own extension-consents.json */ },
   "mixer": { /* app→channel routing, mutes, volumes */ },
   "macros": { /* custom hotkey sequences */ }
 }
 ```
 
 **Rule**: Before wiring any new top-level data through `SettingsController.setValue()`, inspect the **live file** and the daemon's settings loader to understand the schema. Mutations to `"settings"` go through the normal debounced save; top-level siblings may require different serialization logic.
+
+### 6. Testing Audio Changes Against Real PipeWire
+
+Unit tests cover the planners. To see the real effect, run an isolated session
+whose runtime dir and session bus are separate from the desktop. It also works
+in a container after `apt-get install pipewire pipewire-pulse wireplumber
+pulseaudio-utils`.
+
+```bash
+export XDG_RUNTIME_DIR=$(mktemp -d) HOME=$(mktemp -d)   # keep the path short: unix sockets cap at 108 chars
+export XDG_CONFIG_HOME=$HOME/.config
+export DBUS_SESSION_BUS_ADDRESS=$(dbus-daemon --session --fork --print-address=1)
+pipewire & sleep 1; wireplumber & pipewire-pulse & sleep 2
+# Fake "hardware" that survives a pipewire-pulse restart (a pactl null-sink would not):
+pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=speakers media.class=Audio/Sink object.linger=true audio.position=[FL FR] }'
+RUST_LOG=info daemon/target/debug/openggd &
+pw-link -l | grep -A1 '^OpenGG_.*:monitor'
+```
+
+Use `pkill -x openggd`, not `pkill -f`: the pattern also matches your own
+shell's command line.
+
+Mic processing needs plugins. On Debian and Ubuntu `swh-plugins` is in the
+archive; RNNoise is not, but it builds from source in a minute: `cmake` on
+werman/noise-suppression-for-voice with only `-DBUILD_LADSPA_PLUGIN=ON`, then
+copy `librnnoise_ladspa.so` to `/usr/lib/ladspa`. A virtual mic for the test:
+`pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=fakemic media.class=Audio/Source/Virtual object.linger=true audio.position=[MONO] }'`,
+then `pactl set-default-source fakemic` before starting the daemon.
 
 ---
 

@@ -56,7 +56,31 @@ pub mod qobject {
         // to know whether Mixer's toggle was on, so it could push a channel
         // to 150% even with Overdrive off.
         #[qproperty(bool, overdrive_enabled, cxx_name = "overdriveEnabled")]
+        // Streamer Mode state from the daemon: `{enabled, sink, source,
+        // channels: {ch: {volume, muted}}, devices: {ch: device}}`. Refreshed
+        // with channelsJson; "{}" when the daemon is unreachable.
+        #[qproperty(QString, streamer_json, cxx_name = "streamerJson")]
+        // Last Streamer Mode failure (e.g. virtual audio not created), shown
+        // under the toggle. Empty when the last call succeeded.
+        #[qproperty(QString, streamer_error, cxx_name = "streamerError")]
         type AudioController = super::AudioControllerRust;
+
+        /// Turn Streamer Mode on or off (rebuilds part of the audio graph;
+        /// runs on a worker), persist it to `mixer.stream`, then refresh.
+        #[qinvokable]
+        #[cxx_name = "setStreamerMode"]
+        fn set_streamer_mode(self: Pin<&mut Self>, enabled: bool);
+
+        /// Set one Stream-mix fader (0–150). Like setVolume, no refresh per
+        /// call — the fader shows the dragged value and the poll reconciles.
+        #[qinvokable]
+        #[cxx_name = "setStreamVolume"]
+        fn set_stream_volume(self: Pin<&mut Self>, channel: &QString, volume: i32);
+
+        /// Mute or unmute one Stream-mix channel, then refresh.
+        #[qinvokable]
+        #[cxx_name = "setStreamMute"]
+        fn set_stream_mute(self: Pin<&mut Self>, channel: &QString, muted: bool);
 
         /// Fetch the current channel list from the daemon.
         #[qinvokable]
@@ -174,6 +198,11 @@ pub struct AudioControllerRust {
     channel_devices_json: QString,
     ear_blast_json: QString,
     overdrive_enabled: bool,
+    streamer_json: QString,
+    streamer_error: QString,
+    /// Bumped per Stream-mix change; the trailing save only writes if no
+    /// newer change arrived, so a fader drag is one file write, not fifty.
+    stream_save_gen: Arc<AtomicU64>,
 }
 
 impl qobject::AudioController {
@@ -191,7 +220,11 @@ impl qobject::AudioController {
         std::thread::spawn(move || {
             let channels = opengg_core::audio::get_channels();
             let apps = opengg_core::audio::get_apps();
+            let streamer = opengg_core::audio::get_streamer_state().unwrap_or_else(|_| "{}".into());
             let _ = qt_thread.queue(move |mut controller| {
+                if *controller.streamer_json() != QString::from(&streamer) {
+                    controller.as_mut().set_streamer_json(QString::from(&streamer));
+                }
                 match channels {
                     Ok(j) => {
                         controller.as_mut().set_channels_json(QString::from(&j));
@@ -439,6 +472,55 @@ impl qobject::AudioController {
         self.as_mut().set_vu_running(false);
     }
 
+    pub fn set_streamer_mode(self: Pin<&mut Self>, enabled: bool) {
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = opengg_core::audio::set_streamer_mode(enabled);
+            if result.is_ok() {
+                persist_stream_settings();
+            }
+            let err = result.err().unwrap_or_default();
+            let _ = qt_thread.queue(move |mut c| {
+                c.as_mut().set_streamer_error(QString::from(&err));
+                c.as_mut().refresh();
+                // The Personal device column reads from the daemon while
+                // Streamer Mode is on and from pw-link while it is off.
+                c.as_mut().refresh_devices();
+            });
+        });
+    }
+
+    pub fn set_stream_volume(self: Pin<&mut Self>, channel: &QString, volume: i32) {
+        let channel = channel.to_string();
+        let vol = volume.clamp(0, 150) as u32;
+        let gen = self.schedule_stream_save();
+        std::thread::spawn(move || {
+            if let Err(e) = opengg_core::audio::set_stream_volume(&channel, vol) {
+                eprintln!("setStreamVolume: {e}");
+            }
+            save_stream_settings_if_latest(&gen.0, gen.1);
+        });
+    }
+
+    pub fn set_stream_mute(self: Pin<&mut Self>, channel: &QString, muted: bool) {
+        let channel = channel.to_string();
+        let gen = self.schedule_stream_save();
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            if let Err(e) = opengg_core::audio::set_stream_mute(&channel, muted) {
+                eprintln!("setStreamMute: {e}");
+            }
+            save_stream_settings_if_latest(&gen.0, gen.1);
+            let _ = qt_thread.queue(|mut c| c.as_mut().refresh());
+        });
+    }
+
+    fn schedule_stream_save(&self) -> (Arc<AtomicU64>, u64) {
+        let gen = Arc::clone(&self.stream_save_gen);
+        let mine = gen.fetch_add(1, Ordering::SeqCst) + 1;
+        (gen, mine)
+    }
+
     pub fn refresh_ear_blast(mut self: Pin<&mut Self>) {
         let v = load_settings_envelope();
         let eb = v
@@ -498,6 +580,47 @@ fn store_app_rule(binary: &str, channel: Option<&str>) {
     }
     if let Ok(out) = serde_json::to_string(&v) {
         let _ = opengg_core::settings::save_ui_settings(&out);
+    }
+}
+
+/// Persist the daemon's Streamer Mode state as `mixer.stream`
+/// (`{enabled, volumes, mutes}`) — what the daemon seeds from on its next
+/// start. Read-modify-write like every other mixer preference here.
+fn persist_stream_settings() {
+    let Ok(raw) = opengg_core::audio::get_streamer_state() else {
+        return;
+    };
+    let Ok(state) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return;
+    };
+    let mut volumes = serde_json::Map::new();
+    let mut mutes = serde_json::Map::new();
+    if let Some(chs) = state["channels"].as_object() {
+        for (ch, level) in chs {
+            volumes.insert(ch.clone(), level["volume"].clone());
+            mutes.insert(ch.clone(), level["muted"].clone());
+        }
+    }
+    let mut v = load_settings_envelope();
+    if !v["mixer"].is_object() {
+        v["mixer"] = serde_json::json!({});
+    }
+    v["mixer"]["stream"] = serde_json::json!({
+        "enabled": state["enabled"].as_bool().unwrap_or(false),
+        "volumes": volumes,
+        "mutes": mutes,
+    });
+    if let Ok(out) = serde_json::to_string(&v) {
+        let _ = opengg_core::settings::save_ui_settings(&out);
+    }
+}
+
+/// Trailing save for Stream-mix fader changes: wait out the drag, then
+/// write only if this was the last change.
+fn save_stream_settings_if_latest(gen: &AtomicU64, mine: u64) {
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    if gen.load(Ordering::SeqCst) == mine {
+        persist_stream_settings();
     }
 }
 

@@ -75,7 +75,7 @@ Currently defined permission tiers (mapped to daemon-exposed commands):
 
 **Future Write Tiers:** Planned write-capable tiers (e.g., `clips:write`, `audio:write`) will require explicit declaration in `permissions` and will be itemized in the same consent modal.
 
-**Known limitation (v1):** consent is enforced by the frontend at enable time; denial is persisted as `enabled=false` in the shared `~/.config/opengg/extensions.json`, which the daemon honors at startup. A daemon extension that was already enabled *before* this feature existed will still be auto-started by the daemon until the user visits Settings → Extensions once (where the needs-consent state is surfaced). Daemon-side consent checking is a planned follow-up.
+**Enforcement:** the daemon enforces consent itself (`daemon/src/extensions/mod.rs`). A daemon part runs only when `~/.config/opengg/extensions.json` says `true` for its id — **absent means disabled**, so copying an extension folder into place never runs it by itself. When the user enables an extension, the SHA-256 of its executable is pinned in `~/.config/opengg/extension-consents.json`; if the executable later changes, the daemon will not start it again until the user re-enables it. Bare executables placed directly in the extensions folder (the pre-manifest layout) are not run. Extensions are **not sandboxed**: an enabled daemon part runs as your user and inherits the daemon's `input` group membership, so only enable extensions you trust. The permission tiers below describe intent; they are not enforced for daemon parts.
 
 ### First-Run Consent for Daemon Extensions
 

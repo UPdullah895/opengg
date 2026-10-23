@@ -6,6 +6,438 @@ This is the **append-only session log** for all AI agents working on OpenGG. Eve
 
 ---
 
+### [2026-10-23] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (Phase 4: auto-clip, CS2)
+
+**What Changed:**
+- `f7696d0`: Auto-clip from Counter-Strike 2's Game State Integration.
+  - **daemon:** `daemon/src/autoclip/` holds four pieces:
+    - an HTTP POST listener on `127.0.0.1:37820` that checks a token;
+    - `cs2::Tracker`, which diffs the local player's snapshots;
+    - `coalesce::Coalescer`, a 4 s post-roll extended up to a 12 s cap, best event wins;
+    - the `MomentDetected(json)` signal and `GetAutoClipStatus` on the Replay interface.
+
+    `config::load_ui_settings` is now shared, moved out of `audio::hub`.
+  - **core:** `hotkeys::listen` now delivers `ReplaySignal::{Hotkey, Moment}`
+    from one stream. New `core::autoclip` installs the cfg into every Steam
+    library with CS2, manages the token, and has `tag_clip` / `clip_name`
+    (`CS2 – Quad Kill – Mirage`). `steam::steam_library_dirs` was factored out
+    of `get_steam_games`.
+  - **qt-shell:**
+    - HotkeyController gains `lastMoment` and `momentCount`;
+    - `RecordingController.saveMoment` names the clip and stays silent when the buffer is off;
+    - new `AutoClipController` and `AutoClipCard`, the card shown in Settings → Capture & Sound;
+    - en/ar strings.
+  - **Docs:** plan doc Phase 4.
+
+**Why:**
+Phase 4 of the GG-parity plan: clips that save and name themselves. CS2 GSI
+first because it needs nothing but a cfg file, and it is the biggest title
+that GG auto-clips and that also runs on Linux.
+
+**Landmines & Discoveries:**
+- **GSI sends snapshots, not events.** The `player` block follows whoever
+  you spectate after dying, so diff only when `player.steamid ==
+  provider.steamid`, and leave the baseline alone otherwise. Otherwise a
+  teammate's ace is credited to you.
+- **The first snapshot is a baseline.** A daemon restart mid-round would
+  otherwise report every kill already on the board.
+- **The loopback port needs auth.** Any local process can POST a fake "ace".
+  The token is 0600 in `~/.config/opengg/cs2-gsi.token` and inside the cfg
+  (also written 0600).
+- **`~/.steam/root` is a symlink** to `~/.local/share/Steam`, so the cfg dirs
+  are deduplicated after `canonicalize`, or the cfg would be written twice.
+- **`hotkeys::listen`'s match rule has no member filter any more.** Both
+  signals come through one stream in order. It still filters on interface
+  and path, so `PropertiesChanged` is not delivered.
+- **The daemon reads `settings.autoClip` from ui-settings.json** whenever its
+  mtime changes. There is no D-Bus setter to keep in sync, and the listener
+  runs even when auto-clip is off, so Settings can show "connected" before
+  the user turns it on.
+
+**Verification:**
+- `cargo clippy -- -W clippy::all` is clean in daemon, core and qt-shell.
+  `cargo test`:
+  - daemon: 116/116, 16 of them new;
+  - core: all pass, including the real-bus `hotkeys` test (with a private
+    `dbus-daemon`), now also covering `MomentDetected`;
+  - qt-shell: 23/25; the 2 `mixer_pipeline` timing tests fail here because
+    the container has no audio sink. They failed before this work too.
+- `qt-shell/tools/check-colors.sh` is clean, and en/ar have key parity.
+- **End to end, on a private session bus:** openggd in a temp HOME, with
+  synthetic GSI payloads from curl.
+  - A wrong token got a 403.
+  - Kills 1–4 followed by an MVP in one round gave exactly one
+    `MomentDetected` in `dbus-monitor`: `{"kind":"quad","map":"de_mirage","round":3,"kills":4}`.
+    It arrived 4 s after the MVP.
+  - `GetAutoClipStatus` reported `moments: 1` and the last payload time.
+- **Card rendering:** done with the stub harness, not the full sweep (Qt 6.4
+  here). Three states (not set up, connected, off/not found with a port
+  error) in en and ar (RTL), with no QML warnings; the screenshots were
+  inspected.
+- **Not verified:** against a real CS2 client (none in this container). The
+  payload shape follows Valve's documented GSI fields.
+
+### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (Phase 3: merge #62, one path owner, Smart Volume)
+
+**What Changed:**
+- `ec51e3c`: Merged #62 (`ccr-05fc126b-lm8sgg`) into this branch, at the
+  user's choice, and unified the two audio designs. The reconciler now owns
+  every channel's Personal path through `PathMode` (`Direct` / `Chain` /
+  `Loopback`). Streamer Mode keeps only the Stream side. #62's EQ chain
+  became the per-channel FX chain (explicit stereo
+  `pre → 10 bands → [SC4] → fader`). The `pw-cli` payload overflow is fixed.
+  The zbus deny ignores are gone.
+- `db16705`: Smart Volume client side and UI (`SmartVolumeCard`), Streamer
+  Mode strings through `I18n` (en and ar), AGENTS.md audio rules rewritten,
+  plan doc Phase 3.
+
+**Why:**
+Phase 3 (mic processing and Smart Volume) had to sit in #62's chain, and #62's
+reconciler and Phase 2's Streamer Mode fought over the same links. A
+direct `monitor → device` link in Streamer Mode plays an unfaded copy. One
+owner, the reconciler, is the long-term fix.
+
+**Landmines & Discoveries:**
+- **`pw-cli set-param … Props` has a ~1 KiB pod buffer.** Past it, pw-cli
+  sends an empty object (`Object: size 8,`) and exits 0. The stereo EQ plus
+  SC4 payload (~1.3 KiB) hit this: changing the Smart Volume level did
+  nothing. Bisected. Payloads are now split per side and stage, and
+  `set_params` fails on an empty object. Recorded in AGENTS.md.
+- **A compressor after the fader fights the fader.** So whenever a chain
+  runs, the monitor goes pre-fader and the Personal fader moves into the
+  chain (`fader*:Mult` = pactl volume³, mute = 0). The fader measures a full
+  −18 dB at 50% after Smart Volume.
+- **ffmpeg's `sine` source defaults to 1/8 amplitude.** My first Smart Volume
+  test sat below every threshold and "showed" no compression. Test with
+  `volume=7` (about −6 dBFS RMS).
+- **Measurement scripts:** `[-0-9.inf]+` matches letters inside
+  "mean_volume". Use `-?[0-9.]+ dB`. `pgrep -f` can count itself.
+
+**Verification:**
+- Isolated PipeWire 1.0 session, levels measured at the headset and the
+  Stream source:
+  - classic −48.2 dB at Game 50%;
+  - chain takes over at the same −48.2 dB;
+  - chain fader 25% gives −66.2 dB, mute gives silence;
+  - fader after Smart Volume gives a full −18 dB;
+  - Streamer Mode with a chain: headset unchanged, Stream clean −30.1 dB;
+  - a channel on the loopback path at 50% gives −72.4 dB, Stream −54.1 dB;
+  - chain off moves the channel to its loopback (−48.3 dB);
+  - Streamer Mode off restores classic with 0 modules;
+  - SIGTERM leaves 0 Streamer modules and 0 chains.
+- **Smart Volume spread:** 28.9 / 22.3 / 16.1 / 8.9 dB (Off / Light / Medium
+  / Strong).
+- **Rust 1.99.1:** clippy `--all-targets -D warnings` is clean in all three
+  crates. Tests: core 215/215, daemon 100/100, qt-shell 23/25 (the same two
+  `mixer_pipeline` timing tests, which need an audio sink). `cargo deny` reports
+  advisories ok and bans ok with no ignores; `cargo audit` is clean.
+  `check-colors.sh` is clean; en/ar locale keys are at parity.
+- **UI:** the stub harness (Qt 6.4, not the sweep) rendered the merged
+  `MixerPage.qml` with its real English and Arabic strings: Media tab with
+  Smart Volume on, Game tab with the plugin missing, Mic tab, Stream view.
+  Zero QML warnings; screenshots inspected. CI's sweep covers `mixer:game`
+  (Smart Volume card) and `mixer:stream`.
+- **NOT verified:** real hardware; #62's own features beyond what its tests
+  and this audio pass cover (share sheet, edit engine, packaging); it
+  arrives as its author left it.
+
+### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (Phase 2: Streamer Mode)
+
+**What Changed:**
+- `0bc6a81`: Streamer Mode, an independent Stream mix for OBS.
+  - **daemon:** new `audio/streamer.rs` plus five D-Bus methods.
+  - **core:** the device-routing paths are Streamer-aware.
+  - **qt-shell:** Mixer toggle, Personal/Stream switch, OBS hint,
+    `mixer.stream` persistence, a `cast` icon and the `mixer:stream`
+    ui-shots target.
+  - **docs:** an AGENTS.md audio rule, and the corrected Qt 6.4 cause.
+
+**Why:**
+This is Phase 2 of the GG-parity plan, the Sonar Streamer Mode equivalent:
+viewers get their own mix, and the headset keeps the Personal one.
+
+**Landmines & Discoveries:**
+- **A null-sink monitor is post-fader.** Measured with a test tone: −18 dB at
+  50%, silent when muted. So the plan's "loopback the monitor into a Stream
+  bus" would have tied the Stream mix to the Personal fader.
+  `monitor.channel-volumes=false` makes it pre-fader and can be flipped live
+  with `pw-cli set-param <node> Props '{ params = [ "monitor.channel-volumes"
+  false ] }'`. But one monitor can't be both, so the Personal path moves to a
+  loopback while Streamer Mode is on.
+- **The sink volume stays the Personal fader** (mirrored onto the loopback),
+  so the mixer, hydrate, Ear Blast and pavucontrol all keep working untouched.
+- **Any direct `pw-link` from a channel monitor in Streamer Mode leaks
+  unfaded audio.** `core::audio` routes device changes through the daemon.
+  Recorded in AGENTS.md.
+- **pulse `module-loopback` streams can be found by `node.name`** set through
+  `sink_input_properties`. `pw-cli set-param` accepts a node name.
+- **Loopbacks default to 200 ms latency.** 10 ms keeps the Personal mix usable.
+- **`sinks::sink_exists` was a substring match;** made exact. Found because
+  "OpenGG_Stream" collides with the "OpenGG_StreamFeed_…" prefix used for the
+  Stream feed nodes.
+- **Qt 6.4's "X is not a type" has a known cause:** per-corner
+  `topRightRadius` etc. (Qt 6.7+) in `ChannelStrip.qml` and
+  `SegmentedToggle.qml`. Stripping them in scratch copies let the real
+  `MixerPage.qml` render under the stub harness.
+- **Shell slip:** `touch src/main.rs src/lib.rs` in a crate loop creates the
+  file that doesn't exist; an empty `daemon/src/lib.rs` nearly landed. Touch
+  only files you know exist.
+
+**Verification:**
+- Isolated PipeWire 1.0 session (own runtime dir and D-Bus; null sinks for
+  headphones and speakers; a tone-fed mic), measuring levels at each step:
+  - classic Game at 50% gives −48.2 dB at the headphones; Streamer on keeps
+    −48.2 dB at the headphones and the Stream gets −30.1 dB (pre-fader);
+  - Personal mute silences the headphones only; Stream at 50% or muted
+    changes the Stream only;
+  - mic present in the Stream; Stream Master works;
+  - a Personal change made with `pactl` is mirrored (25% gives −66.2 dB);
+  - off restores −48.2 dB and the classic `pw-link` with 0 leftover modules;
+    SIGTERM while on leaves 0 leftovers;
+  - seeded from `mixer.stream` at start; SIGKILL keeps the headphones
+    playing; restart rebuilds exactly 11 modules; off is clean.
+- **`core` driven against the live daemon:** in Streamer Mode a device change
+  goes through the daemon (speakers −30.1 dB, headphones silent: no leak),
+  survives turning it off, and classic routing still uses `pw-link`. Turning
+  it on without virtual audio returns "create virtual audio first".
+- `cargo clippy --all-targets -- -D warnings` (Rust 1.99.1) is clean in all
+  three crates. `cargo test`: daemon 66/66 (5 new), core 98/98, qt-shell
+  21/23 (the same 2 `mixer_pipeline` timing tests that need an audio sink).
+  `check-colors.sh` is clean.
+- **UI:** the real `MixerPage.qml` rendered under the Qt 6.4 stub harness
+  (not the sweep) in four states: off, on/Personal, on/Stream, error. Zero
+  QML warnings; screenshots inspected. CI's Arch job runs the real sweep,
+  including the new `mixer:stream` target.
+- **NOT verified:** real audio hardware, OBS itself, and the per-app routing
+  UI while in the Stream view.
+
+### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v (CI: zbus 6, advisories, Rust 1.99)
+
+**What Changed:**
+- `9687b44`: Fix the three lints clippy 1.99 turned into errors in `core`
+  (17x `empty_line_after_doc_comments`, which also hid those functions'
+  docs; `manual_pattern_char_comparison`; `chunks_exact_to_as_chunks`).
+- `9e8f8a7`: zbus 4 → 6 in `core` and `daemon`; patch bumps for `rustls`,
+  `rustls-webpki`, `webpki-roots`, `quinn-proto` and the yanked `chacha20`;
+  `async-trait` 0.1.92.
+
+**Why:**
+On the same day, every crate's cargo-deny and cargo-audit jobs went red. New
+RustSec advisories mark zvariant, zvariant_derive and zbus_names
+unmaintained, and there were real TLS/QUIC advisories. CI's stable toolchain
+also moved to 1.99, whose new clippy lints failed `core` and `daemon`. The
+user asked for the long-term fix: migrate rather than ignore advisories, and
+stay on stable rather than pin the toolchain.
+
+**Landmines & Discoveries:**
+- zbus 6 removed `zbus::blocking`. `zbus::block_on` panics when nested, so a
+  callback fed from inside `block_on` must run outside it. Documented in
+  AGENTS.md ("zbus 6: `block_on` Must Never Nest").
+- A zbus 6 connection outlives the `block_on` call and thread that made it:
+  a helper thread services it between calls. The cached session in
+  `core::daemon` therefore still works from any thread (tested).
+- zbus 5 is no escape from these advisories: they cover every standalone
+  zvariant release.
+- The daemon builds zbus with `default-features = false` plus
+  `tokio, proxy, service, tracing`. Otherwise it would build zbus's own
+  zruntime as well.
+- Builder setters no longer return `Result`; errors surface from `build()`.
+  The old `.path(..).unwrap()` calls in `ratbag.rs` are gone with them, so a
+  bad object path is now an error rather than a panic.
+- The `double_must_use` errors came from the `async-trait` macro, not from
+  our code. 0.1.92 fixes it upstream, so no `#[allow]` was needed.
+
+**Verification:**
+- Rust 1.99.1 (CI's stable): `cargo clippy --all-targets -- -D warnings` is
+  clean in `core`, `daemon` and `qt-shell`.
+- `cargo deny check advisories bans`: "advisories ok, bans ok" in all three.
+  `cargo audit`: no vulnerabilities and no warnings in all three.
+- `cargo test` on a private `dbus-daemon --session`: core 98/98 (including
+  the new cross-thread/listener test) and daemon 61/61. qt-shell 21/23; the
+  2 failures are the same `mixer_pipeline` timing tests as before, which need
+  an audio sink.
+- `openggd` run on a private session bus: Audio, Device, Replay and
+  Extensions all introspect, and `GetDevices`, `GetChannels` and `GetStatus`
+  answer over `dbus-send`.
+- NOT verified: ratbagd (system bus) paths against real hardware, and the
+  daemon's `HotkeyPressed` emit from a real key press. The core side of
+  that signal is covered by the test above.
+
+### [2026-10-22] Claude Code (Claude Opus 5.5) — claude/ecstatic-keller-kjow4v
+
+**What Changed:**
+- `d2c0777`: Montage builder (SteelSeries Moments parity)
+  - `core/src/montage.rs`: a pure planner (`plan`) that turns a `MontageSpec`
+    plus probed `SourceInfo` into the full ffmpeg argv/filtergraph, and a
+    runner (`run_plan`) with real progress (`-progress pipe:1`) and cancel
+  - `core/src/dialogs.rs`: `pick_file` (kdialog/zenity) for the music track
+  - `qt-shell/src/montage.rs`: `MontageController` QML singleton
+  - `qt-shell/qml/components/MontageDialog.qml` + a **Montage** button in
+    the Clips selection bar; `clips:montage` ui-shots target
+  - `docs/superpowers/plans/2026-10-22-gg-parity-montage.md`: GG feature
+    research, gap table, critique, and Phases 2–4 (Streamer Mode dual mix,
+    mic/loudness DSP, auto-clip)
+
+**Why:**
+Montage was the largest gap against GG Moments. It was built to improve on
+GG's version rather than copy it: it reuses the editor's saved trims, sums
+multi-track captures safely, ducks the music, and offers a vertical 9:16
+export.
+
+**Landmines & Discoveries:**
+- `xfade` refuses inputs whose frame rate or timebase differ, so every
+  segment is normalised with `fps=…,format=yuv420p,settb=AVTB` first.
+  `acrossfade` and `concat` desync unless each audio segment is exactly the
+  video length, hence `apad,atrim=duration=D` per clip, even when a track
+  ends early.
+- Captures have one audio stream per source and some have none. A clip with
+  zero streams needs a generated `anullsrc` bed, or the join filters see
+  mismatched inputs.
+- The dialog must not assign to its own `clips` input property. Reordering
+  that way severs the caller's binding and the dialog can never reopen, so
+  it works on an internal `order` copy instead (close then reopen was checked
+  in the harness).
+- Debian/Ubuntu Qt 6.4 builds qt-shell but cannot load the QML module: every
+  page is "not a type". The full sweep therefore could not run here. The
+  workaround is documented in AGENTS.md.
+
+**Verification:**
+- `cargo test` in `core/`: 14/14 montage tests pass, including a real
+  ffmpeg render (2-track + silent + 200x200 clip, blur fill, crossfade,
+  ducked looped music; output size, duration and track count checked;
+  cancel removes the file)
+- `cargo clippy -- -W clippy::all`: no new warnings in `core/` (same count
+  as base) and none in `qt-shell/`
+- `qt-shell/tools/check-colors.sh`: clean
+- `cargo build` in `qt-shell/` succeeds. `cargo test` there: 21 pass and 2
+  fail (`mixer_pipeline` seek/wall-clock timing). That file is untouched;
+  this container has no audio sink.
+- `ui-shots.sh` could NOT run (Qt 6.4, see above). Instead, MontageDialog
+  was rendered headless with stub singletons, and the form, rendering and
+  done states were inspected visually with zero QML warnings.
+- NOT verified: the full app on a real desktop, the kdialog/zenity music
+  picker, `make build` (release), daemon (untouched)
+
+---
+
+### [2026-10-22] Claude (Claude Code) — ccr-05fc126b-lm8sgg (recording strategy research)
+
+**What Changed:**
+- `docs/RECORDING_STRATEGY.md`: a research note covering:
+  - our own recording engine versus depending on gpu-screen-recorder, with risks and mitigations;
+  - long-term benefits and the maintenance load;
+  - the Linux-first then Windows question;
+  - which projects to reuse, rebuild or study, with licences.
+
+**Why:**
+The user asked whether the recording approach holds up long term and across platforms before more is built on it.
+
+**Landmines & Discoveries:**
+- The UI process, not the daemon, spawns gpu-screen-recorder (`core::gsr::start_gsr_replay`). The daemon's `Recorder` is a stub, so the replay buffer depends on the window process.
+- `core::gsr::kill_kms_server` runs `pkill -9 gsr-kms-server`, which also kills a gpu-screen-recorder the user runs separately.
+- The hardest part of a Windows port is the mixer's virtual sinks, which need a signed kernel audio driver; screen capture is the easier part. WASAPI process loopback gives per-app tracks without a driver.
+
+**Verification:**
+- Fast-moving facts were checked against current sources (cited in the doc): licences, NVENC session limits, portal restore tokens, `ext-image-copy-capture-v1`, WASAPI process loopback, and driver signing.
+
+### [2026-10-22] Claude (Claude Code) — ccr-05fc126b-lm8sgg (Phase 2: timeouts, daemon EQ, mic processing)
+
+**What Changed:**
+- `44be659`: the daemon's `subprocess::command` returns a `Cmd` wrapper that pins the C locale and kills the command's process group after 8 s. Headset and audio D-Bus handlers now run on the blocking pool.
+- `dc89e2a`: the EQ moves into the daemon (`audio/eq.rs`): one filter-chain per channel with a real preamp, linked by the reconciler (`monitor → EQ → device`), restarted if it dies, and saved in `mixer.eq`. New D-Bus methods `SetEq`, `GetEq` and `Reconcile`. Related fixes:
+  - a picked output device is now saved (`mixer.devices`);
+  - startup hydration no longer links monitors directly;
+  - the current-device readout follows the path through the EQ;
+  - the output-device list is read from `pactl -f json`.
+- `450fb37`: mic processing (`audio/micfx.rs`): RNNoise, swh gate and swh SC4 compressor, each only when its plugin exists, in the path `loopback → chain → OpenGG_Mic`. New D-Bus methods `SetMicFx` and `GetMicFx`. DspControls drives it and is no longer shown on the Chat tab. Shared coalesced saver: `core::settings::save_mixer_later`.
+
+**Why:**
+These finish the critique's Phase 2 audio foundation. Before, the EQ died with the window and its dry path was put back by the reconciler (doubled audio); the mic cards had no engine; and one hung `pactl` or `headsetcontrol` could stall the daemon.
+
+**Landmines & Discoveries:**
+- **The reconciler and the old UI EQ conflicted.** The UI-hosted EQ removed the dry link; the reconciler restored it. Anything that changes links must go through the reconciler.
+- **The Qt UI never saved `mixer.devices`.** A picked device was lost on restart. With the reconciler running, it was also reverted at the next device event.
+- **Filter-chain ports:** with `node.autoconnect = false` the chain's ports are `<capture node>:input_FL/FR` and `<playback node>:output_FL/FR`. Controls are set by node name: `pw-cli set-param <capture node> Props '{ params = [ "eq0:Gain" 3.0 ] }'`.
+- **Module path check:** core's filter-chain check only looked in `/usr/lib/pipewire-0.3`, so it reported the module missing on Debian/Ubuntu (multiarch `/usr/lib/x86_64-linux-gnu/...`).
+- **Timeouts:** a timeout must kill the process group, not just the child; a grandchild holding the stdout pipe otherwise blocks the reader threads.
+- **Orphan chains:** `PR_SET_PDEATHSIG` in `pre_exec` stops chains from outliving a crashed daemon, whose node names would collide with the next one's.
+- **Mono plugins:** they are duplicated per channel by the filter-chain itself when `audio.channels = 2`.
+
+**Verification:**
+- clippy `-D warnings` (stable) is clean in core, daemon and qt-shell; `cargo test`: core 199, daemon 88.
+- `check-colors.sh` is clean; `ui-shots.sh` (`mixer:game`, `mixer:mic`) ran with zero QML warnings, both with and without a live daemon, and the screenshots were inspected.
+- Tested live in an isolated PipeWire session with fake speakers, a fake headset and a fake mic, plus RNNoise built from source and swh-plugins:
+  - EQ: enable; set gains in place; output follows a device change; the chain is killed and restored with its gains; disabling restores the dry path; chains die with the daemon; settings are restored when the daemon restarts.
+  - Device choice: a pick made through core is saved and kept across device events.
+  - Mic chain: inserted and removed; plugin controls read back after in-place updates.
+  - UI: renders the saved EQ and mic settings from the live daemon.
+
+### [2026-10-22] Claude (Claude Code) — ccr-05fc126b-lm8sgg (critique + Phase 1 & the audio reconciler)
+
+**What Changed:**
+- `4f5fdd3`: CI green again — TLS advisories patched via `cargo update` in all three lockfiles; per-crate `deny.toml` for core and qt-shell; the three zbus-4 helper advisories ignored with a reason (zbus 6 dropped the blocking API core uses — a real migration, deferred); `async-trait` removed from the daemon.
+- `eff7eee`: global shortcuts no longer fire while a new key is being recorded (`HotkeyController.suppressed`).
+- `101b961`: `docs/CRITIQUE.md` — whole-program review: critical findings C1–C8, module reviews, what the program lacks, a four-phase plan.
+- `3b4367a`: packaging — units run `/usr/bin/openggd` (the Makefile rewrites for `~/.local/bin`), `ReadWritePaths` with `-` prefixes, release CI verifies the shipped units; world-writable udev rules and the dead polkit policy removed; setup only adds the `input` group; "Recheck" really rechecks.
+- `2eef15f`: extensions — off by default, the daemon enforces consent bound to the executable's SHA-256, disabling always works, the bare-executable path is gone.
+- `0dc373b`: diagnostics — log file and crash reports under `$XDG_STATE_HOME/opengg`, panic hook, Settings › General › "Copy diagnostics".
+- `d07fe36`: inert mic DSP cards shown disabled under a notice (`EqController.dspAvailable`); CI "Rust Core" job; `make test`; core's 19 clippy findings fixed so it runs with `-D warnings`; ui-shots target `mixer:mic`.
+- `1ef8fa1`: `daemon/src/audio/reconcile.rs` — `pactl subscribe`-driven reconciler: relinks channels to the saved device or the current default, recreates sinks after a sound-server restart (restoring levels), applies `mixer.appRules` to new streams. Plus: trailing volume write, JSON sink levels, `LC_ALL=C` for daemon subprocesses, safe teardown after module-ID reuse, monitor→OpenGG feedback loop prevented, core's routed cache expires.
+
+**Why:**
+The user asked for a critique and then its implementation. Phase 1 makes what ships safe and honest; the reconciler is the foundation of Phase 2 — audio that keeps working when devices or the sound server change.
+
+**Landmines & Discoveries:**
+- Removing `#[async_trait]` exposed latent infinite recursion: `platform/linux.rs` called D-Bus methods that were private, so the call resolved to the trait method itself. Fixed by `pub(crate)` on the inherent methods.
+- `check-colors.sh` must run under a UTF-8 locale (`LC_ALL=C.UTF-8`); under plain `C`, `grep -P` mis-handles the emoji ranges and the result differs from CI.
+- `log`'s `set_boxed_logger` needs the `std` feature; `set_logger(Box::leak(..))` doesn't.
+- Crash-report names need sub-second precision to sort chronologically; `free_path`'s " (2)" suffix sorts *before* the bare name.
+- `setup_loopbacks` would link channel monitors into an OpenGG sink once it became the default (no hardware output, or right after a restart) — a feedback loop. Guarded in both setup and the reconciler.
+- Module IDs are reused after pipewire-pulse restarts; never unload a remembered ID without checking it is still OpenGG's.
+- The daemon can be tested against real PipeWire in a container — see AGENTS.md "Testing audio changes".
+- `pkill -f <pattern>` kills your own shell when the pattern is in the command line; use `pkill -x <name>`.
+
+**Verification:**
+- clippy `-D warnings` (stable 1.99) clean in core, daemon and qt-shell; `cargo test` passes in all three (core 202, daemon 72).
+- `cargo audit` / `cargo deny check` clean in all three crates.
+- `ui-shots.sh` (`settings:general`, `mixer:mic`) with zero QML warnings; screenshots inspected.
+- Reconciler exercised live in an isolated PipeWire session: default-output change, saved-device hot-plug and unplug, rule applied to a new stream, pipewire-pulse kill + restart (sinks, levels, links restored), RemoveVirtualAudio respected, CreateVirtualAudio restores.
+
+### [2026-10-21] Claude (Claude Code) — ccr-05fc126b-lm8sgg (Kairos-informed overhaul)
+
+**What Changed:**
+- `6298a8a`: `media.rs` trim/export keep every track (`-map 0:v:0 -map 0:a?`), input-side seek, part file + rename, `+faststart`; size targets budget audio per track and use MiB→kbit with 4% headroom.
+- `94175ef`: reliable replay saves — `clips/organizer` (names keep spaces, timestamp-anchored game parsing, " (n)", per-game folders), `foreground` (compositor + SteamAppId game detection), `clips/save_watch` (save gate, finished-file detection, verdicts), `clips/retention` (folder size limit over owned clips); save runs off the UI thread.
+- `762d442`: `core/src/edit` (multi-part edit model, undo history, ffmpeg graph builder, cancellable export) and `core/src/share` (platform planner, 9:16 crop, size-capped render, clipboard, hashtags) — written clean-room by agents from specs.
+- `f328130`: export-dialog Effects (look, speed, "Use my track mix", Mix track) via `edit::simple`; Storage panel organisation settings; `--dialog` harness flag + `editor:export` target.
+- `3907e25`: Share sheet (`ShareController` + `ShareDialog.qml`) from the clip context menu and the editor; `clips:share` target.
+- `3962ad2`: Screenshot hotkey handler (`desktop_shot`), recorder `supervisor` (auto-start with boot delay, crash restarts with budget, restart after suspend), atomic settings writes with `.bad.json` backup.
+- `051e8db`: thumbnails patched in memory (no rescan per thumbnail); Home/Mixer polling only while visible.
+- `dd4b27c`: docs — `docs/KAIROS_INTEGRATION.md` (licence stance, comparison, roadmap), landmines in `AGENTS.md`.
+- `2cc92c2`: fixes from a code review of the branch (replay file must be new + GSR-held, name resolved after the signal, container kept, two-step cancel, stale share results dropped, throttled thumbnails, no disk read per supervisor tick).
+
+**Why:**
+The user asked for an in-depth study of BasilForge/Kairos (Windows instant replay, GPL-2.0+) and an integration of its strengths. Because OpenGG is MIT, everything was re-implemented from behavioural specs, never from Kairos code; the comparison surfaced several outright OpenGG bugs (dropped audio tracks on trim, "Elden Ring" → "Elden", Wayland clips named "Unknown", same-second overwrites, a UI-thread save, settings data loss, dead `gsrAutoStart`/`gsrAutoRestart`/Screenshot bindings) that were fixed first.
+
+**Landmines & Discoveries:**
+- ffmpeg's default stream selection keeps ONE audio stream; output-side `-ss` with `-c copy` produced a file with no video on a 3-stream test clip. Always `-map` explicitly and seek before `-i`.
+- The MP4 muxer may drop `title=` stream tags (keeps `handler_name`).
+- A `.part` → final rename is a `Modify(Name)` notify event; the clip watcher missed it.
+- In a QML `onXChanged` handler, a sibling binding on X may still be stale — read the new value directly.
+- `check-colors.sh`'s emoji check uses `grep -P` with `\x{…}` ranges, which errors (and the script still prints "clean") under a non-UTF-8 locale such as this container's `C`. Run it with `LC_ALL=C.UTF-8`, as CI's Arch image effectively does — a "★" in ShareDialog slipped through locally that way and failed CI.
+- `ui-shots.sh` happily screenshots a stale binary after a failed build (a duplicate `onVisibleChanged` failed qmlcachegen); always check `cargo build`'s result first.
+- This cloud container has Ubuntu's Qt 6.4, too old for the QML (6.7+ APIs: every page fails "is not a type"). Built against 6.4 headers, then ran with the PySide6 6.8 wheel's Qt libs via `LD_LIBRARY_PATH`/`QT_PLUGIN_PATH`/`QML_IMPORT_PATH` and a stub `org.freedesktop.gstreamer.Qt6GLVideoItem` module — enough for a warning-free offscreen sweep. The 4 `mixer_pipeline` tests fail here (and on the base branch) for lack of GStreamer plugins.
+
+**Verification:**
+- `cargo test` in `core/`: 197 passed (incl. real-ffmpeg tests: multi-track trims/exports, effects exports, size caps, cancel, share renders).
+- `cargo clippy --all-targets -- -D warnings` in `qt-shell/`: clean; core clippy: no new warnings (pre-existing ones in `audio.rs`, `clips/mod.rs`).
+- `qt-shell/tools/check-colors.sh`: clean.
+- `QT_FORCE_STDERR_LOGGING=1 qt-shell/tools/ui-shots.sh`: 26/26 captures, zero QML warnings; inspected Storage, editor, export dialog, Share sheet and Clips PNGs.
+- Desktop screenshots exercised for real on Xvfb (x11grab path, per-game folder, " (2)" collision).
+- Not exercised here: gpu-screen-recorder itself (not installable in this container) — the save path's pure logic is unit-tested, the GSR interaction is not.
+
+---
+
 ### [2026-09-25] Claude Opus 5 — qt6-gstreamer-player-b3 (audio-routing persistence + headset control surface)
 
 **What Changed:** Two user-reported faults, both of which turned out to be

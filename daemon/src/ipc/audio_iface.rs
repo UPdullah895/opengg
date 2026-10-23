@@ -47,11 +47,11 @@ impl AudioInterface {
     }
 
     async fn set_volume(&self, channel: &str, volume: u32) -> zbus::fdo::Result<()> {
-        self.hub.set_volume(channel, volume).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        self.hub.set_volume(channel, volume).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
     async fn set_mute(&self, channel: &str, muted: bool) -> zbus::fdo::Result<()> {
-        self.hub.set_mute(channel, muted).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        self.hub.set_mute(channel, muted).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
     async fn get_apps(&self) -> String {
@@ -70,7 +70,33 @@ impl AudioInterface {
     }
 
     async fn route_app(&self, app_id: u32, channel: &str) -> zbus::fdo::Result<()> {
-        self.hub.route_app(app_id, channel).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        self.hub.route_app(app_id, channel).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Set one channel's EQ: `{"enabled": bool, "bands": [dB x10], "preamp": dB}`.
+    async fn set_eq(&self, channel: &str, state_json: &str) -> zbus::fdo::Result<()> {
+        self.hub.set_eq(channel, state_json).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// `{"available", "reason", "channels": {ch: {enabled, bands, preamp, running}}}`
+    async fn get_eq(&self) -> String {
+        self.hub.eq_status().await
+    }
+
+    /// Set microphone processing:
+    /// `{"nr": {enabled, intensity}, "gate": {enabled, threshold}, "comp": {enabled, level}}`.
+    async fn set_mic_fx(&self, json: &str) -> zbus::fdo::Result<()> {
+        self.hub.set_micfx(json).await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// `{"caps": {nr, gate, comp}, "state": {...}, "running": bool}`
+    async fn get_mic_fx(&self) -> String {
+        self.hub.micfx_status().await
+    }
+
+    /// Re-link channels from the saved settings (`mixer.devices`, EQ) now.
+    async fn reconcile(&self) {
+        self.hub.request_reconcile();
     }
 
     async fn remove_virtual_audio(&self) -> zbus::fdo::Result<()> {
@@ -79,5 +105,41 @@ impl AudioInterface {
 
     async fn create_virtual_audio(&self) -> zbus::fdo::Result<()> {
         self.hub.create_virtual_audio().await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Streamer Mode state as JSON: `{enabled, sink, source, channels:
+    /// {ch: {volume, muted}}, devices: {ch: device}}`.
+    async fn get_streamer_state(&self) -> String {
+        serde_json::to_string(&self.hub.streamer_state()).unwrap_or_else(|_| "{}".into())
+    }
+
+    async fn set_streamer_mode(&self, enabled: bool) -> zbus::fdo::Result<()> {
+        self.hub
+            .set_streamer_mode(enabled)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
+    }
+
+    async fn set_stream_volume(&self, channel: &str, volume: u32) -> zbus::fdo::Result<()> {
+        self.hub
+            .set_stream_level(channel.to_string(), Some(volume), None)
+            .await
+            .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("{e:#}")))
+    }
+
+    async fn set_stream_mute(&self, channel: &str, muted: bool) -> zbus::fdo::Result<()> {
+        self.hub
+            .set_stream_level(channel.to_string(), None, Some(muted))
+            .await
+            .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("{e:#}")))
+    }
+
+    /// Set a channel's Smart Volume ("off", "light", "medium", "strong").
+    /// `GetEq` reports it per channel, with plugin availability.
+    async fn set_smart_volume(&self, channel: &str, level: &str) -> zbus::fdo::Result<()> {
+        self.hub
+            .set_smart_volume(channel, level)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
     }
 }

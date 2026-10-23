@@ -32,7 +32,7 @@ mkdir -p "$OUTDIR"
 # same generic ScreenshotController.panel property MixerPage.qml already
 # reuses for its own tab selection, not a settings-only concept).
 TARGETS=(
-    home mixer clips devices
+    home mixer mixer:game mixer:mic mixer:stream clips devices
     settings:general settings:language settings:shortcuts
     settings:mixerRouting settings:captureSound settings:trackManagement
     settings:storage settings:notifications settings:extensions
@@ -40,9 +40,10 @@ TARGETS=(
     devices:buttons
     devices:list-many devices:grid-many devices:carousel-many
     devices:headset-many
-    clips:selection clips:filtered
+    clips:selection clips:filtered clips:montage clips:share
     tour
     editor
+    editor:export
 )
 
 # The clip editor is only reachable by clicking a clip, so the harness opens
@@ -55,7 +56,7 @@ first_clip() {
 
 shot() {
     local target="$1" page panel name args=()
-    if [[ "$target" == editor ]]; then
+    if [[ "$target" == editor || "$target" == editor:* ]]; then
         local clip; clip=$(first_clip)
         if [[ -z "$clip" ]]; then
             printf '  skip %-28s no clip in ~/Videos/OpenGG\n' editor
@@ -63,6 +64,13 @@ shot() {
         fi
         # --panel doubles as the clip path for the editor (see Main.qml).
         page=editor; panel="$clip"; name=editor
+        # editor:<dialog> opens that dialog over the editor (--dialog).
+        if [[ "$target" == editor:* ]]; then
+            name="editor-${target#*:}"; args+=(--dialog "${target#*:}")
+        fi
+    elif [[ "$target" == clips:share ]]; then
+        # The share sheet opens over the first clip (--dialog, see ClipsPage).
+        page=clips; panel=""; name=clips-share; args+=(--dialog share)
     elif [[ "$target" == tour ]]; then
         # The tour overlay is suppressed in normal capture runs (it would cover
         # whatever page we asked for), so it needs an explicit opt-in.

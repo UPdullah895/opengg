@@ -545,7 +545,8 @@ pub fn calc_export_settings(
         return Err("Invalid duration".into());
     }
     let audio_kbps = 128.0;
-    let total_kbps = target_mb * 8192.0 / duration_sec;
+    // Same MiB→kbit conversion and headroom as `export_clip_sized`.
+    let total_kbps = target_mb * 8388.608 * 0.96 / duration_sec;
     let video_kbps = (total_kbps - audio_kbps).max(100.0);
     Ok(serde_json::json!({
         "resolution": format!("{width}x{height}"),
@@ -613,31 +614,42 @@ pub fn export_clip_sized<F: Fn(f64, &str)>(
     // No size target, just a codec change: one CRF pass, no bitrate math.
     if target_mb <= 0.0 {
         on_progress(0.0, "encoding");
+        let part = part_path_for(&out);
         let status = Command::new("ffmpeg")
+            .args(["-hide_banner", "-nostdin", "-y"])
+            .args(seek_args(start_sec, dur))
+            .args(["-i", input_path])
+            .args(["-map", "0:v:0", "-map", "0:a?"])
             .args([
-                "-y", "-i", input_path,
-                "-ss", &format!("{start_sec:.3}"),
-                "-to", &format!("{end_sec:.3}"),
                 "-c:v", video_codec,
                 "-pix_fmt", "yuv420p",
                 "-crf", "20",
                 "-preset", "fast",
                 "-c:a", "aac",
                 "-b:a", "128k",
-                &out,
-            ])
+                "-movflags", "+faststart",
+                ])
+            .arg(&part)
             .status()
             .map_err(|e| format!("ffmpeg: {e}"))?;
         return if status.success() {
+            finish_part(&part, &out)?;
             on_progress(100.0, "done");
             Ok(out)
         } else {
+            let _ = std::fs::remove_file(&part);
             Err("FFmpeg encoding failed".into())
         };
     }
 
-    let audio_kbps: f64 = 128.0;
-    let total_kbps = target_mb * 8192.0 / dur;
+    // Every audio track is kept (one per mixer channel), each at 128k — so
+    // the audio budget scales with the track count, or a 3-track clip blows
+    // through its size target by ~2x the audio bitrate.
+    let audio_kbps: f64 = 128.0 * f64::from(count_audio_streams(input_path));
+    // `target_mb` is MiB (what file managers show) while ffmpeg's "k" is
+    // 1000 bit/s: 1 MiB = 8 388.608 kbit. 4% headroom covers MP4 overhead
+    // and two-pass rate-control overshoot so a "10 MB" export really fits.
+    let total_kbps = target_mb * 8388.608 * 0.96 / dur;
     let video_kbps = (total_kbps - audio_kbps).max(100.0);
     let vbr = format!("{}k", video_kbps as u32);
 
@@ -652,10 +664,10 @@ pub fn export_clip_sized<F: Fn(f64, &str)>(
     on_progress(0.0, "pass1");
     let pass1 = Command::new("ffmpeg")
         .current_dir(&workdir)
+        .args(["-hide_banner", "-nostdin", "-y"])
+        .args(seek_args(start_sec, dur))
+        .args(["-i", input_path, "-map", "0:v:0"])
         .args([
-            "-y", "-i", input_path,
-            "-ss", &format!("{start_sec:.3}"),
-            "-to", &format!("{end_sec:.3}"),
             "-c:v", video_codec,
             "-pix_fmt", "yuv420p",
             "-b:v", &vbr,
@@ -671,12 +683,13 @@ pub fn export_clip_sized<F: Fn(f64, &str)>(
     }
 
     on_progress(50.0, "pass2");
+    let part = part_path_for(&out);
     let pass2 = Command::new("ffmpeg")
         .current_dir(&workdir)
+        .args(["-hide_banner", "-nostdin", "-y"])
+        .args(seek_args(start_sec, dur))
+        .args(["-i", input_path, "-map", "0:v:0", "-map", "0:a?"])
         .args([
-            "-y", "-i", input_path,
-            "-ss", &format!("{start_sec:.3}"),
-            "-to", &format!("{end_sec:.3}"),
             "-c:v", video_codec,
             "-pix_fmt", "yuv420p",
             "-b:v", &vbr,
@@ -684,8 +697,9 @@ pub fn export_clip_sized<F: Fn(f64, &str)>(
             "-pass", "2",
             "-c:a", "aac",
             "-b:a", "128k",
-            &out,
+            "-movflags", "+faststart",
         ])
+        .arg(&part)
         .status()
         .map_err(|e| format!("ffmpeg pass 2: {e}"))?;
 
@@ -693,11 +707,26 @@ pub fn export_clip_sized<F: Fn(f64, &str)>(
     let _ = std::fs::remove_file(workdir.join("ffmpeg2pass-0.log.mbtree"));
 
     if pass2.success() {
+        finish_part(&part, &out)?;
         on_progress(100.0, "done");
         Ok(out)
     } else {
+        let _ = std::fs::remove_file(&part);
         Err("FFmpeg encoding failed".into())
     }
+}
+
+/// Input-side seek for a re-encode: `-ss` before `-i` makes ffmpeg jump to
+/// the nearest keyframe and decode forward only from there (frame-accurate,
+/// since decoded frames before the cut are discarded), instead of decoding
+/// the whole file from 0 — minutes saved on the last seconds of a long clip.
+fn seek_args(start_sec: f64, dur: f64) -> [String; 4] {
+    [
+        "-ss".into(),
+        format!("{start_sec:.3}"),
+        "-t".into(),
+        format!("{dur:.3}"),
+    ]
 }
 
 // ═══ Helpers (public for use by commands.rs and listers) ═══
@@ -891,22 +920,29 @@ pub fn trim_clip<F: Fn(f64, &str)>(
     };
 
     on_progress(0.0, "copying");
+    // `-ss`/`-t` go BEFORE `-i`: an input-side seek jumps straight to the
+    // keyframe at or before the cut instead of reading the file from 0, and
+    // a stream copy that starts on a keyframe has no garbled first second.
+    // `-map 0:v:0 -map 0:a?` keeps EVERY audio track — ffmpeg's default
+    // stream selection keeps just one, which silently dropped the Chat/Mic
+    // tracks (and on some inputs the video) from every trimmed clip.
+    let part = part_path_for(&out);
     let mut child = Command::new("ffmpeg")
+        .args(["-hide_banner", "-nostdin", "-y", "-ss"])
+        .arg(format!("{start_sec:.3}"))
+        .arg("-t")
+        .arg(format!("{dur:.3}"))
+        .arg("-i")
+        .arg(input_path)
         .args([
-            "-i",
-            input_path,
-            "-ss",
-            &format!("{start_sec:.3}"),
-            "-to",
-            &format!("{end_sec:.3}"),
-            "-c",
-            "copy",
-            "-avoid_negative_ts",
-            "make_zero",
-            "-y",
-            &out,
+            "-map", "0:v:0", "-map", "0:a?",
+            "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart",
         ])
-        .stderr(std::process::Stdio::piped())
+        .arg(&part)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| format!("ffmpeg: {e}"))?;
 
@@ -915,16 +951,18 @@ pub fn trim_clip<F: Fn(f64, &str)>(
         match child.try_wait() {
             Ok(Some(status)) => {
                 if status.success() {
+                    finish_part(&part, &out)?;
                     on_progress(100.0, "done");
                     return Ok(out);
                 } else {
+                    let _ = std::fs::remove_file(&part);
                     on_progress(-1.0, "error");
                     return Err("FFmpeg trim failed".into());
                 }
             }
             Ok(None) => {
                 if estimated_size > 0.0 {
-                    let current_size = std::fs::metadata(&out).map(|m| m.len() as f64).unwrap_or(0.0);
+                    let current_size = std::fs::metadata(&part).map(|m| m.len() as f64).unwrap_or(0.0);
                     let pct = ((current_size / estimated_size) * 100.0).min(95.0);
                     if pct > last_pct {
                         last_pct = pct;
@@ -933,9 +971,36 @@ pub fn trim_clip<F: Fn(f64, &str)>(
                 }
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
-            Err(e) => return Err(format!("ffmpeg wait: {e}")),
+            Err(e) => {
+                let _ = std::fs::remove_file(&part);
+                return Err(format!("ffmpeg wait: {e}"));
+            }
         }
     }
+}
+
+/// Hidden sibling an export is written to before it is complete:
+/// `dir/.<stem>.<pid>-<n>.part.<ext>`. The library and file watcher skip
+/// dotfiles, so a half-written export never shows up as a broken clip, and a
+/// failed run never leaves a truncated file under the name the user chose.
+/// The real extension is kept last so ffmpeg picks the muxer the user's
+/// file name asks for; the counter keeps two exports in one process apart.
+pub fn part_path_for(out: &str) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let p = Path::new(out);
+    let dir = p.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let stem = p.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "export".into());
+    let ext = p.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "mp4".into());
+    dir.join(format!(".{stem}.{}-{n}.part.{ext}", std::process::id()))
+}
+
+/// Move a completed part file onto its final name (atomic on one filesystem).
+pub fn finish_part(part: &Path, out: &str) -> Result<(), String> {
+    std::fs::rename(part, out).map_err(|e| {
+        let _ = std::fs::remove_file(part);
+        format!("Could not move the export into place: {e}")
+    })
 }
 
 /// Probe a video file for duration, width, height.
@@ -1190,5 +1255,94 @@ mod waveform_tests {
         let peaks = peaks_from_s16le(&[], 256);
         assert_eq!(peaks.len(), 256);
         assert!(peaks.iter().all(|p| *p == 0.0));
+    }
+}
+
+#[cfg(test)]
+mod multitrack_export_tests {
+    //! Real-ffmpeg checks of the export paths. Skipped when ffmpeg is not on
+    //! PATH so `cargo test` still passes on a bare build machine.
+    use super::*;
+
+    fn have_ffmpeg() -> bool {
+        Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    /// 6 s clip with one video and three titled audio tracks — the shape
+    /// gpu-screen-recorder writes when Game/Chat/Mic are captured.
+    fn make_clip(dir: &Path) -> String {
+        let out = dir.join("Test Game_2026-10-20_12-00-00.mp4");
+        let ok = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=30",
+                "-f", "lavfi", "-i", "sine=frequency=300",
+                "-f", "lavfi", "-i", "sine=frequency=600",
+                "-f", "lavfi", "-i", "sine=frequency=900",
+                "-map", "0", "-map", "1", "-map", "2", "-map", "3", "-t", "6",
+                "-c:v", "libx264", "-g", "30", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                "-metadata:s:a:0", "title=Game", "-metadata:s:a:1", "title=Chat",
+                "-metadata:s:a:2", "title=Mic"])
+            .arg(&out)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "could not generate the test clip");
+        out.to_string_lossy().to_string()
+    }
+
+    fn streams(path: &str) -> Vec<String> {
+        let o = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", path])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).collect()
+    }
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("opengg-media-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn no_part_files(dir: &Path) -> bool {
+        std::fs::read_dir(dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains(".part"))
+    }
+
+    #[test]
+    fn trim_keeps_video_and_every_audio_track() {
+        if !have_ffmpeg() {
+            return;
+        }
+        let d = tmp("trim");
+        let clip = make_clip(&d);
+        let out = d.join("cut.mp4").to_string_lossy().to_string();
+        trim_clip(&clip, 2.0, 4.0, &out, |_, _| {}).unwrap();
+        assert_eq!(streams(&out), ["video", "audio", "audio", "audio"]);
+        let dur = probe_duration(&out);
+        assert!((1.9..=3.2).contains(&dur), "duration {dur}");
+        assert!(no_part_files(&d));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn reencode_and_sized_exports_keep_every_audio_track() {
+        if !have_ffmpeg() {
+            return;
+        }
+        let d = tmp("export");
+        let clip = make_clip(&d);
+        let out = d.join("re.mp4").to_string_lossy().to_string();
+        export_clip_sized(&clip, 1.0, 4.0, 0.0, &out, "h264", |_, _| {}).unwrap();
+        assert_eq!(streams(&out), ["video", "audio", "audio", "audio"]);
+        assert!((probe_duration(&out) - 3.0).abs() < 0.2);
+
+        let sized = d.join("sized.mp4").to_string_lossy().to_string();
+        export_clip_sized(&clip, 0.0, 6.0, 1.0, &sized, "h264", |_, _| {}).unwrap();
+        assert_eq!(streams(&sized), ["video", "audio", "audio", "audio"]);
+        let bytes = std::fs::metadata(&sized).unwrap().len();
+        assert!(bytes <= 1024 * 1024, "1 MiB target produced {bytes} bytes");
+        assert!(no_part_files(&d));
+        std::fs::remove_dir_all(&d).ok();
     }
 }

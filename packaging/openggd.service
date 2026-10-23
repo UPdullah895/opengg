@@ -7,14 +7,18 @@ Requires=pipewire.service
 [Service]
 Type=dbus
 BusName=org.opengg.Daemon
-ExecStart=%h/.local/bin/openggd
+# Packaged path. `make install` / daemon/scripts/setup.sh rewrite it to
+# ~/.local/bin/openggd when installing from source.
+ExecStart=/usr/bin/openggd
 Restart=on-failure
 RestartSec=3
 # Security hardening
 NoNewPrivileges=true
 ProtectHome=read-only
 ProtectSystem=strict
-ReadWritePaths=%h/.config/opengg %h/.local/share/opengg %h/Videos/OpenGG
+# '-' = skip a path that does not exist yet: without it systemd refuses to
+# start the unit at all (226/NAMESPACE) on a fresh account.
+ReadWritePaths=-%h/.config/opengg -%h/.local/share/opengg -%h/Videos/OpenGG
 PrivateTmp=true
 
 [Install]

@@ -27,6 +27,7 @@ Item {
     signal renameRequested()
     signal revealRequested()
     signal copyPathRequested()
+    signal shareRequested()
     signal deleteRequested()
 
     /// `x`/`y` are SCENE coordinates (callers use mapToItem(null, …)). This
@@ -75,6 +76,7 @@ Item {
                 model: [
                     { key: "preview",  icon: "play",          label: I18n.t("clips.contextMenu.preview") },
                     { key: "editor",   icon: "frame-check",   label: I18n.t("clips.contextMenu.edit") },
+                    { key: "share",    icon: "share",         label: I18n.t("clips.contextMenu.share") },
                     { sep: true },
                     { key: "select",   icon: "check-square",  label: I18n.t("clips.contextMenu.select") },
                     { key: "favorite", icon: "heart",
@@ -145,6 +147,7 @@ Item {
                                 switch (modelData.key) {
                                 case "preview":  menu.previewRequested(); break
                                 case "editor":   menu.editRequested(); break
+                                case "share":    menu.shareRequested(); break
                                 case "select":   menu.selectRequested(); break
                                 case "favorite": menu.favoriteRequested(); break
                                 case "rename":   menu.renameRequested(); break

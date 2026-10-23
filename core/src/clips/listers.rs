@@ -5,14 +5,18 @@
 use super::db::{get_meta_map, open_db, probe_cache_get, probe_cache_set, ClipInfo, VIDEO_EXTS};
 use crate::media::{date_from_stem, fmt_ts_local, probe_video};
 use crate::paths::{get_all_clip_dirs, thumb_dir};
-use crate::clips::hash_str;
+use crate::clips::{hash_str, organizer};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Fetch metadata for a single file — used by the frontend file-watcher listener.
 pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, String> {
     let p = PathBuf::from(&filepath);
-    if !p.is_file() {
+    let hidden = p
+        .file_name()
+        .map(|n| organizer::is_hidden(&n.to_string_lossy()))
+        .unwrap_or(true);
+    if hidden || !p.is_file() {
         return Ok(None);
     }
     let ext = p
@@ -46,11 +50,11 @@ pub async fn get_clip_by_path(filepath: String) -> Result<Option<ClipInfo>, Stri
     let (dur, w, h) = tokio::task::spawn_blocking(move || probe_video(&p_clone))
         .await
         .map_err(|e| format!("spawn_blocking: {e}"))?;
-    let game_from_filename = stem
-        .split('_')
-        .next()
-        .unwrap_or("Unknown")
-        .replace('-', " ");
+    let game_from_filename = get_all_clip_dirs("")
+        .iter()
+        .find(|d| p.starts_with(d))
+        .map(|d| organizer::game_for_path(d, &p))
+        .unwrap_or_else(|| organizer::game_for_path(p.parent().unwrap_or(&p), &p));
     let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
     let game = if game_tag.is_empty() {
         game_from_filename
@@ -112,9 +116,14 @@ pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
         if !dir.exists() {
             continue;
         }
+        // Hidden entries are caches and the `.part` files a clip is written
+        // through before it is complete — never list a half-written clip.
+        // The depth cap also stops symlink loops.
         for e in walkdir::WalkDir::new(dir)
             .min_depth(1)
+            .max_depth(8)
             .into_iter()
+            .filter_entry(|e| !organizer::is_hidden(&e.file_name().to_string_lossy()))
             .flatten()
         {
             let p = e.path().to_path_buf();
@@ -152,16 +161,7 @@ pub async fn get_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
                 .unwrap_or(0);
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
             let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
-            // SteelSeries: GameName__YYYY-MM-DD__HH-MM-SS — split on __ to get full game name.
-            // Other formats: Prefix_YYYY-MM-DD_HH-MM-SS — split on _ to get prefix.
-            let game_raw = if let Some(pos) = stem.find("__") {
-                stem[..pos].replace(['-', '_'], " ")
-            } else {
-                stem.split('_')
-                    .next()
-                    .unwrap_or("Unknown")
-                    .replace('-', " ")
-            };
+            let game_raw = organizer::game_for_path(dir, &p);
             let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
             let thumb = td.join(format!("{id}.jpg"));
             let thumbnail = if thumb.exists() {
@@ -334,9 +334,14 @@ pub fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
         if !dir.exists() {
             continue;
         }
+        // Hidden entries are caches and the `.part` files a clip is written
+        // through before it is complete — never list a half-written clip.
+        // The depth cap also stops symlink loops.
         for e in walkdir::WalkDir::new(dir)
             .min_depth(1)
+            .max_depth(8)
             .into_iter()
+            .filter_entry(|e| !organizer::is_hidden(&e.file_name().to_string_lossy()))
             .flatten()
         {
             let p = e.path().to_path_buf();
@@ -374,14 +379,7 @@ pub fn get_clips_fast(folder: String) -> Result<Vec<ClipInfo>, String> {
                 .unwrap_or(0);
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Unknown");
             let created = date_from_stem(stem).unwrap_or_else(|| fmt_ts_local(mtime as i64));
-            let game_raw = if let Some(pos) = stem.find("__") {
-                stem[..pos].replace(['-', '_'], " ")
-            } else {
-                stem.split('_')
-                    .next()
-                    .unwrap_or("Unknown")
-                    .replace('-', " ")
-            };
+            let game_raw = organizer::game_for_path(dir, &p);
             let (cn, fav, game_tag) = meta.get(&fp).cloned().unwrap_or_default();
             let thumb = td.join(format!("{id}.jpg"));
             let thumbnail = if thumb.exists() {

@@ -43,6 +43,10 @@ QtObject {
     }
 
     function dispatch(action) {
+        // The Shortcuts panel is recording a key: the press is the user
+        // typing a combination, not asking for the action.
+        if (HotkeyController.suppressed)
+            return
         switch (action) {
         case "saveReplay":
             // Already notifies on the desktop, which matters here: the window
@@ -55,13 +59,26 @@ QtObject {
             else
                 RecordingController.start()
             break
+        case "screenshot":
+            // A desktop screenshot via the session's own tool (grim,
+            // spectacle, gnome-screenshot, maim…) — see core::desktop_shot.
+            RecordingController.screenshot()
+            break
         default:
-            // "screenshot" lands here. Nothing in this project takes a
-            // desktop screenshot yet (`media.takeScreenshot` grabs a frame
-            // out of an existing clip, which is an editor feature), so the
-            // binding is carried end to end but has nothing to run.
             console.warn("Global hotkey '" + action + "' has no handler")
         }
+    }
+
+    // Recorder health: restarts a crashed or post-suspend-stale replay
+    // buffer when "Auto-restart" is on. Lives here because this object
+    // exists for the whole app lifetime, whatever page is showing. Inert
+    // under the screenshot harness, which must not spawn recorders.
+    property var _supervisor: Timer {
+        interval: 3000
+        repeat: true
+        running: !ScreenshotController.active
+        onTriggered: RecordingController.supervise(
+            !!JSON.parse(SettingsController.settingsJson || "{}").gsrAutoRestart)
     }
 
     property var _conn: Connections {
@@ -69,6 +86,13 @@ QtObject {
         // pressCount, not lastAction: pressing the same hotkey twice leaves
         // lastAction unchanged and emits no change signal.
         function onPressCountChanged() { hk.dispatch(HotkeyController.lastAction) }
+        // Auto-clip: the daemon saw a highlight (CS2 Game State Integration)
+        // and already applied the user's event filter. Saving here, like the
+        // hotkey, because the replay buffer is this app's process.
+        function onMomentCountChanged() {
+            if (!ScreenshotController.active)
+                RecordingController.saveMoment(HotkeyController.lastMoment)
+        }
     }
 
     /// Re-push whenever the user edits a binding, so the daemon never runs on
@@ -78,5 +102,9 @@ QtObject {
     Component.onCompleted: {
         HotkeyController.start()
         hk.push()
+        // "Start replay buffer with OpenGG" (gsrAutoStart) — read nowhere
+        // before this, so the toggle did nothing.
+        if (!ScreenshotController.active)
+            RecordingController.autoStart()
     }
 }

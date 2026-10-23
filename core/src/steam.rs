@@ -276,13 +276,10 @@ async fn fetch_steam_store_details(
     None
 }
 
-pub async fn get_steam_games() -> Result<Vec<SteamGameEntry>, String> {
-    let mut installed_games: HashMap<String, SteamGameEntry> = HashMap::new();
-    let mut seen_appids = std::collections::HashSet::new();
-    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-    let home_p = PathBuf::from(&home);
-
-    let mut roots = steam_root_candidates(&home_p);
+/// Every `steamapps` directory Steam knows about: each root's own, plus the
+/// extra libraries listed in its `libraryfolders.vdf`. Only existing ones.
+pub fn steam_library_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut roots = steam_root_candidates(home);
     // Add possible symlink targets or common custom locations if they exist
     roots.dedup();
 
@@ -314,6 +311,16 @@ pub async fn get_steam_games() -> Result<Vec<SteamGameEntry>, String> {
             }
         }
     }
+    library_folders
+}
+
+pub async fn get_steam_games() -> Result<Vec<SteamGameEntry>, String> {
+    let mut installed_games: HashMap<String, SteamGameEntry> = HashMap::new();
+    let mut seen_appids = std::collections::HashSet::new();
+    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+    let home_p = PathBuf::from(&home);
+
+    let library_folders = steam_library_dirs(&home_p);
 
     // Scan each discovered library for appmanifest_*.acf
     for lib in library_folders {

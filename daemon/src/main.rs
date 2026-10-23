@@ -3,6 +3,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 mod audio;
+mod autoclip;
 mod config;
 mod device;
 mod extensions;
@@ -66,6 +67,7 @@ async fn main() -> Result<()> {
     // D-Bus connection to emit on and `serve` is what creates it, so the
     // handle is posted back into this slot afterwards.
     let hotkey_slot = replay_module.as_ref().map(|r| r.hotkey_slot());
+    let autoclip_status = replay_module.as_ref().map(|r| r.autoclip_status());
 
     // ── Extensions manager ──────────────────────────────────────
     let extensions = std::sync::Arc::new(extensions::ExtensionManager::new());
@@ -84,6 +86,12 @@ async fn main() -> Result<()> {
             &sc.save_replay, &sc.toggle_recording, &sc.screenshot,
         );
         *slot.lock().unwrap() = replay::hotkey::spawn(&conn, bindings);
+    }
+
+    // ── Auto-clip (CS2 Game State Integration) ──────────────────
+    // Signals on the Replay interface, so it only runs alongside it.
+    if let Some(status) = autoclip_status {
+        autoclip::spawn(&conn, status);
     }
 
     // ── Discover + start enabled daemon extensions ──────────────

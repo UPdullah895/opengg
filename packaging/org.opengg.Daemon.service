@@ -1,4 +1,4 @@
 [D-BUS Service]
 Name=org.opengg.Daemon
-Exec=%h/.local/bin/openggd
+Exec=/usr/bin/openggd
 SystemdService=openggd.service

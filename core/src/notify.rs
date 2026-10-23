@@ -87,3 +87,25 @@ fn try_gsr_notify(success: bool, game: &str, filename: &str, filesize_mb: f64, d
         .spawn()
         .is_ok()
 }
+
+/// A plain warning toast (save failed, disk nearly full). Always uses
+/// `notify-send`: these must reach the user even when the clip-saved toast
+/// style is a custom backend, and they are rare enough not to need one.
+pub fn show_warning(summary: &str, body: &str) {
+    if let Err(e) = std::process::Command::new("notify-send")
+        .args(["--app-name=OpenGG", "--urgency=normal", "--icon=dialog-warning", summary, body])
+        .spawn()
+    {
+        log::warn!("notify-send failed: {e}");
+    }
+}
+
+/// A plain informational toast (screenshot saved).
+pub fn show_info(summary: &str, body: &str) {
+    if let Err(e) = std::process::Command::new("notify-send")
+        .args(["--app-name=OpenGG", "--urgency=low", "--expire-time=3000", summary, body])
+        .spawn()
+    {
+        log::warn!("notify-send failed: {e}");
+    }
+}

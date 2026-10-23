@@ -127,6 +127,33 @@ Rectangle {
     property var inputDevices: JSON.parse(AudioController.inputDevicesJson || "[]")
     property var channelDevices: JSON.parse(AudioController.channelDevicesJson || "{}")
 
+    // ── Streamer Mode ─────────────────────────────────────────────────────
+    // A second, independent mix the daemon feeds to OBS (OpenGG_Stream_Mix).
+    // The six strips show one mix at a time: the Personal mix (what the
+    // headset hears — the same faders as without Streamer Mode) or the
+    // Stream mix. App routing is per channel, so it applies to both.
+    readonly property var streamer: ScreenshotController.active && ScreenshotController.panel === "stream"
+        ? page.shotStreamer
+        : JSON.parse(AudioController.streamerJson || "{}")
+    // Sample state for the `--panel stream` capture only.
+    readonly property var shotStreamer: ({
+        enabled: true, source: "OpenGG_Stream_Mix",
+        channels: { Master: { volume: 90, muted: false }, Game: { volume: 45, muted: false },
+                    Chat: { volume: 100, muted: true }, Media: { volume: 30, muted: false },
+                    Aux: { volume: 100, muted: false }, Mic: { volume: 80, muted: false } }
+    })
+    readonly property bool streamerOn: page.streamer.enabled === true
+    property string mixView: "personal"
+    readonly property bool showStream: page.streamerOn && page.mixView === "stream"
+    onStreamerOnChanged: if (!page.streamerOn) page.mixView = "personal"
+    function streamLevel(name) {
+        const c = page.streamer.channels || {}
+        return c[name] || { volume: 100, muted: false }
+    }
+    // One fixed entry so the strip's device row keeps its place (and says
+    // where this fader goes) instead of collapsing in the Stream view.
+    readonly property var streamDevices: [{ value: "OpenGG_Stream", label: (I18n.language, I18n.t("mixer.streamer.streamMix")) }]
+
     readonly property var channelColors: ({
         Master: "#94A3B8", Game: "#E94560", Chat: "#3B82F6",
         Media: "#10B981", Aux: "#A855F7", Mic: "#F59E0B",
@@ -161,18 +188,29 @@ Rectangle {
         // Dev-only: let `--screenshot --page mixer --panel <tab>` open a
         // specific DSP/EQ tab so each one can be captured headlessly, same
         // convention as SettingsPage's `--panel`.
-        if (ScreenshotController.active && ScreenshotController.panel.length > 0)
+        if (ScreenshotController.active && ScreenshotController.panel === "stream") {
+            // `--panel stream`: the Stream view, which needs a running
+            // daemon with Streamer Mode on — so the capture supplies one.
+            page.mixView = "stream"
+        } else if (ScreenshotController.active && ScreenshotController.panel.length > 0) {
             page.activeTab = ScreenshotController.panel
+        }
     }
-    Timer { interval: 2000; running: true; repeat: true; onTriggered: AudioController.refresh() }
+    // Poll only while visible (see HomePage's timer for why); the
+    // onVisibleChanged below refreshes on entry.
+    Timer { interval: 2000; running: page.visible; repeat: true; onTriggered: AudioController.refresh() }
 
     // The VU stream spawns a real pw-cat subprocess per channel — only run
     // it while this page is actually the visible one. StackLayout sets
     // `visible: false` on inactive children, so this is a cheap, correct
     // gate without reaching into Main.qml's currentPage.
     onVisibleChanged: {
-        if (visible) AudioController.startVuStream()
-        else AudioController.stopVuStream()
+        if (visible) {
+            AudioController.refresh()
+            AudioController.startVuStream()
+        } else {
+            AudioController.stopVuStream()
+        }
     }
 
     ColumnLayout {
@@ -319,6 +357,66 @@ Rectangle {
             // Pushes Overdrive/Ear-Blast/gear to the row's far right edge
             // instead of them trailing immediately after the last tab.
             Item { Layout.fillWidth: true }
+
+            // Personal / Stream — which mix the strips below are showing.
+            Row {
+                visible: page.activeTab === "mixer" && page.streamerOn
+                spacing: 6
+                ChoiceChip {
+                    text: (I18n.language, I18n.t("mixer.streamer.personal")).toUpperCase()
+                    selected: page.mixView === "personal"
+                    onTriggered: page.mixView = "personal"
+                }
+                ChoiceChip {
+                    text: (I18n.language, I18n.t("mixer.streamer.stream")).toUpperCase()
+                    selected: page.mixView === "stream"
+                    onTriggered: page.mixView = "stream"
+                }
+            }
+
+            // Streamer Mode — a second mix for OBS, leveled independently.
+            Rectangle {
+                id: streamerBtn
+                visible: page.activeTab === "mixer"
+                width: 30; height: 30
+                radius: Theme.radius
+                color: page.streamerOn ? Theme.tint(Theme.accent, 15) : "transparent"
+                border.width: 1
+                border.color: page.streamerOn ? Theme.accent : Theme.border
+                property bool busy: false
+
+                Icon {
+                    anchors.centerIn: parent
+                    name: "cast"; size: 13
+                    color: page.streamerOn ? Theme.accent : Theme.text
+                    opacity: streamerBtn.busy ? 0.4 : 1
+                }
+                MouseArea {
+                    id: streamerArea
+                    anchors.fill: parent
+                    enabled: !streamerBtn.busy
+                    cursorShape: Qt.PointingHandCursor
+                    hoverEnabled: true
+                    onClicked: {
+                        streamerBtn.busy = true
+                        AudioController.setStreamerMode(!page.streamerOn)
+                    }
+                }
+                // The toggle rebuilds part of the audio graph on a worker;
+                // the next state refresh is what says it finished.
+                Connections {
+                    target: AudioController
+                    function onStreamerJsonChanged() { streamerBtn.busy = false }
+                    function onStreamerErrorChanged() { streamerBtn.busy = false }
+                }
+                Tip {
+                    visible: streamerArea.containsMouse
+                    text: page.streamerOn
+                        ? (I18n.language, I18n.t("mixer.streamer.on"))
+                        : (I18n.language, I18n.t("mixer.streamer.off"))
+                    delay: 300
+                }
+            }
 
             // Overdrive — unlocks faders beyond 100% (up to 150%).
             Rectangle {
@@ -471,19 +569,30 @@ Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
 
+                        readonly property var streamLevel: page.streamLevel(stripCol.modelData.name)
+
                         name: stripCol.modelData.name
-                        volume: stripCol.modelData.volume
-                        muted: !!stripCol.modelData.muted
+                        volume: page.showStream ? streamLevel.volume : stripCol.modelData.volume
+                        muted: page.showStream ? !!streamLevel.muted : !!stripCol.modelData.muted
                         channelColor: page.channelColors[stripCol.modelData.name] || Theme.accent
                         iconName: page.channelIcons[stripCol.modelData.name] || "volume-2"
                         vuDb: page.vuDb(stripCol.modelData.name)
                         maxVolume: AudioController.overdriveEnabled ? 150 : 100
-                        devices: stripCol.modelData.name === "Mic" ? page.inputDevices : page.outputDevices
-                        selectedDevice: page.channelDevices[stripCol.modelData.name] || ""
+                        devices: page.showStream ? page.streamDevices
+                                 : stripCol.modelData.name === "Mic" ? page.inputDevices : page.outputDevices
+                        selectedDevice: page.showStream ? "OpenGG_Stream"
+                                        : page.channelDevices[stripCol.modelData.name] || ""
 
-                        onVolumeRequested: (v) => AudioController.setVolume(stripCol.modelData.name, v)
-                        onMuteToggled: AudioController.setMute(stripCol.modelData.name, !stripCol.modelData.muted)
-                        onDeviceRequested: (d) => AudioController.setChannelDevice(stripCol.modelData.name, d)
+                        onVolumeRequested: (v) => page.showStream
+                            ? AudioController.setStreamVolume(stripCol.modelData.name, v)
+                            : AudioController.setVolume(stripCol.modelData.name, v)
+                        onMuteToggled: page.showStream
+                            ? AudioController.setStreamMute(stripCol.modelData.name, !streamLevel.muted)
+                            : AudioController.setMute(stripCol.modelData.name, !stripCol.modelData.muted)
+                        onDeviceRequested: (d) => {
+                            if (!page.showStream)
+                                AudioController.setChannelDevice(stripCol.modelData.name, d)
+                        }
                     }
 
                     AppBox {
@@ -516,9 +625,43 @@ Rectangle {
         // ChatMix.vue's two-way-sync design: dragging it calls setVolume on
         // both channels, and it re-centers correctly if either volume is
         // changed by any other route (fader drag, Ear Blast ducking, etc).
+        // Stream view: where this mix goes, in place of ChatMix (a Personal
+        // control — it balances what the headset hears).
+        Rectangle {
+            visible: page.activeTab === "mixer" && (page.showStream || AudioController.streamerError.length > 0)
+            Layout.fillWidth: true
+            implicitHeight: streamInfo.implicitHeight + 20
+            radius: Theme.radius
+            color: AudioController.streamerError.length > 0 ? Theme.tint(Theme.danger, 10) : Theme.accentAlpha(10)
+            border.width: 1
+            border.color: AudioController.streamerError.length > 0 ? Theme.danger : Theme.accentAlpha(35)
+
+            RowLayout {
+                id: streamInfo
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 10
+                Icon {
+                    name: AudioController.streamerError.length > 0 ? "alert-triangle" : "cast"
+                    size: 16
+                    color: AudioController.streamerError.length > 0 ? Theme.danger : Theme.accent
+                }
+                Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.text
+                    font.pixelSize: 12
+                    textFormat: Text.StyledText
+                    text: AudioController.streamerError.length > 0
+                        ? (I18n.language, I18n.t("mixer.streamer.error")) + " " + AudioController.streamerError
+                        : (I18n.language, I18n.t("mixer.streamer.obsHint"))
+                }
+            }
+        }
+
         Rectangle {
             id: chatMixBar
-            visible: page.activeTab === "mixer" && AudioController.virtualAudioReady
+            visible: page.activeTab === "mixer" && AudioController.virtualAudioReady && !page.showStream
             Layout.fillWidth: true
             Layout.preferredWidth: 480
             radius: Theme.radius
@@ -717,7 +860,14 @@ Rectangle {
                     visible: page.activeTab === "chat"
                     spacing: 24
                     GraphicEQ { Layout.fillWidth: true; channel: "Chat"; accentColor: page.channelColors.Chat }
-                    DspControls { Layout.fillWidth: true; channel: "Chat"; accentColor: page.channelColors.Chat }
+                }
+                // One card for whichever output channel's tab is showing;
+                // its state lives in the daemon, so nothing per tab to keep.
+                SmartVolumeCard {
+                    readonly property string tabChannel: page.activeTab.charAt(0).toUpperCase() + page.activeTab.slice(1)
+                    visible: ["game", "chat", "media", "aux"].indexOf(page.activeTab) >= 0
+                    channel: tabChannel
+                    accentColor: page.channelColors[tabChannel] || Theme.accent
                 }
                 DspControls {
                     Layout.fillWidth: true

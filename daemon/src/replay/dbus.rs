@@ -17,6 +17,8 @@ pub struct ReplayInterface {
     /// readable keyboards, so `SetHotkeys` can say so instead of accepting
     /// bindings that will never fire.
     hotkeys: Arc<StdMutex<Option<HotkeyHandle>>>,
+    /// Shared with the auto-clip listener, which fills it in.
+    autoclip: crate::autoclip::SharedStatus,
 }
 
 impl ReplayInterface {
@@ -24,6 +26,7 @@ impl ReplayInterface {
         Self {
             recorder: Arc::new(Mutex::new(recorder)),
             hotkeys: Arc::new(StdMutex::new(None)),
+            autoclip: Default::default(),
         }
     }
 
@@ -32,6 +35,11 @@ impl ReplayInterface {
     /// connection to emit on, so the two cannot be wired in one step.
     pub fn hotkey_slot(&self) -> Arc<StdMutex<Option<HotkeyHandle>>> {
         self.hotkeys.clone()
+    }
+
+    /// The status the auto-clip listener reports into; see `autoclip::spawn`.
+    pub fn autoclip_status(&self) -> crate::autoclip::SharedStatus {
+        self.autoclip.clone()
     }
 }
 
@@ -130,9 +138,25 @@ impl ReplayInterface {
     /// belongs to the app, not to it; see `replay::recorder`.
     #[zbus(signal)]
     pub async fn hotkey_pressed(
-        ctxt: &zbus::object_server::SignalContext<'_>,
+        ctxt: &zbus::object_server::SignalEmitter<'_>,
         action: &str,
     ) -> zbus::Result<()>;
+
+    /// Emitted when auto-clip spots a highlight worth saving. The payload is
+    /// a JSON `autoclip::Moment`: `{game, kind, map, round, kills, at}`.
+    /// As with `HotkeyPressed`, the app does the saving.
+    #[zbus(signal)]
+    pub async fn moment_detected(
+        ctxt: &zbus::object_server::SignalEmitter<'_>,
+        moment: &str,
+    ) -> zbus::Result<()>;
+
+    /// Auto-clip listener state as JSON: `{listening, port, error,
+    /// lastPayloadAt, moments, lastMoment}`. `lastPayloadAt` is what tells
+    /// the UI the game is actually talking to us.
+    async fn get_auto_clip_status(&self) -> String {
+        serde_json::to_string(&*self.autoclip.lock().unwrap()).unwrap_or_else(|_| "{}".into())
+    }
 
     /// Trim a clip and export it.
     async fn trim_clip(

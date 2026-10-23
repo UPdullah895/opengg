@@ -5,16 +5,26 @@
 //! an executable), that executable is run as a supervised background subprocess:
 //! crashes restart with exponential backoff; a clean exit (code 0) is left alone.
 //!
-//! Enable-state lives in `~/.config/opengg/extensions.json` (`{ "<id>": bool }`,
-//! absent ⇒ enabled) and is shared with the Tauri/frontend layer. The manager can
-//! start/stop a daemon part at runtime — via the `org.opengg.Daemon.Extensions`
-//! D-Bus interface — without restarting the daemon.
+//! ## Consent is enforced here, not in the UI
 //!
-//! Bare executables placed directly in the extensions dir (no manifest) are still
-//! supervised, for backward compatibility with the pre-manifest layout.
+//! Extension daemons run unsandboxed as the user and inherit this process's
+//! `input` group (keyboard access for global hotkeys). So nothing runs until
+//! the user has enabled it:
+//!
+//! * Enable-state lives in `~/.config/opengg/extensions.json`
+//!   (`{ "<id>": bool }`). **Absent means disabled** — merely copying a folder
+//!   into the extensions directory no longer runs it at the next login.
+//! * When an extension is enabled, the SHA-256 of its executable is recorded
+//!   in `~/.config/opengg/extension-consents.json`. If the executable later
+//!   changes (an update, or tampering), it is not started again until the
+//!   user re-enables it. An extension enabled while this daemon was not
+//!   running is pinned the first time it starts.
+//! * Bare executables dropped directly into the extensions directory are no
+//!   longer run (the pre-manifest layout had no way to ask for consent).
 
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::process::Command;
@@ -79,25 +89,29 @@ impl ExtensionManager {
         for entry in entries.flatten() {
             let path = entry.path();
 
-            let ext = if path.is_dir() {
-                // Manifest-based extension with an optional daemon part.
-                parse_daemon_ext(&path)
-            } else if is_executable(&path) {
-                // Legacy: a bare executable dropped directly into the dir.
-                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                Some(DaemonExt { id: name.clone(), name, exec: path })
-            } else {
-                None
-            };
-
-            let Some(ext) = ext else { continue };
+            if !path.is_dir() {
+                if is_executable(&path) {
+                    tracing::warn!(
+                        "Extension: ignoring bare executable {} — extensions need a folder with a manifest.json",
+                        path.display()
+                    );
+                }
+                continue;
+            }
+            let Some(ext) = parse_daemon_ext(&path) else { continue };
             found_any = true;
             self.known.lock().await.insert(ext.id.clone(), ext.clone());
 
-            if is_enabled(&enabled, &ext.id) {
-                self.spawn(ext).await;
-            } else {
-                tracing::info!("Extension {}: daemon part disabled — not starting", ext.id);
+            if !is_enabled(&enabled, &ext.id) {
+                tracing::info!("Extension {}: not enabled — not starting", ext.id);
+                continue;
+            }
+            match check_consent(&ext) {
+                Consent::Pinned => self.spawn(ext).await,
+                Consent::Changed => tracing::warn!(
+                    "Extension {}: its executable changed since it was enabled — not starting until it is re-enabled",
+                    ext.id
+                ),
             }
         }
 
@@ -136,10 +150,13 @@ impl ExtensionManager {
         let known = self.known.lock().await.get(id).cloned();
         if let Some(ext) = known {
             if enabled {
+                // Enabling is the consent: pin what is being consented to.
+                record_consent(&ext);
                 self.spawn(ext).await;
                 tracing::info!("Extension {id}: daemon part enabled");
             } else {
                 self.stop(id).await;
+                forget_consent(id);
                 tracing::info!("Extension {id}: daemon part stopped");
             }
         }
@@ -156,6 +173,9 @@ impl ExtensionManager {
                     "id": e.id,
                     "name": e.name,
                     "running": running.contains_key(&e.id),
+                    // Enabled, but its executable no longer matches what was
+                    // consented to — needs re-enabling.
+                    "changed": check_consent(e) == Consent::Changed,
                 })
             })
             .collect();
@@ -358,7 +378,131 @@ fn save_enabled_map(map: &HashMap<String, bool>) {
     }
 }
 
-/// An extension is enabled unless the state file explicitly says `false`.
+/// An extension runs only when the state file explicitly says `true`.
 fn is_enabled(map: &HashMap<String, bool>, id: &str) -> bool {
-    *map.get(id).unwrap_or(&true)
+    map.get(id).copied().unwrap_or(false)
+}
+
+// ── Consent pinning: ~/.config/opengg/extension-consents.json ───────────────
+
+#[derive(Debug, PartialEq, Eq)]
+enum Consent {
+    /// The executable is the one the user enabled (or was just pinned).
+    Pinned,
+    /// The executable changed after the user enabled it.
+    Changed,
+}
+
+fn consents_path() -> PathBuf {
+    state_path().with_file_name("extension-consents.json")
+}
+
+fn load_consents(path: &Path) -> HashMap<String, String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_consents(path: &Path, map: &HashMap<String, String>) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(s) = serde_json::to_string_pretty(map) {
+        if let Err(e) = std::fs::write(path, s) {
+            tracing::warn!("Failed to write extension consents: {e}");
+        }
+    }
+}
+
+/// SHA-256 of a file as lowercase hex, `None` if it cannot be read.
+fn file_sha256(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    Some(Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Compare the executable against the pinned hash; pin it if none is
+/// recorded yet (the user enabled it while the daemon was not running).
+fn check_consent_at(path: &Path, ext: &DaemonExt) -> Consent {
+    let Some(current) = file_sha256(&ext.exec) else { return Consent::Changed };
+    let mut map = load_consents(path);
+    match map.get(&ext.id) {
+        Some(pinned) if *pinned == current => Consent::Pinned,
+        Some(_) => Consent::Changed,
+        None => {
+            map.insert(ext.id.clone(), current);
+            save_consents(path, &map);
+            Consent::Pinned
+        }
+    }
+}
+
+fn check_consent(ext: &DaemonExt) -> Consent {
+    check_consent_at(&consents_path(), ext)
+}
+
+fn record_consent_at(path: &Path, ext: &DaemonExt) {
+    if let Some(h) = file_sha256(&ext.exec) {
+        let mut map = load_consents(path);
+        map.insert(ext.id.clone(), h);
+        save_consents(path, &map);
+    }
+}
+
+fn record_consent(ext: &DaemonExt) {
+    record_consent_at(&consents_path(), ext)
+}
+
+fn forget_consent(id: &str) {
+    let path = consents_path();
+    let mut map = load_consents(&path);
+    if map.remove(id).is_some() {
+        save_consents(&path, &map);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("openggd-ext-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn absent_means_disabled() {
+        let mut map = HashMap::new();
+        assert!(!is_enabled(&map, "x"));
+        map.insert("x".into(), true);
+        assert!(is_enabled(&map, "x"));
+        map.insert("x".into(), false);
+        assert!(!is_enabled(&map, "x"));
+    }
+
+    #[test]
+    fn consent_pins_the_executable() {
+        let d = tmp("pin");
+        let exec = d.join("run.sh");
+        std::fs::write(&exec, b"#!/bin/sh\necho one\n").unwrap();
+        let consents = d.join("consents.json");
+        let ext = DaemonExt { id: "demo".into(), name: "Demo".into(), exec: exec.clone() };
+
+        // Enabled while the daemon was down: pinned on first check.
+        assert_eq!(check_consent_at(&consents, &ext), Consent::Pinned);
+        assert_eq!(check_consent_at(&consents, &ext), Consent::Pinned);
+
+        // The executable changes afterwards: refused until re-enabled.
+        std::fs::write(&exec, b"#!/bin/sh\necho two\n").unwrap();
+        assert_eq!(check_consent_at(&consents, &ext), Consent::Changed);
+        record_consent_at(&consents, &ext);
+        assert_eq!(check_consent_at(&consents, &ext), Consent::Pinned);
+
+        // A missing executable is never "pinned".
+        std::fs::remove_file(&exec).unwrap();
+        assert_eq!(check_consent_at(&consents, &ext), Consent::Changed);
+        std::fs::remove_dir_all(&d).ok();
+    }
 }
